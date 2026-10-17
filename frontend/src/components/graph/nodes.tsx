@@ -1,10 +1,13 @@
 import { getBezierPath, Handle, Position, type ConnectionLineComponentProps, type Node, type NodeProps } from "@xyflow/react";
-import { memo, type KeyboardEvent, type MouseEvent, type ReactElement } from "react";
-import { Icon } from "../Icon";
+import { memo, useMemo, type KeyboardEvent, type MouseEvent, type ReactElement, type ReactNode } from "react";
+import type { GraphSource } from "../../api/types";
+import { Icon, type IconName } from "../Icon";
 import type {
   AssetNodeData, ClusterNodeData, MoreNodeData, NodeActions, PointNodeData, SourceNodeData, UnidentifiedNodeData,
 } from "../../lib/graph";
-import { protocolLabel, sourceStatus } from "../../lib/graphStatus";
+import { assetIcon } from "../../lib/assetIcons";
+import { clusterIcon, metricIcon, pointMetric, protocolIcon } from "../../lib/graphIcons";
+import { protocolLabel, sourceAddress, sourceStatus, sourceTitle } from "../../lib/graphStatus";
 
 /**
  * The two handles every node has are only where the edges attach: neither can start or end a connection (W12a). The one handle that can is the "+" of an
@@ -44,16 +47,42 @@ function Toggle({ id, name, expanded, onToggle, label, fold }: { id: string; nam
 }
 
 /**
+ * W12c: the drawing before a node's title, decoration only (`aria-hidden`; the title is the name). `data-icon` carries the icon's name so a test or a spec can say
+ * which one a node chose without reading the paths. 16px, `--text-2`, by the stylesheet (`.gicon`); a modifier class (`gsrc-tile`) lets the source card dress it as a tile.
+ */
+function NodeIcon({ name, className }: { name: IconName; className?: string }) {
+  return (
+    <span className={className ? `gicon ${className}` : "gicon"} data-icon={name} aria-hidden="true">
+      <Icon name={name} />
+    </span>
+  );
+}
+
+/**
+ * W12c: a node's title line, the icon first. The icon stands INSIDE the title (a flex line: icon, then the words, which wrap beside it), so no node gets a row it did not have
+ * and the title stays the element a test or a spec finds by its text and its class (`node-title`).
+ */
+function Title({ icon, children }: { icon: IconName; children: ReactNode }) {
+  return (
+    <div className="node-title gtitle">
+      <NodeIcon name={icon} />
+      {children}
+    </div>
+  );
+}
+
+/**
  * W12a: the small menu button of a mapped point or group. It is NOT a row menu: a menu inside a React Flow node would leak its arrow, Enter and
  * Space keys, its hover and its focus into the node and the canvas, so the button only reports its own element (`onMenu`) and the page opens the
  * node's context menu, outside the canvas, next to it. `nokey` is React Flow's own opt-out of the node's key handling. 20px and absolutely placed
  * by the stylesheet (`gnode-menu-btn`), so the node is no taller; the host node carries `gnode-hasmenu`, which leaves the title room for it.
+ * W12c: `label` names it differently (the source card's "Source actions for X"); that button stands IN the card's title line, not at the node's corner.
  */
-function MenuButton({ name, onMenu }: { name: string; onMenu?: NodeActions["onMenu"] }) {
+function MenuButton({ name, onMenu, label }: { name: string; onMenu?: NodeActions["onMenu"]; label?: string }) {
   if (!onMenu) return null;
   return (
     <button
-      type="button" className="nodrag nokey icon-btn gnode-menu-btn" aria-label={`Mapping actions for ${name}`} aria-haspopup="menu"
+      type="button" className="nodrag nokey icon-btn gnode-menu-btn" aria-label={label ?? `Mapping actions for ${name}`} aria-haspopup="menu"
       onClick={press((event) => onMenu(event.currentTarget))}
     >
       <Icon name="more" />
@@ -113,38 +142,61 @@ export function AddConnectionLine({ fromX, fromY, toX, toY, fromPosition, toPosi
   return <path className="gconnect" d={path} />;
 }
 
+/** How many of a source's points are mapped to an asset (every cluster and the ungrouped ones). */
+function mappedPoints(source: GraphSource): number {
+  let mapped = 0;
+  for (const cluster of source.clusters) for (const p of cluster.points) if (p.asset_id !== null) mapped++;
+  for (const p of source.ungrouped) if (p.asset_id !== null) mapped++;
+  return mapped;
+}
+
+/**
+ * W12c: the source card. Six lines of FIXED height (the stylesheet sets each in px; graph-source-card.css has the table and the measured result), so the card fits the
+ * room `SOURCE_H` keeps for it and a line that changes its words (a status, "Seen ... 9 min ago" -> "10 min ago") moves nothing:
+ *   head: the fold (a chevron, on the LEFT), the protocol icon as a tile, the short title on ONE line (the full name in its `title` and in every accessible name), the
+ *         "Source actions" menu button at the right end when the page gave the node an `onMenu`;
+ *   protocol and where it listens; the status dot, its WORD and the origin (the word is the signal, the dot decoration); "N of M mapped" in words with a 4px bar under
+ *   them (decoration); Details when the page gave `onSelect`; the last-seen line when there is one.
+ * Create assets and Remove are not drawn: they are items of the menu the page opens from the `⋯` button (and from a right click), so `onCreateAssets`, `onRemove` and
+ * `groups` stay in the data for the page and are not read here.
+ */
 function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
-  const { source, expanded, onToggle, onSelect, onCreateAssets, onRemove, groups = 0, seen } = data;
+  const { source, expanded, onToggle, onSelect, onMenu, seen } = data;
   const status = sourceStatus(source);
+  const protocol = protocolLabel(source.connector_type);
+  const address = sourceAddress(source);
+  const facts = address ? `${protocol} · ${address}` : protocol;
+  const total = source.point_count;
+  // The count that came with the source can lag behind the points the graph holds; the share never passes the whole.
+  const mapped = useMemo(() => Math.min(total, mappedPoints(source)), [source, total]);
+  const share = total > 0 ? Math.round((mapped / total) * 100) : 0;
   return (
     <div className={`gnode gnode-source ${source.origin}`}>
       <Handles>
-        <div className="row">
-          <div className="node-title">{source.name}</div>
-          <Toggle id={id} name={source.name} expanded={expanded} onToggle={onToggle} />
-        </div>
-        {/* One row: Details, Create assets… and the bin (Remove has no text) fit the 220 px node; the row still wraps, a second line being better than a clipped one. Keyboard order is the order here. */}
-        {(onSelect || onCreateAssets || onRemove) && (
-          <div className="row gnode-actions">
-            {onSelect && (
-              <button type="button" className="nodrag" aria-label={`Details for ${source.name}`} onClick={press(() => onSelect(id))}>Details</button>
-            )}
-            {onCreateAssets && (
-              <button type="button" className="nodrag" aria-label={`Create assets for ${groups} ${groups === 1 ? "group" : "groups"} of ${source.name}`} onClick={press(() => onCreateAssets(id))}>Create assets…</button>
-            )}
-            {onRemove && (
-              <button type="button" className="nodrag quiet gnode-remove" aria-label={`Remove ${source.name} from Discovery`} title="Remove" onClick={press(() => onRemove(id))}><Icon name="trash" /></button>
-            )}
+        <div className="gsrc-body">
+          <div className="gsrc-head">
+            <Toggle id={id} name={source.name} expanded={expanded} onToggle={onToggle} fold />
+            <NodeIcon name={protocolIcon(source.connector_type)} className="gsrc-tile" />
+            <div className="node-title gsrc-title" title={source.name}>{sourceTitle(source)}</div>
+            <MenuButton name={source.name} label={`Source actions for ${source.name}`} onMenu={onMenu} />
           </div>
-        )}
-        {/* The dot and the protocol replace the connector word in the facts line, so the node is no taller (SOURCE_H is measured for this line); the status WORD stays in the text, the dot is decoration. */}
-        <div className="muted gnode-facts">
-          <span className={`gdot gdot-${status.key}`} aria-hidden="true" title={status.label} />{" "}
-          <span className="gproto">{protocolLabel(source.connector_type)}</span>
-          {` ${source.origin} · ${source.status} · ${source.point_count} points`}
+          <div className="gsrc-sub muted" title={facts}>{facts}</div>
+          <div className="gsrc-status">
+            <span className={`gdot gdot-${status.key}`} aria-hidden="true" title={status.label} />
+            <span className={status.key === "credentials" ? "gsrc-word gsrc-attn" : "gsrc-word"}>{status.label}</span>
+            {` · ${source.origin}`}
+          </div>
+          <div className="gsrc-mapped">
+            <div className="gsrc-words">{total > 0 ? `${mapped} of ${total} mapped` : "No points yet"}</div>
+            <div className="gsrc-bar" aria-hidden="true"><span className="gsrc-fill" style={{ width: `${share}%` }} /></div>
+          </div>
+          {onSelect && (
+            <div className="gsrc-actions">
+              <button type="button" className="nodrag gsrc-details" aria-label={`Details for ${source.name}`} onClick={press(() => onSelect(id))}>Details</button>
+            </div>
+          )}
+          {seen && <div className="gsrc-seen muted" title={seen}>{seen}</div>}
         </div>
-        {seen && <div className="muted gnode-seen" title={seen}>{seen}</div>}
-        {source.needs_credentials && <span className="badge">needs credentials</span>}
       </Handles>
     </div>
   );
@@ -159,7 +211,7 @@ function ClusterNode({ id, data }: NodeProps<Node<ClusterNodeData, "cluster">>) 
     <div className={onMenu ? "gnode gnode-cluster gprogress-host gnode-hasmenu" : "gnode gnode-cluster gprogress-host"}>
       <Handles>
         <div className={onMenu ? "row gnode-head" : "row"}>
-          <div className="node-title">{`${label} (${count})`}</div>
+          <Title icon={clusterIcon}>{`${label} (${count})`}</Title>
           <Toggle id={id} name={label} expanded={expanded} onToggle={onToggle} />
         </div>
         <MenuButton name={label} onMenu={onMenu} />
@@ -179,7 +231,7 @@ function PointNode({ id, data }: NodeProps<Node<PointNodeData, "point">>) {
   return (
     <div className={onMenu ? "gnode gnode-point gnode-hasmenu" : "gnode gnode-point"}>
       <Handles>
-        <div className="node-title">{point.name}</div>
+        <Title icon={metricIcon(pointMetric(point))}>{point.name}</Title>
         <MenuButton name={point.name} onMenu={onMenu} />
         {detail && <div className="muted">{detail}</div>}
         <MapButtons id={id} name={point.name} onMap={onMap} onNewAsset={onNewAsset} />
@@ -201,14 +253,14 @@ function AssetNode({ id, data }: NodeProps<Node<AssetNodeData, "asset">>) {
       <Handles>
         {toggle || badge ? (
           <div className="row">
-            <div className="node-title">{asset.name}</div>
+            <Title icon={assetIcon(asset)}>{asset.name}</Title>
             {badge && <span className="gnode-mapped" title={`${mappedInside} mapped inside`}>{`${mappedInside} mapped`}</span>}
             {toggle && (
               <Toggle id={id} name={asset.name} expanded={!collapsed} onToggle={onToggleAssets} label={`${collapsed ? "Show" : "Hide"} sub-assets of ${asset.name}`} fold />
             )}
           </div>
         ) : (
-          <div className="node-title">{asset.name}</div>
+          <Title icon={assetIcon(asset)}>{asset.name}</Title>
         )}
       </Handles>
       {/* After the two handles above on purpose: an edge with no sourceHandle (every asset-to-asset edge) starts at the FIRST source handle in the DOM, which must stay the default one. */}
@@ -237,7 +289,7 @@ function UnidentifiedNode({ data }: NodeProps<Node<UnidentifiedNodeData, "uniden
   return (
     <div className="gnode gnode-unidentified">
       <Handles>
-        <div className="node-title">{`${data.host}:${data.port} — unidentified service`}</div>
+        <Title icon="sources">{`${data.host}:${data.port} — unidentified service`}</Title>
       </Handles>
     </div>
   );

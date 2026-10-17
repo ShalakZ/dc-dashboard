@@ -11,8 +11,12 @@
   .gdot-credentials { background: var(--warn); }
   .gdot-idle { background: var(--text-2); }
 
-  /* Protocol badge: a plain rectangle (never a pill) in the muted line. A tight line height and 1px borders keep the facts line as tall as before: SOURCE_H is measured for it. */
-  .gproto { display: inline-block; padding: 0 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--text); font-size: 11px; line-height: 1.2; vertical-align: 0.05em; }
+  /* W12c: the icon before a node's title (NodeIcon in nodes.tsx; the protocol badge it replaces is gone). 16px, muted, never shrunk by a long title, and no transition (a guard below keeps every
+     node paint immediate). The title that holds it is a flex line, the icon at the top beside the first line of a title that wraps: the line is as tall as the text alone was, so a node gets no
+     row it did not have (the layout packs nodes by their old heights). The source card dresses its own icon as a tile in graph-source-card.css. */
+  .gtitle { display: flex; align-items: flex-start; gap: 6px; }
+  .gicon { display: inline-flex; flex: none; width: 16px; height: 16px; color: var(--text-2); }
+  .gicon svg.i { width: 16px; height: 16px; }
 
   /* Mapped-progress strip on a group's bottom edge. Absolutely placed, so the node does not grow; the host is the node itself (its box is the one React Flow measures). */
   .gprogress-host { position: relative; }

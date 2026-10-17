@@ -1,3 +1,38 @@
 @layer w6 {
-  /* w12c: placeholder, filled by its task (see docs/superpowers/plans/2026-10-16-w12c-discovery-visual-polish.md). Tokens only; one page class per page file. */
+  /* w12c: the Discovery source card (nodes.tsx, SourceNode). Measured in Chromium at the node's 220px width (offsetHeight of .gnode, light and dark, with a fallback font wider than Segoe UI): a one-line name 114px without a last-seen line and 132px with one;
+     "needs credentials" 132; a name too long for the line (ellipsis, still one line) 132; 0 points 132; discovered and manual 132; with neither Details nor a last-seen line 92. The tallest is 132, never over
+     the 136 of SOURCE_H, which this card does not change.
+     Tokens only; every class here is gsrc-* (plus the menu button's own class as the SECOND part of a selector), so no other page file names them. */
+
+  /* The six lines, each a fixed height (the text is set to the same line-height), two px apart, inside the node's own 6px 8px padding and 1px border (app.css):
+       head 20 (the fold, the icon tile, the one-line title, the Source actions button)
+       protocol line 16, status line 16, mapped line 20 (words 14 + gap 2 + bar 4), Details 20, last seen 16
+     = 108 + 5 gaps of 2 + 12 padding + 2 border = 132px, inside the 136 that SOURCE_H keeps for a source (graph-nodes.css.test.ts adds it up). A card with no Details and no last-seen line is
+     shorter; nothing here ever makes it taller, so a text that changes (a status, "9 min ago" -> "10 min ago") moves nothing. */
+  .gsrc-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
+  .gsrc-head { display: flex; align-items: center; gap: 4px; height: 20px; min-width: 0; }
+  /* The protocol icon as a small tile (a plain rectangle with the small radius). Two classes beat the base .gicon (one class: 16px, muted) of graph-nodes.css whatever the file order. */
+  .gsrc-head .gsrc-tile { display: grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text); }
+  .gsrc-tile svg.i { width: 14px; height: 14px; }
+  /* ONE line that gives way first (min-width 0): the whole name is in the title attribute and in every accessible name. app.css's `.gnode .node-title` (overflow-wrap anywhere) is the same specificity and loads first. */
+  .gsrc-head .gsrc-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; }
+  /* The Source actions button stands in the line (the point and group cards place theirs at the corner); 20px like those, the icon 14px. Beats app.css's .icon-btn (28px) and `.gnode button` (padding 0 6px). */
+  .gsrc-head .gnode-menu-btn { flex: none; width: 20px; height: 20px; padding: 0; }
+  .gsrc-head .gnode-menu-btn svg.i { width: 14px; height: 14px; }
+
+  /* Three one-line texts: the protocol line, the status line and the last-seen line. */
+  .gsrc-sub, .gsrc-status, .gsrc-seen { height: 16px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The status word stands after the 8px dot (graph-nodes.css); "needs credentials" is the one that asks for something, so it is bolder. */
+  .gsrc-word { margin-left: 6px; }
+  .gsrc-attn { font-weight: 600; }
+
+  /* "60 of 60 mapped" in words, with a 4px bar under them: the words are the signal, the bar (aria-hidden) is a picture of the same share. */
+  .gsrc-mapped { height: 20px; }
+  .gsrc-words { height: 14px; line-height: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gsrc-bar { height: 4px; margin-top: 2px; overflow: hidden; background: var(--border); }
+  .gsrc-fill { display: block; height: 100%; background: var(--accent); }
+
+  .gsrc-actions { display: flex; align-items: center; height: 20px; }
+  .gsrc-actions .gsrc-details { height: 20px; }
 }

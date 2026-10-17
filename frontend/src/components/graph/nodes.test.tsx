@@ -1,6 +1,8 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GraphPoint, GraphSource } from "../../api/types";
+import { assetIcon } from "../../lib/assetIcons";
+import { clusterIcon, metricIcon, pointMetric } from "../../lib/graphIcons";
 import { nodeTypes } from "./nodes";
 
 // Handles need a React Flow store; the node bodies are what is under test here. The mock draws each handle as a div that says which handle it is and whether it can
@@ -32,18 +34,250 @@ const renderNode = (type: keyof typeof nodeTypes, id: string, data: object) => {
 };
 
 describe("graph nodes", () => {
-  it("a source shows its facts, a credentials badge and a node-title", () => {
+  it("a source shows its title, protocol, status word, origin and how many points are mapped", () => {
     renderNode("source", "src:1", { source, expanded: false });
     expect(screen.getByText("Plant OPC")).toHaveClass("node-title");
     expect(screen.getByText(/OPC UA/)).toBeInTheDocument();
     expect(screen.getByText(/discovered/)).toBeInTheDocument();
-    expect(screen.getByText(/7 points/)).toBeInTheDocument();
+    expect(screen.getByText("0 of 7 mapped")).toBeInTheDocument();
     expect(screen.getByText("needs credentials")).toBeInTheDocument();
   });
 
-  it("a source without the flag shows no credentials badge", () => {
+  it("a source without the flag does not say it needs credentials", () => {
     renderNode("source", "src:1", { source: { ...source, needs_credentials: false }, expanded: false });
     expect(screen.queryByText("needs credentials")).not.toBeInTheDocument();
+  });
+
+  describe("every node draws its icon before its title (W12c)", () => {
+    const iconOf = () => document.querySelector(".gicon") as HTMLElement;
+
+    it("a point draws the icon of what it measures: the mapped metric, else the suggested one", () => {
+      renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point: { ...point, asset_id: 10, mapping_id: 1, mapped_metric: "voltage_v" } });
+      expect(iconOf()).toHaveAttribute("data-icon", "metricVoltage");
+      cleanup();
+      renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point }); // not mapped: the scan suggests active power
+      expect(iconOf()).toHaveAttribute("data-icon", metricIcon(pointMetric(point)));
+      expect(iconOf()).toHaveAttribute("data-icon", "rate");
+      cleanup();
+      renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point: { ...point, suggestion: { ...point.suggestion, metric: "custom" } } });
+      expect(iconOf()).toHaveAttribute("data-icon", "metricOther");
+    });
+
+    it("a group draws the layers icon", () => {
+      renderNode("cluster", "cluster:1:LVP01", cluster);
+      expect(iconOf()).toHaveAttribute("data-icon", clusterIcon);
+      expect(iconOf()).toHaveAttribute("data-icon", "layers");
+    });
+
+    it("a source draws its protocol icon, and a connector this build does not know draws the generic sources icon", () => {
+      for (const [type, icon] of [["opcua", "protoOpcua"], ["modbus", "protoModbus"], ["simulator", "protoSimulator"], ["http", "sources"]]) {
+        renderNode("source", "src:1", { source: { ...source, connector_type: type }, expanded: false });
+        expect(iconOf()).toHaveAttribute("data-icon", icon);
+        cleanup();
+      }
+    });
+
+    it("an unidentified service draws the sources icon", () => {
+      renderNode("unidentified", "unid:10.0.0.9:8080", { host: "10.0.0.9", port: 8080 });
+      expect(iconOf()).toHaveAttribute("data-icon", "sources");
+    });
+
+    it("an asset draws what assetIcon gives for it: the chosen icon first, then the registry's, then the guess from its kind", () => {
+      const plain = { id: 10, parent_id: null, name: "Rack A", kind: "rack" };
+      const cases = [
+        { ...plain, icon: "ups", kind_icon: "rack" }, // chosen wins over the registry's
+        { ...plain, icon: null, kind_icon: "panel" }, // the registry's
+        { ...plain, kind: "UPS room" }, // neither: the guess from the kind text
+      ];
+      for (const asset of cases) {
+        renderNode("asset", "asset:10", { asset, depth: 0 });
+        expect(iconOf()).toHaveAttribute("data-icon", assetIcon(asset));
+        cleanup();
+      }
+      renderNode("asset", "asset:10", { asset: cases[0], depth: 0 });
+      expect(iconOf()).toHaveAttribute("data-icon", "kindUps");
+      cleanup();
+      renderNode("asset", "asset:10", { asset: cases[1], depth: 0 });
+      expect(iconOf()).toHaveAttribute("data-icon", "kindPanel");
+    });
+
+    it("the icon is a decorative span that holds an svg and stands BEFORE the words, inside the title (so no node gets a row it did not have)", () => {
+      renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point });
+      const title = screen.getByText("LVP01 kW");
+      expect(title).toHaveClass("node-title");
+      expect(iconOf().tagName).toBe("SPAN");
+      expect(iconOf()).toHaveAttribute("aria-hidden", "true");
+      expect(iconOf().querySelector("svg.i")).not.toBeNull();
+      expect(iconOf().parentElement).toBe(title);
+      expect(title.firstElementChild).toBe(iconOf());
+    });
+
+    it("every kind draws exactly one icon, and the icon adds no text to what a screen reader reads", () => {
+      const kinds: [keyof typeof nodeTypes, object][] = [
+        ["source", { source, expanded: false }], ["cluster", cluster], ["point", { sourceId: 1, clusterKey: "LVP01", point }],
+        ["asset", { asset: { id: 10, parent_id: null, name: "Site", kind: "generic" }, depth: 0 }], ["unidentified", { host: "10.0.0.9", port: 8080 }],
+      ];
+      for (const [type, data] of kinds) {
+        renderNode(type, `${type}:1`, data);
+        expect(document.querySelectorAll(".gicon"), type).toHaveLength(1);
+        expect(document.querySelector(".gicon")!.textContent, type).toBe("");
+        cleanup();
+      }
+      renderNode("more", "more:1", { clusterId: "cluster:1:LVP01", label: "LVP01", left: 70, step: 50 });
+      expect(document.querySelector(".gicon")).toBeNull(); // the Show more node is a button and nothing else
+    });
+  });
+
+  describe("the source card (W12c)", () => {
+    const pointOf = (id: number, mapped: boolean): GraphPoint => ({ ...point, id, mapping_id: mapped ? id : null, asset_id: mapped ? 10 : null, mapped_metric: mapped ? "active_power_kw" : null });
+    const pointsOf = (total: number, mapped: number) => Array.from({ length: total }, (_, i) => pointOf(i + 1, i < mapped));
+    const opc: GraphSource = {
+      ...source, name: "OPC UA server at 172.20.0.2:4840", config: { endpoint: "opc.tcp://172.20.0.2:4840/server" }, enabled: true, status: "online",
+      needs_credentials: false, point_count: 60, clusters: [{ key: "K", points: pointsOf(60, 60) }],
+    };
+    const lines = () => Array.from(document.querySelectorAll(".gsrc-body > *")).map((line) => line.className.split(" ")[0]);
+
+    it("the title is the short name on ONE line with the full name in its title; the second line says the protocol and where the source listens", () => {
+      renderNode("source", "src:1", { source: opc, expanded: false });
+      const title = screen.getByText("OPC UA server");
+      expect(title).toHaveClass("node-title");
+      expect(title).toHaveAttribute("title", "OPC UA server at 172.20.0.2:4840");
+      expect(screen.getByText("OPC UA · 172.20.0.2:4840")).toHaveClass("muted");
+    });
+
+    it("a hand-typed name stays as typed; a source with no address in its config shows the protocol alone", () => {
+      renderNode("source", "src:1", { source: { ...opc, name: "Boiler house", config: {} }, expanded: false });
+      expect(screen.getByText("Boiler house")).toHaveAttribute("title", "Boiler house");
+      expect(screen.getByText("OPC UA", { selector: ".gsrc-sub" })).toBeInTheDocument();
+    });
+
+    it("the Modbus auto name loses its address; the line shows host and port from the config", () => {
+      renderNode("source", "src:2", { source: { ...opc, name: "Modbus device at 10.0.0.5:502", connector_type: "modbus", config: { host: "10.0.0.5", port: 502 } }, expanded: false });
+      expect(screen.getByText("Modbus device")).toHaveClass("node-title");
+      expect(screen.getByText("Modbus · 10.0.0.5:502")).toBeInTheDocument();
+    });
+
+    it("the status line is the dot, its word and the origin: online, offline, needs credentials, disabled and not polled each say their word", () => {
+      // [fields, word, dot class]
+      const cases: [object, string, string][] = [
+        [{ enabled: true, status: "online", needs_credentials: false }, "online", "gdot-online"],
+        [{ enabled: true, status: "offline", needs_credentials: false }, "offline", "gdot-offline"],
+        [{ enabled: true, status: "online", needs_credentials: true }, "needs credentials", "gdot-credentials"],
+        [{ enabled: false, status: "online", needs_credentials: false }, "disabled", "gdot-idle"],
+        [{ enabled: true, status: "unknown", needs_credentials: false }, "not polled", "gdot-idle"],
+      ];
+      for (const [fields, word, dot] of cases) {
+        renderNode("source", "src:1", { source: { ...opc, ...fields }, expanded: false });
+        const line = document.querySelector(".gsrc-status") as HTMLElement;
+        const mark = line.querySelector(".gdot") as HTMLElement;
+        expect(mark, word).toHaveClass("gdot", dot);
+        expect(mark).toHaveAttribute("aria-hidden", "true"); // decoration: the word is the signal
+        expect(mark).toHaveAttribute("title", word);
+        expect(mark.textContent).toBe("");
+        expect(line.textContent, word).toBe(`${word} · discovered`);
+        expect(screen.getByText(word, { selector: ".gsrc-word" }), word).toBeInTheDocument();
+        cleanup();
+      }
+    });
+
+    it("there is no separate needs-credentials badge any more", () => {
+      renderNode("source", "src:1", { source, expanded: false });
+      expect(document.querySelector(".badge")).toBeNull();
+      expect(screen.getAllByText("needs credentials")).toHaveLength(1);
+    });
+
+    it("says N of M mapped in words, with a 4px bar under them that is decoration and as wide as the share", () => {
+      renderNode("source", "src:1", { source: opc, expanded: false });
+      expect(screen.getByText("60 of 60 mapped")).toBeInTheDocument();
+      const bar = document.querySelector(".gsrc-bar") as HTMLElement;
+      expect(bar).toHaveAttribute("aria-hidden", "true");
+      expect((bar.firstElementChild as HTMLElement).style.width).toBe("100%");
+      cleanup();
+      renderNode("source", "src:1", { source: { ...opc, point_count: 8, clusters: [{ key: "K", points: pointsOf(5, 2) }], ungrouped: pointsOf(3, 1).map((p) => ({ ...p, id: p.id + 100 })) }, expanded: false });
+      expect(screen.getByText("3 of 8 mapped")).toBeInTheDocument(); // clusters and the ungrouped points both count
+      expect(((document.querySelector(".gsrc-bar") as HTMLElement).firstElementChild as HTMLElement).style.width).toBe("38%");
+    });
+
+    it("an empty source says No points yet and draws a bar with nothing in it; the share never passes 100%", () => {
+      renderNode("source", "src:1", { source: { ...opc, point_count: 0, clusters: [] }, expanded: false });
+      expect(screen.getByText("No points yet")).toBeInTheDocument();
+      expect(screen.queryByText(/mapped/)).not.toBeInTheDocument();
+      expect(((document.querySelector(".gsrc-bar") as HTMLElement).firstElementChild as HTMLElement).style.width).toBe("0%");
+      cleanup();
+      renderNode("source", "src:1", { source: { ...opc, point_count: 40 }, expanded: false }); // the count lags behind the points: 60 mapped of 40
+      expect(screen.getByText("40 of 40 mapped")).toBeInTheDocument();
+      expect(((document.querySelector(".gsrc-bar") as HTMLElement).firstElementChild as HTMLElement).style.width).toBe("100%");
+    });
+
+    it("the lines come in a fixed order: head, protocol, status, mapped, Details, last seen; the last two only when there is something to show", () => {
+      renderNode("source", "src:1", { source: opc, expanded: false, onSelect: vi.fn(), seen: "Seen in scan #6, 10 min ago" });
+      expect(lines()).toEqual(["gsrc-head", "gsrc-sub", "gsrc-status", "gsrc-mapped", "gsrc-actions", "gsrc-seen"]);
+      cleanup();
+      renderNode("source", "src:1", { source: opc, expanded: false });
+      expect(lines()).toEqual(["gsrc-head", "gsrc-sub", "gsrc-status", "gsrc-mapped"]);
+    });
+
+    it("the fold is a chevron on the LEFT of the icon and the title, named Expand or Collapse with the FULL name, and it reports the node id without selecting the node", async () => {
+      const onToggle = vi.fn();
+      const outer = vi.fn();
+      const Node = nodeTypes.source as unknown as (props: { id: string; data: object }) => React.ReactElement;
+      const view = render(<div onClick={outer}><Node id="src:1" data={{ source: opc, expanded: false, onToggle }} /></div>);
+      const head = document.querySelector(".gsrc-head") as HTMLElement;
+      const fold = screen.getByRole("button", { name: "Expand OPC UA server at 172.20.0.2:4840" });
+      expect(head.firstElementChild).toBe(fold);
+      expect(fold).toHaveClass("nodrag", "gnode-fold");
+      expect(fold).toHaveAttribute("data-folded", "true"); // pointing right while closed
+      expect(fold.querySelector("svg.i")).not.toBeNull();
+      expect(fold.textContent).toBe("");
+      expect(fold.nextElementSibling).toHaveClass("gicon");
+      expect(fold.nextElementSibling!.nextElementSibling).toHaveClass("node-title");
+      await userEvent.click(fold);
+      expect(onToggle).toHaveBeenCalledWith("src:1");
+      expect(outer).not.toHaveBeenCalled();
+      view.rerender(<div onClick={outer}><Node id="src:1" data={{ source: opc, expanded: true, onToggle }} /></div>);
+      expect(screen.getByRole("button", { name: "Collapse OPC UA server at 172.20.0.2:4840" })).not.toHaveAttribute("data-folded");
+    });
+
+    it("the Source actions button is drawn only when the page gave the node an onMenu, is named for the FULL name, opens a menu and hands over its own element", async () => {
+      const view = renderNode("source", "src:1", { source: opc, expanded: false, onToggle: vi.fn(), onSelect: vi.fn() });
+      expect(screen.queryByRole("button", { name: /^Source actions/ })).not.toBeInTheDocument();
+      view.unmount();
+      const onMenu = vi.fn();
+      const outer = vi.fn();
+      const Node = nodeTypes.source as unknown as (props: { id: string; data: object }) => React.ReactElement;
+      render(<div onClick={outer}><Node id="src:1" data={{ source: opc, expanded: false, onMenu }} /></div>);
+      const button = screen.getByRole("button", { name: "Source actions for OPC UA server at 172.20.0.2:4840" });
+      expect(button).toHaveAttribute("type", "button");
+      expect(button).toHaveAttribute("aria-haspopup", "menu");
+      expect(button).toHaveClass("nodrag", "nokey");
+      expect(button.textContent).toBe("");
+      expect(button.parentElement).toHaveClass("gsrc-head"); // on the title line, at its right end
+      expect(button.parentElement!.lastElementChild).toBe(button);
+      await userEvent.click(button);
+      expect(onMenu).toHaveBeenCalledWith(button);
+      expect(outer).not.toHaveBeenCalled();
+    });
+
+    it("a point's and a group's menu button keep their own name (Mapping actions for X)", () => {
+      renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point, onMenu: vi.fn() });
+      expect(screen.getByRole("button", { name: "Mapping actions for LVP01 kW" })).toBeInTheDocument();
+    });
+
+    it("draws no Create assets and no Remove button even when the data carries both callbacks: they are items of the node's menu now", () => {
+      renderNode("source", "src:1", { source: opc, expanded: false, onSelect: vi.fn(), onCreateAssets: vi.fn(), onRemove: vi.fn(), groups: 3 });
+      expect(screen.queryByRole("button", { name: /^Create assets/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeInTheDocument();
+      expect(screen.getAllByRole("button")).toHaveLength(1); // Details
+      expect(document.querySelector(".gnode-actions, .gnode-remove, .gnode-facts, .gnode-seen, .gproto")).toBeNull();
+    });
+
+    it("keeps the dashed border class for a discovered source and the origin class for a manual one", () => {
+      renderNode("source", "src:1", { source: opc, expanded: false });
+      expect(document.querySelector(".gnode")!.className).toBe("gnode gnode-source discovered");
+      cleanup();
+      renderNode("source", "src:1", { source: { ...opc, origin: "manual" }, expanded: false });
+      expect(document.querySelector(".gnode")!.className).toBe("gnode gnode-source manual");
+    });
   });
 
   it("a toggle button appears only when onToggle is injected, and reports the node id", async () => {
@@ -83,125 +317,44 @@ describe("graph nodes", () => {
     expect(onSelect).toHaveBeenCalledTimes(2);
   });
 
-  describe("a source node's buttons and last-seen line (W7r)", () => {
-    const all = { source, expanded: false, onToggle: vi.fn(), onSelect: vi.fn(), onCreateAssets: vi.fn(), onRemove: vi.fn(), groups: 3, seen: "Seen in scan #6, 10 min ago" };
+  describe("a source card's keyboard order, buttons and last-seen line (W7r, W12c)", () => {
+    const all = { source, expanded: false, onToggle: vi.fn(), onSelect: vi.fn(), onMenu: vi.fn(), groups: 3, seen: "Seen in scan #6, 10 min ago" };
 
-    it("Remove and Create assets… render only when their callback is injected, and report the node id", async () => {
-      const view = renderNode("source", "src:1", { source, expanded: false, onSelect: vi.fn(), groups: 3 });
-      expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /^Create assets/ })).not.toBeInTheDocument();
-      view.unmount();
-      const [onRemove, onCreateAssets] = [vi.fn(), vi.fn()];
-      renderNode("source", "src:1", { ...all, onRemove, onCreateAssets });
-      const remove = screen.getByRole("button", { name: "Remove Plant OPC from Discovery" });
-      const create = screen.getByRole("button", { name: "Create assets for 3 groups of Plant OPC" });
-      expect(remove.textContent).toBe(""); // the bin alone (W7t): the name is the aria-label, the tooltip the title
-      expect(remove).toHaveAttribute("title", "Remove");
-      expect(remove.querySelector("svg.i")).toHaveAttribute("aria-hidden", "true");
-      expect(create).toHaveTextContent("Create assets…");
-      expect(remove).toHaveClass("nodrag");
-      expect(create).toHaveClass("nodrag");
-      await userEvent.click(remove);
-      await userEvent.click(create);
-      expect(onRemove).toHaveBeenCalledWith("src:1");
-      expect(onCreateAssets).toHaveBeenCalledWith("src:1");
-    });
-
-    it("the Create assets name counts its groups, one group included", () => {
-      renderNode("source", "src:1", { ...all, groups: 1 });
-      expect(screen.getByRole("button", { name: "Create assets for 1 group of Plant OPC" })).toBeInTheDocument();
-    });
-
-    it("keyboard order is Toggle, Details, Create assets, Remove", async () => {
+    it("keyboard order is the fold, Source actions, then Details", async () => {
       renderNode("source", "src:1", all);
       const order: string[] = [];
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 3; i++) {
         await userEvent.tab();
         order.push(document.activeElement?.getAttribute("aria-label") ?? "");
       }
-      expect(order).toEqual(["Expand Plant OPC", "Details for Plant OPC", "Create assets for 3 groups of Plant OPC", "Remove Plant OPC from Discovery"]);
+      expect(order).toEqual(["Expand Plant OPC", "Source actions for Plant OPC", "Details for Plant OPC"]);
     });
 
-    it("Details, Create assets and Remove share ONE row that may wrap, apart from the title row with the toggle", () => {
+    it("Details sits on a line of its own, apart from the head with the fold and the menu", () => {
       renderNode("source", "src:1", all);
-      const row = screen.getByRole("button", { name: "Details for Plant OPC" }).parentElement!;
-      expect(row).toHaveClass("row", "gnode-actions");
-      expect(row).toContainElement(screen.getByRole("button", { name: /^Create assets/ }));
-      expect(row).toContainElement(screen.getByRole("button", { name: /^Remove / }));
-      expect(row).not.toContainElement(screen.getByRole("button", { name: "Expand Plant OPC" }));
-    });
-
-    it("Details and Create assets keep their words; only Remove is a bin without text", () => {
-      renderNode("source", "src:1", all);
+      const line = screen.getByRole("button", { name: "Details for Plant OPC" }).parentElement!;
+      expect(line).toHaveClass("gsrc-actions");
+      expect(line).not.toContainElement(screen.getByRole("button", { name: "Expand Plant OPC" }));
       expect(screen.getByRole("button", { name: "Details for Plant OPC" })).toHaveTextContent("Details");
-      expect(screen.getByRole("button", { name: /^Create assets/ })).toHaveTextContent("Create assets…");
-      expect(screen.getByRole("button", { name: /^Remove / })).toHaveClass("gnode-remove");
     });
 
     it("every button is type=button, so none submits a form around the graph", () => {
       renderNode("source", "src:1", all);
+      expect(screen.getAllByRole("button")).toHaveLength(3);
       for (const button of screen.getAllByRole("button")) expect(button).toHaveAttribute("type", "button");
     });
 
     it("shows the last-seen line as one muted line with the whole text in its title", () => {
       renderNode("source", "src:1", all);
       const line = screen.getByText("Seen in scan #6, 10 min ago");
-      expect(line).toHaveClass("muted", "gnode-seen");
+      expect(line).toHaveClass("muted", "gsrc-seen");
       expect(line).toHaveAttribute("title", "Seen in scan #6, 10 min ago");
     });
 
-    it("draws no action row at all when the node has no button", () => {
+    it("draws no Details line and no last-seen line when there is nothing to show", () => {
       renderNode("source", "src:1", { source, expanded: false });
-      expect(document.querySelector(".gnode-actions")).toBeNull();
-    });
-  });
-
-  describe("a source node's status dot and protocol badge (W7u)", () => {
-    const facts = () => document.querySelector(".gnode-facts") as HTMLElement;
-    const dot = () => facts().querySelector(".gdot") as HTMLElement;
-    const online = { ...source, enabled: true, status: "online", needs_credentials: false };
-
-    // [name, source fields, class of the dot, its tooltip]
-    it.each([
-      ["online", { enabled: true, status: "online", needs_credentials: false }, "gdot-online", "online"],
-      ["offline", { enabled: true, status: "offline", needs_credentials: false }, "gdot-offline", "offline"],
-      ["needs credentials", { enabled: true, status: "online", needs_credentials: true }, "gdot-credentials", "needs credentials"],
-      ["disabled", { enabled: false, status: "online", needs_credentials: false }, "gdot-idle", "disabled"],
-      ["never polled", { enabled: true, status: "unknown", needs_credentials: false }, "gdot-idle", "not polled"],
-    ])("%s: the dot has its class and tooltip, and is hidden from assistive tech (decoration)", (_name, fields, cls, title) => {
-      renderNode("source", "src:1", { source: { ...source, ...fields }, expanded: false });
-      expect(dot()).toHaveClass("gdot", cls);
-      expect(dot()).toHaveAttribute("aria-hidden", "true");
-      expect(dot()).toHaveAttribute("title", title);
-      expect(dot().textContent).toBe("");
-    });
-
-    it("the status word stays in the text, raw: colour is never the only signal (unknown stays unknown beside an amber dot)", () => {
-      renderNode("source", "src:1", { source, expanded: false }); // needs credentials, status "unknown"
-      expect(dot()).toHaveClass("gdot-credentials");
-      expect(screen.getByText(/discovered · unknown · 7 points/)).toBeInTheDocument();
-    });
-
-    it("the facts line is the dot, the badge, then the origin, status and count as ONE text node", () => {
-      renderNode("source", "src:1", { source: online, expanded: false });
-      expect(facts()).toHaveClass("muted");
-      const texts = [...facts().childNodes].filter((n) => n.nodeType === Node.TEXT_NODE && /\S/.test(n.textContent ?? ""));
-      expect(texts).toHaveLength(1);
-      expect(texts[0].textContent).toBe(" discovered · online · 7 points");
-      expect(facts().textContent).toBe(" OPC UA discovered · online · 7 points"); // what a screen reader reads: the dot is empty
-      const kids = [...facts().children].map((c) => c.className);
-      expect(kids).toEqual(["gdot gdot-online", "gproto"]);
-    });
-
-    it.each([["opcua", "OPC UA"], ["modbus", "Modbus"], ["simulator", "Simulator"], ["http", "http"]])("the badge says %s as %s", (type, label) => {
-      renderNode("source", "src:1", { source: { ...source, connector_type: type }, expanded: false });
-      expect(screen.getByText(label, { selector: ".gproto" })).toBeInTheDocument();
-      expect(document.querySelectorAll(".gproto")).toHaveLength(1);
-    });
-
-    it("the credentials badge below the facts is still there beside the amber dot", () => {
-      renderNode("source", "src:1", { source, expanded: false });
-      expect(screen.getByText("needs credentials", { selector: ".badge" })).toBeInTheDocument();
+      expect(document.querySelector(".gsrc-actions")).toBeNull();
+      expect(document.querySelector(".gsrc-seen")).toBeNull();
     });
   });
 
@@ -572,9 +725,14 @@ describe("graph nodes", () => {
       expect(show).toHaveAttribute("data-folded", "true"); // the stylesheet turns the chevron to point right
     });
 
-    it("a source keeps its minus and plus (only the asset fold changed)", () => {
+    it("a source's fold is a chevron too since W12c, with the words Expand and Collapse; a group keeps its minus and plus", () => {
       renderNode("source", "src:1", { source, expanded: true, onToggle: vi.fn() });
-      expect(screen.getByRole("button", { name: "Collapse Plant OPC" })).toHaveTextContent(/^−$/);
+      const fold = screen.getByRole("button", { name: "Collapse Plant OPC" });
+      expect(fold).toHaveTextContent(/^$/);
+      expect(fold.querySelector("svg.i")).not.toBeNull();
+      cleanup();
+      renderNode("cluster", "cluster:1:LVP01", { ...cluster, expanded: true, onToggle: vi.fn() });
+      expect(screen.getByRole("button", { name: "Collapse LVP01" })).toHaveTextContent(/^−$/);
     });
 
     it("the words Expand and Collapse are not used (they belong to groups and sources)", () => {
