@@ -8,6 +8,9 @@ it would create and exits 0; with `--yes` but no variable it exits 2; if a sourc
 named "Seeded demo") exists, or one of the safety checks below fails, it exits 1. In all of these nothing is written. Never run
 it against a production database.
 
+`--layout pilot-hall` (with `--interval-minutes`) makes a made-up data-centre hall instead, see dcdash/seed/pilot_hall.py; it shares
+the switches, the range rules and the clean-up below. Everything else here describes the default layout, `three-panels`.
+
 What it makes, and nothing else (no other row is read-modified, no audit row is written, no asset kind is registered):
   - a source `seeded-history`, a DISABLED simulator source (the scheduler polls only enabled sources), pointing at a host that
     never resolves;
@@ -71,6 +74,7 @@ STEP = timedelta(minutes=5)
 STEP_SECONDS = int(STEP.total_seconds())
 STEP_HOURS = STEP.total_seconds() / 3600
 INTERVAL_CHOICES = (5, 10, 15, 30, 60)  # minutes: the sample spacings the pilot-hall layout may use (each divides an hour)
+LAYOUTS = ("three-panels", "pilot-hall")  # three-panels (this file) is the default; pilot-hall lives in dcdash.seed.pilot_hall
 JITTER = 0.03  # +-3 % on the power
 GAP_HOURS = 6
 GAP_FROM_LOCAL = time(9, 0)  # the gap runs 09:00 to 15:00 local, so the next value arrives on the same local day
@@ -447,11 +451,20 @@ def _days(text: str) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m dcdash.seed.history",
-        description="Make a month of fake history on a DEV or SCRATCH stack. Without --yes it only prints its plan.",
+        description="Make a month of fake history on a DEV or SCRATCH stack: three seeded panels (the default layout) or a made-up "
+        "data-centre hall with halls, rows and 117 racks (--layout pilot-hall). Without --yes it only prints its plan.",
     )
     parser.add_argument("--yes", action="store_true", help=f"really write it (also needs {SWITCH}=1 in the environment)")
     parser.add_argument("--days", type=_days, metavar="N", help="use the last N days instead of starting at the previous month")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="seed of the jitter (default: a fixed one)")
+    parser.add_argument(
+        "--layout", choices=LAYOUTS, default=LAYOUTS[0],
+        help="three-panels: Panel A, B and C every 5 minutes (default); pilot-hall: a hall of racks with A and B feeds",
+    )
+    parser.add_argument(
+        "--interval-minutes", type=int, choices=INTERVAL_CHOICES,
+        help="minutes between samples; only for --layout pilot-hall (more minutes: fewer readings, a faster run)",
+    )
     return parser
 
 
@@ -558,14 +571,24 @@ async def _seed(args: argparse.Namespace) -> int:
 
 
 async def amain(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.layout == "three-panels" and args.interval_minutes is not None:
+        parser.error("--interval-minutes only applies to --layout pilot-hall")
+    if args.layout == "pilot-hall":
+        # Imported here, not at the top: pilot_hall imports this module, and `python -m dcdash.seed.history` runs it as __main__.
+        from dcdash.seed import pilot_hall
+
+        dry_run, seed = pilot_hall.dry_run, pilot_hall.seed
+    else:
+        dry_run, seed = _dry_run, _seed
     if not args.yes:
-        return await _dry_run(args)
+        return await dry_run(args)
     if os.environ.get(SWITCH) != "1":
         print(f"Refused, nothing written: --yes also needs {SWITCH}=1 in the environment "
               "(this writes fake readings; use it on a dev or scratch stack only).", file=sys.stderr)
         return 2
-    return await _seed(args)
+    return await seed(args)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

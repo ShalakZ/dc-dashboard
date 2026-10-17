@@ -3,14 +3,20 @@ and an undo sentence of its own, and its layout and series are pure functions of
 
 These tests do not touch the old layout's figures (`test_seed_history.py` pins those and runs unmodified). The first group needs no
 database: it checks the plan arithmetic, the batch writer's checks and the undo texts of `dcdash.seed.history`."""
+import asyncio
 import math
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from billing_helpers import set_zone
+from dcdash.api import billing
+from dcdash.connectors.simulator import SimulatorConfig
+from dcdash.core.asset_kinds import kind_key
+from dcdash.core.db import get_sessionmaker
 from dcdash.core.metrics import Metric
 from dcdash.seed import history, pilot_hall
 
@@ -567,3 +573,354 @@ def test_the_load_follows_the_local_hour(small):
             afternoon.append(total)
     assert night and afternoon
     assert sum(afternoon) / len(afternoon) > 1.1 * sum(night) / len(night)
+
+
+# ---- the kinds a run uses (task 4a): pure -----------------------------------------------------------------------------------
+
+ROLES = ["site", "hall", "pod", "row", "rack", "feed", "electrical", "panel"]
+
+
+def test_choose_kinds_prefers_the_registry():
+    empty = pilot_hall.choose_kinds(set())
+    assert list(empty) == ROLES
+    assert {role: (choice.name, choice.registered) for role, choice in empty.items()} == {
+        "site": ("Site", False), "hall": ("Data hall", False), "pod": ("Room", False), "row": ("Row", False),
+        "rack": ("Rack", False), "feed": ("Circuit", False), "electrical": ("Room", False), "panel": ("Panel", False),
+    }
+    assert all(choice.preferred == choice.name for choice in empty.values())  # nothing registered: the first preferred name
+
+    basic = {"site", "room", "row", "rack", "circuit", "panel"}  # what a fresh install holds, roughly
+    chosen = pilot_hall.choose_kinds(basic)
+    assert all(choice.registered for choice in chosen.values())
+    assert (chosen["hall"].name, chosen["hall"].preferred) == ("Room", "Data hall")  # the second preferred name is registered
+    assert (chosen["feed"].name, chosen["pod"].name, chosen["electrical"].name) == ("Circuit", "Room", "Room")
+
+    pack = pilot_hall.choose_kinds(basic | {"data hall"})
+    assert (pack["hall"].name, pack["hall"].registered, pack["hall"].preferred) == ("Data hall", True, "Data hall")
+    assert pack["pod"].name == "Room"
+
+    # "Other equipment" is the fallback only for a role whose preferred names are ALL missing
+    fallback = pilot_hall.choose_kinds({"other equipment", "room", "meter"})
+    assert (fallback["hall"].name, fallback["hall"].registered) == ("Room", True)
+    assert (fallback["feed"].name, fallback["feed"].registered) == ("Meter", True)  # the second preferred name beats the fallback
+    assert (fallback["rack"].name, fallback["rack"].registered, fallback["rack"].preferred) == ("Other equipment", True, "Rack")
+    assert (fallback["panel"].name, fallback["panel"].registered) == ("Other equipment", True)
+    only_other = pilot_hall.choose_kinds({"other equipment"})
+    assert all((choice.name, choice.registered) == ("Other equipment", True) for choice in only_other.values())
+    assert only_other["site"].preferred == "Site" and only_other["hall"].preferred == "Data hall"
+
+    # the registry holds kind_key values: spelling and spacing of the stored name do not matter, the key does
+    assert pilot_hall.choose_kinds({kind_key("  DATA   Hall ")})["hall"].registered is True
+
+
+# ---- the command line (task 4a) ---------------------------------------------------------------------------------------------
+# A seeding test takes tens of seconds (the rollup refresh), so every run below is one or two days at a 60-minute step.
+
+HOUR = 3600
+QUICK = ["--days", "1", "--interval-minutes", "60"]
+TWO_DAYS = ["--days", "2", "--interval-minutes", "60"]
+WATCHED = (
+    "sources", "assets", "points", "mappings", "readings", "point_latest", "tariffs", "settings", "audit_log", "asset_kinds",
+    "users", "dashboards", "widgets", "jobs", "graph_layout", "scans",
+)
+UNTOUCHED = ("tariffs", "settings", "audit_log", "asset_kinds", "users", "dashboards", "widgets", "jobs", "graph_layout", "scans")
+
+
+@pytest.fixture(autouse=True)
+def frozen_billing(monkeypatch):
+    monkeypatch.setattr(billing, "_now", lambda: NOW)
+
+
+@pytest.fixture
+def allowed(monkeypatch):
+    monkeypatch.setenv(history.SWITCH, "1")
+
+
+@pytest.fixture
+async def site(db):
+    """Qatar, and the factory raw retention of 30 days (which the `db` fixture stores)."""
+    await set_zone(db, ZONE)
+    return db
+
+
+async def counts(db) -> dict[str, int]:
+    return {table: await db.fetchval(f"SELECT count(*) FROM {table}") for table in WATCHED}
+
+
+async def dump(db, table: str, order: str = "id") -> list[tuple]:
+    return [tuple(row) for row in await db.fetch(f"SELECT * FROM {table} ORDER BY {order}")]
+
+
+async def seed_pilot(args: list[str] | None = None) -> int:
+    return await history.amain(["--yes", "--layout", "pilot-hall", *(args or [])])
+
+
+async def asset_rows(db) -> dict[str, object]:
+    """Every asset row by its path (the names from the root down): a name repeats across halls, a path does not."""
+    rows = {row["id"]: row for row in await db.fetch("SELECT * FROM assets")}
+
+    def route(row) -> str:
+        names = []
+        while row is not None:
+            names.append(row["name"])
+            row = rows.get(row["parent_id"])
+        return " / ".join(reversed(names))
+
+    return {route(row): row for row in rows.values()}
+
+
+async def month_figures(month: str) -> dict[int, dict]:
+    async with get_sessionmaker()() as session:
+        body = await billing.month_costs(session, month)
+    return {asset["asset_id"]: asset for asset in body["assets"]}
+
+
+async def test_the_old_layout_is_still_the_default(site, capsys):
+    assert await history.amain([]) == 0
+    out = capsys.readouterr().out
+    assert "Seeded Panel A" in out and "Seeded pilot hall" not in out and "seeded-history" in out
+
+
+async def test_yes_without_the_variable_exits_2(site, capsys, monkeypatch):
+    before = await counts(site)
+    assert await seed_pilot() == 2
+    assert history.SWITCH in capsys.readouterr().err
+    monkeypatch.setenv(history.SWITCH, "true")
+    assert await seed_pilot() == 2
+    assert await counts(site) == before
+
+
+async def test_interval_minutes_is_refused_for_the_old_layout(site, allowed, capsys):
+    before = await counts(site)
+    for argv in (["--interval-minutes", "60"], ["--layout", "three-panels", "--interval-minutes", "15"], ["--yes", "--interval-minutes", "5"]):
+        with pytest.raises(SystemExit) as caught:
+            await history.amain(argv)
+        assert caught.value.code == 2
+        assert "--interval-minutes only applies to --layout pilot-hall" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as caught:  # a value that is not an offered interval is refused by argparse
+        await history.amain(["--layout", "pilot-hall", "--interval-minutes", "7"])
+    assert caught.value.code == 2
+    with pytest.raises(SystemExit) as caught:  # and so is a layout that does not exist
+        await history.amain(["--layout", "nope"])
+    assert caught.value.code == 2
+    assert await counts(site) == before
+
+
+# ---- one run: the rows, the report, the figures ---------------------------------------------------------------------------
+
+
+async def test_a_run_creates_exactly_the_planned_rows(site, allowed, capsys):
+    before = await counts(site)
+    layout = pilot_hall.build_layout()
+    plan = history.make_plan(NOW, ZONE, 1, raw_retention_days=30, step_seconds=HOUR)
+    frames = list(pilot_hall.samples(plan, layout))
+    expected = sum(len(values) for _, values in frames)
+    assert plan.gap is None and expected == len(layout.meters) * plan.count == 233 * 25
+
+    assert await seed_pilot(QUICK) == 0
+    out = capsys.readouterr().out
+    assert out.splitlines()[0] == "Seeded pilot hall created."
+    assert "assets    370 (site 1, halls 2, pods 4, rows 8, racks 117, feeds 229, electrical 1, panels 8)" in out and len(layout.nodes) == 370
+    assert "points    233" in out and "interval  60 minutes" in out and f"readings  {expected}" in out
+    assert "range     " in out and f" in {ZONE}" in out and "clamped" not in out
+    assert re.search(r"took \d+(\.\d+)? s writing, \d+(\.\d+)? s refreshing the rollups", out)
+    assert "Set a site rate in Tariffs to see costs." in out and f"To undo it: {pilot_hall.UNDO}." in out
+    assert "Billing cannot use" not in out
+    for role in ROLES:  # the test registry is empty, so every role's kind is unregistered and the report says so
+        preferred = pilot_hall.choose_kinds(set())[role].name
+        assert f'kind "{preferred}" for {role} is not in the Asset kinds list (preferred "{preferred}")' in out
+
+    after = await counts(site)
+    assert after["sources"] == before["sources"] + 1 and after["assets"] == before["assets"] + len(layout.nodes)
+    assert after["points"] == after["mappings"] == after["point_latest"] == len(layout.meters)
+    assert after["readings"] == expected
+    for table in UNTOUCHED:
+        assert after[table] == before[table], table  # no audit row, no registered kind, no other row
+
+    source = await site.fetchrow("SELECT * FROM sources")
+    assert (source["name"], source["connector_type"], source["enabled"], source["origin"]) == ("seeded-pilot-hall", "simulator", False, "manual")
+    assert source["status"] == "unknown" and source["secret"] is None
+    assert SimulatorConfig.model_validate(source["config"]).model_dump(mode="json") == source["config"]
+    assert f'"{pilot_hall.SOURCE_NAME}" id {source["id"]}' in out
+
+    # the tree is the layout: same paths, kinds from choose_kinds, Electrical listed after the halls, no icon of its own
+    rows = await asset_rows(site)
+    kinds = pilot_hall.choose_kinds(set())
+    assert set(rows) == {pilot_hall.path(layout, node.key) for node in layout.nodes}
+    for node in layout.nodes:
+        row = rows[pilot_hall.path(layout, node.key)]
+        assert (row["kind"], row["sort_order"], row["icon"]) == (kinds[node.role].name, node.sort_order, None), node.key
+        assert (row["parent_id"] is None) == (node.parent is None)
+    assert rows[pilot_hall.ROOT_NAME]["kind"] == "Site" and rows[f"{pilot_hall.ROOT_NAME} / Electrical"]["sort_order"] == 1
+    assert f"root      \"{pilot_hall.ROOT_NAME}\" id {rows[pilot_hall.ROOT_NAME]['id']}" in out
+
+    points = {row["address"]: row for row in await site.fetch(
+        "SELECT p.*, m.metric, m.scale, m.interval_seconds, m.asset_id FROM points p JOIN mappings m ON m.point_id = p.id"
+    )}
+    assert len(points) == len(layout.meters)
+    for meter in layout.meters:
+        row = points[pilot_hall.point_address(meter)]
+        assert row["name"] == f"{pilot_hall.path(layout, meter.node)} {meter.metric.value}" and row["data_type"] == "float"
+        assert (row["unit_hint"], row["metric"], row["scale"], row["interval_seconds"]) == (pilot_hall.unit(meter), meter.metric.value, 1.0, HOUR)
+        assert row["asset_id"] == rows[pilot_hall.path(layout, meter.node)]["id"]
+    panel_metrics = {points[pilot_hall.point_address(m)]["metric"] for m in layout.meters if m.kind in ("voltage", "current")}
+    assert panel_metrics == {"voltage_v", "current_a"}  # a panel carries no energy mapping
+
+    # the readings are the generator's, through the collector's writer: quality GOOD, point_latest holds each meter's last value
+    assert await site.fetchval("SELECT count(*) FROM readings WHERE quality <> 0") == 0
+    assert await site.fetchval("SELECT min(ts) FROM readings") == plan.start and await site.fetchval("SELECT max(ts) FROM readings") == plan.end
+    last = frames[-1][1]
+    for meter in layout.meters:
+        latest = await site.fetchrow("SELECT ts, value FROM point_latest WHERE point_id = $1", points[pilot_hall.point_address(meter)]["id"])
+        assert (latest["ts"], latest["value"]) == (plan.end, last[meter.id]), meter.id
+    assert await site.fetchval("SELECT count(*) FROM readings_1h") > 0 and await site.fetchval("SELECT count(*) FROM readings_1m") > 0
+
+
+async def test_totals_do_not_double_count(site, allowed):
+    layout = pilot_hall.build_layout()
+    assert await seed_pilot(TWO_DAYS) == 0
+    rows = await asset_rows(site)
+    figures = await month_figures("2026-10")
+
+    def total(key: str) -> dict | None:
+        return figures[rows[pilot_hall.path(layout, key)]["id"]]["total"]
+
+    racks_of = {hall: [rack for rack in layout.racks if rack.hall == hall] for hall in (1, 2)}
+    for hall, racks in racks_of.items():
+        live = [rack for rack in racks if rack.status != "free"]
+        assert total(f"h{hall}")["kwh"] == pytest.approx(sum(total(rack.node)["kwh"] for rack in live), rel=1e-9)
+        assert total(f"h{hall}")["kwh"] > 0
+    assert total("site")["kwh"] == pytest.approx(total("h1")["kwh"] + total("h2")["kwh"], rel=1e-9)  # no Electrical energy on top
+    for rack in layout.racks:
+        if rack.status == "free":
+            assert total(rack.node) is None and all(total(feed) is None for feed in rack.feeds), rack.node
+        else:
+            assert total(rack.node)["kwh"] == pytest.approx(sum(total(feed)["kwh"] for feed in rack.feeds), rel=1e-9), rack.node
+    assert total("elec") is None and all(total(node.key) is None for node in layout.nodes if node.role == "panel")
+    # Hall 1 is exact; Hall 2 holds the power-only feeds the engine has to estimate, and the Site above it shows the same "~"
+    assert total("h1")["estimated"] is False
+    assert total("h2")["estimated"] is True and total("site")["estimated"] is True
+
+
+async def test_a_feed_matches_the_generator(site, allowed):
+    layout = pilot_hall.build_layout()
+    plan = history.make_plan(NOW, ZONE, 2, raw_retention_days=30, step_seconds=HOUR)
+    meter = next(m for m in layout.meters if m.node.startswith("h1/") and m.kind == "counter" and not m.gap and not m.resets)
+    rows = [(ts, values[meter.id]) for ts, values in pilot_hall.samples(plan, layout) if meter.id in values]
+    zone = ZoneInfo(ZONE)
+    model: dict[date, float] = defaultdict(float)
+    for (_, before), (when, after) in zip(rows, rows[1:]):
+        model[when.astimezone(zone).date()] += max(0.0, after - before)
+
+    assert await seed_pilot(TWO_DAYS) == 0
+    figures = await month_figures("2026-10")
+    asset = (await asset_rows(site))[pilot_hall.path(layout, meter.node)]["id"]
+    complete = date(2026, 10, 14)  # the one local day wholly inside the two days
+    assert figures[asset]["days"][complete.day - 1]["kwh"] == pytest.approx(model[complete], rel=1e-6)
+    assert model[complete] > 20  # a real figure: a feed of 1 to 11 kW draws tens of kWh in a day
+
+
+# ---- refusals, other layout, clean-up ---------------------------------------------------------------------------------------
+
+
+async def test_a_second_run_refuses_and_changes_nothing(site, allowed, capsys):
+    assert await seed_pilot(QUICK) == 0
+    capsys.readouterr()
+    before = {"counts": await counts(site), "assets": await dump(site, "assets"), "sources": await dump(site, "sources")}
+    assert await seed_pilot(QUICK) == 1
+    err = capsys.readouterr().err
+    assert "Refused, nothing written" in err and "seeded-pilot-hall" in err and "To undo it" in err
+    assert {"counts": await counts(site), "assets": await dump(site, "assets"), "sources": await dump(site, "sources")} == before
+    assert await history.amain(["--layout", "pilot-hall"]) == 0  # the dry run still exits 0
+
+
+@pytest.mark.parametrize("first", ["three-panels", "pilot-hall"])
+async def test_the_other_layout_coexists_both_ways(site, allowed, capsys, first):
+    arguments = {"three-panels": ["--layout", "three-panels", "--days", "1"], "pilot-hall": ["--layout", "pilot-hall", *QUICK]}
+    names = {"three-panels": "seeded-history", "pilot-hall": "seeded-pilot-hall"}
+    second = "pilot-hall" if first == "three-panels" else "three-panels"
+    assert await history.amain(["--yes", *arguments[first]]) == 0
+    assert await history.amain(["--yes", *arguments[second]]) == 0  # the other layout's rows never refuse
+    assert await site.fetchval("SELECT count(*) FROM sources") == 2
+    capsys.readouterr()
+    before = await counts(site)
+    for layout_name in (first, second):  # each guard refuses its own second run, and names its own source
+        assert await history.amain(["--yes", *arguments[layout_name]]) == 1
+        assert names[layout_name] in capsys.readouterr().err
+        assert await counts(site) == before
+    rows = await asset_rows(site)
+    assert {"Seeded demo", "Seeded pilot hall"} <= set(rows)
+
+
+async def test_a_flush_that_fails_after_the_first_day_takes_everything_back(site, allowed, monkeypatch, capsys):
+    real = history.Writer.flush
+    calls: list[int] = []
+
+    async def first_then_nothing(self):
+        calls.append(self.pending)
+        return await real(self) if len(calls) == 1 else 0  # what Writer.flush does when the database is unavailable
+
+    monkeypatch.setattr(history.Writer, "flush", first_then_nothing)
+    before = await counts(site)
+    assert await seed_pilot(QUICK) == 1
+    err = capsys.readouterr().err
+    assert len(calls) == 2 and "Failed, and what it had made was removed" in err and "took 0 of" in err
+    assert await counts(site) == before  # source, assets, points, mappings, readings and point_latest are all gone
+    for table in ("readings", "readings_1m", "readings_1h"):
+        assert await site.fetchval(f"SELECT count(*) FROM {table}") == 0, table
+
+
+async def test_a_failed_refresh_takes_everything_back(site, allowed, monkeypatch, capsys):
+    calls = []
+    real = history.refresh_rollups
+
+    async def refreshes_then_breaks(pool, plan):
+        calls.append(plan)
+        await real(pool, plan)  # the rollups now hold the seeded minutes and hours ... (the cleanup refreshes them again)
+        if len(calls) == 1:
+            raise RuntimeError("the refresh broke")
+
+    monkeypatch.setattr(history, "refresh_rollups", refreshes_then_breaks)
+    before = await counts(site)
+    assert await seed_pilot(QUICK) == 1
+    assert "the refresh broke" in capsys.readouterr().err and len(calls) == 2
+    assert await counts(site) == before
+    assert await site.fetchval("SELECT count(*) FROM readings_1m") == 0 and await site.fetchval("SELECT count(*) FROM readings_1h") == 0
+
+
+async def test_cancellation_takes_everything_back_and_propagates(site, allowed, monkeypatch):
+    real = history.Writer.flush
+    calls: list[int] = []
+
+    async def cancelled_on_the_second(self):
+        calls.append(self.pending)
+        if len(calls) == 2:
+            raise asyncio.CancelledError()  # Ctrl+C or a cancelled task, half way through the days
+        return await real(self)
+
+    monkeypatch.setattr(history.Writer, "flush", cancelled_on_the_second)
+    before = await counts(site)
+    with pytest.raises(asyncio.CancelledError):
+        await seed_pilot(QUICK)
+    assert len(calls) == 2
+    assert await counts(site) == before
+    for table in ("readings", "readings_1m", "readings_1h"):
+        assert await site.fetchval(f"SELECT count(*) FROM {table}") == 0, table
+
+
+async def test_the_write_phase_reports_every_fifth_day(site, allowed, monkeypatch, capsys):
+    async def drains(pool, batches):  # the progress lines belong to the days as they are pulled, so no database writes are needed
+        return sum(len(rows) for _day, rows in batches)
+
+    async def no_refresh(pool, plan):
+        return None
+
+    monkeypatch.setattr(history, "write_batches", drains)
+    monkeypatch.setattr(history, "refresh_rollups", no_refresh)
+    for days, expected in ((9, 10), (11, 12)):  # 10 UTC dates: a line after the 5th and the 10th; 12 dates: 5th and 10th only
+        plan = history.make_plan(NOW, ZONE, days, raw_retention_days=30, step_seconds=HOUR)
+        assert len({ts.date() for ts in plan.times()}) == expected
+        await site.execute("DELETE FROM sources; DELETE FROM assets")
+        assert await seed_pilot(["--days", str(days), "--interval-minutes", "60"]) == 0
+        lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("written ")]
+        assert lines == [f"written 5 of {expected} days", f"written 10 of {expected} days"]

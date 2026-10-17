@@ -1,12 +1,15 @@
 """The "pilot hall": a made-up data-centre tree for a DEV or SCRATCH stack, so the demo and later waves have something to look at.
 
-    python -m dcdash.seed.history --layout pilot-hall        # arrives with a later task of wave w16
+    python -m dcdash.seed.history --layout pilot-hall                       # prints the plan, writes nothing
+    DCDASH_ALLOW_SEED_HISTORY=1 python -m dcdash.seed.history --layout pilot-hall --yes
 
-This part is only the LAYOUT: what the tree looks like, which racks are busy, idle, single-fed or empty, and which meter sits on
+The first part is the LAYOUT: what the tree looks like, which racks are busy, idle, single-fed or empty, and which meter sits on
 which asset. Everything here is synthetic and generic ("Hall 1", "Pod A", "Row 1", "Rack 01", "Feed A", "Panel 1A"); no name comes
 from a real site. The layout is a pure function of a seed (one `random.Random(seed)`, no clock, no database), and the module does
 nothing on its own: importing it writes nothing and reads nothing. The series (the readings of every meter) is the second part of
-this file, also pure; the writer, the dry run and the command line are added by a later task (4).
+this file, also pure. The third part writes them: the kinds the assets get, the rows, and the run. It borrows the old seeder's
+machinery (the plan, the pending-drop check, the batch writer, the rollup refresh and the undo) through the `history` module, so
+the two switches, the raw-retention clamp and the clean-up of a failed run are the same as for the default layout.
 
 The tree, with its keys (a key is a unique label in this module, not a path):
   - the Site "Seeded pilot hall" (`site`) > Hall 1, Hall 2 (`h1`, `h2`) > Pod A, Pod B (`h1/pa`, `h1/pb`) > Row 1 to Row 4 of each
@@ -20,20 +23,34 @@ Variety, with the counts fixed and the choice of racks moved by the seed: 6 free
 rack shares its load about half and half between the feeds. Eight of the Hall 2 B feeds report power instead of an energy counter
 (so the engine has to estimate them), one Hall 1 Feed A counter has a gap in its samples and another one resets once.
 """
+import argparse
 import math
 import random
 import re
+import sys
+import time
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import asyncpg
+from pydantic import AnyHttpUrl
+
+from dcdash.api.asset_names import _KEY, ASSET_NAMES_LOCK  # the one definition of "the same sibling name"
+from dcdash.connectors.base import GOOD
+from dcdash.connectors.simulator import SimulatorConfig
+from dcdash.core.asset_kinds import kind_key
 from dcdash.core.metrics import Metric, unit_for
+from dcdash.core.pg import create_pool
+from dcdash.core.timeutil import validate_whole_hour_zone
 from dcdash.seed import history
 
 ROOT_NAME = "Seeded pilot hall"
 SOURCE_NAME = "seeded-pilot-hall"
 ELECTRICAL_NAME = "Electrical"
+UNDO = 'delete the "Seeded pilot hall" asset and the source "seeded-pilot-hall" with the normal deletes (Assets Tree and Sources)'
 INTERVAL_CHOICES = history.INTERVAL_CHOICES
 DEFAULT_INTERVAL_MINUTES = 60  # the sample spacing; the measurement of the real run (task 5) sets this
 
@@ -288,3 +305,187 @@ def readings_by_day(plan: history.Plan, layout: Layout) -> Iterator[tuple[date, 
         rows.extend((meter_id, ts, value) for meter_id, value in values.items())
     if day is not None:
         yield day, rows
+
+
+# ---- the kinds the assets get ---------------------------------------------------------------------------------------------
+
+# What each role would like to be called, best first. The seeder registers NO kind: a role takes the first of these that the Asset
+# kinds list (`asset_kinds`) holds, else "Other equipment" if the list holds that, else its first name, which is then flagged as
+# not registered (an asset's kind is free text, so the tree is still made; it only shows the default icon).
+PREFERRED_KINDS: dict[str, tuple[str, ...]] = {
+    "site": ("Site",),
+    "hall": ("Data hall", "Room"),
+    "pod": ("Room",),
+    "row": ("Row",),
+    "rack": ("Rack",),
+    "feed": ("Circuit", "Meter"),
+    "electrical": ("Room",),
+    "panel": ("Panel",),
+}
+FALLBACK_KIND = "Other equipment"
+ROLE_LABELS = {  # the plural (or not) the report prints for a role
+    "site": "site", "hall": "halls", "pod": "pods", "row": "rows", "rack": "racks", "feed": "feeds", "electrical": "electrical",
+    "panel": "panels",
+}
+
+
+@dataclass(frozen=True)
+class KindChoice:
+    name: str  # the kind text the assets of the role get
+    registered: bool  # False: the Asset kinds list does not hold it
+    preferred: str  # the role's first choice, whatever was picked
+
+
+def choose_kinds(registered: set[str]) -> dict[str, KindChoice]:
+    """The kind of every role. `registered` holds `kind_key(name)` values, the `key` column of `asset_kinds`. Pure."""
+    chosen: dict[str, KindChoice] = {}
+    for role, names in PREFERRED_KINDS.items():
+        name = next((candidate for candidate in names if kind_key(candidate) in registered), None)
+        if name is None and kind_key(FALLBACK_KIND) in registered:
+            name = FALLBACK_KIND
+        chosen[role] = KindChoice(name, True, names[0]) if name is not None else KindChoice(names[0], False, names[0])
+    return chosen
+
+
+async def registered_kinds(pool: asyncpg.Pool) -> set[str]:
+    return {row["key"] for row in await pool.fetch("SELECT key FROM asset_kinds")}
+
+
+# ---- the database ---------------------------------------------------------------------------------------------------------
+
+
+async def _refusal(conn: asyncpg.Connection) -> str | None:
+    """Why this layout cannot be made here, or None. Only THIS layout's own rows count: the other layout's never refuse."""
+    source = await conn.fetchval("SELECT id FROM sources WHERE name = $1", SOURCE_NAME)
+    if source is not None:
+        return f'a source named "{SOURCE_NAME}" already exists (id {source}); a seed was made here before. To undo it, {UNDO}'
+    twin = await conn.fetchval(
+        f"SELECT id FROM assets WHERE parent_id IS NULL AND {_KEY.format('name')} = {_KEY.format('CAST($1 AS text)')} ORDER BY id LIMIT 1",
+        ROOT_NAME,
+    )
+    if twin is not None:
+        return f'a top-level asset named "{ROOT_NAME}" already exists (id {twin}); delete it first (the source "{SOURCE_NAME}" is gone)'
+    return None
+
+
+async def create_rows(
+    pool: asyncpg.Pool, layout: Layout, kinds: dict[str, KindChoice], step_seconds: int
+) -> history.Created:
+    """The source, assets, points and mappings, in ONE transaction: if anything fails nothing is left behind. The assets are made
+    one by one in node order (a parent before its children), so each child gets its parent's id."""
+    # A valid simulator config that points nowhere: .invalid never resolves, and the source is disabled anyway.
+    config = SimulatorConfig(url=AnyHttpUrl("http://seeded-pilot-hall.invalid:9000")).model_dump(mode="json")
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute("SELECT pg_advisory_xact_lock($1)", ASSET_NAMES_LOCK)  # as every route that creates an asset
+        reason = await _refusal(conn)
+        if reason is not None:
+            raise history.Refused(reason)
+        try:
+            source_id = await conn.fetchval(
+                "INSERT INTO sources (name, connector_type, config, enabled, origin) "
+                "VALUES ($1, 'simulator', $2, false, 'manual') RETURNING id",
+                SOURCE_NAME, config,
+            )
+        except asyncpg.UniqueViolationError:
+            raise history.Refused(f'a source named "{SOURCE_NAME}" was created a moment ago by someone else') from None
+        asset_ids: dict[str, int] = {}
+        for node in layout.nodes:
+            asset_ids[node.key] = await conn.fetchval(
+                "INSERT INTO assets (parent_id, name, kind, sort_order) VALUES ($1, $2, $3, $4) RETURNING id",
+                None if node.parent is None else asset_ids[node.parent], node.name, kinds[node.role].name, node.sort_order,
+            )
+        point_ids: dict[str, int] = {}
+        for meter in layout.meters:
+            point_ids[meter.id] = await conn.fetchval(
+                "INSERT INTO points (source_id, address, name, data_type, unit_hint) VALUES ($1, $2, $3, 'float', $4) RETURNING id",
+                source_id, point_address(meter), f"{path(layout, meter.node)} {meter.metric.value}", unit(meter),
+            )
+            await conn.execute(
+                "INSERT INTO mappings (point_id, asset_id, metric, scale, interval_seconds) VALUES ($1, $2, $3, 1.0, $4)",
+                point_ids[meter.id], asset_ids[meter.node], meter.metric.value, step_seconds,
+            )
+    return history.Created(source_id, asset_ids["site"], asset_ids, point_ids)
+
+
+# ---- the command ----------------------------------------------------------------------------------------------------------
+
+PROGRESS_EVERY_DAYS = 5
+
+
+def _batches(
+    plan: history.Plan, layout: Layout, point_ids: dict[str, int], total_days: int
+) -> Iterator[tuple[date, list[history.Row]]]:
+    """The UTC days as `history.write_batches` takes them, with meter ids turned into point ids. The writer asks for the next day
+    only after it has written the one before, so a progress line printed when a day is asked for (or when the days run out) says
+    how many days are really in the database."""
+    done = 0
+    for day, rows in readings_by_day(plan, layout):
+        if done and done % PROGRESS_EVERY_DAYS == 0:
+            print(f"written {done} of {total_days} days", flush=True)
+        yield day, [(point_ids[meter_id], ts, value, GOOD) for meter_id, ts, value in rows]
+        done += 1
+    if done and done % PROGRESS_EVERY_DAYS == 0:
+        print(f"written {done} of {total_days} days", flush=True)
+
+
+async def dry_run(args: argparse.Namespace) -> int:
+    print("Dry run: the pilot-hall dry run arrives with task 4b. Nothing written.")
+    return 0
+
+
+async def seed(args: argparse.Namespace) -> int:
+    pool = await create_pool()
+    try:
+        tz = await history.site_timezone(pool)
+        step_seconds = (args.interval_minutes or DEFAULT_INTERVAL_MINUTES) * 60
+        try:
+            plan = history.make_plan(
+                history._now(), tz, args.days, args.seed, await history.raw_retention_days(pool), step_seconds=step_seconds
+            )
+            problem = await history.pending_drop(pool, plan)
+            if problem is not None:
+                raise history.Refused(problem)
+            layout = build_layout(args.seed)
+            kinds = choose_kinds(await registered_kinds(pool))
+            created = await create_rows(pool, layout, kinds, step_seconds)
+        except history.Refused as refused:
+            print(f"Refused, nothing written: {refused}", file=sys.stderr)
+            return 1
+        total_days = len({ts.date() for ts in plan.times()})
+        started = time.monotonic()
+        try:
+            readings = await history.write_batches(pool, _batches(plan, layout, created.point_ids, total_days))
+            written = time.monotonic()
+            await history.refresh_rollups(pool, plan)
+            refreshed = time.monotonic()
+        except BaseException as exc:
+            await history._undo(pool, plan, created, undo=UNDO)
+            if not isinstance(exc, Exception):
+                raise
+            print(f"Failed, and what it had made was removed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+        by_role = Counter(node.role for node in layout.nodes)
+        print("Seeded pilot hall created.")
+        print(f'  source    "{SOURCE_NAME}" id {created.source_id} (disabled)')
+        print(f'  root      "{ROOT_NAME}" id {created.root_id}')
+        print(f"  assets    {len(layout.nodes)} (" + ", ".join(f"{ROLE_LABELS[role]} {by_role[role]}" for role in PREFERRED_KINDS) + ")")
+        print(f"  points    {len(layout.meters)}")
+        print(
+            f"  range     {history._local(plan.start, tz)} to {history._local(plan.end, tz)} in {tz}"
+            + (" (clamped to the raw retention)" if plan.clamped else "")
+        )
+        print(f"  interval  {step_seconds // 60} minutes")
+        for role, choice in kinds.items():
+            if not choice.registered:
+                print(f'  kind "{choice.name}" for {role} is not in the Asset kinds list (preferred "{choice.preferred}")')
+        print(f"  readings  {readings}")
+        print(f"  took {written - started:.1f} s writing, {refreshed - written:.1f} s refreshing the rollups")
+        try:
+            validate_whole_hour_zone(tz)
+        except ValueError as exc:
+            print(f"  warning   Billing cannot use this site time zone ({exc}); the figures will not show until it is changed")
+        print("  Set a site rate in Tariffs to see costs.")
+        print(f"To undo it: {UNDO}.")
+        return 0
+    finally:
+        await pool.close()
