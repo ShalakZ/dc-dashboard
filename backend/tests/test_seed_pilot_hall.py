@@ -179,7 +179,7 @@ def _rack_of(layout: pilot_hall.Layout, feed_key: str) -> pilot_hall.Rack:
 def test_the_module_names_and_the_interval_are_the_plans():
     assert pilot_hall.ROOT_NAME == "Seeded pilot hall" and pilot_hall.SOURCE_NAME == "seeded-pilot-hall"
     assert pilot_hall.ELECTRICAL_NAME == "Electrical"
-    assert pilot_hall.INTERVAL_CHOICES is history.INTERVAL_CHOICES and pilot_hall.DEFAULT_INTERVAL_MINUTES == 60
+    assert pilot_hall.INTERVAL_CHOICES is history.INTERVAL_CHOICES and pilot_hall.DEFAULT_INTERVAL_MINUTES == 15
 
 
 def test_the_tree_has_the_planned_shape(layout):

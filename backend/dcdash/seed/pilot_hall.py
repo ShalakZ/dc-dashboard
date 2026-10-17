@@ -53,7 +53,7 @@ SOURCE_NAME = "seeded-pilot-hall"
 ELECTRICAL_NAME = "Electrical"
 UNDO = 'delete the "Seeded pilot hall" asset and the source "seeded-pilot-hall" with the normal deletes (Assets Tree and Sources)'
 INTERVAL_CHOICES = history.INTERVAL_CHOICES
-DEFAULT_INTERVAL_MINUTES = 60  # the sample spacing; the measurement of the real run (task 5) sets this
+DEFAULT_INTERVAL_MINUTES = 15  # measured on the scratch stack (w16 task 5): about 650,000 readings and a minute at 15, 160,000 and half a minute at 60
 
 RACKS_PER_ROW = ((15, 15, 14, 15), (15, 15, 13, 15))  # Hall 1, Hall 2: the racks of Row 1 to Row 4, 117 in all
 FREE_RACKS = 6
@@ -555,7 +555,8 @@ async def dry_run(args: argparse.Namespace) -> int:
         print(f"  A real run would be refused: {problem}.")
     print(f"To do it, run again with --yes and {history.SWITCH}=1 in the environment.")
     print(
-        "Set a site rate in Tariffs to see costs. A run takes several minutes (the rollups are rebuilt over the whole range); "
+        "Set a site rate in Tariffs to see costs. A run takes one to several minutes, longer on a slow laptop (the rollups are "
+        "rebuilt over the whole range); "
         "--days N or a larger --interval-minutes makes it faster."
     )
     return 0
