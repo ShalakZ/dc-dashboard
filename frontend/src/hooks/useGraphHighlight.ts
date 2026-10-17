@@ -24,7 +24,7 @@ function stop(timer: Timer): void {
 }
 
 // A touch screen emulates mouseenter on a tap and would leave the highlight stuck: hover counts only where the device can hover (true when unknown).
-function canHover(): boolean {
+export function canHover(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
   try {
     return window.matchMedia("(hover: hover)").matches;
