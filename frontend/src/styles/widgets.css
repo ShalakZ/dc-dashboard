@@ -1,0 +1,137 @@
+@layer w6 {
+  /* w13 dashboard widgets: the card, its states, the five widget types, the editor preview and the editor grid's library chrome. Tokens only (app.css :root, dark values in
+     themes.css): no raw colour, no island, nothing here knows which look is on. Sections are named for the task whose markup they style. The narrow-card rules are the two
+     @container blocks at the end (a width threshold belongs in CSS), measured against the card itself: 200px and 280px. Shared names (.big, .num, .muted, .kv, .chip) are
+     never written bare here, and the Details panel's wd-* classes are widgets-details.css (app.css.test.ts: one page file cannot restyle another). */
+
+  /* ===== The grid: the read-only CSS grid (12 columns, rows and gap inline from lib/gridMetrics) and the editor's frame ===== */
+  .dash-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); }
+  .dash-cell { min-width: 0; min-height: 0; }
+  @media (max-width: 700px) {
+    .dash-grid { display: block; }
+    .dash-cell { grid-column: auto !important; grid-row: auto !important; height: 280px; margin-bottom: 10px; } /* beats the inline grid placement */
+  }
+  .dash-grid-edit { margin-top: 8px; }
+  .dash-grid-edit .widget-drag-handle { cursor: grab; user-select: none; }
+  .dash-grid-edit .widget-drag-handle:active { cursor: grabbing; }
+
+  /* ===== Frame and states (Task 2) ===== */
+  /* The card is a size container named widget: its descendants change with ITS width, not the window's (the container's own box cannot be styled by it). No overflow
+     clipping on the card: the library's resize handles sit on its edge. */
+  .widget-frame { container-type: inline-size; container-name: widget; display: flex; flex-direction: column; height: 100%; min-width: 0; border: 1px solid var(--widget-border); border-radius: var(--widget-radius); background: var(--widget-bg); box-shadow: var(--widget-shadow); color: var(--text); font-size: var(--fs-sm); }
+  .widget-head { flex: none; display: flex; align-items: center; gap: 6px; height: var(--widget-head-h); padding: 0 6px 0 var(--widget-pad); }
+  .widget-head .spacer { flex: 1; min-width: 0; }
+  /* Two classes: .dialog h2 (0,1,1) would otherwise enlarge the editor preview's title. */
+  .widget-frame .widget-title { flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; color: var(--text); font-size: var(--fs-sm); font-weight: 600; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+  .widget-grip { display: inline-flex; flex: none; color: var(--text-2); }
+  .widget-grip svg.i { width: 16px; height: 16px; }
+  .widget-chips { display: inline-flex; flex: none; align-items: center; gap: 4px; }
+  .widget-chips .chip { position: relative; flex: none; }
+  .widget-chips .chip-short { display: none; }
+  .widget-tools { display: inline-flex; flex: none; align-items: center; gap: 2px; }
+  .widget-actions { display: inline-flex; align-items: center; gap: 2px; }
+  /* A button that waits (the Details button while the data loads, the CSV button while it exports) uses aria-disabled, never disabled: it may hold the focus the click gave it. */
+  .widget-tools .icon-btn[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+  .widget-tools .icon-btn[aria-disabled="true"]:hover { background: none; color: var(--text-2); }
+  .widget-body { flex: 1; min-height: 0; min-width: 0; padding: var(--widget-pad); overflow: auto; }
+  .widget-body:has(.widget-table) { padding: 0 0 6px; } /* the table runs edge to edge; its cells carry the card's 12px */
+  /* One line under the body, only when there is something to say: "since 10:46", a dot, the marker hint. Each text is its own small and shrinks with an ellipsis. */
+  .widget-foot { flex: none; display: flex; align-items: center; gap: 4px; min-height: 22px; margin: 0; padding: 0 var(--widget-pad) 6px; overflow: hidden; color: var(--text-2); font-size: var(--fs-xs); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+  .widget-foot small { min-width: 0; overflow: hidden; font-size: inherit; text-overflow: ellipsis; }
+  .widget-foot .widget-since, .widget-foot .widget-dot { flex: none; }
+  .widget-foot .widget-hint { flex: 0 1 auto; }
+  .widget-frame > .error { margin: 0; padding: 0 var(--widget-pad) 6px; font-size: var(--fs-xs); } /* a failed CSV export, under the header */
+  .widget-empty, .widget-error { margin: 0; font-size: var(--fs-sm); text-align: center; }
+  .widget-empty { color: var(--text-2); }
+  .widget-error { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--crit); }
+  .widget-error svg.i { width: 16px; height: 16px; }
+  .widget-body > :is(.widget-empty, .widget-error):only-child { display: flex; align-items: center; justify-content: center; min-height: 100%; }
+  /* The loading skeleton (Skeleton.tsx shapes in one region): as tall as the body it stands in for, so the card never changes size when the data lands. */
+  .widget-sk { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; overflow: hidden; }
+  .widget-frame > .widget-sk { flex: 1; height: auto; padding: var(--widget-pad); }
+  .widget-sk[data-type="timeseries"] .sk-block, .widget-sk[data-type="bar"] .sk-block { flex: 1; height: auto; min-height: 0; }
+  .widget-sk[data-type="gauge"] .sk-block { height: auto; margin: 0 auto; aspect-ratio: 2 / 1; border-radius: 999px 999px 0 0; }
+  .widget-sk[data-type="gauge"] > span { text-align: center; } /* the figure's and the name's lines sit under the dial, as the real ones do */
+
+  /* ===== Stat (Task 3): the figure, its unit, the asset name, and the age of a stale reading ===== */
+  .stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .stat .big { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 4px; min-width: 0; margin: 0; color: var(--text); font-size: var(--widget-figure); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; }
+  .stat .big.muted { color: var(--stale); } /* a stale reading: the age beside it is the signal, the dimming is support */
+  .stat .big.none, .stat .big[title] { color: var(--text-2); font-size: var(--fs-sm); font-weight: 400; line-height: 1.4; } /* nothing recorded: the words "no data", not a figure */
+  .stat .stat-num, .gauge-figure .stat-num { white-space: nowrap; } /* a figure never splits; the unit drops under it instead */
+  .stat .stat-unit, .gauge-figure .stat-unit { color: var(--text-2); font-size: var(--widget-unit-fs); font-weight: 400; }
+  .stat-name { min-width: 0; overflow: hidden; color: var(--text-2); font-size: var(--fs-sm); text-overflow: ellipsis; white-space: nowrap; }
+  .stat-age { display: flex; align-items: center; gap: 4px; color: var(--text-2); font-size: var(--fs-xs); line-height: 16px; }
+  .stat-age svg.i { width: 12px; height: 12px; }
+  .stat-age small, .widget-table .cell-age small { font-size: inherit; }
+
+  /* ===== Table (Task 3): edge to edge, the head row on its own ground, 32px rows, the value column right aligned ===== */
+  .widget-table { width: 100%; margin: 0; border-collapse: separate; border-spacing: 0; font-size: var(--fs-sm); }
+  .widget-table th { position: sticky; top: 0; z-index: 1; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--widget-head-row); color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; text-align: left; white-space: normal; }
+  .widget-table td { height: var(--widget-row-h); padding: 7px 12px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: middle; }
+  .widget-table tbody tr:last-child > td { border-bottom: 0; }
+  .widget-table td:first-child { overflow-wrap: anywhere; } /* the asset name only, never a figure */
+  .widget-table :is(th, td).num { text-align: right; font-variant-numeric: tabular-nums; }
+  .widget-table td.muted { color: var(--stale); } /* nothing recorded, or a stale reading: the words and the age are the signal, the dimming is support (the layer's td colour is more specific than .muted) */
+  .widget-table .cell-age { display: inline-block; margin-left: 4px; color: var(--text-2); font-size: var(--fs-xs); white-space: nowrap; } /* may drop under the figure, never splits */
+
+  /* ===== Gauge (Task 3): a 180 degree SVG arc, then the scale ends, the figure and the name as plain text in the flow below it ===== */
+  .gauge { display: flex; flex-direction: column; gap: 2px; height: 100%; min-width: 0; min-height: 0; } /* the scale row sits at the bottom of the arc box, not in this column */
+  /* The arc box is a size container that holds the dial AND the scale row. The svg is viewBox 0 0 100 52, xMidYMax meet, so the arc is DRAWN min(box width, dial height * 100 / 52) wide, not as wide as the box. The feet are at x = 6 and 94 of its 100, so the row is 88% of the drawn width, centred: "0" starts under the left foot and the max ends under the right one at every card size (whole-wave review I1). 48px = a 32px dial and the 16px row. */
+  .gauge-arc { --gauge-scale-h: 16px; position: relative; flex: 1; min-height: 48px; container-type: size; }
+  .gauge-svg { position: absolute; top: 0; left: 0; width: 100%; height: calc(100% - var(--gauge-scale-h)); overflow: visible; } /* the round caps reach past the viewBox at small scales */
+  .gauge-track, .gauge-fill { fill: none; stroke-linecap: round; stroke-width: var(--gauge-width); vector-effect: non-scaling-stroke; }
+  .gauge-track { stroke: var(--gauge-track); }
+  .gauge-fill { stroke: var(--gauge-fill); }
+  .gauge-scale { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); width: min(88cqw, calc((100cqh - var(--gauge-scale-h)) * 88 / 52)); min-width: max-content; display: flex; justify-content: space-between; gap: 8px; color: var(--text-2); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; line-height: var(--gauge-scale-h); }
+  .gauge-scale > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gauge-figure { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 0 4px; margin: 0; color: var(--text); font-size: var(--widget-figure); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; }
+  .gauge-figure.muted { color: var(--stale); }
+  .gauge-figure.none, .gauge-figure[title] { color: var(--text-2); font-size: var(--fs-sm); font-weight: 400; line-height: 1.4; }
+  .gauge-name { min-width: 0; overflow: hidden; color: var(--text-2); font-size: var(--fs-sm); text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+  /* a stale gauge adds " · 47 min ago" to the name's line: the name gives way first (an ellipsis), the age never does */
+  .gauge-name:has(> small) { display: flex; justify-content: center; gap: 4px; }
+  .gauge-name > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .gauge-name > small { flex: none; font-size: var(--fs-xs); }
+
+  /* ===== Charts (Task 4): the canvas box ===== */
+  .widget-chart { height: 100%; min-width: 0; min-height: 140px; }
+
+  /* ===== Editor (Task 6): the dialog's live preview is a real card in a box of the widget's real height; stat and gauge are capped so they read at a realistic size ===== */
+  .widget-preview { height: var(--widget-preview-h); } /* a stretched block (a grid item), never fit-content or inline: the card inside is a size container */
+  .widget-preview[data-type="stat"], .widget-preview[data-type="gauge"] { max-width: 360px; }
+
+  /* ===== The editor grid's library chrome (Task 6). react-grid-layout and react-resizable ship unlayered sheets that load with the lazy editor chunk, after this file, and an
+     unlayered rule beats a layered one: so every declaration here is !important (an important declaration in a layer beats the library's normal ones whatever the load order;
+     graph-nodes.css does the same for React Flow). They reset what the library draws (the arrow image, the rotations, the margins, the black borders) and draw the handles from tokens. ===== */
+  .dash-grid-edit .react-grid-item.react-grid-placeholder { background: var(--accent-tint) !important; opacity: 1 !important; outline: 2px dashed var(--accent) !important; outline-offset: -2px !important; border-radius: var(--widget-radius) !important; }
+  .dash-grid-edit .react-grid-item > .react-resizable-handle { opacity: 1 !important; background-image: none !important; transform: none !important; margin: 0 !important; padding: 0 !important; }
+  .dash-grid-edit .react-grid-item > .react-resizable-handle::after { content: "" !important; position: absolute !important; border: 0 !important; border-radius: 2px !important; background: transparent !important; }
+  /* the corner: a 10px L of 2px --text-2, inside the card's rounded corner */
+  .dash-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-se::after { right: 3px !important; bottom: 3px !important; width: 10px !important; height: 10px !important; border-right: 2px solid var(--text-2) !important; border-bottom: 2px solid var(--text-2) !important; border-radius: 0 0 var(--radius-sm) 0 !important; }
+  .dash-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-se:hover::after { border-color: var(--accent) !important; }
+  /* the edges: a 24 by 4 bar of --widget-handle in the middle of the right and the bottom edge, in a bigger hit box */
+  .dash-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-e { width: 12px !important; height: 32px !important; margin-top: -16px !important; }
+  .dash-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-e::after { top: 50% !important; right: 2px !important; bottom: auto !important; width: 4px !important; height: 24px !important; margin-top: -12px !important; background: var(--widget-handle) !important; }
+  .dash-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-e:hover::after { background: var(--accent) !important; }
+  .dash-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-s { width: 32px !important; height: 12px !important; margin-left: -16px !important; }
+  .dash-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-s::after { left: 50% !important; right: auto !important; bottom: 2px !important; width: 24px !important; height: 4px !important; margin-left: -12px !important; background: var(--widget-handle) !important; }
+  .dash-grid-edit .react-grid-item > .react-resizable-handle.react-resizable-handle-s:hover::after { background: var(--accent) !important; }
+
+  /* ===== Narrow cards: the two thresholds. All the container rules are here, after the rules they override. A container query measures the card's content box, so
+     "under 200px" is a card whose outer width is under 202px (its two 1px borders are not counted). ===== */
+  @container widget (max-width: 279.98px) {
+    /* a chip keeps its triangle and its count; its words stay for a screen reader (clipped, not display: none) */
+    .widget-chips .chip-long { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .widget-chips .chip-short { display: inline; }
+    /* the footer: "since HH:MM" and its dot give way to the marker hint (it explains what the figure's marks mean), so "— no rate" and "~ estimated" fit even on a 116px card; a footer with no hint keeps its since */
+    .widget-foot:has(.widget-hint) :is(.widget-since, .widget-dot) { display: none; }
+  }
+  @container widget (max-width: 199.98px) {
+    .widget-tools .widget-csv-btn { display: none; } /* it is the Details drawer's Download CSV below 200px */
+    .widget-grip { display: none; }
+    .stat .big { font-size: var(--widget-figure-sm); }
+    .gauge-figure { font-size: var(--widget-figure-sm); }
+    .gauge-track, .gauge-fill { stroke-width: calc(var(--gauge-width) * 0.8); }
+  }
+}

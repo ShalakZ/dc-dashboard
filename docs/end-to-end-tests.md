@@ -9,7 +9,7 @@ spec guards, and the two scratch-stack self-tests. The unit tests are on [Develo
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Thirty-six specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Thirty-seven specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`E2E_BASE_URL` changes it). `frontend/e2e/playwright.config.ts` makes each spec its own project and runs them one at a time in the
 order below, each depending on the one before; all but `journey` use a 1600×1000 window unless a spec sets its own sizes. Its
 `global-setup.ts` waits up to 120 s for the stack and refuses a database that already has users.
@@ -61,13 +61,13 @@ order below, each depending on the one before; all but `journey` use a 1600×100
 - `w7d.spec.ts` (after `w7c`, at 1600×1000) checks the Appearance choice: Mode and Theme colour in the profile panel, a choice applying at
   once, saved on the account and surviving a cleared browser; sign-out keeping the look on the sign-in page while another account on the
   same browser gets its own; Match my device following the device only while it is chosen; the keyboard walk of the two selects; dark mode
-  (a widget frame stays white, no sideways scroll at 1440 and 1024 px); and `theme-init.js` served as JavaScript and loaded without a
+  (a widget frame follows the theme, no sideways scroll at 1440 and 1024 px); and `theme-init.js` served as JavaScript and loaded without a
   Content-Security-Policy violation. It puts the admin's choice back to Light and Navy and gold.
 - `w7e.spec.ts` (after `w7d`, at 1600×1000) checks the theme polish: buttons, links, hover and the open row taking the theme's colour
   for its bar and its name, with no tint, in all four presets, light and dark; the dropdowns from the keyboard (Esc, arrows then Esc, Enter, the choice kept across a reload); a
   refused save putting the dropdown and the page back and saying so; the loading bar along the top edge in the theme's marker colour
   (all four presets, a full line under reduced motion, never on a poll, never blocking a click); a kind icon on every tree row and in
-  the asset header; the dashboard widgets keeping their light blue accent in all eight looks; and no sideways scroll at 1024 px in any
+  the asset header; the dashboard widgets taking the look's own accent in all eight looks; and no sideways scroll at 1024 px in any
   look. It makes two assets and a dashboard and removes them again.
 - `w7f.spec.ts` (its own project, after `w7e`, at 1600×1000) holds a page's first data request and checks the loading skeletons: one status
   region per area and none of the content, and the content back with the region gone once the data arrives (an asset page, the summary,
@@ -278,7 +278,7 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   without changing the zoom, and the focus is never on the page itself. In a graph of about 2,000 nodes (ten sources of four groups of
   49 points) closing and opening one group, and resting the pointer on a node, stay within three times the measured times (rerun once
   alone on a miss), and none of it prints a console error.
-- `w12c.spec.ts` (its own project, last in the list, after `w12b`, the tail of the chain; at 1440, 1024 and 800 px, with the sidebar
+- `w12c.spec.ts` (its own project, after `w12b`, the tail of the chain until `w13`; at 1440, 1024 and 800 px, with the sidebar
   minimised and expanded) checks the Discovery visual polish. The bar above the canvas has its three groups (`View controls`,
   `Canvas controls`, `Page controls`) and does not overflow at any of those sizes. On a narrower window it shows icons only, and at 800 px
   every button of the bar, and the `Unmapped only` switch, still has its name, either in the bar or as an item of the `More Discovery
@@ -298,6 +298,18 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   puts the focus back on the node. A separate case, also with made-up answers, checks that a role without `assets.view` makes no value
   request at all and shows no card. One case asks the real stack for `GET /api/mappings/{id}/latest` on a real mapping (200 for the
   administrator, 404 for an unknown one, 401 signed out and 403 for a role that holds only `discovery.view`).
+- `w13.spec.ts` (its own project, last in the list, after `w12c`, the tail of the chain; at 1440, 1024 and 1920 px) checks the dashboard
+  widgets. It writes next to nothing: one dashboard (`w13 <run>`, 15 widgets of `e2e/w13Showcase.ts`) is saved through the API and every
+  `POST /api/widget-data` is answered in the page from that showcase (the same config gets the same answer), so estimated, partial, no-rate,
+  stale, no-data and removed-asset states are always there; the dashboard is removed afterwards and the admin goes back to Light and Navy and
+  gold. In light navy-gold and dark desert-gold (the unit tests read all eight looks) every card is a `region` named by its title with an `h2`
+  title, sits on the `--widget-bg` token (not white in dark), shows its markers, and reads at 4.5:1. At 1024, 1440 and 1920 px the page does
+  not scroll sideways and no two cards meet. The 2 x 2 gauge is 170 px high with its figure and name apart and nothing clipped, and below
+  200 px of card width the CSV button leaves the header. A time series repaints in the other mode's axis colour after a Mode switch with no
+  navigation. The **Details** button opens from the keyboard and from a click, Escape returns the focus to it, and what the panel says is
+  what the answer proves (freshness, window with the zone, marker meanings, lowest and highest from the data, a total only when it is exact,
+  never an average over buckets). The editor's preview is the dashboard card, edit mode has no Details or CSV button, and in dark the drop
+  placeholder and the resize handles show against the card.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

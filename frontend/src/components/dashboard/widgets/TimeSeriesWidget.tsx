@@ -2,8 +2,10 @@ import type { EChartsOption } from "echarts";
 import ReactECharts from "echarts-for-react";
 import { memo } from "react";
 import type { WidgetData } from "../../../api/types";
+import { chartDescription } from "../../../lib/widgetDetails";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
-import { chartLabels, escapeHtml, figureText, formatValue, labelBucket, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
+import { chartLabels, figureText, formatValue, labelBucket, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
+import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, type ChartTheme } from "./chartTheme";
 import { useLegendSelection } from "./legendSelection";
 
 type Point = WidgetData["series"][number]["points"][number];
@@ -13,8 +15,6 @@ type ChartRow = Row | { value: Row; symbol: string; symbolSize: number };
 
 /** Characters a legend entry shows; the full name is in the chart tooltip and in the legend's own tooltip (S7-3). */
 const LEGEND_CHARS = 24;
-
-const PALETTE = ["#1f6feb", "#cf222e", "#1a7f37", "#9a6700", "#8250df", "#bf3989", "#0a7d8c", "#57606a"];
 
 /**
  * Spacing between buckets, which decides what counts as a hole in the data. Energy and cost series name their bucket
@@ -71,12 +71,21 @@ export function markIsolated(rows: readonly Row[]): ChartRow[] {
 
 interface TipItem { seriesId?: string; seriesName?: string; value?: unknown; marker?: string }
 
+/** The state of a point in words, beside its ~ or * marker: what the marker or the dash means. */
+function stateWords(data: WidgetData, point: Point): string {
+  const words: string[] = [];
+  if (point.estimated) words.push("estimated");
+  if (point.partial) words.push("partial");
+  if (data.source === "cost" && point.value === null && !point.no_data) words.push("no rate");
+  return words.join(", ");
+}
+
 /**
- * Axis tooltip: one line per asset (average with its min and max), without the helper series that draw the band.
- * A bucket with no rate shows a dash; a bucket nothing was recorded in (and the filler rows that break the line) shows
- * no line. The figure carries its bucket's own ~ and * markers. Names are user-typed, so they are escaped.
+ * Axis tooltip: the time, then one row per asset (average with its min and max, the state in words), without the helper series
+ * that draw the band. A bucket with no rate shows a dash; a bucket nothing was recorded in (and the filler rows that break the
+ * line) shows no row. The figure carries its bucket's own ~ and * markers. Names are user-typed, so they are escaped.
  */
-export function tooltipFormatter(data: WidgetData, timezone: string) {
+export function tooltipFormatter(data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART) {
   const points = new Map<string, Map<number, Point>>();
   for (const s of data.series) points.set(`avg-${s.asset_id}`, new Map(s.points.map((p) => [Date.parse(p.ts), p])));
   const stamp = (item: TipItem) => (Array.isArray(item.value) ? Date.parse(String(item.value[0])) : NaN);
@@ -88,12 +97,12 @@ export function tooltipFormatter(data: WidgetData, timezone: string) {
         return point && !point.no_data ? [{ item, point }] : [];
       });
     if (lines.length === 0) return "";
-    const head = `${escapeHtml(formatSiteDateTime(new Date(stamp(lines[0].item)).toISOString(), timezone))}<br/>`;
+    const head = tipHead(formatSiteDateTime(new Date(stamp(lines[0].item)).toISOString(), timezone), theme);
     return head + lines.map(({ item, point }) => {
-      const figure = point.value === null ? "—" : `${figureText(point.value, point)}${escapeHtml(unitSuffix(data.unit))}`;
+      const figure = point.value === null ? "—" : `${figureText(point.value, point)}${unitSuffix(data.unit)}`;
       const spread = point.value !== null && point.min !== null && point.max !== null ? ` (min ${formatValue(point.min)}, max ${formatValue(point.max)})` : "";
-      return `${item.marker ?? ""} ${escapeHtml(String(item.seriesName ?? ""))}: ${figure}${spread}`;
-    }).join("<br/>");
+      return tipRow(item.marker ?? "", String(item.seriesName ?? ""), `${figure}${spread}`, stateWords(data, point), theme);
+    }).join("");
   };
 }
 
@@ -122,41 +131,52 @@ export function timeAxisBounds(data: WidgetData): { min: number; max: number } |
   return { min: min - pad, max: max + pad };
 }
 
-export function timeSeriesOption(data: WidgetData, timezone: string): EChartsOption {
+/**
+ * The chart's option. Each asset is one legend entry: its line comes FIRST (the legend draws its icon from the first series of a name, and a
+ * hidden band first would give an invisible icon), and the two band series that follow carry the line's name and colour, so one click on the
+ * legend switches the line and its band together. The line has the higher z, so it stays on top of its band.
+ */
+export function timeSeriesOption(data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART): EChartsOption {
   const labels = chartLabels(data.series);
   const legendShort = shortLabels(labels, LEGEND_CHARS);
   const bucket = labelBucket(data);
   const band = data.source === "metric";
+  const base = chartBase(theme);
+  const axis = axisParts(theme);
   const series = data.series.flatMap((s, i): object[] => {
-    const color = PALETTE[i % PALETTE.length];
+    const { color, type } = seriesLook(theme, i, data.series.length);
     const width = bucketMs(data.bucket, s.points);
-    const line = { id: `avg-${s.asset_id}`, name: labels[i], type: "line" as const, color, symbol: "none", connectNulls: false, data: markIsolated(withGaps(s.points, width, (p) => p.value)) };
+    const line = {
+      id: `avg-${s.asset_id}`, name: labels[i], type: "line" as const, color, z: 3, symbol: "none", lineStyle: { width: 2, type }, connectNulls: false,
+      data: markIsolated(withGaps(s.points, width, (p) => p.value)),
+    };
     if (!band) return [line];
     // The band is two stacked invisible-line series: min, then max - min with a filled area.
-    const hidden = { type: "line" as const, symbol: "none", lineStyle: { opacity: 0 }, stack: `band-${s.asset_id}`, connectNulls: false };
+    const hidden = { type: "line" as const, name: labels[i], color, z: 2, symbol: "none", lineStyle: { opacity: 0 }, stack: `band-${s.asset_id}`, connectNulls: false };
     return [
-      { ...hidden, id: `band-min-${s.asset_id}`, name: `${labels[i]} min`, data: withGaps(s.points, width, (p) => p.min) },
-      { ...hidden, id: `band-span-${s.asset_id}`, name: `${labels[i]} range`, areaStyle: { color, opacity: 0.12 }, data: withGaps(s.points, width, (p) => (p.min === null || p.max === null ? null : p.max - p.min)) },
       line,
+      { ...hidden, id: `band-min-${s.asset_id}`, data: withGaps(s.points, width, (p) => p.min) },
+      { ...hidden, id: `band-span-${s.asset_id}`, areaStyle: { color, opacity: theme.bandOpacity }, data: withGaps(s.points, width, (p) => (p.min === null || p.max === null ? null : p.max - p.min)) },
     ];
   });
   return {
-    animation: false,
+    ...base,
     useUTC: true, // tick positions on whole UTC hours; labels below are formatted in the site zone, not the browser's
-    tooltip: { trigger: "axis", formatter: tooltipFormatter(data, timezone) },
+    tooltip: { ...base.tooltip, formatter: tooltipFormatter(data, timezone, theme) },
     // The legend still selects by the full series name; only the text shown is shortened.
     legend: {
-      show: data.series.length > 1, bottom: 0, type: "scroll", data: labels,
-      formatter: (name: string) => legendShort.get(name) ?? shortLabel(name, LEGEND_CHARS), tooltip: { show: true },
+      ...legendParts(theme, "line"), show: data.series.length > 1, data: labels,
+      formatter: (name: string) => legendShort.get(name) ?? shortLabel(name, LEGEND_CHARS),
     },
     grid: { left: 60, right: 20, top: 30, bottom: data.series.length > 1 ? 50 : 30 },
     xAxis: {
       type: "time",
       ...timeAxisBounds(data),
+      ...axis,
       // hideOverlap: labels that would run together are dropped, whatever the width of the widget or the span of the axis
-      axisLabel: { hideOverlap: true, formatter: (value: number | string) => formatSiteTick(new Date(Number(value)).toISOString(), timezone, bucket) },
+      axisLabel: { ...axis.axisLabel, hideOverlap: true, formatter: (value: number | string) => formatSiteTick(new Date(Number(value)).toISOString(), timezone, bucket) },
     },
-    yAxis: { type: "value", name: data.unit ?? undefined, scale: band },
+    yAxis: { type: "value", name: data.unit ?? undefined, scale: band, ...axis },
     series,
   } as EChartsOption;
 }
@@ -168,11 +188,15 @@ export function timeSeriesOption(data: WidgetData, timezone: string): EChartsOpt
  */
 export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone }: { data: WidgetData; timezone: string }) {
   const legend = useLegendSelection();
-  if (data.series.every((s) => s.points.every((p) => p.no_data))) return <p className="muted">No data in this range.</p>;
+  const theme = useChartTheme();
+  if (data.series.every((s) => s.points.every((p) => p.no_data))) return <p className="widget-empty">No data in this range.</p>;
+  // The canvas is a picture: the box around it is the chart's text alternative (the figures themselves are in the Details panel).
   return (
-    <ReactECharts
-      option={legend.apply(timeSeriesOption(data, timezone))} onEvents={legend.onEvents}
-      style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge
-    />
+    <div className="widget-chart" role="img" aria-label={chartDescription("timeseries", data)}>
+      <ReactECharts
+        option={legend.apply(timeSeriesOption(data, timezone, theme), data.series.map((s) => s.asset_id))} onEvents={legend.onEvents}
+        style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge
+      />
+    </div>
   );
 });

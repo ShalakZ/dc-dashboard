@@ -1,0 +1,39 @@
+@layer w6 {
+  /* w13 Details panel (components/dashboard/WidgetDetails.tsx). Only wd-* classes belong here: the dashboard widgets' own rules are
+     widgets.css, and a class written bare in one page file may not be named in another (app.css.test.ts). Never name .kv: pages-admin.css writes it
+     bare, so the panel's definition lists carry a wd-kv class of their own and are tuned through it. Tokens only. */
+
+  .wd-body { min-width: 0; }
+  /* Section headings: 13px, 600, the body ink; 20px above, 8px below (the first one sits at the top of the panel). */
+  .wd-heading { margin: 20px 0 8px; font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+  .wd-body > .wd-heading:first-child { margin-top: 0; }
+
+  /* The shared definition list (.kv, pages-admin.css) sets a 16px bottom margin and 190px labels; here the label is an asset name or a short
+     word, so it may wrap anywhere, and the list is followed by the next heading's own space. (Two classes: the page file's rule comes later.) */
+  .wd-body .wd-kv { margin: 0; }
+  .wd-body .wd-kv dt { overflow-wrap: anywhere; }
+  .wd-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+  .wd-list > li { min-width: 0; overflow-wrap: anywhere; }
+  /* The marker meanings stand in the same box as a definition list, so the panel reads as one family. */
+  .wd-markers { padding: 10px 16px; border: 1px solid var(--border); border-radius: var(--radius); }
+
+  /* Per asset: the app's table at the scan drawer's size. It scrolls sideways inside its box when a chart's five columns do not fit the
+     drawer; the Asset column keeps a readable width and the figures never break between the number and its unit. */
+  .wd-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+  .wd-table { margin: 0; font-size: var(--fs-sm); }
+  .wd-table :is(th, td) { padding: 8px; }
+  .wd-table th { white-space: normal; vertical-align: bottom; }
+  .wd-table tbody tr:last-child > td { border-bottom: 0; }
+  .wd-table td:first-child { min-width: 11ch; overflow-wrap: anywhere; }
+  .wd-fig { white-space: nowrap; }
+  /* A second line under a name or a figure: the states in words, the bucket a figure belongs to. */
+  .wd-sub { display: block; margin-top: 2px; color: var(--text-2); font-size: var(--fs-xs); font-weight: 400; white-space: normal; }
+  .wd-note { margin: 8px 0 0; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.45; }
+
+  /* The footer is the drawer's own fixed-height bar: Download CSV on the left, a failed export's line to its right (cut at two lines). While the
+     export runs the button is aria-disabled (it keeps its focus), so it must look off itself and take the hover wash back. */
+  .wd-foot { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; }
+  .wd-foot > .wd-error { margin: 0; min-width: 0; font-size: var(--fs-sm); line-height: 1.3; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .wd-foot button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+  .wd-foot button[aria-disabled="true"]:hover { background: var(--bg); }
+}

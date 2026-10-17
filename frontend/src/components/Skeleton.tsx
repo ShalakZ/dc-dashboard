@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import type { WidgetType } from "../api/types";
 import { CHART_HEIGHT } from "../lib/chartBox";
 
 // Loading skeletons: grey shapes in the layout the data will have, shown while a page has no data yet. A Suspense fallback uses these
@@ -45,8 +46,8 @@ export function resetSkeletonClock() {
   lastSeenGone = -Infinity;
 }
 
-/** The one `role="status"` of an area: busy, with the label as its only text. It takes a className so it can BE the real wrapper. */
-export function SkeletonRegion({ label, className, children }: { label: string; className?: string; children?: ReactNode }) {
+/** The one `role="status"` of an area: busy, with the label as its only text. It takes a className (and a `data-type`) so it can BE the real wrapper. */
+export function SkeletonRegion({ label, className, dataType, children }: { label: string; className?: string; dataType?: string; children?: ReactNode }) {
   const [self] = useState<Region>(() => ({ born: 0, instant: false }));
   const box = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -62,7 +63,7 @@ export function SkeletonRegion({ label, className, children }: { label: string; 
     };
   }, [self]);
   return (
-    <div ref={box} role="status" aria-busy="true" className={className ? `sk-region ${className}` : "sk-region"}>
+    <div ref={box} role="status" aria-busy="true" className={className ? `sk-region ${className}` : "sk-region"} data-type={dataType}>
       <span className="sr-only">{label}</span>
       {children}
     </div>
@@ -397,4 +398,34 @@ export function CanvasSkeleton({ label }: { label: string }) {
       <Skeleton variant="block" height="auto" />
     </SkeletonRegion>
   );
+}
+
+/**
+ * A widget's body while its data loads, in the shapes the data will have: a stat is a figure and a name, a gauge the dial and two lines, a table a head and
+ * four rows, a chart one block that fills the body (widgets.css sizes them by `data-type`). Given a `label` it is the one region of the card and stands where
+ * `.widget-body` will be (the class `widget-sk` is how the stylesheet and the tests know it from the page's own region); without one it is a bare, hidden body:
+ * the fallback of a lazy chart chunk, which is only ever drawn once the card holds its data, so the card has no second status.
+ */
+export function WidgetSkeleton({ type, label }: { type?: WidgetType; label?: string }) {
+  const shapes = type === "stat" ? (
+    <>
+      <Skeleton variant="block" width="60%" height="var(--widget-figure)" />
+      <Skeleton variant="block" width="40%" height={14} />
+    </>
+  ) : type === "gauge" ? (
+    <>
+      <Skeleton variant="block" width="70%" />
+      <Skeleton width="8ch" height={20} />
+      <Skeleton width="12ch" />
+    </>
+  ) : type === "table" ? (
+    <>
+      <Skeleton variant="block" height={28} />
+      {[0, 1, 2, 3].map((i) => <Skeleton key={i} variant="block" height={14} />)}
+    </>
+  ) : (
+    <Skeleton variant="block" />
+  );
+  if (label) return <SkeletonRegion label={label} className="widget-sk" dataType={type}>{shapes}</SkeletonRegion>;
+  return <div className="widget-sk" data-type={type} aria-hidden="true">{shapes}</div>;
 }

@@ -1,13 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import type { WidgetData } from "../../../api/types";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
-import { escapeHtml, MUTED_FIGURE, shortLabel } from "../../../lib/widgetFormat";
-import { config, seriesData, seriesPoint, valueRow, valuesData } from "../../../test/dashboardFixtures";
-import { LiveValuesContext } from "../LiveValuesContext";
+import { escapeHtml, shortLabel } from "../../../lib/widgetFormat";
+import { seriesData, seriesPoint, valueRow, valuesData } from "../../../test/dashboardFixtures";
 import { BarWidget, barOption } from "./BarWidget";
-import { GaugeWidget, gaugeOption } from "./GaugeWidget";
-import { StatWidget } from "./StatWidget";
-import { TableWidget } from "./TableWidget";
+import { LIGHT_CHART, type ChartTheme } from "./chartTheme";
 import { bucketMs, markIsolated, timeSeriesOption, tooltipFormatter, TimeSeriesWidget, withGaps } from "./TimeSeriesWidget";
 
 vi.mock("echarts-for-react", () => ({
@@ -36,12 +33,10 @@ const TZ = "Asia/Qatar";
 interface LegendOpt { show: boolean; type: string; formatter: (name: string) => string; tooltip: { show: boolean } }
 const legendOf = (option: unknown) => (option as { legend: LegendOpt }).legend;
 const axisLabelOf = (option: unknown) => (option as { xAxis: { axisLabel: { interval: number; formatter: (value: string) => string } } }).xAxis.axisLabel;
+/** A tooltip as the viewer reads it: the tags taken away, the name, the value and the state of each row one after the other. */
+const tipText = (html: string) => html.replace(/<\/(span|div)>/g, " ").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
 const LONG = "Main-Switchboard-Feeder-Room-East-Hall-3"; // 40 characters
 const LONG_2 = "Auxiliary-Distribution-Panel-Block-West"; // differs from LONG at the start, so the two shorten to different texts
-const stream = (value: number | null, quality = 0, connected = true, ts = "2026-10-08T06:00:00.000Z") => ({
-  values: new Map([[7, { ts, value, quality }]]), connected, register: () => {},
-});
-const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
 describe("time series", () => {
   const points = [
@@ -144,7 +139,7 @@ describe("time series", () => {
   it("keeps the min/max band helpers free of symbols, so only the average line shows the dot", () => {
     const lone = seriesData({ series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 1, min: 0, max: 2 })] }] });
     const option = asOption(timeSeriesOption(lone, TZ));
-    expect(option.series.map((s) => s.id)).toEqual(["band-min-5", "band-span-5", "avg-5"]);
+    expect(option.series.map((s) => s.id)).toEqual(["avg-5", "band-min-5", "band-span-5"]);
     expect(option.series.find((s) => s.id === "avg-5")!.data[0]).toMatchObject({ symbol: "circle" });
     expect(option.series.find((s) => s.id === "band-min-5")!.data.every((c) => Array.isArray(c))).toBe(true);
     expect(option.series.find((s) => s.id === "band-span-5")!.data.every((c) => Array.isArray(c))).toBe(true);
@@ -155,7 +150,7 @@ describe("time series", () => {
     const [line] = asOption(timeSeriesOption(lone, TZ)).series;
     const cell = line.data[0] as { value: Row };
     // ECharts hands the formatter the item's `value` pair as `params.value`.
-    expect(tooltipFormatter(lone, TZ)([{ seriesId: "avg-5", seriesName: "A", value: cell.value, marker: "" }])).toContain("A: 1.50 kWh");
+    expect(tipText(tooltipFormatter(lone, TZ)([{ seriesId: "avg-5", seriesName: "A", value: cell.value, marker: "" }]))).toContain("A 1.50 kWh");
   });
 
   it("breaks the line where buckets are missing and where the value is null", () => {
@@ -166,7 +161,7 @@ describe("time series", () => {
 
   it("draws an average line per asset with a min/max band, gaps as gaps", () => {
     const option = asOption(timeSeriesOption(data, TZ));
-    expect(option.series.map((s) => s.id)).toEqual(["band-min-5", "band-span-5", "avg-5"]);
+    expect(option.series.map((s) => s.id)).toEqual(["avg-5", "band-min-5", "band-span-5"]);
     const avg = option.series.find((s) => s.id === "avg-5")!;
     expect(avg.name).toBe("LV Panel 1");
     expect(avg.connectNulls).toBe(false);
@@ -259,12 +254,12 @@ describe("time series", () => {
 
   it("builds a tooltip that hides the band helpers, shows min/max, and escapes names", () => {
     const html = tooltipFormatter(data, TZ)([
-      { seriesId: "band-min-5", seriesName: "LV Panel 1 min", value: ["2026-10-08T00:01:00+00:00", 1], marker: "<i>m</i>" },
+      { seriesId: "band-min-5", seriesName: "LV Panel 1", value: ["2026-10-08T00:01:00+00:00", 1], marker: "<i>m</i>" }, // W13: a band carries its line's name
       { seriesId: "avg-5", seriesName: "<b>LV</b> Panel 1", value: ["2026-10-08T00:01:00+00:00", 2], marker: "<i>m</i>" },
     ]);
     expect(html).toContain("&lt;b&gt;LV&lt;/b&gt; Panel 1");
     expect(html).not.toContain("<b>");
-    expect(html).not.toContain("LV Panel 1 min");
+    expect(html.match(/justify-content:space-between/g)).toHaveLength(1); // one row: the band's helper series adds none
     expect(html).toContain("2.00 kW");
     expect(html).toContain("(min 1.00, max 3.00)");
     expect(html).toContain(formatSiteDateTime("2026-10-08T00:01:00.000Z", TZ));
@@ -290,16 +285,18 @@ describe("time series", () => {
     const tip = tooltipFormatter(cost, TZ);
     const item = (id: number, name: string, ts: string, value: number | null) => ({ seriesId: `avg-${id}`, seriesName: name, value: [ts, value], marker: "" });
     const at = (ts: string) => tip([item(5, "A", ts, null), item(6, "B", ts, 1)]);
-    const first = tip([item(5, "A", "2026-10-08T00:00:00+00:00", 0.5), item(6, "B", "2026-10-08T00:00:00+00:00", 1.25)]);
-    expect(first).toContain("A: 0.50* QAR");
-    expect(first).toContain("B: ~1.25 QAR");
-    const noRate = tip([item(5, "A", "2026-10-08T01:00:00+00:00", null), item(6, "B", "2026-10-08T01:00:00+00:00", 2)]);
-    expect(noRate).toContain("A: —");
-    expect(noRate).not.toContain("A: — QAR");
-    expect(noRate).toContain("B: 2.00 QAR");
-    const silent = at("2026-10-08T02:00:00+00:00");
-    expect(silent).not.toContain("A:");
-    expect(silent).toContain("B:");
+    // The rows are the name on the left and the value on the right; tipText reads them one after the other. W13 adds the state in words after the value.
+    const first = tipText(tip([item(5, "A", "2026-10-08T00:00:00+00:00", 0.5), item(6, "B", "2026-10-08T00:00:00+00:00", 1.25)]));
+    expect(first).toContain("A 0.50* QAR partial");
+    expect(first).toContain("B ~1.25 QAR estimated");
+    const noRate = tipText(tip([item(5, "A", "2026-10-08T01:00:00+00:00", null), item(6, "B", "2026-10-08T01:00:00+00:00", 2)]));
+    expect(noRate).toContain("A — partial, no rate"); // the bucket is partial too (it has consumption but no rate)
+    expect(noRate).not.toContain("A — QAR");
+    expect(noRate).toContain("B 2.00 QAR");
+    expect(noRate).not.toContain("B 2.00 QAR estimated"); // a bucket with no marker says nothing about a state
+    const silent = tipText(at("2026-10-08T02:00:00+00:00"));
+    expect(silent).not.toMatch(/\bA\b/);
+    expect(silent).toMatch(/\bB\b/);
     // A hover over a stretch that has only silent buckets or the filler row of a gap shows no tooltip at all.
     expect(tip([item(5, "A", "2026-10-08T02:00:00+00:00", null)])).toBe("");
     expect(tip([item(5, "A", "2026-10-08T05:00:00+00:00", null)])).toBe("");
@@ -470,8 +467,9 @@ describe("bar", () => {
       { asset_id: 6, name: "B", estimated: false, partial: false, points: [point("2026-10-08T02:00:00+00:00", { value: 6 })] },
     ], { source: "cost", unit: "QAR" });
     const option = barSeries(barOption(data, TZ));
-    expect(option[0].data).toEqual([1, null, null]);
-    expect(option[0].markPoint?.data).toEqual([expect.objectContaining({ coord: [1, 0] })]);
+    // W13: the dash is a bar of zero height in that asset's own slot (a point mark would sit at the middle of the group); the other empty buckets stay null.
+    expect(option[0].data).toEqual([1, expect.objectContaining({ value: 0, itemStyle: { color: "transparent" }, label: expect.objectContaining({ show: true, formatter: "—" }) }), null]);
+    expect(option[0].markPoint).toBeUndefined();
     expect(option[1].data).toEqual([null, null, 6]);
     expect(option[1].markPoint).toBeUndefined();
   });
@@ -491,10 +489,10 @@ describe("bar", () => {
       point("2026-10-08T02:00:00+00:00", { value: null, no_data: true }),
     ] }], { source: "cost", unit: "QAR" });
     const tip = asBar(barOption(data, TZ)).tooltip.formatter;
-    const line = (dataIndex: number) => tip([{ name: "x", dataIndex, seriesIndex: 0, seriesName: "A", marker: "" }]);
-    expect(line(0)).toContain("A: 1.50 QAR");
-    expect(line(1)).toContain("A: —");
-    expect(line(2)).toBe("");
+    const line = (dataIndex: number) => tipText(tip([{ name: "x", dataIndex, seriesIndex: 0, seriesName: "A", marker: "" }]));
+    expect(line(0)).toContain("A 1.50 QAR");
+    expect(line(1)).toContain("A — partial, no rate");
+    expect(tip([{ name: "x", dataIndex: 2, seriesIndex: 0, seriesName: "A", marker: "" }])).toBe("");
   });
 
   it("renders a bar chart, or says there is nothing to draw", () => {
@@ -533,228 +531,139 @@ describe("bar per asset when no asset has a reading", () => {
   });
 });
 
-describe("gauge", () => {
-  type GaugeOpt = { series: { type: string; min: number; max: number; pointer: { show: boolean }; progress: { show: boolean }; data: { value: number }[]; detail: { formatter: () => string; color?: string; offsetCenter: [number, string] }; title: { show: boolean; offsetCenter: [number, string] } }[] };
-  const gauge = (args: Partial<Parameters<typeof gaugeOption>[0]> = {}) =>
-    gaugeOption({ value: 12.5, min: 0, max: 100, unit: "kW", name: "LV Panel 1", ...args }) as unknown as GaugeOpt;
+describe("the charts follow the theme (W13)", () => {
+  const dark: ChartTheme = {
+    palette: ["#6ea8fe", "#f59a52", "#3ecf8e", "#f38bb8", "#4cc9dc", "#b49bff", "#e9c046", "#a3adbd"],
+    accent: "#c9a227", axisText: "#a3adbd", axisLine: "#3a414d", grid: "#262b33", tipBg: "#262b33", tipText: "#e6e9ef", tipBorder: "#4a5261", bandOpacity: 0.22,
+  };
+  const asset = (id: number, name: string, extra: Partial<WidgetData["series"][number]> = {}) => ({
+    asset_id: id, name, estimated: false, partial: false, ...extra,
+    points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: id, min: id - 1, max: id + 1 }), seriesPoint({ ts: "2026-10-08T00:04:48+00:00", value: id + 1, min: id, max: id + 2 })],
+  });
+  interface Axis { axisLabel: { color: string; fontSize: number }; axisLine: { lineStyle: { color: string } }; splitLine: { lineStyle: { color: string; width: number; type: string } }; nameTextStyle: { color: string } }
+  interface Themed {
+    tooltip: { confine: boolean; backgroundColor: string; borderColor: string; textStyle: { color: string; fontSize: number } };
+    legend: { textStyle: { color: string; fontSize: number }; icon: string };
+    xAxis: Axis; yAxis: Axis;
+    series: { id?: string; name?: string; color?: string; z?: number; lineStyle?: { type?: string; width?: number; opacity?: number }; areaStyle?: { color: string; opacity: number }; data: unknown[] }[];
+  }
+  const themed = (option: unknown) => option as Themed;
 
-  it("uses the configured range, the unit and the markers of the figure", () => {
-    const option = gauge();
-    expect(option.series[0]).toMatchObject({ type: "gauge", min: 0, max: 100, data: [{ value: 12.5 }], pointer: { show: true }, progress: { show: true } });
-    expect(option.series[0].detail.formatter()).toBe("12.50 kW");
-    expect(gauge({ estimated: true, partial: true }).series[0].detail.formatter()).toBe("~12.50* kW");
+  it("takes the series colours, the axis ink, the grid and the tooltip from the theme it is given", () => {
+    const option = themed(timeSeriesOption(seriesData({ series: [asset(5, "A"), asset(6, "B")] }), TZ, dark));
+    expect(option.series.filter((s) => s.id?.startsWith("avg-")).map((s) => s.color)).toEqual(["#6ea8fe", "#f59a52"]);
+    for (const axis of [option.xAxis, option.yAxis]) {
+      expect(axis.axisLabel).toMatchObject({ color: "#a3adbd", fontSize: 12 });
+      expect(axis.axisLine.lineStyle.color).toBe("#3a414d");
+      expect(axis.splitLine.lineStyle).toEqual({ color: "#262b33", width: 1, type: "solid" });
+    }
+    expect(option.yAxis.nameTextStyle.color).toBe("#a3adbd");
+    expect(option.legend.textStyle).toEqual({ color: "#a3adbd", fontSize: 12 });
+    expect(option.tooltip).toMatchObject({ confine: true, backgroundColor: "#262b33", borderColor: "#4a5261", textStyle: { color: "#e6e9ef", fontSize: 13 } });
   });
 
-  it("positions the asset name (the series title) below the value, not at the default centre over the needle", () => {
-    const { title, detail } = gauge().series[0];
-    expect(title.show).toBe(true);
-    expect(Array.isArray(title.offsetCenter)).toBe(true);
-    expect(parseFloat(title.offsetCenter[1])).toBeGreaterThan(parseFloat(detail.offsetCenter[1])); // 70 % for the value
+  it("colours a chart of one series with the accent, and draws 2px lines", () => {
+    const one = themed(timeSeriesOption(seriesData(), TZ, dark));
+    const line = one.series.find((s) => s.id === "avg-5")!;
+    expect(line.color).toBe("#c9a227");
+    expect(line.lineStyle).toEqual({ width: 2, type: "solid" });
   });
 
-  it("draws no needle and no progress for a missing figure, only a dash, never a zero", () => {
-    const empty = gauge({ value: null, min: 10, max: 20 });
-    expect(empty.series[0].pointer.show).toBe(false);
-    expect(empty.series[0].progress.show).toBe(false);
-    expect(empty.series[0].detail.formatter()).toBe("—");
-    expect(gauge({ value: null, noData: true }).series[0].detail.formatter()).toBe("no data");
-    expect(empty.series[0].data[0].value).toBe(10); // parked at the scale's start so the dash still has a place to show
+  it("draws series 6 to 8 dashed and 9 and later dotted in colours 1 to 5", () => {
+    const many = themed(timeSeriesOption(seriesData({
+      source: "energy", metric: null, unit: "kWh", bucket: "hour", tier: null,
+      series: Array.from({ length: 10 }, (_, i) => asset(10 + i, `S${i}`)),
+    }), TZ, dark));
+    expect(many.series.map((s) => s.lineStyle?.type)).toEqual([...Array(5).fill("solid"), "dashed", "dashed", "dashed", "dotted", "dotted"]);
+    expect(many.series.map((s) => s.color)).toEqual([...dark.palette, dark.palette[0], dark.palette[1]]);
   });
 
-  it("dims the figure when it is stale or recorded nothing", () => {
-    expect(gauge().series[0].detail.color).toBeUndefined();
-    expect(gauge({ muted: true }).series[0].detail.color).toBe(MUTED_FIGURE); // the stat's muted colour, which reads at 4.5:1
+  it("gives a line's band its name and colour and a lower z, so one legend entry switches both and the line stays on top", () => {
+    const option = themed(timeSeriesOption(seriesData({ series: [asset(5, "A"), asset(6, "B", { estimated: true })] }), TZ, dark));
+    const byId = (id: string) => option.series.find((s) => s.id === id)!;
+    expect(option.series.map((s) => s.id)).toEqual(["avg-5", "band-min-5", "band-span-5", "avg-6", "band-min-6", "band-span-6"]);
+    for (const [id, name, color] of [[5, "A", "#6ea8fe"], [6, "B ~", "#f59a52"]] as const) {
+      expect(byId(`avg-${id}`)).toMatchObject({ name, color, z: 3 });
+      for (const band of ["band-min", "band-span"]) expect(byId(`${band}-${id}`)).toMatchObject({ name, color, z: 2, lineStyle: { opacity: 0 } });
+      expect(byId(`band-span-${id}`).areaStyle).toEqual({ color, opacity: 0.22 });
+    }
+    expect((option as unknown as { legend: { data: string[] } }).legend.data).toEqual(["A", "B ~"]); // the line's name is the entry; the bands add none
   });
 
-  it("renders the fetched value, a live value for a live gauge, and ignores the stream when not live", () => {
-    const cfg = config({ aggregation: "last", min: 0, max: 200 });
-    const data = valuesData({ type: "gauge" });
-    const { unmount } = render(<GaugeWidget data={data} config={cfg} live={false} />);
-    expect(screen.getByTestId("chart").textContent).toContain('"value":10.5');
-    unmount();
-    render(<LiveValuesContext.Provider value={stream(33.5)}><GaugeWidget data={data} config={cfg} live /></LiveValuesContext.Provider>);
-    expect(screen.getByTestId("chart").textContent).toContain('"value":33.5');
-    expect(screen.getByTestId("chart").textContent).toContain('"max":200');
-  });
-
-  it("goes back to the fetched value when the stream has dropped, and draws no needle when the live reading went bad", () => {
-    const cfg = config({ aggregation: "last", min: 0, max: 200 });
-    const data = valuesData({ type: "gauge" });
-    const { unmount } = render(<LiveValuesContext.Provider value={stream(33.5, 0, false)}><GaugeWidget data={data} config={cfg} live /></LiveValuesContext.Provider>);
-    expect(screen.getByTestId("chart").textContent).toContain('"value":10.5');
-    unmount();
-    render(<LiveValuesContext.Provider value={stream(7, 1)}><GaugeWidget data={data} config={cfg} live /></LiveValuesContext.Provider>);
-    expect(screen.getByTestId("chart").textContent).toContain('"pointer":{"show":false}');
-  });
-
-  it("says how old a stale reading is", () => {
-    const cfg = config({ aggregation: "last" });
-    render(<GaugeWidget data={valuesData({ type: "gauge", values: [valueRow({ ts: minutesAgo(12), stale: true })] })} config={cfg} live={false} />);
-    expect(screen.getByText("12 min ago")).toBeInTheDocument();
-  });
-});
-
-describe("stat", () => {
-  it("shows the figure, its unit and the asset", () => {
-    render(<StatWidget data={valuesData()} live={false} />);
-    expect(screen.getByText("10.50")).toBeInTheDocument();
-    expect(screen.getByText("kW")).toBeInTheDocument();
-    expect(screen.getByText("LV Panel 1")).toBeInTheDocument();
-    expect(screen.getByText("10.50")).not.toHaveClass("muted");
-  });
-
-  it("marks estimated (~) and partial (*) figures and says what the markers mean", () => {
-    const row = valueRow({ value: 12.3, estimated: true, partial: true, point_id: null });
-    render(<StatWidget data={valuesData({ source: "cost", unit: "QAR", values: [row] })} live={false} />);
-    expect(screen.getByText("~12.30*")).toBeInTheDocument();
-    expect(screen.getByText("QAR")).toBeInTheDocument();
-    expect(screen.getByText("~ estimated, * partial, some hours have no rate")).toBeInTheDocument();
-  });
-
-  it("shows a dash when there is no figure or no asset", () => {
-    const row = valueRow({ value: null, estimated: true, point_id: null });
-    const { unmount } = render(<StatWidget data={valuesData({ values: [row] })} live={false} />);
-    expect(screen.getByText("—")).toBeInTheDocument();
-    unmount();
-    render(<StatWidget data={valuesData({ values: [] })} live={false} />);
-    expect(screen.getByText("—")).toBeInTheDocument();
-  });
-
-  it("mutes a figure that recorded nothing, and says so in its title", () => {
-    render(<StatWidget data={valuesData({ source: "energy", metric: null, unit: "kWh", values: [valueRow({ value: 0, no_data: true, point_id: null })] })} live={false} />);
-    expect(screen.getByText("0.00")).toHaveClass("muted");
-    expect(screen.getByText("0.00")).toHaveAttribute("title", "no data");
-  });
-
-  it("says 'no data' for a metric with no reading, not the dash that means a missing rate", () => {
-    render(<StatWidget data={valuesData({ values: [valueRow({ value: null, no_data: true, point_id: null })] })} live={false} />);
-    const big = screen.getByTitle("no data");
-    expect(big).toHaveClass("muted");
-    expect(big).toHaveTextContent(/^no data$/);
-    expect(screen.queryByText("—")).not.toBeInTheDocument();
-  });
-
-  it("keeps the muted dash for a cost without a rate that also recorded nothing, as Billing does, and titles it", () => {
-    render(<StatWidget data={valuesData({ source: "cost", metric: null, unit: "QAR", values: [valueRow({ value: null, no_data: true, point_id: null })] })} live={false} />);
-    const big = screen.getByTitle("no data");
-    expect(big).toHaveClass("muted");
-    expect(big).toHaveTextContent("—");
-  });
-
-  it("gives a measured figure no title", () => {
-    render(<StatWidget data={valuesData()} live={false} />);
-    expect(screen.getByText("10.50")).not.toHaveAttribute("title");
-  });
-
-  it("dims a stale reading and says how old it is", () => {
-    render(<StatWidget data={valuesData({ values: [valueRow({ ts: minutesAgo(12), stale: true })] })} live={false} />);
-    expect(screen.getByText("10.50")).toHaveClass("muted");
-    expect(screen.getByText("12 min ago")).toBeInTheDocument();
-  });
-
-  it("shows no age for a fresh reading", () => {
-    render(<StatWidget data={valuesData({ values: [valueRow({ ts: minutesAgo(0), stale: false })] })} live={false} />);
-    expect(screen.queryByText(/ago|just now/)).not.toBeInTheDocument();
-  });
-
-  it("follows the stream only when live", () => {
-    const { unmount } = render(<LiveValuesContext.Provider value={stream(11.25)}><StatWidget data={valuesData()} live /></LiveValuesContext.Provider>);
-    expect(screen.getByText("11.25")).toBeInTheDocument();
-    unmount();
-    render(<LiveValuesContext.Provider value={stream(11.25)}><StatWidget data={valuesData()} live={false} /></LiveValuesContext.Provider>);
-    expect(screen.getByText("10.50")).toBeInTheDocument();
-  });
-
-  it("says 'no data' when the live reading is bad, exactly as for a fetched row that recorded nothing", () => {
-    const silent = valuesData({ values: [valueRow({ value: null, no_data: true })] });
-    const fetched = render(<StatWidget data={silent} live={false} />);
-    const before = screen.getByTitle("no data");
-    const shown = { text: before.textContent, muted: before.classList.contains("muted") };
-    fetched.unmount();
-    // a good fetch, then a bad stream sample: the meter's reads are failing
-    render(<LiveValuesContext.Provider value={stream(7, 1)}><StatWidget data={valuesData()} live /></LiveValuesContext.Provider>);
-    const after = screen.getByTitle("no data");
-    expect(after.textContent).toBe("no data");
-    expect({ text: after.textContent, muted: after.classList.contains("muted") }).toEqual(shown);
-    expect(screen.queryByText("—")).not.toBeInTheDocument();
-  });
-
-  it("goes back to the fetched figure when the stream has dropped", () => {
-    render(<LiveValuesContext.Provider value={stream(11.25, 0, false)}><StatWidget data={valuesData()} live /></LiveValuesContext.Provider>);
-    expect(screen.getByText("10.50")).toBeInTheDocument();
-  });
-
-  it("treats a streamed value as fresh and takes its age from the stream, whatever the fetched row says", () => {
-    const row = valueRow({ ts: "2026-10-08T10:20:00.000000+03:00", stale: true, no_data: false });
-    render(<LiveValuesContext.Provider value={stream(11.25, 0, true, "2026-10-08T07:30:00.000Z")}><StatWidget data={valuesData({ values: [row] })} live /></LiveValuesContext.Provider>);
-    expect(screen.getByText("11.25")).not.toHaveClass("muted");
-    expect(screen.queryByText(/ago/)).not.toBeInTheDocument();
-  });
-
-  it("keeps the fetched, newer reading and its staleness when the stream entry is older", () => {
-    const row = valueRow({ ts: "2026-10-08T10:20:00.000000+03:00", stale: true });
-    render(<LiveValuesContext.Provider value={stream(11.25, 0, true, "2026-10-08T07:10:00.000Z")}><StatWidget data={valuesData({ values: [row] })} live /></LiveValuesContext.Provider>);
-    expect(screen.getByText("10.50")).toHaveClass("muted");
-    expect(screen.getByText(/ago/)).toBeInTheDocument();
-  });
-});
-
-describe("table", () => {
-  it("lists one row per asset with markers and dashes", () => {
-    const data = valuesData({ type: "table", unit: "kWh", source: "energy", metric: null, values: [
-      valueRow({ name: "LV Panel 1", value: 10.5, point_id: null }),
-      valueRow({ asset_id: 6, name: "LV Panel 2", value: 4.25, estimated: true, point_id: null }),
-      valueRow({ asset_id: 7, name: "LV Panel 3", value: null, point_id: null }),
+  it("draws the marker of a no-rate row in its series' colour: the dash bar is transparent, and so would be the marker ECharts builds from it", () => {
+    const cost = seriesData({ type: "bar", source: "cost", unit: "QAR", metric: null, bucket: "hour", tier: null, series: [
+      { ...asset(5, "A"), points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 1 })] },
+      { ...asset(6, "B"), points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: null, partial: true })] },
     ] });
-    render(<TableWidget data={data} />);
-    expect(screen.getByRole("columnheader", { name: "Value (kWh)" })).toBeInTheDocument();
-    expect(screen.getByRole("row", { name: /LV Panel 1/ })).toHaveTextContent("10.50");
-    expect(screen.getByRole("row", { name: /LV Panel 2/ })).toHaveTextContent("~4.25");
-    expect(screen.getByRole("row", { name: /LV Panel 3/ })).toHaveTextContent("—");
-    expect(screen.getByText("~ estimated")).toBeInTheDocument();
+    const tip = asBar(barOption(cost, TZ, dark)).tooltip.formatter;
+    const html = tip([
+      { name: "x", dataIndex: 0, seriesIndex: 0, seriesName: "A", marker: "<i>real</i>" },
+      { name: "x", dataIndex: 0, seriesIndex: 1, seriesName: "B", marker: "<i>transparent</i>" },
+    ]);
+    expect(html).toContain("<i>real</i>"); // a row with a bar keeps the marker ECharts gave it
+    expect(html).not.toContain("<i>transparent</i>");
+    expect(html).toContain("background-color:#f59a52"); // B's own colour, the second of the theme's palette
   });
 
-  it("mutes the figure of an asset that recorded nothing and dims a stale reading with its age", () => {
-    const data = valuesData({ type: "table", values: [
-      valueRow({ name: "Quiet", value: 0, no_data: true, point_id: null }),
-      valueRow({ asset_id: 6, name: "Old", value: 3, ts: minutesAgo(12), stale: true }),
-      valueRow({ asset_id: 7, name: "Fresh", value: 4 }),
-    ] });
-    render(<TableWidget data={data} />);
-    expect(screen.getByRole("row", { name: /Quiet/ }).lastElementChild).toHaveClass("muted");
-    expect(screen.getByRole("row", { name: /Old/ }).lastElementChild).toHaveClass("muted");
-    expect(screen.getByRole("row", { name: /Old/ })).toHaveTextContent("12 min ago");
-    expect(screen.getByRole("row", { name: /Fresh/ }).lastElementChild).not.toHaveClass("muted");
+  it("colours the bars by series (the accent for one), square legend icons, and the dash with the axis ink", () => {
+    const grouped = themed(barOption(seriesData({ type: "bar", series: [asset(5, "A"), asset(6, "B")] }), TZ, dark));
+    expect(grouped.series.map((s) => s.color)).toEqual(["#6ea8fe", "#f59a52"]);
+    expect(grouped.legend.icon).toBe("roundRect");
+    expect(themed(barOption(seriesData({ type: "bar" }), TZ, dark)).series[0].color).toBe("#c9a227");
+    const byAsset = barOption(valuesData({ type: "bar", source: "cost", metric: null, unit: "QAR", values: [valueRow({ value: null, point_id: null })] }), TZ, dark);
+    expect(barSeries(byAsset)[0].markPoint).toMatchObject({ label: { color: "#a3adbd" } });
+    expect(themed(byAsset).series[0].color).toBe("#c9a227");
   });
 
-  it("says 'no data' with a title for a metric with no reading, and titles a muted zero", () => {
+  it("says the state in words beside the marker in a bar's tooltip: estimated, partial, no rate", () => {
     const rows = [
-      valueRow({ name: "Silent", value: null, no_data: true, point_id: null }),
-      valueRow({ asset_id: 6, name: "Zero", value: 0, no_data: true, point_id: null }),
-      valueRow({ asset_id: 7, name: "Fine", value: 4, point_id: null }),
+      valueRow({ name: "A", value: 10, estimated: true, point_id: null }),
+      valueRow({ asset_id: 6, name: "B", value: 4, partial: true, point_id: null }),
+      valueRow({ asset_id: 7, name: "C", value: null, point_id: null }),
+      valueRow({ asset_id: 8, name: "D", value: 2, point_id: null }),
     ];
-    render(<TableWidget data={valuesData({ type: "table", values: rows })} />);
-    const cell = (name: RegExp) => screen.getByRole("row", { name }).lastElementChild!;
-    expect(cell(/Silent/)).toHaveTextContent(/^no data$/);
-    expect(cell(/Silent/)).toHaveClass("muted");
-    expect(cell(/Silent/)).toHaveAttribute("title", "no data");
-    expect(cell(/Zero/)).toHaveTextContent("0.00");
-    expect(cell(/Zero/)).toHaveAttribute("title", "no data");
-    expect(cell(/Fine/)).not.toHaveAttribute("title");
-    expect(screen.queryByText("—")).not.toBeInTheDocument();
+    const tip = asBar(barOption(valuesData({ type: "bar", source: "cost", metric: null, unit: "QAR", values: rows }), TZ)).tooltip.formatter;
+    const at = (dataIndex: number) => tipText(tip([{ name: "x", dataIndex, seriesIndex: 0, marker: "" }]));
+    expect(at(0)).toContain("~10.00 QAR estimated");
+    expect(at(1)).toContain("4.00* QAR partial");
+    expect(at(2)).toContain("— no rate");
+    expect(at(3)).toContain("2.00 QAR");
+    expect(at(3)).not.toMatch(/estimated|partial|no rate/);
   });
 
-  it("keeps the muted dash, titled, for a cost without a rate that also recorded nothing", () => {
-    const rows = [valueRow({ name: "Unpriced", value: null, no_data: true, point_id: null })];
-    render(<TableWidget data={valuesData({ type: "table", source: "cost", metric: null, unit: "QAR", values: rows })} />);
-    const cell = screen.getByRole("row", { name: /Unpriced/ }).lastElementChild!;
-    expect(cell).toHaveTextContent("—");
-    expect(cell).toHaveClass("muted");
-    expect(cell).toHaveAttribute("title", "no data");
-  });
+  describe("the widgets", () => {
+    const ROOT = document.documentElement;
+    afterEach(() => {
+      ROOT.style.removeProperty("--chart-axis-text");
+      ROOT.removeAttribute("data-mode");
+    });
 
-  it("says so when there are no assets", () => {
-    render(<TableWidget data={valuesData({ type: "table", values: [] })} />);
-    expect(screen.getByText("No assets.")).toBeInTheDocument();
+    it("wrap the canvas in a picture with a name, so a screen reader hears what the chart is", () => {
+      const { unmount } = render(<TimeSeriesWidget data={seriesData({ series: [asset(5, "A"), asset(6, "B")] })} timezone={TZ} />);
+      const line = screen.getByRole("img");
+      expect(line).toHaveClass("widget-chart");
+      expect(line).toHaveAccessibleName(/^Line chart of 2 assets: A, B\. active_power_kw in kW, Last 24 hours\./);
+      unmount();
+      render(<BarWidget data={valuesData({ type: "bar" })} timezone={TZ} />);
+      expect(screen.getByRole("img")).toHaveAccessibleName(/^Bar chart of 1 asset: LV Panel 1\./);
+    });
+
+    it("say 'No data in this range.' as a widget empty state, not a picture", () => {
+      render(<BarWidget data={valuesData({ type: "bar", values: [] })} timezone={TZ} />);
+      expect(screen.getByText("No data in this range.")).toHaveClass("widget-empty");
+      expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    });
+
+    it("draw again in the new colours when the mode changes, without a reload", async () => {
+      render(<TimeSeriesWidget data={seriesData()} timezone={TZ} />);
+      const colours = () => JSON.parse(screen.getByTestId("chart").textContent!).yAxis.axisLabel.color as string;
+      expect(colours()).toBe(LIGHT_CHART.axisText);
+      await act(async () => {
+        ROOT.style.setProperty("--chart-axis-text", "#a3adbd");
+        ROOT.setAttribute("data-mode", "dark");
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(colours()).toBe("#a3adbd");
+    });
   });
 });

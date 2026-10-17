@@ -17,7 +17,9 @@ lacks says "No access".
 - **Asset kinds** (everyone reads, admins change): the Asset kinds button of the Assets Tree (`/assets/kinds`). Reading needs
   `assets.view`; adding, renaming, re-iconing and deleting kinds needs `assets.kinds`. See [Asset kinds](assets-and-kinds.md#asset-kinds).
 - **Dashboards** (everyone can read; operators and admins build): needs `dashboards.view`; building needs `dashboards.edit`.
-  Shared dashboards of widgets. An admin (`dashboards.default`) can mark one as the default, and the sidebar entry and the
+  Shared dashboards of widgets that follow the theme (light, dark and each theme colour); the information button on a card opens
+  **Details**, a panel with what the card shows, its time window and freshness, what its markers mean and its figures as text.
+  An admin (`dashboards.default`) can mark one as the default, and the sidebar entry and the
   first page after signing in then open it. See [Dashboards and billing](dashboards-and-billing.md).
 - **Billing** (everyone): needs `billing.view`. Energy and cost per asset per day and per month, picked with the Year and Month
   selects, with a CSV export (`billing.export`). An admin (`billing.close`) can **Close month…** on a finished month with data, which

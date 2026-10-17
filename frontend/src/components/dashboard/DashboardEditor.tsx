@@ -7,6 +7,8 @@ import { useDialogFocus } from "../../hooks/useDialogFocus";
 import { isDirty, isStaleConflict, MAX_TEXT, MAX_WIDGETS, metricAssetsOf, saveBody } from "../../lib/dashboardEdit";
 import { compactVertical, defaultSize, newKey, nextPosition, toDrafts, type DraftWidget } from "../../lib/layout";
 import { RANGE_LABELS, RANGE_PRESETS } from "../../lib/ranges";
+import { Icon } from "../Icon";
+import { TrashButton } from "../TrashButton";
 import { DashboardGrid } from "./DashboardGrid";
 import { WidgetEditor, type EditorFields } from "./WidgetEditor";
 import { WidgetView } from "./WidgetView";
@@ -103,11 +105,18 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
   const renderWidget = (d: DraftWidget) => (
     <WidgetView
       widgetKey={d.key} type={d.type} title={d.title} config={d.config} dashboardRange={range} timezone={timezone}
-      csv={false} live={false} dragHandle
+      csv={false} details={false} live={false} dragHandle
       actions={
+        // The grid does not start a drag from this span (`cancel: ".widget-actions"` in DashboardGrid).
         <span className="widget-actions">
-          <button type="button" disabled={!ready} onClick={() => setDialog({ draft: d })} aria-label={`Edit ${d.title}`}>Edit</button>
-          <button type="button" onClick={() => removeWidget(d)} aria-label={`Delete ${d.title}`}>Delete</button>
+          {/* aria-disabled, not disabled: the button stays in the Tab order and keeps the focus a click gave it (the widget header styles it as waiting). */}
+          <button
+            type="button" className="icon-btn" aria-disabled={!ready ? true : undefined} onClick={() => { if (ready) setDialog({ draft: d }); }}
+            aria-label={`Edit ${d.title}`} title={`Edit ${d.title}`}
+          >
+            <Icon name="pencil" />
+          </button>
+          <TrashButton label={`Delete ${d.title}`} title={`Delete ${d.title}`} onClick={() => removeWidget(d)} />
         </span>
       }
     />

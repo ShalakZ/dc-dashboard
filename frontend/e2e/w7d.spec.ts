@@ -90,6 +90,17 @@ const settled = (page: Page) => page.evaluate(() => new Promise<void>((done) => 
 
 const sidewaysOverflow = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 
+/** The `--widget-bg` token in the page's current look, as the browser prints a computed colour (rgb(...)). */
+const widgetGround = (page: Page): Promise<string> =>
+  page.evaluate(() => {
+    const probe = document.createElement("span");
+    probe.style.backgroundColor = "var(--widget-bg)";
+    document.documentElement.appendChild(probe);
+    const colour = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return colour;
+  });
+
 test.describe.serial("W7d: appearance", () => {
   let dashboardId = 0;
   let viewerId = 0;
@@ -308,7 +319,7 @@ test.describe.serial("W7d: appearance", () => {
     });
   });
 
-  test("dark mode: a widget frame stays white and the pages do not scroll sideways at 1440 and 1024", async ({ page, browser }) => {
+  test("dark mode: a widget frame follows the theme and the pages do not scroll sideways at 1440 and 1024", async ({ page, browser }) => {
     test.setTimeout(240_000);
     await setAdminLook(browser, MAROON_DARK);
     await signIn(page, ADMIN);
@@ -329,7 +340,10 @@ test.describe.serial("W7d: appearance", () => {
           if (path.startsWith("/dashboards/")) {
             const frame = page.getByRole("region", { name: WIDGET, exact: true });
             await expect(frame).toBeVisible();
-            await expect(frame, "the widget stays a light card on the dark page").toHaveCSS("background-color", PAGE_LIGHT);
+            // w13: the card is the look's --widget-bg token (read through a probe), never the old white island.
+            const ground = await widgetGround(page);
+            expect(ground, "the widget card in dark mode is not white").not.toBe(PAGE_LIGHT);
+            await expect(frame, "the widget follows the theme: its card is the --widget-bg token of the dark look").toHaveCSS("background-color", ground);
           }
           await expect.poll(() => sidewaysOverflow(page), { message: `the sideways overflow of ${name} in pixels` }).toBeLessThanOrEqual(0);
         });

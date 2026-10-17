@@ -240,12 +240,13 @@ test("W3b: dashboards close up, a parent's live power, the Trend's updated time,
     await page.goto(`/dashboards/${made.id}`);
     for (const title of [BAR, SERIES]) {
       await expect(region(page, title)).toBeVisible();
-      await expect(region(page, title).getByText("loading…", { exact: true })).toHaveCount(0);
+      // A chart is drawn on a canvas: look at the picture only once both have one. The card shows its loading skeleton (a status region named "Loading <title>") until the
+      // data lands, and the canvas only after, so with the canvas there the skeleton must be gone (w13: the old "loading…" text no longer exists, so a check for it was vacuous).
+      await expect(region(page, title).locator("canvas")).toBeVisible();
+      await expect(region(page, title).getByRole("status"), "no loading skeleton once the chart is drawn").toHaveCount(0);
       await expect(region(page, title).getByRole("alert")).toHaveCount(0);
     }
     await expect(page.getByRole("alert")).toHaveCount(0);
-    // A chart is drawn on a canvas: look at the picture only once both have one.
-    for (const title of [BAR, SERIES]) await expect(region(page, title).locator("canvas")).toBeVisible();
     // The charts draw to canvas: the controller looks at the picture (the shortening itself is covered by the option-level tests).
     await page.mouse.move(0, 0);
     await page.screenshot({ path: "test-results/w3b-longnames.png", fullPage: true });

@@ -10,7 +10,7 @@ import { navLink, userBlock } from "./shell";
 //
 // Colours are compared with the look's own tokens, read through a probe element on <html> (`tokenColour`), so the spec pins the wiring (a
 // button, a link, the selected row, the bar take THE THEME'S token) and not the palette: the palette is pinned by themes.css.test.ts, and
-// the owner may tune it. The one literal is the widget island's blue, which is pinned on purpose.
+// the owner may tune it. The one literal is the blue every look had before W7e (the old widget island's #1d5bd8), which no look but Graphite light may still have.
 //
 // The two selects are `#profile-panel` > `Mode` and `Theme colour` (matched with `exact: true`, as in w7d). The panel is an overlay on the
 // top right of the page, so a test that hovers or clicks the page header closes it first (`chooseLook` always leaves it closed).
@@ -34,8 +34,8 @@ const RACK = `W7e ${RUN} rack`;
 const DASHBOARD = `W7e ${RUN}`;
 const WIDGET = `W7e stat ${RUN}`;
 
-const OLD_BLUE = "rgb(29, 91, 216)"; // the accent every look had before W7e, and the island's blue (#1d5bd8)
-const ISLAND_ACCENT = "#1d5bd8";
+const OLD_BLUE = "rgb(29, 91, 216)"; // the accent every look had before W7e, and the old widget island's blue (#1d5bd8)
+const ISLAND_ACCENT = "#1d5bd8"; // the same blue as the custom property's text; w13 took the island out, so no widget has it of its own any more
 const HOLD_MS = 1500; // how long a held /api/assets answer is kept back
 
 async function signIn(page: Page, who: Account) {
@@ -216,7 +216,7 @@ test.describe.serial("W7e: theme colours, dropdowns, loading bar, icons", () => 
       panelId = await make(PANEL, "Panel");
       rackId = await make(RACK, "Rack");
 
-      // A dashboard with one stat widget, to read the widget island's accent (the frame exists whether or not there is data).
+      // A dashboard with one stat widget, to read the accent inside a widget frame (the frame exists whether or not there is data).
       const mv2 = assets.find((a) => a.name === "MV2") ?? root!;
       const created = await request.post("/api/dashboards", { data: { name: DASHBOARD, range: "24h" } });
       expect(created.ok(), `creating the dashboard: ${created.status()} ${await created.text()}`).toBe(true);
@@ -530,7 +530,7 @@ test.describe.serial("W7e: theme colours, dropdowns, loading bar, icons", () => 
     expect(await title.locator(".page-tile svg").innerHTML(), "the header shows the row's icon").toBe(panelIcon);
   });
 
-  test("the dashboard widgets keep the light blue accent in all eight looks, while the page around them does not", async ({ page, browser }) => {
+  test("the widget's accent is the look's accent in all eight looks (w13 took the fixed blue island out)", async ({ page, browser }) => {
     test.setTimeout(240_000);
     await setAdminLook(browser, DEFAULT_LOOK);
     await signIn(page, ADMIN);
@@ -541,9 +541,10 @@ test.describe.serial("W7e: theme colours, dropdowns, loading bar, icons", () => 
     for (const look of LOOKS) {
       await test.step(`${look.theme}, ${look.mode}`, async () => {
         await chooseLook(page, look);
-        expect(await frame.evaluate((el) => getComputedStyle(el).getPropertyValue("--accent").trim().toLowerCase()), "inside the widget frame").toBe(ISLAND_ACCENT);
+        const inside = await frame.evaluate((el) => getComputedStyle(el).getPropertyValue("--accent").trim().toLowerCase());
         const outside = await tokenText(page, "--accent");
-        if (look.theme !== "graphite" || look.mode !== "light") expect(outside, "outside it, the look's own accent").not.toBe(ISLAND_ACCENT);
+        expect(inside, `inside the widget frame the accent is the look's own (${outside}), not a fixed one`).toBe(outside);
+        if (look.theme !== "graphite" || look.mode !== "light") expect(inside, "and it is no longer the island's blue").not.toBe(ISLAND_ACCENT);
       });
     }
   });

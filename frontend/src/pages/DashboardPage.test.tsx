@@ -76,8 +76,11 @@ describe("DashboardPage (view)", () => {
     open();
     await region("Power trend");
     expect(screen.getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(["Power trend", "Energy by asset", "Current power", "Load", "Assets"]);
-    await waitFor(() => expect(screen.getAllByTestId("chart")).toHaveLength(3));
-    expect(screen.getAllByTestId("chart").map((c) => c.getAttribute("data-kind")).sort()).toEqual(["bar", "gauge", "line"]);
+    await waitFor(() => expect(screen.getAllByTestId("chart")).toHaveLength(2)); // the gauge is an SVG arc now, not an ECharts canvas
+    expect(screen.getAllByTestId("chart").map((c) => c.getAttribute("data-kind")).sort()).toEqual(["bar", "line"]);
+    const meter = await within(await region("Load")).findByRole("meter");
+    expect(meter).toHaveAttribute("aria-valuenow", "10.5");
+    expect(meter).toHaveAttribute("aria-valuemax", "200");
     expect(await within(await region("Current power")).findByText("10.50")).toBeInTheDocument();
     const table = within(await region("Assets"));
     expect(await table.findByText("LV Panel 2")).toBeInTheDocument();
@@ -130,7 +133,9 @@ describe("DashboardPage (view)", () => {
     act(() => FakeEventSource.open[0].emit([[7, 1_760_000_000, 11.25, 0], [8, 1_760_000_000, 99, 0], [99, 1_760_000_000, 1, 0]]));
     expect(stat.getByText("11.25")).toBeInTheDocument();
     expect(stat.queryByText("10.50")).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByTestId("chart").some((c) => c.textContent?.includes('"value":11.25'))).toBe(true));
+    const load = within(await region("Load")); // the gauge sits on point 7 here, so it follows the stream like the stat
+    await waitFor(() => expect(load.getByRole("meter")).toHaveAttribute("aria-valuenow", "11.25"));
+    expect(load.getByText("11.25")).toBeInTheDocument();
     const table = within(await region("Assets"));
     expect(await table.findByText("10.50")).toBeInTheDocument(); // a table is not live
     expect(table.queryByText("99.00")).not.toBeInTheDocument();
@@ -187,26 +192,29 @@ describe("DashboardPage (view)", () => {
     });
     const power = within(await region("Current power"));
     await power.findByText("10.50");
-    await waitFor(() => expect(screen.getAllByTestId("chart")).toHaveLength(3));
+    const load = within(await region("Load"));
+    await load.findByRole("meter");
+    await waitFor(() => expect(screen.getAllByTestId("chart")).toHaveLength(2)); // the gauge is an SVG arc, not a canvas
     await waitFor(() => expect(FakeEventSource.open).toHaveLength(1));
     act(() => FakeEventSource.open[0].onopen?.());
     act(() => FakeEventSource.open[0].emit([[7, 1_760_000_000, 11, 0], [8, 1_760_000_000, 5, 0]])); // everything now holds a stream entry
     expect(power.getByText("11.00")).toBeInTheDocument();
+    expect(load.getByRole("meter")).toHaveAttribute("aria-valuenow", "5");
     const lineRenders = chart.renders.line;
     const barRenders = chart.renders.bar;
     const lineOptions = chart.options.line.size;
-    const gaugeOptions = chart.options.gauge.size;
     expect(lineRenders).toBeGreaterThan(0);
     // A batch that moves only the stat's point.
     act(() => FakeEventSource.open[0].emit([[7, 1_760_000_001, 12.5, 0]]));
     expect(power.getByText("12.50")).toBeInTheDocument();
+    expect(load.getByText("5.00")).toBeInTheDocument(); // the gauge sits on point 8: it did not move
     expect(chart.renders.line).toBe(lineRenders); // the time series was not even rendered again
     expect(chart.renders.bar).toBe(barRenders); // nor the bar chart
     expect(chart.options.line.size).toBe(lineOptions);
-    expect(chart.options.gauge.size).toBe(gaugeOptions); // the gauge re-renders, but with the very same option: no setOption
     // A batch that moves the gauge's point does reach the gauge.
     act(() => FakeEventSource.open[0].emit([[8, 1_760_000_002, 6, 0]]));
-    await waitFor(() => expect(chart.options.gauge.size).toBe(gaugeOptions + 1));
+    await waitFor(() => expect(load.getByRole("meter")).toHaveAttribute("aria-valuenow", "6"));
+    expect(load.getByText("6.00")).toBeInTheDocument();
     expect(chart.renders.line).toBe(lineRenders);
     expect(chart.renders.bar).toBe(barRenders);
   });
@@ -305,6 +313,9 @@ describe("DashboardPage while it loads", () => {
     expect(await screen.findByRole("heading", { name: "Hall A" })).toBeInTheDocument();
     expect(await region("Power trend")).toBeInTheDocument();
     expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    // The page's own skeleton is gone; each widget draws its own `.widget-sk` region until its data lands, so those are waited out.
+    expect(document.querySelector(".sk-region:not(.widget-sk)")).toBeNull();
+    await waitFor(() => expect(document.querySelector(".widget-sk")).toBeNull());
     expect(document.querySelector(".sk-region")).toBeNull();
   });
 

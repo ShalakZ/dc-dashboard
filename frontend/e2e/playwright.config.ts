@@ -256,5 +256,15 @@ export default defineConfig({
       dependencies: ["w12b"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // Writes next to nothing and needs no readings from the stack, like w12c: beforeAll saves ONE dashboard (`w13 <run>`, the 15 widgets of e2e/w13Showcase.ts, on the first six real asset ids)
+    // and every case answers POST /api/widget-data through page.route from that showcase, so it sees the states the seed cannot give on demand (estimated, partial, no rate, stale, no data). Its
+    // cases set the admin's look (light navy-gold, dark desert-gold) through PUT /api/me/preferences before they open the page, and afterAll deletes the dashboard and puts the look back to
+    // light navy-gold. Each case that needs a window size sets it itself (1024, 1440 and 1920 px); nothing may come after it that is not content with the admin on light navy-gold.
+    {
+      name: "w13",
+      testMatch: "w13.spec.ts",
+      dependencies: ["w12c"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

@@ -18,6 +18,8 @@ interface Props {
  * same function the read-only grid uses), so the saved x/y/w/h are exactly what is on screen and the CSS grid draws the same
  * cells (the container padding is 0 for that reason: the library would otherwise indent the grid by the margin). Only
  * finished drags and resizes are reported (the library also reports on mount, which would make every dashboard look edited).
+ * The two library sheets imported above load with this (lazy) chunk, after the app's own CSS, so the look of the resize handles and of the
+ * drop placeholder is written in `styles/widgets.css` with `!important` inside the layer, under `.dash-grid-edit` (the class here).
  */
 export function DashboardGrid({ drafts, onChange, renderWidget }: Props) {
   const { width, containerRef, mounted } = useContainerWidth();
