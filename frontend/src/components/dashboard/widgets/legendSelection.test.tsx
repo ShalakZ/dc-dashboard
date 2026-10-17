@@ -70,11 +70,12 @@ describe("a legend selection survives a refetch", () => {
   });
 });
 
-describe("a remembered selection that no longer fits is forgotten", () => {
+describe("a remembered selection is kept by asset, and only what still fits is applied", () => {
   const only = (...ids: [number, string][]) => seriesData({ series: ids.map(([id, name]) => line(id, name, id)) });
   const A: [number, string] = [5, "A"];
   const B: [number, string] = [6, "B"];
   const C: [number, string] = [7, "C"];
+  const D: [number, string] = [8, "D"];
 
   it("when the legend is no longer shown (one series left), so a hidden series can never become unreachable", () => {
     const { rerender } = render(<TimeSeriesWidget data={only(A, B)} timezone={TZ} />);
@@ -85,12 +86,46 @@ describe("a remembered selection that no longer fits is forgotten", () => {
     expect(props().option.legend?.selected).toBeUndefined();
   });
 
-  it("when the names in the legend are not the ones that were chosen from (an asset replaced, renamed or flagged)", () => {
-    const { rerender } = render(<TimeSeriesWidget data={only(A, B)} timezone={TZ} />);
+  it("when an asset gains or loses a ~ or a * (its legend name changes), the choice stays with the asset", () => {
+    const flagged = (flag: { estimated?: boolean; partial?: boolean }) =>
+      seriesData({ series: [line(5, "A", 5), { ...line(6, "B", 6), ...flag }] });
+    const { rerender } = render(<TimeSeriesWidget data={flagged({})} timezone={TZ} />);
     toggle({ A: true, B: false });
-    rerender(<TimeSeriesWidget data={only(A, C)} timezone={TZ} />);
+    rerender(<TimeSeriesWidget data={flagged({ estimated: true })} timezone={TZ} />); // the refetch flagged B: its name is now "B ~"
+    expect(props().option.legend?.selected).toEqual({ A: true, "B ~": false });
+    rerender(<TimeSeriesWidget data={flagged({ estimated: true, partial: true })} timezone={TZ} />);
+    expect(props().option.legend?.selected).toEqual({ A: true, "B ~ *": false });
+    rerender(<TimeSeriesWidget data={flagged({})} timezone={TZ} />); // and the flag goes again
+    expect(props().option.legend?.selected).toEqual({ A: true, B: false });
+    rerender(<TimeSeriesWidget data={flagged({ partial: true })} timezone={TZ} />);
+    toggle({ A: true, "B *": true }); // a choice made under a flagged name is remembered under the asset too
+    rerender(<TimeSeriesWidget data={flagged({})} timezone={TZ} />);
+    expect(props().option.legend?.selected).toEqual({ A: true, B: true });
+  });
+
+  it("when an asset is renamed", () => {
+    const named = (name: string) => seriesData({ series: [line(5, "A", 5), line(6, name, 6)] });
+    const { rerender } = render(<TimeSeriesWidget data={named("B")} timezone={TZ} />);
+    toggle({ A: true, B: false });
+    rerender(<TimeSeriesWidget data={named("Boiler")} timezone={TZ} />);
+    expect(props().option.legend?.selected).toEqual({ A: true, Boiler: false });
+  });
+
+  it("when an asset is replaced: the one that is gone is ignored, a new one is shown, the others keep their choice", () => {
+    const { rerender } = render(<TimeSeriesWidget data={only(A, B, C)} timezone={TZ} />);
+    toggle({ A: false, B: true, C: true });
+    rerender(<TimeSeriesWidget data={only(A, D)} timezone={TZ} />); // C replaced by D
+    expect(props().option.legend?.selected).toEqual({ A: false, D: true });
+    rerender(<TimeSeriesWidget data={only(A, B, C)} timezone={TZ} />); // an asset that was gone has no choice left: shown
+    expect(props().option.legend?.selected).toEqual({ A: false, B: true, C: true });
+  });
+
+  it("never leaves every series hidden: a choice that would is dropped for good", () => {
+    const { rerender } = render(<TimeSeriesWidget data={only(A, B, C)} timezone={TZ} />);
+    toggle({ A: true, B: false, C: false });
+    rerender(<TimeSeriesWidget data={only(B, C)} timezone={TZ} />); // A, the only one left on, was deleted
     expect(props().option.legend?.selected).toBeUndefined();
-    rerender(<TimeSeriesWidget data={only(A, B)} timezone={TZ} />); // B is not hidden again behind the viewer's back
+    rerender(<TimeSeriesWidget data={only(A, B, C)} timezone={TZ} />); // and it does not come back with A
     expect(props().option.legend?.selected).toBeUndefined();
   });
 
@@ -100,12 +135,16 @@ describe("a remembered selection that no longer fits is forgotten", () => {
     toggle({ A: false, B: true });
     rerender(<BarWidget data={bars(B)} timezone={TZ} />);
     expect(props().option.legend?.selected).toBeUndefined();
+    const { rerender: again } = render(<BarWidget data={bars(A, B, C)} timezone={TZ} />);
+    toggle({ A: true, B: false, C: true });
+    again(<BarWidget data={bars(A, B, D)} timezone={TZ} />);
+    expect(props().option.legend?.selected).toEqual({ A: true, B: false, D: true });
   });
 
-  it("but not while the same names are still there: the choice survives data that changed", () => {
+  it("but not while the same assets are still there: the choice survives data that changed, in any order", () => {
     const { rerender } = render(<TimeSeriesWidget data={only(A, B)} timezone={TZ} />);
     toggle({ A: true, B: false });
-    rerender(<TimeSeriesWidget data={only(B, A)} timezone={TZ} />); // same two names, other order
+    rerender(<TimeSeriesWidget data={only(B, A)} timezone={TZ} />);
     expect(props().option.legend?.selected).toEqual({ A: true, B: false });
   });
 });

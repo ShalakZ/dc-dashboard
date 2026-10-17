@@ -1,9 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import type { WidgetData } from "../../../api/types";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
 import { escapeHtml, shortLabel } from "../../../lib/widgetFormat";
 import { seriesData, seriesPoint, valueRow, valuesData } from "../../../test/dashboardFixtures";
 import { BarWidget, barOption } from "./BarWidget";
+import { LIGHT_CHART, type ChartTheme } from "./chartTheme";
 import { bucketMs, markIsolated, timeSeriesOption, tooltipFormatter, TimeSeriesWidget, withGaps } from "./TimeSeriesWidget";
 
 vi.mock("echarts-for-react", () => ({
@@ -32,6 +33,8 @@ const TZ = "Asia/Qatar";
 interface LegendOpt { show: boolean; type: string; formatter: (name: string) => string; tooltip: { show: boolean } }
 const legendOf = (option: unknown) => (option as { legend: LegendOpt }).legend;
 const axisLabelOf = (option: unknown) => (option as { xAxis: { axisLabel: { interval: number; formatter: (value: string) => string } } }).xAxis.axisLabel;
+/** A tooltip as the viewer reads it: the tags taken away, the name, the value and the state of each row one after the other. */
+const tipText = (html: string) => html.replace(/<\/(span|div)>/g, " ").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
 const LONG = "Main-Switchboard-Feeder-Room-East-Hall-3"; // 40 characters
 const LONG_2 = "Auxiliary-Distribution-Panel-Block-West"; // differs from LONG at the start, so the two shorten to different texts
 
@@ -136,7 +139,7 @@ describe("time series", () => {
   it("keeps the min/max band helpers free of symbols, so only the average line shows the dot", () => {
     const lone = seriesData({ series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 1, min: 0, max: 2 })] }] });
     const option = asOption(timeSeriesOption(lone, TZ));
-    expect(option.series.map((s) => s.id)).toEqual(["band-min-5", "band-span-5", "avg-5"]);
+    expect(option.series.map((s) => s.id)).toEqual(["avg-5", "band-min-5", "band-span-5"]);
     expect(option.series.find((s) => s.id === "avg-5")!.data[0]).toMatchObject({ symbol: "circle" });
     expect(option.series.find((s) => s.id === "band-min-5")!.data.every((c) => Array.isArray(c))).toBe(true);
     expect(option.series.find((s) => s.id === "band-span-5")!.data.every((c) => Array.isArray(c))).toBe(true);
@@ -147,7 +150,7 @@ describe("time series", () => {
     const [line] = asOption(timeSeriesOption(lone, TZ)).series;
     const cell = line.data[0] as { value: Row };
     // ECharts hands the formatter the item's `value` pair as `params.value`.
-    expect(tooltipFormatter(lone, TZ)([{ seriesId: "avg-5", seriesName: "A", value: cell.value, marker: "" }])).toContain("A: 1.50 kWh");
+    expect(tipText(tooltipFormatter(lone, TZ)([{ seriesId: "avg-5", seriesName: "A", value: cell.value, marker: "" }]))).toContain("A 1.50 kWh");
   });
 
   it("breaks the line where buckets are missing and where the value is null", () => {
@@ -158,7 +161,7 @@ describe("time series", () => {
 
   it("draws an average line per asset with a min/max band, gaps as gaps", () => {
     const option = asOption(timeSeriesOption(data, TZ));
-    expect(option.series.map((s) => s.id)).toEqual(["band-min-5", "band-span-5", "avg-5"]);
+    expect(option.series.map((s) => s.id)).toEqual(["avg-5", "band-min-5", "band-span-5"]);
     const avg = option.series.find((s) => s.id === "avg-5")!;
     expect(avg.name).toBe("LV Panel 1");
     expect(avg.connectNulls).toBe(false);
@@ -251,12 +254,12 @@ describe("time series", () => {
 
   it("builds a tooltip that hides the band helpers, shows min/max, and escapes names", () => {
     const html = tooltipFormatter(data, TZ)([
-      { seriesId: "band-min-5", seriesName: "LV Panel 1 min", value: ["2026-10-08T00:01:00+00:00", 1], marker: "<i>m</i>" },
+      { seriesId: "band-min-5", seriesName: "LV Panel 1", value: ["2026-10-08T00:01:00+00:00", 1], marker: "<i>m</i>" }, // W13: a band carries its line's name
       { seriesId: "avg-5", seriesName: "<b>LV</b> Panel 1", value: ["2026-10-08T00:01:00+00:00", 2], marker: "<i>m</i>" },
     ]);
     expect(html).toContain("&lt;b&gt;LV&lt;/b&gt; Panel 1");
     expect(html).not.toContain("<b>");
-    expect(html).not.toContain("LV Panel 1 min");
+    expect(html.match(/justify-content:space-between/g)).toHaveLength(1); // one row: the band's helper series adds none
     expect(html).toContain("2.00 kW");
     expect(html).toContain("(min 1.00, max 3.00)");
     expect(html).toContain(formatSiteDateTime("2026-10-08T00:01:00.000Z", TZ));
@@ -282,16 +285,18 @@ describe("time series", () => {
     const tip = tooltipFormatter(cost, TZ);
     const item = (id: number, name: string, ts: string, value: number | null) => ({ seriesId: `avg-${id}`, seriesName: name, value: [ts, value], marker: "" });
     const at = (ts: string) => tip([item(5, "A", ts, null), item(6, "B", ts, 1)]);
-    const first = tip([item(5, "A", "2026-10-08T00:00:00+00:00", 0.5), item(6, "B", "2026-10-08T00:00:00+00:00", 1.25)]);
-    expect(first).toContain("A: 0.50* QAR");
-    expect(first).toContain("B: ~1.25 QAR");
-    const noRate = tip([item(5, "A", "2026-10-08T01:00:00+00:00", null), item(6, "B", "2026-10-08T01:00:00+00:00", 2)]);
-    expect(noRate).toContain("A: —");
-    expect(noRate).not.toContain("A: — QAR");
-    expect(noRate).toContain("B: 2.00 QAR");
-    const silent = at("2026-10-08T02:00:00+00:00");
-    expect(silent).not.toContain("A:");
-    expect(silent).toContain("B:");
+    // The rows are the name on the left and the value on the right; tipText reads them one after the other. W13 adds the state in words after the value.
+    const first = tipText(tip([item(5, "A", "2026-10-08T00:00:00+00:00", 0.5), item(6, "B", "2026-10-08T00:00:00+00:00", 1.25)]));
+    expect(first).toContain("A 0.50* QAR partial");
+    expect(first).toContain("B ~1.25 QAR estimated");
+    const noRate = tipText(tip([item(5, "A", "2026-10-08T01:00:00+00:00", null), item(6, "B", "2026-10-08T01:00:00+00:00", 2)]));
+    expect(noRate).toContain("A — partial, no rate"); // the bucket is partial too (it has consumption but no rate)
+    expect(noRate).not.toContain("A — QAR");
+    expect(noRate).toContain("B 2.00 QAR");
+    expect(noRate).not.toContain("B 2.00 QAR estimated"); // a bucket with no marker says nothing about a state
+    const silent = tipText(at("2026-10-08T02:00:00+00:00"));
+    expect(silent).not.toMatch(/\bA\b/);
+    expect(silent).toMatch(/\bB\b/);
     // A hover over a stretch that has only silent buckets or the filler row of a gap shows no tooltip at all.
     expect(tip([item(5, "A", "2026-10-08T02:00:00+00:00", null)])).toBe("");
     expect(tip([item(5, "A", "2026-10-08T05:00:00+00:00", null)])).toBe("");
@@ -462,8 +467,9 @@ describe("bar", () => {
       { asset_id: 6, name: "B", estimated: false, partial: false, points: [point("2026-10-08T02:00:00+00:00", { value: 6 })] },
     ], { source: "cost", unit: "QAR" });
     const option = barSeries(barOption(data, TZ));
-    expect(option[0].data).toEqual([1, null, null]);
-    expect(option[0].markPoint?.data).toEqual([expect.objectContaining({ coord: [1, 0] })]);
+    // W13: the dash is a bar of zero height in that asset's own slot (a point mark would sit at the middle of the group); the other empty buckets stay null.
+    expect(option[0].data).toEqual([1, expect.objectContaining({ value: 0, itemStyle: { color: "transparent" }, label: expect.objectContaining({ show: true, formatter: "—" }) }), null]);
+    expect(option[0].markPoint).toBeUndefined();
     expect(option[1].data).toEqual([null, null, 6]);
     expect(option[1].markPoint).toBeUndefined();
   });
@@ -483,10 +489,10 @@ describe("bar", () => {
       point("2026-10-08T02:00:00+00:00", { value: null, no_data: true }),
     ] }], { source: "cost", unit: "QAR" });
     const tip = asBar(barOption(data, TZ)).tooltip.formatter;
-    const line = (dataIndex: number) => tip([{ name: "x", dataIndex, seriesIndex: 0, seriesName: "A", marker: "" }]);
-    expect(line(0)).toContain("A: 1.50 QAR");
-    expect(line(1)).toContain("A: —");
-    expect(line(2)).toBe("");
+    const line = (dataIndex: number) => tipText(tip([{ name: "x", dataIndex, seriesIndex: 0, seriesName: "A", marker: "" }]));
+    expect(line(0)).toContain("A 1.50 QAR");
+    expect(line(1)).toContain("A — partial, no rate");
+    expect(tip([{ name: "x", dataIndex: 2, seriesIndex: 0, seriesName: "A", marker: "" }])).toBe("");
   });
 
   it("renders a bar chart, or says there is nothing to draw", () => {
@@ -522,5 +528,142 @@ describe("bar per asset when no asset has a reading", () => {
     second.unmount();
     render(<BarWidget data={metric(rows({ value: null }))} timezone={TZ} />); // not marked silent: the dash, as before
     expect(screen.getByTestId("chart")).toBeInTheDocument();
+  });
+});
+
+describe("the charts follow the theme (W13)", () => {
+  const dark: ChartTheme = {
+    palette: ["#6ea8fe", "#f59a52", "#3ecf8e", "#f38bb8", "#4cc9dc", "#b49bff", "#e9c046", "#a3adbd"],
+    accent: "#c9a227", axisText: "#a3adbd", axisLine: "#3a414d", grid: "#262b33", tipBg: "#262b33", tipText: "#e6e9ef", tipBorder: "#4a5261", bandOpacity: 0.22,
+  };
+  const asset = (id: number, name: string, extra: Partial<WidgetData["series"][number]> = {}) => ({
+    asset_id: id, name, estimated: false, partial: false, ...extra,
+    points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: id, min: id - 1, max: id + 1 }), seriesPoint({ ts: "2026-10-08T00:04:48+00:00", value: id + 1, min: id, max: id + 2 })],
+  });
+  interface Axis { axisLabel: { color: string; fontSize: number }; axisLine: { lineStyle: { color: string } }; splitLine: { lineStyle: { color: string; width: number; type: string } }; nameTextStyle: { color: string } }
+  interface Themed {
+    tooltip: { confine: boolean; backgroundColor: string; borderColor: string; textStyle: { color: string; fontSize: number } };
+    legend: { textStyle: { color: string; fontSize: number }; icon: string };
+    xAxis: Axis; yAxis: Axis;
+    series: { id?: string; name?: string; color?: string; z?: number; lineStyle?: { type?: string; width?: number; opacity?: number }; areaStyle?: { color: string; opacity: number }; data: unknown[] }[];
+  }
+  const themed = (option: unknown) => option as Themed;
+
+  it("takes the series colours, the axis ink, the grid and the tooltip from the theme it is given", () => {
+    const option = themed(timeSeriesOption(seriesData({ series: [asset(5, "A"), asset(6, "B")] }), TZ, dark));
+    expect(option.series.filter((s) => s.id?.startsWith("avg-")).map((s) => s.color)).toEqual(["#6ea8fe", "#f59a52"]);
+    for (const axis of [option.xAxis, option.yAxis]) {
+      expect(axis.axisLabel).toMatchObject({ color: "#a3adbd", fontSize: 12 });
+      expect(axis.axisLine.lineStyle.color).toBe("#3a414d");
+      expect(axis.splitLine.lineStyle).toEqual({ color: "#262b33", width: 1, type: "solid" });
+    }
+    expect(option.yAxis.nameTextStyle.color).toBe("#a3adbd");
+    expect(option.legend.textStyle).toEqual({ color: "#a3adbd", fontSize: 12 });
+    expect(option.tooltip).toMatchObject({ confine: true, backgroundColor: "#262b33", borderColor: "#4a5261", textStyle: { color: "#e6e9ef", fontSize: 13 } });
+  });
+
+  it("colours a chart of one series with the accent, and draws 2px lines", () => {
+    const one = themed(timeSeriesOption(seriesData(), TZ, dark));
+    const line = one.series.find((s) => s.id === "avg-5")!;
+    expect(line.color).toBe("#c9a227");
+    expect(line.lineStyle).toEqual({ width: 2, type: "solid" });
+  });
+
+  it("draws series 6 to 8 dashed and 9 and later dotted in colours 1 to 5", () => {
+    const many = themed(timeSeriesOption(seriesData({
+      source: "energy", metric: null, unit: "kWh", bucket: "hour", tier: null,
+      series: Array.from({ length: 10 }, (_, i) => asset(10 + i, `S${i}`)),
+    }), TZ, dark));
+    expect(many.series.map((s) => s.lineStyle?.type)).toEqual([...Array(5).fill("solid"), "dashed", "dashed", "dashed", "dotted", "dotted"]);
+    expect(many.series.map((s) => s.color)).toEqual([...dark.palette, dark.palette[0], dark.palette[1]]);
+  });
+
+  it("gives a line's band its name and colour and a lower z, so one legend entry switches both and the line stays on top", () => {
+    const option = themed(timeSeriesOption(seriesData({ series: [asset(5, "A"), asset(6, "B", { estimated: true })] }), TZ, dark));
+    const byId = (id: string) => option.series.find((s) => s.id === id)!;
+    expect(option.series.map((s) => s.id)).toEqual(["avg-5", "band-min-5", "band-span-5", "avg-6", "band-min-6", "band-span-6"]);
+    for (const [id, name, color] of [[5, "A", "#6ea8fe"], [6, "B ~", "#f59a52"]] as const) {
+      expect(byId(`avg-${id}`)).toMatchObject({ name, color, z: 3 });
+      for (const band of ["band-min", "band-span"]) expect(byId(`${band}-${id}`)).toMatchObject({ name, color, z: 2, lineStyle: { opacity: 0 } });
+      expect(byId(`band-span-${id}`).areaStyle).toEqual({ color, opacity: 0.22 });
+    }
+    expect((option as unknown as { legend: { data: string[] } }).legend.data).toEqual(["A", "B ~"]); // the line's name is the entry; the bands add none
+  });
+
+  it("draws the marker of a no-rate row in its series' colour: the dash bar is transparent, and so would be the marker ECharts builds from it", () => {
+    const cost = seriesData({ type: "bar", source: "cost", unit: "QAR", metric: null, bucket: "hour", tier: null, series: [
+      { ...asset(5, "A"), points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 1 })] },
+      { ...asset(6, "B"), points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: null, partial: true })] },
+    ] });
+    const tip = asBar(barOption(cost, TZ, dark)).tooltip.formatter;
+    const html = tip([
+      { name: "x", dataIndex: 0, seriesIndex: 0, seriesName: "A", marker: "<i>real</i>" },
+      { name: "x", dataIndex: 0, seriesIndex: 1, seriesName: "B", marker: "<i>transparent</i>" },
+    ]);
+    expect(html).toContain("<i>real</i>"); // a row with a bar keeps the marker ECharts gave it
+    expect(html).not.toContain("<i>transparent</i>");
+    expect(html).toContain("background-color:#f59a52"); // B's own colour, the second of the theme's palette
+  });
+
+  it("colours the bars by series (the accent for one), square legend icons, and the dash with the axis ink", () => {
+    const grouped = themed(barOption(seriesData({ type: "bar", series: [asset(5, "A"), asset(6, "B")] }), TZ, dark));
+    expect(grouped.series.map((s) => s.color)).toEqual(["#6ea8fe", "#f59a52"]);
+    expect(grouped.legend.icon).toBe("roundRect");
+    expect(themed(barOption(seriesData({ type: "bar" }), TZ, dark)).series[0].color).toBe("#c9a227");
+    const byAsset = barOption(valuesData({ type: "bar", source: "cost", metric: null, unit: "QAR", values: [valueRow({ value: null, point_id: null })] }), TZ, dark);
+    expect(barSeries(byAsset)[0].markPoint).toMatchObject({ label: { color: "#a3adbd" } });
+    expect(themed(byAsset).series[0].color).toBe("#c9a227");
+  });
+
+  it("says the state in words beside the marker in a bar's tooltip: estimated, partial, no rate", () => {
+    const rows = [
+      valueRow({ name: "A", value: 10, estimated: true, point_id: null }),
+      valueRow({ asset_id: 6, name: "B", value: 4, partial: true, point_id: null }),
+      valueRow({ asset_id: 7, name: "C", value: null, point_id: null }),
+      valueRow({ asset_id: 8, name: "D", value: 2, point_id: null }),
+    ];
+    const tip = asBar(barOption(valuesData({ type: "bar", source: "cost", metric: null, unit: "QAR", values: rows }), TZ)).tooltip.formatter;
+    const at = (dataIndex: number) => tipText(tip([{ name: "x", dataIndex, seriesIndex: 0, marker: "" }]));
+    expect(at(0)).toContain("~10.00 QAR estimated");
+    expect(at(1)).toContain("4.00* QAR partial");
+    expect(at(2)).toContain("— no rate");
+    expect(at(3)).toContain("2.00 QAR");
+    expect(at(3)).not.toMatch(/estimated|partial|no rate/);
+  });
+
+  describe("the widgets", () => {
+    const ROOT = document.documentElement;
+    afterEach(() => {
+      ROOT.style.removeProperty("--chart-axis-text");
+      ROOT.removeAttribute("data-mode");
+    });
+
+    it("wrap the canvas in a picture with a name, so a screen reader hears what the chart is", () => {
+      const { unmount } = render(<TimeSeriesWidget data={seriesData({ series: [asset(5, "A"), asset(6, "B")] })} timezone={TZ} />);
+      const line = screen.getByRole("img");
+      expect(line).toHaveClass("widget-chart");
+      expect(line).toHaveAccessibleName(/^Line chart of 2 assets: A, B\. active_power_kw in kW, Last 24 hours\./);
+      unmount();
+      render(<BarWidget data={valuesData({ type: "bar" })} timezone={TZ} />);
+      expect(screen.getByRole("img")).toHaveAccessibleName(/^Bar chart of 1 asset: LV Panel 1\./);
+    });
+
+    it("say 'No data in this range.' as a widget empty state, not a picture", () => {
+      render(<BarWidget data={valuesData({ type: "bar", values: [] })} timezone={TZ} />);
+      expect(screen.getByText("No data in this range.")).toHaveClass("widget-empty");
+      expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    });
+
+    it("draw again in the new colours when the mode changes, without a reload", async () => {
+      render(<TimeSeriesWidget data={seriesData()} timezone={TZ} />);
+      const colours = () => JSON.parse(screen.getByTestId("chart").textContent!).yAxis.axisLabel.color as string;
+      expect(colours()).toBe(LIGHT_CHART.axisText);
+      await act(async () => {
+        ROOT.style.setProperty("--chart-axis-text", "#a3adbd");
+        ROOT.setAttribute("data-mode", "dark");
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(colours()).toBe("#a3adbd");
+    });
   });
 });

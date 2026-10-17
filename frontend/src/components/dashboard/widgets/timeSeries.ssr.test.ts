@@ -2,15 +2,19 @@
 // Real ECharts, no DOM: the option is rendered to an SVG string and what was drawn is looked at. The other widget tests
 // replace echarts-for-react by a stub and can only see the option, which is how a bucket-width error that made
 // every line of a 24h chart vanish slipped through once.
+// W13: the same file proves, on the real library, what the option tests above cannot: the legend switches a line AND its band, the legend keeps
+// a choice when a name gains a flag, the dash of a bucket with no rate sits in its own series' slot, and the colours are the theme's.
 import * as echarts from "echarts";
 import { shortLabel } from "../../../lib/widgetFormat";
 import { seriesData, seriesPoint } from "../../../test/dashboardFixtures";
+import { barOption } from "./BarWidget";
+import { LIGHT_CHART, type ChartTheme } from "./chartTheme";
 import { withLegendSelection } from "./legendSelection";
 import { timeSeriesOption } from "./TimeSeriesWidget";
 
 vi.mock("echarts-for-react", () => ({ default: () => null }));
 
-interface Drawn { d: string; fill: string | null; stroke: string | null }
+interface Drawn { d: string; fill: string | null; fillOpacity: string | null; stroke: string | null; strokeOpacity: string | null; dash: string | null; kind: string | null }
 const attr = (tag: string, name: string) => new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1] ?? null;
 
 function draw(option: unknown): Drawn[] {
@@ -18,11 +22,14 @@ function draw(option: unknown): Drawn[] {
   chart.setOption(option as echarts.EChartsOption);
   const svg = chart.renderToSVGString();
   chart.dispose();
-  return (svg.match(/<path\b[^>]*>/g) ?? []).map((tag) => ({ d: attr(tag, "d") ?? "", fill: attr(tag, "fill"), stroke: attr(tag, "stroke") }));
+  return (svg.match(/<path\b[^>]*>/g) ?? []).map((tag) => ({
+    d: attr(tag, "d") ?? "", fill: attr(tag, "fill"), fillOpacity: attr(tag, "fill-opacity"), stroke: attr(tag, "stroke"), strokeOpacity: attr(tag, "stroke-opacity"),
+    dash: attr(tag, "stroke-dasharray"), kind: attr(tag, "ecmeta_ssr_type"),
+  }));
 }
 const colorOf = (option: unknown) => (option as { series: { id?: string; color?: string }[] }).series.find((s) => s.id === "avg-5")!.color!;
-/** The average line: the path stroked in the series colour, and the dots: arcs filled with it. */
-const lineOf = (paths: Drawn[], color: string) => paths.filter((p) => p.stroke === color);
+/** The average line: the path stroked in the series colour (the band's own lines are stroked in it too, with an opacity of 0), and the dots: arcs filled with it. */
+const lineOf = (paths: Drawn[], color: string) => paths.filter((p) => p.stroke === color && p.strokeOpacity !== "0");
 const dotsOf = (paths: Drawn[], color: string) => paths.filter((p) => p.fill === color && p.d.includes("A"));
 const segments = (path: Drawn) => (path.d.match(/L/g) ?? []).length;
 
@@ -59,6 +66,10 @@ describe("time series, drawn by the real chart library", () => {
 });
 
 describe("legend selection, kept by the real chart library", () => {
+  const A_COLOR = LIGHT_CHART.palette[0]; // asset 5, the first of two series
+  const B_COLOR = LIGHT_CHART.palette[1]; // asset 6
+  /** What the hook remembers from a `legendselectchanged` payload: by asset id (5 is the first entry, 6 the second). */
+  const byAsset = (selected: Record<string, boolean>, names = ["A", "B"]) => ({ 5: selected[names[0]], 6: selected[names[1]] });
   const twoAssets = (base: number) => seriesData({
     series: [5, 6].map((id) => ({
       asset_id: id, name: id === 5 ? "A" : "B", estimated: false, partial: false,
@@ -71,26 +82,26 @@ describe("legend selection, kept by the real chart library", () => {
     const chart = echarts.init(null, undefined, { renderer: "svg", ssr: true, width: 600, height: 300 });
     /** The stroked paths of a data line of three points (two segments) in `color`. */
     const dataLines = (color: string) => (chart.renderToSVGString().match(/<path\b[^>]*>/g) ?? [])
-      .filter((tag) => attr(tag, "stroke") === color && ((attr(tag, "d") ?? "").match(/L/g) ?? []).length === 2);
+      .filter((tag) => attr(tag, "stroke") === color && attr(tag, "stroke-opacity") !== "0" && ((attr(tag, "d") ?? "").match(/L/g) ?? []).length === 2);
     let reported: Record<string, boolean> | null = null;
     chart.on("legendselectchanged", (event) => { reported = (event as unknown as { selected: Record<string, boolean> }).selected; });
     chart.setOption(timeSeriesOption(twoAssets(0), "Asia/Qatar"), { notMerge: true });
-    expect(dataLines("#cf222e")).toHaveLength(1); // both assets are drawn to begin with (B has the second palette colour)
+    expect(dataLines(B_COLOR)).toHaveLength(1); // both assets are drawn to begin with (B has the second palette colour)
     chart.dispatchAction({ type: "legendToggleSelect", name: "B" });
     expect(reported).toEqual({ A: true, B: false }); // the event and payload the widgets listen to
     expect(shownLegend(chart)).toEqual({ A: true, B: false });
-    expect(dataLines("#cf222e")).toHaveLength(0);
+    expect(dataLines(B_COLOR)).toHaveLength(0);
 
     // what a 30 s refetch did without the fix: a new option, notMerge, and B is back
     chart.setOption(timeSeriesOption(twoAssets(100), "Asia/Qatar"), { notMerge: true });
     expect(shownLegend(chart).B).not.toBe(false); // an empty selection: every entry on
-    expect(dataLines("#cf222e")).toHaveLength(1);
+    expect(dataLines(B_COLOR)).toHaveLength(1);
 
     chart.dispatchAction({ type: "legendToggleSelect", name: "B" });
-    chart.setOption(withLegendSelection(timeSeriesOption(twoAssets(200), "Asia/Qatar"), reported!), { notMerge: true });
+    chart.setOption(withLegendSelection(timeSeriesOption(twoAssets(200), "Asia/Qatar"), [5, 6], byAsset(reported!)), { notMerge: true });
     expect(shownLegend(chart)).toEqual({ A: true, B: false });
-    expect(dataLines("#1f6feb")).toHaveLength(1); // asset A's line
-    expect(dataLines("#cf222e")).toHaveLength(0); // asset B's is not drawn
+    expect(dataLines(A_COLOR)).toHaveLength(1); // asset A's line
+    expect(dataLines(B_COLOR)).toHaveLength(0); // asset B's is not drawn
     chart.dispose();
   });
 
@@ -112,7 +123,7 @@ describe("legend selection, kept by the real chart library", () => {
     expect(svg).not.toContain(`>${first}<`);
     chart.dispatchAction({ type: "legendToggleSelect", name: second });
     expect(reported).toEqual({ [first]: true, [second]: false });
-    chart.setOption(withLegendSelection(timeSeriesOption(named(100), "Asia/Qatar"), reported!), { notMerge: true });
+    chart.setOption(withLegendSelection(timeSeriesOption(named(100), "Asia/Qatar"), [5, 6], byAsset(reported!, [first, second])), { notMerge: true });
     expect(shownLegend(chart)).toEqual({ [first]: true, [second]: false });
     chart.dispose();
   });
@@ -209,5 +220,214 @@ describe("the time axis of an energy or cost series, drawn by the real chart lib
     expect(xAxisOf(metric)).not.toHaveProperty("max");
     expect(xAxisOf(metric).axisLabel.hideOverlap).toBe(true);
     expect(xAxisOf(timeSeriesOption(oneHour, "Asia/Qatar")).axisLabel.hideOverlap).toBe(true);
+  });
+});
+
+// ---- W13: a line and its band are one legend entry; the choice follows the asset; the dash has a slot; the colours are the theme's ----
+
+const metricAsset = (id: number, name: string, base: number, over: { estimated?: boolean; partial?: boolean } = {}) => ({
+  asset_id: id, name, estimated: false, partial: false, ...over,
+  points: [0, 1, 2].map((i) => seriesPoint({ ts: `2026-10-08T0${i}:00:00+00:00`, value: base + i, min: base + i - 1, max: base + i + 1 })),
+});
+const metricData = (...assets: ReturnType<typeof metricAsset>[]) => seriesData({ series: assets });
+const A_COLOR = LIGHT_CHART.palette[0];
+const B_COLOR = LIGHT_CHART.palette[1];
+
+/** A chart that stays open, so a legend click can be dispatched and drawn again. */
+function openChart(option: unknown) {
+  const chart = echarts.init(null, undefined, { renderer: "svg", ssr: true, width: 600, height: 300 });
+  chart.setOption(option as echarts.EChartsOption, { notMerge: true });
+  const reported: { selected: Record<string, boolean> | null } = { selected: null };
+  chart.on("legendselectchanged", (event) => { reported.selected = (event as unknown as { selected: Record<string, boolean> }).selected; });
+  return { chart, reported, paths: () => (chart.renderToSVGString().match(/<path\b[^>]*>/g) ?? []) };
+}
+/** The filled areas of the min-max band in `color`: the only paths filled with it at the band's opacity. */
+const bandsOf = (tags: string[], color: string, opacity: number) => tags.filter((t) => attr(t, "fill") === color && attr(t, "fill-opacity") === String(opacity));
+/** The visible data lines in `color` (the band's helper lines are stroked in it too, at an opacity of 0). */
+const visibleLines = (tags: string[], color: string) => tags.filter((t) => attr(t, "stroke") === color && attr(t, "stroke-opacity") !== "0" && (attr(t, "d") ?? "").includes("L") && attr(t, "ecmeta_ssr_type") === null);
+/** The legend's icons: the small filled rectangles the legend draws before each entry's text. */
+const legendIcons = (tags: string[]) => tags.filter((t) => attr(t, "ecmeta_ssr_type") === "legend" && attr(t, "fill") !== "none" && !(attr(t, "d") ?? "").startsWith("M-5"));
+
+describe("a line and its min-max band are one legend entry", () => {
+  const two = (flag: { estimated?: boolean; partial?: boolean } = {}) => metricData(metricAsset(5, "A", 0), metricAsset(6, "B", 10, flag));
+
+  it("draws both bands, each in its line's colour at the theme's band opacity, and a legend icon in each line's colour that is not hidden", () => {
+    const { paths } = openChart(timeSeriesOption(two(), "Asia/Qatar"));
+    const tags = paths();
+    expect(bandsOf(tags, A_COLOR, LIGHT_CHART.bandOpacity)).toHaveLength(1);
+    expect(bandsOf(tags, B_COLOR, LIGHT_CHART.bandOpacity)).toHaveLength(1);
+    const icons = legendIcons(tags);
+    expect(icons.map((t) => attr(t, "fill"))).toEqual([A_COLOR, B_COLOR]); // the icon comes from the first series of the name: the line, never the invisible band
+    for (const icon of icons) {
+      expect(attr(icon, "opacity")).toBeNull();
+      expect(attr(icon, "fill-opacity")).toBeNull();
+      expect(attr(icon, "d")).toBe("M0 0l12 0l0 3l-12 0Z"); // a 12 x 3 line, not a symbol
+    }
+  });
+
+  it("switching an asset off in the legend takes its line and its band, and switching it on brings both back", () => {
+    const { chart, reported, paths } = openChart(timeSeriesOption(two(), "Asia/Qatar"));
+    expect(visibleLines(paths(), B_COLOR)).toHaveLength(1);
+    chart.dispatchAction({ type: "legendToggleSelect", name: "B" });
+    expect(reported.selected).toEqual({ A: true, B: false });
+    let tags = paths();
+    expect(visibleLines(tags, B_COLOR)).toHaveLength(0);
+    expect(bandsOf(tags, B_COLOR, LIGHT_CHART.bandOpacity)).toHaveLength(0); // the reported bug: the band stayed
+    expect(visibleLines(tags, A_COLOR)).toHaveLength(1);
+    expect(bandsOf(tags, A_COLOR, LIGHT_CHART.bandOpacity)).toHaveLength(1);
+    chart.dispatchAction({ type: "legendToggleSelect", name: "B" });
+    tags = paths();
+    expect(visibleLines(tags, B_COLOR)).toHaveLength(1);
+    expect(bandsOf(tags, B_COLOR, LIGHT_CHART.bandOpacity)).toHaveLength(1);
+    chart.dispose();
+  });
+
+  it("keeps an asset switched off when the refetch gives its name a ~ or a *", () => {
+    const { chart, reported, paths } = openChart(timeSeriesOption(two(), "Asia/Qatar"));
+    chart.dispatchAction({ type: "legendToggleSelect", name: "B" });
+    const remembered = { 5: reported.selected!.A, 6: reported.selected!.B };
+    // the refetch: B is estimated now, so its legend name is "B ~"; the old code compared names and forgot the choice for good
+    const next = withLegendSelection(timeSeriesOption(two({ estimated: true }), "Asia/Qatar"), [5, 6], remembered);
+    chart.setOption(next as echarts.EChartsOption, { notMerge: true });
+    const shown = (chart.getOption() as { legend: { selected: Record<string, boolean> }[] }).legend[0].selected;
+    expect(shown).toEqual({ A: true, "B ~": false });
+    const tags = paths();
+    expect(visibleLines(tags, B_COLOR)).toHaveLength(0);
+    expect(bandsOf(tags, B_COLOR, LIGHT_CHART.bandOpacity)).toHaveLength(0);
+    expect(visibleLines(tags, A_COLOR)).toHaveLength(1);
+    chart.dispose();
+  });
+
+  it("ignores a deleted asset and never leaves every series hidden", () => {
+    const three = (...ids: [number, string][]) => metricData(...ids.map(([id, name]) => metricAsset(id, name, id)));
+    const remembered = { 5: true, 6: false, 7: false }; // A is the only one on
+    const withoutA = timeSeriesOption(three([6, "B"], [7, "C"]), "Asia/Qatar");
+    expect(withLegendSelection(withoutA, [6, 7], remembered)).toBe(withoutA); // dropped: B and C would both be hidden
+    const { chart, paths } = openChart(withLegendSelection(withoutA, [6, 7], remembered));
+    expect(visibleLines(paths(), LIGHT_CHART.palette[0])).toHaveLength(1); // both are drawn (B, C are the first two series now)
+    expect(visibleLines(paths(), LIGHT_CHART.palette[1])).toHaveLength(1);
+    chart.dispose();
+  });
+
+  it("draws series 6 to 8 dashed, and 9 and later dotted in colours 1 to 5", () => {
+    const hourly = (count: number) => seriesData({
+      source: "energy", metric: null, unit: "kWh", bucket: "hour", tier: null,
+      series: Array.from({ length: count }, (_, i) => ({
+        asset_id: 10 + i, name: `S${i}`, estimated: false, partial: false,
+        points: [0, 1, 2].map((k) => seriesPoint({ ts: `2026-10-08T0${k}:00:00+00:00`, value: 100 * i + k })),
+      })),
+    });
+    const { paths, chart } = openChart(timeSeriesOption(hourly(10), "Asia/Qatar"));
+    const lines = paths().filter((t) => attr(t, "stroke-width") === "2" && (attr(t, "d") ?? "").includes("L"));
+    expect(lines).toHaveLength(10);
+    const dashes = lines.map((t) => attr(t, "stroke-dasharray"));
+    expect(dashes.slice(0, 5).every((d) => d === null)).toBe(true); // 1 to 5: solid
+    const dashed = dashes.slice(5, 8);
+    expect(dashed.every((d) => d !== null && d === dashed[0])).toBe(true); // 6 to 8: dashed
+    const dotted = dashes.slice(8);
+    expect(dotted.every((d) => d !== null && d === dotted[0])).toBe(true); // 9 and 10: dotted
+    expect(dotted[0]).not.toBe(dashed[0]); // and not the same as dashed
+    expect(lines.slice(8).map((t) => attr(t, "stroke"))).toEqual([LIGHT_CHART.palette[0], LIGHT_CHART.palette[1]]);
+    chart.dispose();
+  });
+
+  it("takes every colour from the theme it is given: axis ink, grid, band, series (the dark look draws nothing in the light colours)", () => {
+    const dark: ChartTheme = {
+      palette: ["#6ea8fe", "#f59a52", "#3ecf8e", "#f38bb8", "#4cc9dc", "#b49bff", "#e9c046", "#a3adbd"],
+      accent: "#c9a227", axisText: "#a3adbd", axisLine: "#3a414d", grid: "#262b33", tipBg: "#262b33", tipText: "#e6e9ef", tipBorder: "#4a5261", bandOpacity: 0.22,
+    };
+    const chart = echarts.init(null, undefined, { renderer: "svg", ssr: true, width: 600, height: 300 });
+    chart.setOption(timeSeriesOption(two(), "Asia/Qatar", dark), { notMerge: true });
+    const svg = chart.renderToSVGString();
+    chart.dispose();
+    const tags = svg.match(/<path\b[^>]*>/g) ?? [];
+    const texts = [...svg.matchAll(/<text\b[^>]*fill="([^"]*)"[^>]*>([^<]*)<\/text>/g)].map((m) => ({ fill: m[1], text: m[2] }));
+    expect(texts.length).toBeGreaterThan(5);
+    expect(texts.every((t) => t.fill === dark.axisText)).toBe(true); // tick labels, unit name and legend text: one ink
+    expect(tags.some((t) => attr(t, "stroke") === dark.grid)).toBe(true);
+    expect(tags.some((t) => attr(t, "stroke") === dark.axisLine)).toBe(true);
+    expect(bandsOf(tags, dark.palette[0], 0.22)).toHaveLength(1);
+    expect(bandsOf(tags, dark.palette[1], 0.22)).toHaveLength(1);
+    expect(svg).not.toContain(LIGHT_CHART.palette[0]);
+    expect(svg).not.toContain("#e1e5ec"); // the light grid
+  });
+});
+
+describe("the bar chart, drawn by the real chart library", () => {
+  const costBars = (over: Partial<ReturnType<typeof seriesData>> = {}) => seriesData({
+    type: "bar", source: "cost", unit: "QAR", metric: null, bucket: "hour", tier: null, ...over,
+    series: [
+      { asset_id: 5, name: "A", estimated: false, partial: true, points: [
+        seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 4 }), seriesPoint({ ts: "2026-10-08T01:00:00+00:00", value: null, partial: true }),
+      ] },
+      { asset_id: 6, name: "B", estimated: false, partial: true, points: [
+        seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: null, partial: true }), seriesPoint({ ts: "2026-10-08T01:00:00+00:00", value: 6 }),
+      ] },
+    ],
+  });
+  const draw2 = (option: unknown) => {
+    const chart = echarts.init(null, undefined, { renderer: "svg", ssr: true, width: 600, height: 300 });
+    chart.setOption(option as echarts.EChartsOption, { notMerge: true });
+    const svg = chart.renderToSVGString();
+    chart.dispose();
+    return svg;
+  };
+  /** x of the centre of every bar the chart drew in `color` (a bar is a filled rectangle path "M x y l w 0 l 0 -h l -w 0Z"). */
+  const barCentres = (svg: string, color: string) => (svg.match(/<path\b[^>]*>/g) ?? [])
+    .filter((t) => attr(t, "fill") === color && attr(t, "ecmeta_ssr_type") === "chart")
+    .map((t) => /^M([\d.]+) [\d.]+l([\d.]+) /.exec(attr(t, "d") ?? "")) // the dash's invisible point mark is a path too: only rectangles are bars
+    .flatMap((m) => (m ? [Number(m[1]) + Number(m[2]) / 2] : []));
+  /** x of every dash label (a text "—"). */
+  const dashXs = (svg: string) => [...svg.matchAll(/<text\b[^>]*transform="translate\(([\d.]+) [\d.]+\)"[^>]*>—<\/text>/g)].map((m) => Number(m[1]));
+  // Two categories, 520 px of plot from x = 60: the first is 60 to 320, the second 320 to 580.
+  const FIRST_START = 60;
+  const SECOND_START = 320;
+
+  it("puts the dash of a bucket with no rate in that asset's own slot, not at the middle of the group", () => {
+    const svg = draw2(barOption(costBars(), "Asia/Qatar"));
+    const b = barCentres(svg, LIGHT_CHART.palette[1]); // B has a bar in the second category only
+    const a = barCentres(svg, LIGHT_CHART.palette[0]); // A in the first only
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+    const dashes = dashXs(svg);
+    expect(dashes).toHaveLength(2); // B has no rate in the first category, A in the second
+    const [inFirst, inSecond] = [...dashes].sort((x, y) => x - y);
+    // B's slot in a category is where B's real bar is in the other one, measured from the start of its category
+    expect(inFirst - FIRST_START).toBeCloseTo(b[0] - SECOND_START, 0);
+    expect(inSecond - SECOND_START).toBeCloseTo(a[0] - FIRST_START, 0);
+    // and that is not the middle of the category, where the old point mark put every dash
+    expect(Math.abs(inFirst - (FIRST_START + SECOND_START) / 2)).toBeGreaterThan(20);
+    expect(Math.abs(inSecond - (SECOND_START + 580) / 2)).toBeGreaterThan(20);
+  });
+
+  it("draws nothing for that bucket but the dash: no bar, no fill", () => {
+    const svg = draw2(barOption(costBars(), "Asia/Qatar"));
+    const chartPaths = (svg.match(/<path\b[^>]*>/g) ?? []).filter((t) => attr(t, "ecmeta_ssr_type") === "chart");
+    const filled = chartPaths.filter((t) => attr(t, "fill") !== "none");
+    expect(filled).toHaveLength(2); // A's 4 and B's 6
+    expect(chartPaths).toHaveLength(4); // and the two zero-height items, drawn with no fill
+  });
+
+  it("draws the legend of a bar chart as a 10 x 10 rounded square in each series' colour", () => {
+    const svg = draw2(barOption(costBars(), "Asia/Qatar"));
+    const icons = (svg.match(/<path\b[^>]*>/g) ?? []).filter((t) => attr(t, "ecmeta_ssr_type") === "legend" && attr(t, "fill") !== "none" && (attr(t, "d") ?? "").startsWith("M2.5 0L7.5 0"));
+    expect(icons.map((t) => attr(t, "fill"))).toEqual([LIGHT_CHART.palette[0], LIGHT_CHART.palette[1]]);
+  });
+
+  it("colours a bar chart of one value per asset with the accent, and its dash label with the axis ink", () => {
+    const values = seriesData({
+      type: "bar", mode: "values", source: "cost", unit: "QAR", metric: null, bucket: null, tier: null, series: [],
+      values: [
+        { asset_id: 5, name: "A", value: 4, estimated: false, partial: false, point_id: null, no_data: false, ts: null, stale: false },
+        { asset_id: 6, name: "B", value: null, estimated: false, partial: false, point_id: null, no_data: false, ts: null, stale: false },
+      ],
+    });
+    const theme: ChartTheme = { ...LIGHT_CHART, accent: "#c9a227", axisText: "#a3adbd" };
+    const svg = draw2(barOption(values, "Asia/Qatar", theme));
+    expect(barCentres(svg, "#c9a227")).toHaveLength(1);
+    expect(svg).not.toContain(LIGHT_CHART.palette[0]);
+    const dash = [...svg.matchAll(/<text\b[^>]*fill="([^"]*)"[^>]*>—<\/text>/g)];
+    expect(dash).toHaveLength(1);
+    expect(dash[0][1]).toBe("#a3adbd");
   });
 });
