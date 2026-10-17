@@ -15,6 +15,34 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w13 (2026-10-17, MERGE_COMMIT)
+
+w13 (the dashboard widget overhaul) changes how the dashboard widgets look and what they tell you; no figure, unit or rounding a widget
+shows has changed. The widgets follow the theme: a card in the app's own colours (light, dark and the four theme colours; the white card
+on a dark page is gone), with a 36 px header, small icon buttons (**Details** and **CSV**), and one footer line that holds "since 10:46"
+and the marker hint (`~ estimated`, `* partial`, `— no rate`) for every widget type. A cost with no rate now says `— no rate` under a stat
+and a table as well, not only under a chart. A card narrower than 200 px (a two-column stat or gauge on a small window) moves its CSV
+button into **Details**. The charts use one palette of eight colours measured for contrast in light and in dark (a chart with one series
+uses the theme colour; series 6 to 8 are dashed and 9 and later dotted), with the axes, grid, legend and tooltip in the theme's colours;
+they repaint after a Mode or Theme colour switch without a reload, and a tooltip line carries the state in words (estimated, partial, no
+rate) beside the markers. The gauge is a half-circle arc with the scale ends, the figure, its unit and the asset name under it, so
+nothing overlaps at the smallest size (two columns by two rows); a screen reader hears a meter. **Details** opens a right-hand panel
+for the widget: what it shows (type, source with its unit, what the figure is, the assets with links to their pages), the time window
+with the site time zone, how fresh a latest reading is (for a finished range the hour the last value belongs to, never a made-up second),
+what each marker means for this widget, the state of each asset, and for a chart a small table (lowest, highest and the bucket it fell
+in, the last bucket, and a total only when it is exact). It never shows an average over buckets, and never a bucket width for a metric
+time series, because the server does not send one. Small bugs are fixed: switching an asset off in a chart legend now removes its
+min-max band too; the remembered legend choice is kept when an asset gains or loses a `~` or `*`; the grouped bar's no-rate dash sits in
+its own asset's slot; a chart has a text alternative and a widget's title is a level 2 heading; the gauge no longer overlaps at two rows;
+a card shows a skeleton instead of "loading…". The editor's preview is the same card as the dashboard's, and edit mode has a grip, a
+pencil and a bin icon, with the resize handles and the drop placeholder visible in dark. No migration, no backend change, no new
+permission, saved dashboards and widgets keep working unchanged. To tweak the look, the tokens are `--widget-pad`, `--widget-head-h`,
+`--widget-row-h`, `--widget-radius`, `--widget-shadow`, `--widget-figure` (card density and corners), `--chart-1` to `--chart-8`,
+`--chart-band-opacity`, `--chart-grid`, `--chart-tip-bg` (the palette) and `--gauge-width`, `--gauge-track`, `--gauge-fill` (the gauge);
+the gauge's arc shape (a half circle) is a code constant. The usual steps of [Upgrading and going back](docs/upgrading.md) are all it
+needs; the code to go back to is `b4f295f`. See [Dashboards and billing](docs/dashboards-and-billing.md), [Screens](docs/screens.md) and
+[End-to-end tests](docs/end-to-end-tests.md).
+
 ## w12c (2026-10-17, 2572801)
 
 w12c (Discovery visual polish) tidies the look of Discovery without changing what it does. The bar above the canvas is one regrouped bar:
