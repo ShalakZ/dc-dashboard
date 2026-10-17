@@ -53,6 +53,21 @@ describe("BarMenu", () => {
     expect(trigger()).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("the menu hangs UNDER the button, so it never covers the bar's other buttons: left edges aligned in the left half of the window, right edges in the right half", async () => {
+    mount();
+    const rect = (left: number, right: number) => ({ top: 100, bottom: 130, left, right, width: right - left, height: 30, x: left, y: 100, toJSON: () => ({}) }) as DOMRect;
+    const half = window.innerWidth / 2;
+    trigger().getBoundingClientRect = () => rect(half - 60, half - 20); // centre left of the middle
+    await userEvent.click(trigger());
+    expect(screen.getByRole("menu").style.top).toBe("134px"); // under the button (its bottom 130 + the 4px gap), not at its top
+    expect(screen.getByRole("menu").style.left).toBe(`${half - 60}px`); // jsdom measures the panel as 0 wide
+    await userEvent.keyboard("{Escape}");
+    trigger().getBoundingClientRect = () => rect(half + 20, half + 60); // centre right of the middle
+    await userEvent.click(trigger());
+    expect(screen.getByRole("menu").style.top).toBe("134px");
+    expect(screen.getByRole("menu").style.left).toBe(`${half + 60}px`);
+  });
+
   it("opens from the keyboard too: Enter puts the focus in the menu, Escape closes it and gives the focus back to the button", async () => {
     mount();
     trigger().focus();

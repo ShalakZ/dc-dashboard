@@ -33,7 +33,7 @@ export function BarMenu({ name, menuLabel, items, icon, className, disabled }: {
   disabled?: boolean;
 }) {
   const button = useRef<HTMLButtonElement>(null);
-  const [menu, setMenu] = useState<{ id: number; box: Box; asked: BarMenuItem[] | null } | null>(null);
+  const [menu, setMenu] = useState<{ id: number; box: Box; below: "start" | "end"; asked: BarMenuItem[] | null } | null>(null);
   const sequence = useRef(0);
   const reasonId = useId();
   const standing = useRef(false); // whether the menu is open as the next press will find it
@@ -68,7 +68,10 @@ export function BarMenu({ name, menuLabel, items, icon, className, disabled }: {
     if (!at) return;
     const asked = typeof items === "function" ? items() : null;
     if (asked && asked.length === 0) return;
-    setMenu({ id: ++sequence.current, box: { top: at.top, left: at.left, right: at.right, bottom: at.bottom }, asked });
+    // The menu hangs under the button (it must not cover the bar's neighbouring buttons): from its left edge in the left half of the window,
+    // from its right edge in the right half, so it opens toward the middle and stays inside the window.
+    const below = (at.left + at.right) / 2 > window.innerWidth / 2 ? "end" : "start";
+    setMenu({ id: ++sequence.current, box: { top: at.top, left: at.left, right: at.right, bottom: at.bottom }, below, asked });
   };
 
   const listed = menu?.asked ?? known ?? [];
@@ -90,7 +93,7 @@ export function BarMenu({ name, menuLabel, items, icon, className, disabled }: {
       {menu && (
         <GraphContextMenu
           key={menu.id}
-          at={{ box: menu.box }}
+          at={{ box: menu.box, below: menu.below }}
           label={menuLabel}
           returnFocus={() => button.current}
           onClose={close}

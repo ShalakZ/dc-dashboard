@@ -3,7 +3,11 @@ import { createPortal } from "react-dom";
 import { placePanel, type Box, type Placement } from "../../lib/placePanel";
 import type { RowAction } from "../RowActions";
 
-export type GraphMenuAt = { x: number; y: number } | { box: Box };
+/**
+ * Where the menu opens: at a point (a right-click), next to a box (a `⋯` button in a column of rows: to its LEFT, like `RowActions`), or
+ * `below` a box (a button in a horizontal bar: UNDER it, its left edge on the box's for "start", its right edge on the box's for "end").
+ */
+export type GraphMenuAt = { x: number; y: number } | { box: Box } | { box: Box; below: "start" | "end" };
 
 const ITEMS = '[role="menuitem"]:not([aria-disabled="true"])';
 const EDGE = 8; // kept free at the right, left and bottom of the window (placePanel's own margin)
@@ -31,6 +35,29 @@ export function placeAtPoint(
   const up = point.y - panel.height >= inset;
   const top = down ? point.y : up ? point.y - panel.height : Math.max(inset, viewport.height - EDGE - panel.height);
   return { top, left, placement: down || !up ? "down" : "up", maxHeight: viewport.height - top - EDGE };
+}
+
+/**
+ * Where a menu goes when it hangs from a button of a horizontal bar: under the box with a `gap`, left edges aligned for "start" and right
+ * edges aligned for "end", so it never covers the bar's neighbouring buttons. With no room below it flips ABOVE the box when the whole panel
+ * fits there; one that fits on neither side stays below, clamped under `inset` (the top bar), and scrolls inside its `maxHeight`. The panel
+ * is kept `EDGE` from the left and right of the window (the left margin wins in a window narrower than the panel).
+ */
+export function placeBelowBox(
+  box: Box,
+  panel: { width: number; height: number },
+  viewport: { width: number; height: number },
+  align: "start" | "end",
+  gap = 4,
+  inset = EDGE,
+): Placement {
+  const below = box.bottom + gap;
+  const above = box.top - gap - panel.height;
+  const up = below + panel.height > viewport.height - EDGE && above >= inset;
+  const top = Math.max(up ? above : below, inset);
+  const wanted = align === "end" ? box.right - panel.width : box.left;
+  const left = Math.max(EDGE, Math.min(wanted, viewport.width - EDGE - panel.width));
+  return { top, left, placement: up ? "up" : "down", maxHeight: viewport.height - top - EDGE };
 }
 
 /**
@@ -70,7 +97,14 @@ export function GraphContextMenu({ at, items, label, returnFocus, onClose }: {
     if (!box) return;
     const { width, height } = box.getBoundingClientRect();
     const viewport = { width: window.innerWidth, height: window.innerHeight };
-    setPlace("box" in at ? placePanel(at.box, { width, height }, viewport, 4, barHeight()) : placeAtPoint(at, { width, height }, viewport, barHeight()));
+    const size = { width, height };
+    setPlace(
+      "box" in at
+        ? "below" in at
+          ? placeBelowBox(at.box, size, viewport, at.below, 4, barHeight())
+          : placePanel(at.box, size, viewport, 4, barHeight())
+        : placeAtPoint(at, size, viewport, barHeight()),
+    );
     enabled()[0]?.focus({ preventScroll: true });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- placed once per mount
 
