@@ -128,7 +128,7 @@ export function defs(A: readonly number[]): ShowcaseWidget[] {
       data: (now) => ({ unit: "kWh", mode: "series", tier: null, bucket: "hour", missing: [999], series: [
         seriesOf(a[0], "Rack A01", hourly(now, 24, (i) => 10 + (i % 7))),
         seriesOf(a[1], "Rack A02", hourly(now, 24, (i) => 14 + (i % 5)), { estimated: true }),
-        seriesOf(a[2], "UPS-1 output", hourly(now, 24, (i) => 35 + (i % 9), (i) => (i === 3 ? { partial: true } : {})), { partial: true }),
+        seriesOf(a[2], "UPS-1 output", hourly(now, 24, (i) => 35 + (i % 9))), // the server never sends partial for energy (only a cost can be partial): Cost per hour has the partial case
       ] }) },
     { title: "Energy per asset", type: "bar", x: 0, y: 10, w: 6, h: 4, config: cfg(a.slice(0, 6), "energy", null, "sum"),
       data: () => ({ unit: "kWh", mode: "values", values: SIX.map((n, i) => row(a[i], n, i === 4 ? null : 20 + i * 11.5, i === 4 ? { no_data: true } : i === 1 ? { estimated: true } : {})) }) },

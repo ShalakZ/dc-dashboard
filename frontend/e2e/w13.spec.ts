@@ -21,7 +21,7 @@ import { answer, defs, H, type ShowcaseWidget, type WidgetRequest } from "./w13S
 //             dark), each type shows its markers (~ estimated, * partial, the no-rate dash, "no data", a stale age, a removed-asset chip, the gauge as a meter), a chart has its text
 //             alternative and a canvas, and the title, the stat figure, a table cell, the hint line and the gauge text read at 4.5:1.
 //   overflow  at 1024, 1440 and 1920 px the page does not scroll sideways, no card's body has a horizontal scrollbar, no card is wider than its box, no two cards overlap.
-//   gauge     the 2 x 2 gauge is 170 px high at 1024, 1440 and 1920, its figure and name boxes do not meet, nothing is clipped, and below 200 px of card width only the Details drawer can
+//   gauge     the 2 x 2 gauge is 170 px high at 1024, 1440 and 1920, its figure and name boxes do not meet, nothing is clipped, the scale labels sit under the drawn arc's feet (within 12 px), and below 200 px of card width only the Details drawer can
 //             download the CSV.
 //   theme     a time series repaints after a Mode switch through the profile menu with NO navigation: every opaque pixel in the left 56 px of its canvas (the axis labels) is the
 //             --chart-axis-text colour of the look on screen, light then dark then light again.
@@ -505,6 +505,9 @@ interface GaugeFit {
   frame: Box;
   body: { client: number; scroll: number; clientW: number; scrollW: number };
   boxes: Record<"body" | "arc" | "scale" | "figure" | "name", Box>;
+  /** The dial's svg box and the two scale labels' boxes (min, max). */
+  svg: Box;
+  ends: Box[];
   cut: { figure: number; name: number; scale: number[] };
 }
 
@@ -528,6 +531,8 @@ test("the 2 x 2 gauge is 170 px high at 1024, 1440 and 1920 px, with its figure 
           frame: rect(frame),
           body: { client: body.clientHeight, scroll: body.scrollHeight, clientW: body.clientWidth, scrollW: body.scrollWidth },
           boxes: { body: rect(body), arc: rect(frame.querySelector(".gauge-arc")), scale: rect(frame.querySelector(".gauge-scale")), figure: rect(figure), name: rect(name) },
+          svg: rect(frame.querySelector(".gauge-svg")),
+          ends: Array.from(frame.querySelectorAll(".gauge-scale > span")).map(rect),
           cut: {
             figure: figure.scrollWidth - figure.clientWidth,
             name: name.scrollWidth - name.clientWidth,
@@ -553,6 +558,17 @@ test("the 2 x 2 gauge is 170 px high at 1024, 1440 and 1920 px, with its figure 
       expect(fit.cut.figure, "the figure is cut").toBeLessThanOrEqual(1);
       expect(fit.cut.name, "the name is cut with an ellipsis").toBeLessThanOrEqual(1);
       expect(Math.max(...fit.cut.scale), "an end of the scale is cut").toBeLessThanOrEqual(1);
+
+      // The ends of the scale sit under the feet of the DRAWN arc (whole-wave review I1). The svg is viewBox 0 0 100 52, xMidYMax meet, with the feet at x = 6 and 94: it is drawn
+      // min(box width, box height * 100 / 52) wide, centred, whatever the card is. Measured from the svg box, not from the card.
+      const drawn = Math.min(fit.svg.width, (fit.svg.height * 100) / 52);
+      const drawnLeft = fit.svg.x + (fit.svg.width - drawn) / 2;
+      const footLeft = drawnLeft + 0.06 * drawn;
+      const footRight = drawnLeft + 0.94 * drawn;
+      const [minEnd, maxEnd] = fit.ends;
+      measured(`${width}px arc`, { drawn, footLeft, footRight, minCentre: minEnd.x + minEnd.width / 2, maxRight: maxEnd.x + maxEnd.width });
+      expect(Math.abs(minEnd.x + minEnd.width / 2 - footLeft), `the min label's centre is ${Math.round(minEnd.x + minEnd.width / 2)}, the arc's left end is at ${Math.round(footLeft)} (the arc is ${Math.round(drawn)} px wide in a ${Math.round(fit.svg.width)} px box)`).toBeLessThanOrEqual(12);
+      expect(Math.abs(maxEnd.x + maxEnd.width - footRight), `the max label ends at ${Math.round(maxEnd.x + maxEnd.width)}, the arc's right end is at ${Math.round(footRight)}`).toBeLessThanOrEqual(12);
 
       // Below 200 px of card width the CSV button leaves the header and only the Details drawer downloads (decision D3).
       const csv = c.getByRole("button", { name: "Download CSV for Load (2 rows)", exact: true });
@@ -820,7 +836,7 @@ test.describe("Details", () => {
       expect(sums[0].sum, "the showcase's first series adds up to 306 kWh").toBe(306);
       await expect(total("Rack A01")).toHaveText("306.00 kWh");
       await expect(total("Rack A02"), "an estimated series: ~").toHaveText(`~${sums[1].sum.toFixed(2)} kWh`);
-      await expect(total("UPS-1 output"), "a partial series: *").toHaveText(`${sums[2].sum.toFixed(2)}* kWh`);
+      await expect(total("UPS-1 output"), "a plain series: no mark (the server never sends partial for energy)").toHaveText(`${sums[2].sum.toFixed(2)} kWh`);
       await page.keyboard.press("Escape");
       await expect(dialog).toBeHidden();
     });
