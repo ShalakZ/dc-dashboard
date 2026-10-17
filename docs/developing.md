@@ -107,8 +107,9 @@ work laptop run `scripts\update.ps1` first so the code is current, then type the
   which kind each level got.
 - **Size and time.** Measured on a development PC. With the default 30 minutes and the default 30-day raw retention (29 days of data):
   about 615,000 readings and a minute and a half. With the raw retention raised to 60 days (a whole previous month, 47 days): about
-  1,000,000 readings and a little over two minutes. `--interval-minutes 15` doubles both and `--interval-minutes 60` halves them;
-  `--interval-minutes 5` is estimated at six times the default and was not run over a whole month. A slow laptop takes longer, a
+  1,000,000 readings and a little over two minutes. `--interval-minutes 15` doubles the readings (about three minutes measured with
+  the 60-day retention); `--interval-minutes 60` roughly halves them and `--interval-minutes 5` is about six times the default (both
+  estimated from these runs, not run over a whole month). A slow laptop takes longer, a
   repeated seed on one database takes longer too (a rollup refresh also recomputes the readings of earlier, removed seeds), and
   `--days 7` makes it small. It prints "written 5 of 30 days" lines while it works.
 - **The range.** From the start of the previous site month up to now, but never earlier than the raw retention allows (30 days by
@@ -118,14 +119,15 @@ work laptop run `scripts\update.ps1` first so the code is current, then type the
 - **Seeing past data.** Set a rate first: Tariffs, a site-wide rate with an effective-from date before the range, for example
   2020-01-01. Then in Billing pick the previous month (the Year and Month selects): the Site total and every hall, row and rack are
   there, with the day columns on the right (the Billing CSV has one row per asset and day at every level, so do not add up its kWh
-  column). In the Assets Tree a Feed page has a Trend: pick the metric (`active_power_kw` shows the daily curve, `energy_kwh` a
-  rising counter) and the 7d range; a hall, row or rack page shows Live power, Energy today and Cost today, because it adds up the
+  column). In the Assets Tree a Feed page has a Trend that opens on `active_power_kw` (the daily curve; pick `energy_kwh` for the
+  rising counter) and has a 7d range; a hall, row or rack page shows Live power, Energy today and Cost today, because it adds up the
   feeds below it, but no Trend of its own. The tree opens fully expanded (370 assets): use Collapse all in its header, the filter, or
   Ctrl+K. The data ends at the moment the command ran, so "Energy today", the 1h, 6h and 24h trends and the live chip only show
   something in the hours after the run: run it shortly before a demo.
-- **Live power.** A parent adds up the live power of the feeds below it: the Site reads about 580 kW and each rack a few kW. About
-  an hour and a half after the run (three sample spacings) the feeds count as not reporting and a parent says so; Billing and the
-  7d and month views are not affected.
+- **Live power.** A parent adds up the live power of the feeds below it: the Site reads about 600 to 700 kW depending on the hour of
+  the day, and each rack a few kW. Between one hour and an hour and a half after the run (three sample spacings counted from the last
+  sample, which is up to half an hour old) the feeds count as not reporting and a parent says so; Billing and the 7d and month views
+  are not affected.
 - **Why the panels carry no kWh.** A parent without a meter adds up every child. A kWh meter on a panel beside the halls would count
   the same energy twice at the Site and in the total of Billing, so the panels carry voltage and current only (the current follows the
   feeds of their pod). Energy per panel needs a "fed by" relation between assets, which does not exist yet.

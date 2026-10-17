@@ -593,7 +593,7 @@ async def dry_run(args: argparse.Namespace) -> int:
         plan = history.make_plan(history._now(), tz, args.days, args.seed, retention, step_seconds=step_seconds)
         for line in _plan_lines(layout, plan):
             print(f"  would create  {line}")
-        zone_warning = _zone_warning(tz)  # known now, not after ~650,000 readings are written
+        zone_warning = _zone_warning(tz)  # known now, not after the readings are written
         if zone_warning is not None:
             print(f"  {zone_warning}")
         if pool is not None:

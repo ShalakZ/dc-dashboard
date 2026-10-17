@@ -54,7 +54,7 @@ The Opus whole-wave review (0 Critical, 1 Important, 8 Minor, `.waves/w16/review
 - **P7 changed.** A UTC day is now up to 127,296 rows at 5 minutes, over the writer's 100,000 buffer: `_batches` slices a day into batches of at most `BATCH_ROWS = 50_000`; progress lines still count days.
 - Report and dry run: the report names every kind (with "(preferred ...)" for a fallback); the dry run prints the Billing-zone warning. A DB test runs the default interval (`interval_seconds` == 1800).
 - **P6 changed: `DEFAULT_INTERVAL_MINUTES = 30`** after measuring with the twins (55d7e0e): 30-day retention (29 days): 615,240 readings in 1m38; retention 60 (47 days): 996,244 readings in 2m16; 15 minutes with retention 60: 1,991,604 readings in 3m10 (the scratch database held millions of orphan readings of earlier runs, which slows the refresh).
-- Parked (backlog AZ): the Assets Tree opens fully expanded and has no arrow keys / scroll-into-view for a 370-node tree (pre-existing UI); the Billing CSV has no level column; the first day of a range reads about 1 % low (no baseline for its first sample).
+- Parked (backlog AZ): the Assets Tree opens fully expanded and has no arrow keys / scroll-into-view for a 370-node tree (pre-existing UI); the Billing CSV has no level column; the first day of a range reads about 2 % low at 30 minutes (the counters have no baseline for their first hour).
 
 ## Existing tests that will change
 
