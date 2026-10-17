@@ -150,7 +150,7 @@ export const BarWidget = memo(function BarWidget({ data, timezone }: { data: Wid
   if (empty) return <p className="widget-empty">No data in this range.</p>;
   // The canvas is a picture: the box around it is the chart's text alternative (the figures themselves are in the Details panel).
   return (
-    <div className="widget-chart" role="img" aria-label={chartDescription("bar", data, timezone)}>
+    <div className="widget-chart" role="img" aria-label={chartDescription("bar", data)}>
       <ReactECharts
         option={legend.apply(barOption(data, timezone, theme), data.mode === "series" ? data.series.map((s) => s.asset_id) : [])} onEvents={legend.onEvents}
         style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge

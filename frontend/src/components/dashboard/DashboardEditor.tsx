@@ -109,7 +109,11 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
       actions={
         // The grid does not start a drag from this span (`cancel: ".widget-actions"` in DashboardGrid).
         <span className="widget-actions">
-          <button type="button" className="icon-btn" disabled={!ready} onClick={() => setDialog({ draft: d })} aria-label={`Edit ${d.title}`} title={`Edit ${d.title}`}>
+          {/* aria-disabled, not disabled: the button stays in the Tab order and keeps the focus a click gave it (the widget header styles it as waiting). */}
+          <button
+            type="button" className="icon-btn" aria-disabled={!ready ? true : undefined} onClick={() => { if (ready) setDialog({ draft: d }); }}
+            aria-label={`Edit ${d.title}`} title={`Edit ${d.title}`}
+          >
             <Icon name="pencil" />
           </button>
           <TrashButton label={`Delete ${d.title}`} title={`Delete ${d.title}`} onClick={() => removeWidget(d)} />

@@ -61,11 +61,12 @@ export function isLatestReading(data: Pick<WidgetData, "source" | "range">, conf
 /**
  * When the figure was read. `live` is `isLatestReading`. A live reading has a real time: "Last reading 12:04:31 (9 s ago)",
  * with the date when it is not the site's today, and a stale sentence. For a finished range `ts` is the START OF THE HOUR
- * of the roll-up row the last value belongs to, so only that hour is claimed: no seconds, no age, never stale.
+ * of the roll-up row the last value belongs to, so only that hour is claimed: its date and hour ("10-16 23:00", for a last
+ * month that hour could be any day of it), no seconds, no age, never stale.
  */
 export function freshnessLine(ts: string | null, now: number, timezone: string, stale: boolean, live: boolean): string {
   const known = ts !== null && !Number.isNaN(Date.parse(ts));
-  if (!live) return known ? `Last value of the hour from ${formatSiteTick(ts, timezone, null)} (hourly roll-up)` : "No reading time recorded";
+  if (!live) return known ? `Last value of the hour from ${formatSiteTick(ts, timezone, "hour")} (hourly roll-up)` : "No reading time recorded";
   const sentence = stale ? " Stale: older than three polling intervals of its meter (and at least a minute)." : "";
   if (!known) return `No reading time recorded${sentence}`;
   const sameDay = siteDay(new Date(ts), timezone) === siteDay(new Date(now), timezone);
@@ -273,9 +274,9 @@ export function bucketStartText(iso: string, timezone: string, data: Pick<Widget
 
 /**
  * The accessible name of a chart (the canvas is a picture): type, assets, metric and unit, window. A gauge is a `meter`
- * and a stat or table is text, so they get "". `_timezone` is kept for the call shape; the preset words need none.
+ * and a stat or table is text, so they get "". The preset words need no time zone.
  */
-export function chartDescription(type: WidgetType, data: WidgetData, _timezone: string): string {
+export function chartDescription(type: WidgetType, data: WidgetData): string {
   if (type !== "timeseries" && type !== "bar") return "";
   const kind = type === "timeseries" ? "Line chart" : "Bar chart";
   const rows = data.mode === "series" ? data.series : data.values;

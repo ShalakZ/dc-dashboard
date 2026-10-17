@@ -151,8 +151,17 @@ describe("WidgetDetails: freshness", () => {
       values: [valueRow({ ts: "2026-10-16T23:00:00+03:00", stale: true })],
     });
     const { dialog } = open("stat", data, LAST());
-    expect(within(dialog()).getByText("Last value of the hour from 23:00 (hourly roll-up)")).toBeInTheDocument();
+    expect(within(dialog()).getByText("Last value of the hour from 10-16 23:00 (hourly roll-up)")).toBeInTheDocument();
     expect(dialog().textContent).not.toMatch(/ago|Stale|stale/);
+  });
+
+  it("a last month's value names its day: the date is in the freshness line", () => {
+    const data = valuesData({
+      type: "stat", range: { preset: "last_month", start: "2026-09-01T00:00:00+03:00", end: "2026-10-01T00:00:00+03:00" },
+      values: [valueRow({ ts: "2026-09-30T23:00:00+03:00" })],
+    });
+    const { dialog } = open("stat", data, LAST());
+    expect(within(dialog()).getByText("Last value of the hour from 09-30 23:00 (hourly roll-up)")).toBeInTheDocument();
   });
 
   it("a table has one line per row, from the fetched reading", () => {
@@ -248,6 +257,15 @@ describe("WidgetDetails: the figures of a chart", () => {
     expect(cellsOf(row)).toEqual(["LV Panel 1", "0.50 kW", "14.00* kW", "2026-10-08 03:09:36", "12.30* kW" + "from 2026-10-08 03:09:36"]);
     expect(within(dialog()).getByText("Average of each bucket, with the lowest and highest as a band")).toBeInTheDocument();
     expect(within(table).queryByRole("columnheader", { name: "Average" })).not.toBeInTheDocument();
+  });
+
+  it("the time of the last bucket is a nowrap span of its own, so it never breaks inside the date (the state words around it may wrap)", () => {
+    const data = seriesData({ series: [{ asset_id: 5, name: "LV Panel 1", estimated: false, partial: false, points: BUCKETS }] });
+    const { dialog } = open("timeseries", data, config());
+    const sub = dialog().querySelector(".wd-table small.wd-sub") as HTMLElement;
+    expect(sub.textContent).toBe("from 2026-10-08 03:09:36");
+    const time = sub.querySelector("span.wd-fig");
+    expect(time?.textContent, "only the time, not the word 'from'").toBe("2026-10-08 03:09:36");
   });
 
   it("an energy series: the total only when every bucket has a value, and never a word about an average", () => {

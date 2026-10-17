@@ -192,7 +192,7 @@ export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone 
   if (data.series.every((s) => s.points.every((p) => p.no_data))) return <p className="widget-empty">No data in this range.</p>;
   // The canvas is a picture: the box around it is the chart's text alternative (the figures themselves are in the Details panel).
   return (
-    <div className="widget-chart" role="img" aria-label={chartDescription("timeseries", data, timezone)}>
+    <div className="widget-chart" role="img" aria-label={chartDescription("timeseries", data)}>
       <ReactECharts
         option={legend.apply(timeSeriesOption(data, timezone, theme), data.series.map((s) => s.asset_id))} onEvents={legend.onEvents}
         style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge

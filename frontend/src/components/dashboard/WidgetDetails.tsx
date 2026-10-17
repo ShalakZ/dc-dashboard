@@ -71,7 +71,7 @@ function SummaryCell({ column, row, states, data, timezone }: {
       return (
         <>
           <Figure figure={row.last} unit={data.unit} />
-          {row.lastFrom && <small className="wd-sub">from {bucketStartText(row.lastFrom, timezone, data)}</small>}
+          {row.lastFrom && <small className="wd-sub">from <span className="wd-fig">{bucketStartText(row.lastFrom, timezone, data)}</span></small>}
         </>
       );
   }

@@ -58,8 +58,14 @@ describe("freshnessLine", () => {
   it("not live: the hour the last value belongs to, with no seconds, no age and never stale", () => {
     // the backend gives the START of the hour of the hourly roll-up row
     const line = freshnessLine("2026-10-16T23:00:00+03:00", NOW, TZ, true, false);
-    expect(line).toBe("Last value of the hour from 23:00 (hourly roll-up)");
+    expect(line).toBe("Last value of the hour from 10-16 23:00 (hourly roll-up)");
     expect(line).not.toMatch(/stale|ago|:00:00/i);
+  });
+  it("not live: the hour carries its date, so a last month's value says which day it is from", () => {
+    // Yesterday's last hour, and the last hour of last month (23:00 Qatar is 20:00 UTC: the date is the site's)
+    expect(freshnessLine("2026-10-16T23:00:00+03:00", NOW, TZ, false, false)).toBe("Last value of the hour from 10-16 23:00 (hourly roll-up)");
+    expect(freshnessLine("2026-09-30T23:00:00+03:00", NOW, TZ, false, false)).toBe("Last value of the hour from 09-30 23:00 (hourly roll-up)");
+    expect(freshnessLine("2026-09-12T08:00:00+03:00", NOW, TZ, false, false)).toBe("Last value of the hour from 09-12 08:00 (hourly roll-up)");
   });
   it("not live: no reading time recorded still has its own words", () => {
     expect(freshnessLine(null, NOW, TZ, false, false)).toBe("No reading time recorded");
@@ -440,30 +446,30 @@ describe("chartDescription", () => {
     series: ["Rack A01", "Rack A02", "UPS-1 output"].map((name, i) => ({ asset_id: 5 + i, name, estimated: false, partial: false, points: [] })),
   });
   it("names the chart, its assets, the metric with its unit and the window, and points to Details", () => {
-    expect(chartDescription("timeseries", three, TZ))
+    expect(chartDescription("timeseries", three))
       .toBe("Line chart of 3 assets: Rack A01, Rack A02, UPS-1 output. active_power_kw in kW, Last 24 hours. Open Details for the figures.");
   });
   it("is a bar chart for a bar, and names energy and cost by their unit", () => {
     const bars = valuesData({ type: "bar", source: "energy", metric: null, unit: "kWh", values: [valueRow({ asset_id: 5, name: "Hall A" })] });
-    expect(chartDescription("bar", bars, TZ)).toBe("Bar chart of 1 asset: Hall A. Energy in kWh, Last 24 hours. Open Details for the figures.");
+    expect(chartDescription("bar", bars)).toBe("Bar chart of 1 asset: Hall A. Energy in kWh, Last 24 hours. Open Details for the figures.");
     const cost = valuesData({ type: "bar", source: "cost", metric: null, unit: "QAR", values: [valueRow({ asset_id: 5, name: "Hall A" }), valueRow({ asset_id: 6, name: "Hall B" })] });
-    expect(chartDescription("bar", cost, TZ)).toBe("Bar chart of 2 assets: Hall A, Hall B. Cost in QAR, Last 24 hours. Open Details for the figures.");
+    expect(chartDescription("bar", cost)).toBe("Bar chart of 2 assets: Hall A, Hall B. Cost in QAR, Last 24 hours. Open Details for the figures.");
   });
   it("names three assets and counts the rest", () => {
     const many = timeseries({ series: ["A", "B", "C", "D", "E"].map((name, i) => ({ asset_id: 5 + i, name, estimated: false, partial: false, points: [] })) });
-    expect(chartDescription("timeseries", many, TZ)).toContain("Line chart of 5 assets: A, B, C and 2 more.");
+    expect(chartDescription("timeseries", many)).toContain("Line chart of 5 assets: A, B, C and 2 more.");
     const four = timeseries({ series: ["A", "B", "C", "D"].map((name, i) => ({ asset_id: 5 + i, name, estimated: false, partial: false, points: [] })) });
-    expect(chartDescription("timeseries", four, TZ)).toContain("Line chart of 4 assets: A, B, C and 1 more.");
+    expect(chartDescription("timeseries", four)).toContain("Line chart of 4 assets: A, B, C and 1 more.");
   });
   it("leaves the unit out when there is none, and says so when there is no data", () => {
     const pf = valuesData({ type: "bar", metric: "power_factor", unit: null });
-    expect(chartDescription("bar", pf, TZ)).toContain("power_factor, Last 24 hours.");
-    expect(chartDescription("timeseries", timeseries({ series: [] }), TZ)).toBe("Line chart with no data. Open Details for the figures.");
+    expect(chartDescription("bar", pf)).toContain("power_factor, Last 24 hours.");
+    expect(chartDescription("timeseries", timeseries({ series: [] }))).toBe("Line chart with no data. Open Details for the figures.");
   });
   it("is empty for a type that is not a chart", () => {
-    expect(chartDescription("gauge", valuesData({ type: "gauge" }), TZ)).toBe("");
-    expect(chartDescription("stat", valuesData(), TZ)).toBe("");
-    expect(chartDescription("table", valuesData(), TZ)).toBe("");
+    expect(chartDescription("gauge", valuesData({ type: "gauge" }))).toBe("");
+    expect(chartDescription("stat", valuesData())).toBe("");
+    expect(chartDescription("table", valuesData())).toBe("");
   });
 });
 
@@ -477,7 +483,7 @@ describe("no helper calls a series total or a mean of buckets an average", () =>
         const summary = seriesSummary(data, c)!;
         const words = [
           figuresText(data, c), aggregationWords("timeseries", data, c), aggregationWords("bar", data, c), sourceWords(data),
-          chartDescription("timeseries", data, TZ), chartDescription("bar", data, TZ), ...markerMeanings(data),
+          chartDescription("timeseries", data), chartDescription("bar", data), ...markerMeanings(data),
           ...assetRows(data).flatMap((r) => [r.name, ...r.states]), ...summary.columns.map((col) => col.heading),
         ].join("\n");
         expect(words).not.toMatch(/average|mean/i);

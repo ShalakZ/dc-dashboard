@@ -368,12 +368,22 @@ describe("undo after a delete", () => {
 });
 
 describe("before the mappings are known", () => {
+  /** The pencil waits with aria-disabled, never a native disabled (it stays in the Tab order and keeps focus), and a click on it opens nothing. */
+  async function expectEditWaits() {
+    const pencil = screen.getByRole("button", { name: "Edit Current power" });
+    expect(pencil).toHaveAttribute("aria-disabled", "true");
+    expect(pencil).not.toBeDisabled();
+    await userEvent.click(pencil);
+    expect(screen.queryByRole("dialog", { name: "Edit widget" })).not.toBeInTheDocument();
+    expect(pencil, "it keeps the focus the click gave it").toHaveFocus();
+  }
+
   it("keeps Add widget and every Edit button off, and says why, when the metric mappings cannot be loaded", async () => {
     open("operator", "/dashboards/3", { "GET /api/discovery/graph": { status: 500, body: { detail: "graph unavailable" } } });
     await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
     expect(await screen.findByText("Could not load the metric mappings: graph unavailable")).toBeInTheDocument();
     expect(add()).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Edit Current power" })).toBeDisabled();
+    await expectEditWaits();
     expect(screen.getByRole("button", { name: "Delete Current power" })).toBeEnabled();
   });
 
@@ -382,7 +392,7 @@ describe("before the mappings are known", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
     expect(await screen.findByText("Could not load the assets: assets unavailable")).toBeInTheDocument();
     expect(add()).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Edit Current power" })).toBeDisabled();
+    await expectEditWaits();
   });
 });
 
