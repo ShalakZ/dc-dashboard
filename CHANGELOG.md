@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w13 (2026-10-17, MERGE_COMMIT)
+## w13 (2026-10-17, 4202012)
 
 w13 (the dashboard widget overhaul) changes how the dashboard widgets look and what they tell you; no figure, unit or rounding a widget
 shows has changed. The widgets follow the theme: a card in the app's own colours (light, dark and the four theme colours; the white card
