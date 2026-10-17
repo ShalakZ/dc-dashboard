@@ -1,0 +1,156 @@
+# W16 Pilot-hall demo seed Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** `python -m dcdash.seed.history --layout pilot-hall` makes a synthetic, believable data-centre tree (a Site, two halls, four pods, eight rows, 117 racks with an A and a B feed each, an Electrical branch) with a month of readings, on a dev or scratch stack only, so the CITO demo and later waves have something to look at. The old three-panel layout stays the default and does not change.
+
+**Architecture:** A new module `backend/dcdash/seed/pilot_hall.py` holds the layout generator and the series generator (both pure, no database), the kind resolver, the writer and the dry run. It reuses the old seeder's machinery (`make_plan`, `pending_drop`, `refresh_rollups`, `_undo`, `Created`, the two switches) through `backend/dcdash/seed/history.py`, which gets only behaviour-preserving changes: a `step_seconds` on `Plan`/`make_plan`, the day-writing loop of `write_readings` extracted as `write_batches`, and the `--layout` / `--interval-minutes` arguments with a lazy dispatch.
+
+**Tech Stack:** Python 3.12, asyncpg, TimescaleDB rollups, pytest (database tests need Docker).
+
+**Spec:** `.waves/w16.md` (the brief; not law, see "Facts checked"). Tier **M** (Ruling in the ledger): backend script, tests and docs; no migration, no UI change, no new permission, no new route.
+
+**Scratch stack for this wave:** project `dcdash_e2e_w16_vis`, ports **18220 / 18574** (checked free with `ss -ltn`), scripts copied from `.waves/w13/` into `.waves/w16/` (the guard refuses `dcdash`, checked). The seeder is NEVER run on the dev stack `dcdash` by this wave.
+
+## Global Constraints
+
+- Every name in the tree is generic and synthetic ("Hall 1", "Pod A", "Row 1", "Rack 01", "Feed A", "Panel 1A"). No tenant, no organisation, nothing from any real file.
+- The old layout's output, figures and tests do not change (`backend/tests/test_seed_history.py` passes unmodified).
+- Nothing is written without BOTH `--yes` and `DCDASH_ALLOW_SEED_HISTORY=1`; no audit row; no asset kind is registered; no tariff, dashboard or setting is written.
+- Edit files with the Edit tool or an anchored `sed`, never with a script that rewrites a whole file; after any scripted edit check the size and `git diff --stat` of that file.
+- Implementers run only: `uv run pytest <files>` (in `backend/`), git, grep. Never `docker`, `scripts/*`, or anything on the Compose project `dcdash`. (The database tests use the test database the existing seeder tests already use.)
+- One commit per task, `git add` named files only, trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
+- PowerShell on the work laptop: the commands in the docs must work as written (Task 6).
+
+## Facts checked in the code (2026-10-18)
+
+1. `history.py` (559 lines) read in full. Reusable as they are: `make_plan`, `Plan`, `Refused`, `pending_drop`, `refresh_rollups`, `_refresh`, `_undo(pool, plan, created)`, `Created(source_id, root_id, asset_ids, point_ids)`, `site_timezone`, `raw_retention_days`, `hour_floor`, `load_kw`, `base_kw`, `_gap_window`, `SWITCH`, `DEFAULT_SEED`, `JITTER`. Hard-wired to the 5-minute step and to the three panels (must be parameterised, Task 1): `_floor`, `_ceil`, `Plan.count/times/reset_at/clamped`, `write_readings` (builds the whole series in memory and flushes per UTC day).
+2. **Kinds.** A fresh install has the ten kinds migration 0010 seeds: Site, Building, Room, Row, Rack, Panel, Meter, Circuit, Other equipment, generic. "Data hall" is in the 39-kind pack (`core/asset_kinds.py` `STARTER_PACK`) and exists only where someone pressed the pack (the owner's dev stack). `assets.kind` is free text without a foreign key. The test `db` fixture TRUNCATEs `asset_kinds` and does not restore it, so the registry is EMPTY in tests unless a test inserts rows.
+3. **Energy rules** (`core/energy.py`): an asset with an `energy_kwh` or `active_power_kw` mapping uses it and never its children; only those two metrics make a meter (`load_meters`), so a `voltage_v` or `current_a` mapping adds no energy anywhere; an asset without a meter sums EVERY child; `estimated` is true for a parent when any child hour is estimated (so one power-only feed makes its rack, row, pod, hall, the Site and Billing's totals `~`); `billing_close.root_totals` sums the ROOT assets' totals. A point maps to ONE asset, an asset has at most one mapping per metric. Sibling names must be unique (`api/asset_names.py`, `_KEY`, `ASSET_NAMES_LOCK`). `assets.parent_id` is `ON DELETE CASCADE` (migration 0001).
+4. `Writer` keeps at most 100,000 rows in its buffer and drops the oldest silently; `flush()` returns 0 on failure instead of raising (the old seeder checks both per day).
+5. The brief's R3 says the Electrical panels sit under the Site beside the halls. With kWh meters on them the Site (which has no meter of its own) would sum halls AND panels and count the same energy twice. Decision P1 below.
+6. A1 grep (`grep -rn "seed.history\|Seeded demo\|seeded-history\|Seeded Panel" backend/tests frontend/e2e frontend/src docs/*.md README.md`): hits only in `backend/tests/test_seed_history.py`, `frontend/e2e/w11.spec.ts` (+ a comment in `playwright.config.ts`) and `docs/developing.md` lines 46-83. No test reads `docs/developing.md` for needles; `backend/tests/test_docs_links.py` checks its links.
+7. Not yet known and measured in Task 5: the cost of the rollup refresh per reading at this size.
+
+## Decisions (each is also a Ruling in the ledger)
+
+- **P1 Panels carry no energy.** The Electrical branch stays under the Site (R3) but each panel is mapped only to `voltage_v` and `current_a` (current follows the feeds it carries, I = P / (sqrt(3) x V x 0.95)). Reason: facts 3 and 5. The docs say so and say that a panel's kWh needs a "downstream of" relation (a later wave).
+- **P2 Free and single-feed racks.** A free rack keeps its Feed A and Feed B assets, with no mapping and no readings (its energy is "no data"). A single-feed rack has only Feed A (carrying the whole load).
+- **P3 Numbering.** Racks are numbered across a hall (Hall 1: Rack 01-59, Hall 2: Rack 01-58) and rows across a hall (Row 1-4, two per pod), so a name is unique inside its hall and a quick-find hit is rarely ambiguous. Hall 2 repeats the numbers of Hall 1 (different parents).
+- **P4 Where the `~` lives.** The 8 power-only feeds are the B feeds of 8 live racks of Hall 2, so Hall 1 is exact and Hall 2, the Site and the totals show `~`. The one gap feed and the one reset counter are Feed A of two live racks of Hall 1.
+- **P5 Kinds.** `choose_kinds(registered_keys)`: per role the first preferred kind that is registered, else "Other equipment" if registered, else the first preferred name unregistered, flagged (warning in the dry run and the report). Preferred: site "Site"; hall "Data hall", "Room"; pod "Room"; row "Row"; rack "Rack"; feed "Circuit", "Meter"; electrical group "Room"; panel "Panel". Nothing is ever registered.
+- **P6 Interval.** `--interval-minutes` in {5, 10, 15, 30, 60} (the mapping's `interval_seconds` equals the real spacing); the default `DEFAULT_INTERVAL_MINUTES` is 15 until Task 5 measures; the tests use 60.
+- **P7 Memory and flushes.** Readings are generated per UTC day (counter state persists across days), flushed in slices of at most 50,000 rows through `history.write_batches`.
+- **P8 Progress.** The write phase prints one stdout line every 5 days ("written 5 of 29 days") because a run takes minutes.
+- **P9 The tree.** Site "Seeded pilot hall" (sort 0) > "Hall 1", "Hall 2" > "Pod A", "Pod B" > "Row n" (rack counts per row, in order across both halls: 15, 15, 14, 15 | 15, 15, 13, 15 = 117) > "Rack nn" > "Feed A"/"Feed B"; and "Electrical" (sort_order 1, so the halls list first) > "Panel 1A", "Panel 1B" ... "Panel 4B" (pod number across the site 1-4, letter = feed). Variety (counts fixed, which racks varies with `--seed`): 6 free racks, 6 idle racks (0.15-0.45 kW), 5 single-feed racks, the rest live (2.0-11.0 kW), A share 0.5 +- 0.05, 8 power-only feeds, 1 gap, 1 reset.
+
+## Existing tests that will change
+
+None should change. Must pass UNMODIFIED: all of `backend/tests/test_seed_history.py` (the old dry-run text "would create", "seeded-history", "Nothing written", "clamped"; the figures; the refusal texts), the Playwright spec `frontend/e2e/w11.spec.ts` (it runs the old seeder with its defaults, in the gate's `vis-rebuild.sh` run), `backend/tests/test_docs_links.py` (after the docs edit).
+
+## File map
+
+| File | Change |
+|---|---|
+| `backend/dcdash/seed/history.py` | Task 1 (step parameter, `write_batches`) and Task 4 (`--layout`, `--interval-minutes`, dispatch); old behaviour unchanged |
+| `backend/dcdash/seed/pilot_hall.py` | new: Tasks 2, 3, 4 |
+| `backend/tests/test_seed_pilot_hall.py` | new: Tasks 1-4 |
+| `docs/developing.md` | Task 6 |
+| `CHANGELOG.md`, `docs/superpowers/backlog.md` (section AZ), `docs/superpowers/plans/2026-10-11-w7-owner-feedback-roadmap.md` (next O- row), this plan's log | close-out |
+
+## Review Focus
+
+1. A name clash or leftover from the OTHER layout must never be confused with this one's (root name, source name, point addresses are different; both layouts coexist).
+2. A rollup refresh over a window that holds real history must still be refused (pending-drop check unchanged, run for this layout too).
+3. A hostile range: `--days 1` with a 60-minute step (no complete day, so no gap), the default range in the last days of a month, a retention shorter than the previous month.
+4. A stack with a smaller or empty kinds list (the test database): the dry run and the report say which kind was used and which was not registered; nothing is registered.
+5. Totals: Site = Hall 1 + Hall 2 (no Electrical energy), hall = sum of racks, rack = A + B, and a free rack has no figure.
+
+---
+
+### Task 1: Parameterise the shared machinery (no behaviour change)
+
+**Files:** Modify `backend/dcdash/seed/history.py`; Create `backend/tests/test_seed_pilot_hall.py` (first tests).
+
+**Interfaces:**
+- Produces: `Plan.step_seconds: int` (trailing field, default `STEP_SECONDS`); `Plan.step -> timedelta`; `make_plan(now, tz, days, seed=DEFAULT_SEED, raw_retention_days=..., step_seconds=STEP_SECONDS) -> Plan`; `_floor(ts, step_seconds=STEP_SECONDS)`, `_ceil(ts, step_seconds=STEP_SECONDS)`; `async def write_batches(pool, batches: Iterable[tuple[date, list[Row]]]) -> int` (the per-batch checks of `write_readings`, same error texts); `write_readings` calls it.
+
+- [ ] **Step 1: tests (new file).** `test_make_plan_with_a_15_minute_step_ends_on_quarter_hours`: `make_plan(NOW, "Asia/Qatar", 2, raw_retention_days=30, step_seconds=900)` has `start`/`end` on 900 s marks, `count == (end - start) / 15 min + 1`, `times()` spaced 15 min, `reset_at == start + reset_index x 15 min`; `test_the_default_step_still_gives_the_old_numbers`: `make_plan(NOW, ZONE, None).count == 8_353` and `clamped` as in `test_seed_history.py`; `test_clamped_uses_the_step`: a plan whose `wanted_start` is not on a mark but `start` is `_ceil(wanted)` is not clamped for step 900 either.
+- [ ] **Step 2:** run them (`cd backend && uv run pytest tests/test_seed_pilot_hall.py -q`): FAIL.
+- [ ] **Step 3: implement** the signatures above in `history.py` with an anchored Edit each; defaults reproduce today's behaviour exactly; `write_readings` keeps building `by_day` and calls `write_batches(pool, ((day, by_day[day]) for day in sorted(by_day)))`.
+- [ ] **Step 4:** the new tests pass AND `uv run pytest tests/test_seed_history.py -q` passes unmodified (it takes a few minutes; it is the proof the old layout did not change).
+- [ ] **Step 5: commit** `refactor(seed): a step on the history plan and write_batches (w16 task 1)`.
+
+### Task 2: The pure layout generator
+
+**Files:** Create `backend/dcdash/seed/pilot_hall.py` (layout part); Modify `backend/tests/test_seed_pilot_hall.py`.
+
+**Interfaces (produces):**
+```python
+ROOT_NAME = "Seeded pilot hall"; SOURCE_NAME = "seeded-pilot-hall"; ELECTRICAL_NAME = "Electrical"
+INTERVAL_CHOICES = (5, 10, 15, 30, 60); DEFAULT_INTERVAL_MINUTES = 15
+@dataclass(frozen=True) class Node: key: str; parent: str | None; name: str; role: str; sort_order: int = 0
+# role in ("site","hall","pod","row","rack","feed","electrical","panel"); key unique, e.g. "site", "h1", "h1/pa", "h1/pa/r1", "h1/r01", "h1/r01/a", "elec", "elec/p1a"
+@dataclass(frozen=True) class Rack: node: str; hall: int; status: str; kw: float; share_a: float; feeds: tuple[str, ...]
+# status in ("live","free","idle","single"); feeds = the keys of its Feed assets (2, or 1 for single)
+@dataclass(frozen=True) class Meter:
+    node: str; metric: Metric; kind: str  # "counter" | "power" | "voltage" | "current"
+    counter_base: float | None = None; resets: bool = False; gap: bool = False; feeds: tuple[str, ...] = ()  # current: the feed nodes whose power it carries
+    @property id -> str  # f"{node}|{metric.value}", unique
+@dataclass(frozen=True) class Layout: seed: int; nodes: tuple[Node, ...]; racks: tuple[Rack, ...]; meters: tuple[Meter, ...]
+def build_layout(seed: int = history.DEFAULT_SEED) -> Layout   # nodes parents-first; meters in tree order, feeds first, then panels (voltage, current)
+def sibling_key(name: str) -> str   # lower(btrim(collapse spaces)): the Python twin of asset_names._KEY, used by the tests
+```
+Counts per P9: 1 + 2 + 4 + 8 + 117 racks + feed assets (117 x 2 - 5 = 229) + Electrical + 8 panels. Meters: 100 live x 2 + 6 idle x 2 + 5 single = 217 feed meters, of which 8 `power` (B feed of live Hall 2 racks), 1 gap, 1 reset, the rest `counter` (base `uniform(2000, 90000)` rounded to 3 places); plus 16 panel meters.
+
+- [ ] **Step 1: tests (no database)**: `test_the_tree_has_the_planned_shape` (counts by role: 1 site, 2 halls, 4 pods, 8 rows, 117 racks, 229 feeds, 1 electrical, 8 panels; racks per row 15,15,14,15,15,15,13,15); `test_sibling_names_are_unique` (group nodes by parent, `sibling_key` distinct); `test_parents_come_before_children_and_panels_are_outside_every_hall` (every node's ancestors; no panel/electrical node has a hall/rack ancestor); `test_every_rack_has_its_feeds` (live/idle/free: A and B; single: A only; the feed nodes are the rack's children); `test_the_variety_counts` (6 free with no feed meters, 6 idle with kw < 0.5, 5 single, 100 live; 8 power meters all on Hall 2 Feed B of live racks; the gap meter and the reset meter are two different Feed A counters of Hall 1 live racks; no panel mapped to an energy metric: `{m.metric for m in panel meters} == {voltage_v, current_a}`); `test_a_rack_shares_its_load_between_the_feeds` (`0.45 <= share_a <= 0.55`, single is 1.0); `test_meter_ids_are_unique`; `test_the_layout_is_deterministic_and_the_seed_moves_the_selection` (same seed equal; seed 1 gives the same node keys but a different set of free racks); `test_every_name_is_generic` (each node name fullmatches `Seeded pilot hall|Hall \d|Pod [AB]|Row \d|Rack \d\d|Feed [AB]|Electrical|Panel \d[AB]`).
+- [ ] **Step 2:** run: FAIL. **Step 3:** implement (rng: one `random.Random(seed)`; shuffle all rack indexes; first 6 free, next 6 idle, next 5 single; power-only: `rng.sample` of 8 live Hall 2 racks; gap and reset: `rng.sample` of 2 live Hall 1 racks). **Step 4:** pass. **Step 5: commit** `feat(seed): the pilot-hall layout generator (w16 task 2)`.
+
+### Task 3: The series generator
+
+**Files:** Modify `backend/dcdash/seed/pilot_hall.py`, `backend/tests/test_seed_pilot_hall.py`.
+
+**Interfaces:**
+- Consumes: `history.Plan`, `history.base_kw(ts, ZoneInfo(plan.tz))`, `history.JITTER`, `Layout`/`Meter`/`Rack` of Task 2.
+- Produces:
+```python
+def curve(load_kw: float) -> float   # 0.86 + 0.14 * (load_kw - 20) / 60 for a value of history.base_kw, in [0.86, 1.0]
+def samples(plan: history.Plan, layout: Layout) -> Iterator[tuple[datetime, dict[str, float]]]
+#   one item per instant of plan.times(): {meter.id: value} for the meters that are SAMPLED at that instant
+def readings_by_day(plan, layout) -> Iterator[tuple[date, list[tuple[str, datetime, float]]]]   # UTC day, (meter id, ts, value), ascending
+```
+Rules: feed power = `rack.kw x share (share_a for A, 1 - share_a for B; 1.0 for single) x curve(base_kw(ts)) x (1 + uniform(-JITTER, JITTER))`, one draw per feed meter per instant in `layout.meters` order, drawn even inside a gap; a counter adds `power x step_hours` after each instant, starts at `counter_base`, the reset meter drops to `uniform(0.1, 1.0)` at `plan.reset_index`, the gap meter emits nothing while `plan.in_gap(ts)` (the counter keeps counting); a `power` meter emits the power; panel voltage `round(400 x (1 + uniform(-0.01, 0.01)), 1)`; panel current `round(sum of the true power of its feeds x 1000 / (sqrt(3) x V x 0.95), 2)` (true power, also of the gap feed); counters rounded to 3 places, powers to 3.
+
+- [ ] **Step 1: tests (no database, a small plan: `history.make_plan(NOW, ZONE, 3, raw_retention_days=30, step_seconds=3600)`)**: `test_counters_only_rise_except_one_reset` (every counter meter non-decreasing except the reset meter with exactly one fall of more than 1000); `test_the_gap_meter_has_no_samples_in_its_gap_and_the_others_do` (use `step_seconds=900`, `make_plan(NOW, ZONE, 3, ...)`: the plan has a gap; the gap meter lacks exactly 24 instants, no other meter lacks any); `test_a_range_without_a_complete_day_has_no_gap_and_nothing_breaks` (`days=1`, step 3600, `plan.gap is None`; every meter has `plan.count` samples); `test_a_rack_is_about_the_sum_of_its_feeds_and_a_panel_follows_its_feeds` (for one live Hall 1 rack, `power(A) + power(B)` computed from counter differences times 3600/step is within 8 % of `rack.kw x curve` averaged; a panel's amps x sqrt(3) x 400 x 0.95 / 1000 is within 3 % of the sum of the power of its feeds, per instant); `test_power_only_feeds_report_kw_in_range` (values between 0 and 12); `test_the_series_is_deterministic_and_the_seed_changes_it`; `test_readings_by_day_groups_by_utc_day_and_is_sorted`; `test_free_racks_have_no_readings`; `test_the_load_follows_the_local_hour` (the afternoon mean of the whole layout is higher than the night mean).
+- [ ] **Steps 2-5** as before; commit `feat(seed): the pilot-hall series (w16 task 3)`.
+
+### Task 4: The writer, the guards, the dry run and the command line
+
+**Files:** Modify `backend/dcdash/seed/pilot_hall.py`, `backend/dcdash/seed/history.py` (`_parser`, `amain`), `backend/tests/test_seed_pilot_hall.py`.
+
+**Interfaces:**
+- Consumes: Tasks 1-3; `history.Created`, `history.write_batches`, `history.pending_drop`, `history.refresh_rollups`, `history._undo`.
+- Produces: `choose_kinds(registered: set[str]) -> dict[str, KindChoice]` with `KindChoice(name: str, registered: bool, preferred: str)` for roles `site hall pod row rack feed electrical panel` (P5; `registered` holds `core.asset_kinds.kind_key(name)` values); `async def registered_kinds(pool) -> set[str]` (reads the `key` column of `asset_kinds`); `async def create_rows(pool, layout, kinds) -> history.Created` (ONE transaction: advisory lock `ASSET_NAMES_LOCK`, this layout's own refusal check, the source `seeded-pilot-hall` (disabled simulator, `.invalid` host, origin manual), the assets in node order (kind from `kinds`, Electrical `sort_order` 1), the points (address `seed/pilot/<meter id>`, name `"<path> <metric>"`, unit_hint from the meter) and the mappings (`scale` 1.0, `interval_seconds` = the step)); `async def dry_run(args) -> int`; `async def seed(args) -> int`. `history._parser` gains `--layout {three-panels,pilot-hall}` (default `three-panels`) and `--interval-minutes {5,10,15,30,60}` (default `None`; with `three-panels` it is an argparse error, exit 2); `history.amain` dispatches to `pilot_hall.dry_run` / `pilot_hall.seed` for `pilot-hall` after the same two-switch checks (lazy import).
+
+Behaviour: refusal when a source named `seeded-pilot-hall` exists or a top-level asset with the same normalised name as "Seeded pilot hall" exists (own texts, naming the undo); the OTHER layout's rows never cause a refusal; `pending_drop` and the range clamp run as in `_seed`; failure after the rows were committed calls `history._undo`; the report prints counts, range, interval, the kinds used (and "not in the Asset kinds list" for an unregistered one), readings written, the hint "set a site rate in Tariffs to see costs" and the undo sentence; the dry run prints the plan lines (assets by role, racks by status, points, power-only/gap/reset facts, range and interval, estimated reading count, kinds with fallbacks) plus the same refusals as `_dry_run` does, exits 0, writes nothing. Whole-run `readings` equals the sum over `samples`.
+
+- [ ] **Step 1: tests (database, `--days 2 --interval-minutes 60`, frozen clock as in `test_seed_history.py`; copy its few fixture lines `frozen`/`allowed`/`site`, do not import the test module)**: `test_no_arguments_prints_the_plan_and_writes_nothing`; `test_the_old_layout_is_still_the_default` (`amain([])` text unchanged: "Seeded Panel A" in the output, "Seeded pilot hall" not); `test_yes_without_the_variable_exits_2`; `test_interval_minutes_is_refused_for_the_old_layout`; `test_a_run_creates_exactly_the_planned_rows` (counts of sources +1, assets == `len(layout.nodes)`, points == mappings == `len(layout.meters)`, readings == the generator's count, `point_latest` == points that have a sample, tables `tariffs settings audit_log asset_kinds users dashboards widgets jobs graph_layout scans` unchanged, the source is disabled/manual/simulator and its config validates as `SimulatorConfig`, every mapping has `interval_seconds == 3600` and scale 1.0, panels have only voltage/current mappings); `test_totals_do_not_double_count` (via `billing.month_costs(session, "2026-10")` by `asset_id`: the Site total equals Hall 1 + Hall 2 (`approx`), a hall equals the sum of its racks, a live rack equals Feed A + Feed B, a free rack and "Electrical" have `total is None`, Hall 1 `total.estimated` False and Hall 2 True); `test_a_feed_matches_the_generator` (one Hall 1 counter feed: each complete day's `kwh` equals the sum of positive counter steps by local day, as `counter_days` in `test_seed_history.py`); `test_a_second_run_refuses_and_changes_nothing` (dump of assets and sources equal; dry run says "would be refused"); `test_the_other_layout_coexists_both_ways` (old then new, new then old: exit 0 and each guard still refuses its own second run); `test_a_leftover_root_asset_refuses` and `test_a_leftover_source_refuses` (delete the other half, exit 1, counts equal); `test_a_failed_refresh_takes_everything_back` and `test_a_flush_that_writes_less_fails_the_run` (monkeypatch as in the old tests; counts equal afterwards, rollups empty); `test_kinds_come_from_the_registry` (empty registry: every role falls back to its first preferred name, the dry run and the report print the "not in the Asset kinds list" warning, `asset_kinds` unchanged; with "Rack", "Row", "Circuit", "Panel", "Site", "Room" inserted: no warning for those and a hall is "Room"; with "Data hall" inserted: hall is "Data hall"); `test_the_range_clamp_and_the_pending_drop_check_apply` (retention 10 and no `--days`: exit 1 "raw retention is 10 days"; the dropped-chunk scenario of `test_it_refuses_when_the_rollups_hold_minutes_whose_raw_readings_were_dropped` exits 1 with `readings_1m` untouched); `test_rows_that_existed_before_are_unchanged` (real source/asset/readings with rollups survive, as the old test).
+- [ ] **Steps 2-5**; run `uv run pytest tests/test_seed_pilot_hall.py tests/test_seed_history.py -q`; commit `feat(seed): --layout pilot-hall (w16 task 4)`.
+
+### Task 5: The real run on the scratch stack (controller, no subagent)
+
+- [ ] Build the scratch stack `dcdash_e2e_w16_vis` from the branch with `.waves/w16/vis-rebuild.sh` (detached, polled; it runs the whole Playwright suite once: judge by `N passed`, 0 failed). Then, inside that stack only: dry run, set a tariff by the API, run the seeder at intervals 60, 15 and 5 minutes (remove the root asset and the source through the API between runs), record rows, seconds per phase, table size (`pg_total_relation_size`), the Billing figures for the previous and the current month, one rack's page through the API, the delete of the root (how long, what is left). Pick `DEFAULT_INTERVAL_MINUTES` (the smallest interval whose whole run stays under about 5 minutes) and commit it if it changes. Gallery in `.waves/w16/gallery/`: Assets Tree, Billing (previous month), one rack's page, at 1440. Record all numbers in the ledger.
+
+### Task 6: Docs
+
+**Files:** Modify `docs/developing.md` (the "Seeding a month of history" section: a "Pilot hall layout" part with the exact commands for Linux/macOS/WSL and Windows PowerShell on the work laptop (from the install folder, after `scripts\update.ps1`), what it makes, the sizes measured in Task 5, how to see past data (Tariffs rate first, Billing previous month, the Assets Tree and a rack page), what `~` means here, why panels carry no kWh, and how to remove it with the measured steps); keep every link valid.
+
+- [ ] Write it from the Task 5 observations; run `uv run pytest tests/test_docs_links.py tests/test_readme_ops.py -q`; check the PowerShell command lines with `powershell.exe` if `docker` resolves there, otherwise a parse check only and say so; commit `docs(w16): the pilot-hall seed (task 6)`.
+
+### Close-out (controller)
+
+Gates (full backend suite once, detached; frontend suite, typecheck, build; the isolated Playwright run on the final build), ONE whole-wave Opus review, one fix wave, then the CHANGELOG section, backlog AZ, the roadmap row, MORNING, the merge order of RESUME.md.
+
+## Execution log
+
+(The controller appends to `.waves/w16/progress.md`; this file gets the ticked boxes and the final log at close-out.)
