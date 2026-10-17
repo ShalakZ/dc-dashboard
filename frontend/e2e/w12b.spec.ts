@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
-  bigGroup, bigModel, bigPointId, bigSourceId, DRAG_SHAPES, node as nid, PAGED_SHAPES, SMALL, SMALL_GROUPS, SMALL_NAMES, smallModel,
+  bigGroup, bigModel, bigPointId, bigSourceId, DRAG_SHAPES, latestBody, node as nid, PAGED_SHAPES, SMALL, SMALL_GROUPS, SMALL_NAMES, smallModel,
   type ApiCluster, type ApiGraphModel, type ApiPoint, type Metric, type Shape, type XY,
 } from "./graphModel";
 
@@ -22,7 +22,7 @@ import {
 //   3  Show more: a group of 120 opens with 50 points, the node `Show 50 more points of <group>, 70 left` and a line `50 of 120 shown`; pressed with the mouse and then with Enter it draws
 //      100 and 120 points, vanishes at the end, and the focus is on a point; a mapped point beyond the page keeps an aggregated edge (`N mapped`) from the group to its asset; closing the
 //      group and opening it again is back to 50.
-//   4  Unmapped only: a) the switch, the summary that starts `Showing U of N points` (fully visible at 1024 with the sidebar expanded), mapped points, all-mapped groups and sources gone,
+//   4  Unmapped only: a) the switch, the summary that starts `Showing U of N points` (W12c: read, not drawn; the points chip shows `U of N` whole at 1024 with the sidebar expanded), mapped points, all-mapped groups and sources gone,
 //      no mapped edge, remembered over a reload, and Find (Ctrl+K) for a hidden mapped point turns it off with the toast; b) mapping through the Review while it is on leaves the focus on
 //      a named element (a point, a group, a source or the canvas), never <body>.
 //   5  Folded assets: `Hide sub-assets of <name>`, the `N mapped` badge, the sub-assets and their edges gone, the mapped edges ending on the folded asset as ONE edge with the summed
@@ -146,6 +146,12 @@ async function stubGraph(page: Page, model: ApiGraphModel): Promise<Stub> {
       return route.fulfill({ status: 204 });
     }
     return route.fallback();
+  });
+  // W12c: a mapped point that rests under the pointer or the keyboard focus asks for its last value (the card). The mappings of a generated graph are not on the stack (a real answer would be a 404 and a
+  // console error, which case 10 forbids), so the route is answered here with a fresh reading.
+  await page.route(/\/api\/mappings\/\d+\/latest(\?.*)?$/, async (route) => {
+    const id = Number(/\/mappings\/(\d+)\/latest/.exec(route.request().url())![1]);
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(latestBody(id)) });
   });
   await page.route(/\/api\/discovery\/accept(\?.*)?$/, async (route) => {
     if (route.request().method() !== "POST") return route.fallback();
@@ -613,22 +619,24 @@ for (const size of SIZES) {
         await expect(edgesWith(page, "m:"), "mapped edges are drawn").not.toHaveCount(0);
       });
 
-      await test.step("on: the count leads the summary, whole at 1024 with the sidebar expanded; Expand all draws the unmapped points only", async () => {
+      await test.step("on: the count leads the summary and the points chip shows it whole at 1024 with the sidebar expanded; Expand all draws the unmapped points only", async () => {
         await expandSidebar(page);
         await switchEl.click();
         await expect(switchEl).toBeChecked();
         await expect(summaryEl(page)).toHaveText("Showing 6 of 15 points, 4 sources, 9 mapped, 1 needs credentials");
-        const reach = await summaryEl(page).evaluate((el, lead) => {
-          const text = el.firstChild;
-          if (!(text instanceof Text)) return { right: 0, limit: 0, cut: true, starts: false };
-          const range = document.createRange();
-          range.setStart(text, 0);
-          range.setEnd(text, Math.min(lead.length, text.length));
-          return { right: range.getBoundingClientRect().right, limit: el.getBoundingClientRect().right, cut: el.scrollWidth > el.clientWidth, starts: text.data.startsWith(lead) };
-        }, LEAD);
-        expect(reach.starts, "the line starts with the count").toBe(true);
-        // A line that the bar had to cut ends in an ellipsis about a character wide: the count must end before it.
-        expect(reach.right, `the count ends at ${reach.right.toFixed(0)} px, the line at ${reach.limit.toFixed(0)} px${reach.cut ? " (and is cut)" : ""}`).toBeLessThanOrEqual(reach.limit - (reach.cut ? 16 : 0));
+        // W12c: the sentence above is read, not drawn (visually hidden); the chips are the visible count. The points chip reads "6 of 15" and is drawn WHOLE: in the chips' one row (a chip that does not fit
+        // wraps out of the 20 px row and is clipped), inside the bar, with its words (or, when a narrow bar takes them away, its title) saying "6 of 15 points".
+        const reach = await page.evaluate(() => {
+          const group = document.querySelector<HTMLElement>(".gbar-chips");
+          const chip = [...(group?.querySelectorAll<HTMLElement>(".gbar-chip") ?? [])].find((el) => el.querySelector(".gbar-chip-num")?.textContent === "6 of 15");
+          if (!group || !chip) return null;
+          const [g, c] = [group.getBoundingClientRect(), chip.getBoundingClientRect()];
+          return { title: chip.getAttribute("title"), inRow: c.top >= g.top - 0.5 && c.bottom <= g.bottom + 0.5, right: c.right, limit: g.right };
+        });
+        expect(reach, "the chips hold one that reads 6 of 15").not.toBeNull();
+        expect(reach!.title, "and says what it counts").toBe("6 of 15 points");
+        expect(reach!.inRow, "it is in the chips' one row, not wrapped out of sight").toBe(true);
+        expect(reach!.right, `the chip ends at ${reach!.right.toFixed(0)} px, the chips' room at ${reach!.limit.toFixed(0)} px`).toBeLessThanOrEqual(reach!.limit + 0.5);
 
         await barButton(page, "Expand all").click();
         await expect(pointNodes(page), "LVP01's two unmapped points, Charlie's two and Delta's two").toHaveCount(6);

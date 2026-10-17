@@ -17,7 +17,7 @@ import {
 // Create mappings or a confirmation. The project may therefore stand anywhere in the order; it follows w7t, whose Tidy layout empties the REAL layout, which this spec never reads.
 //
 // The cases (each its own test; one failing does not stop the next):
-//   nodes       the status dot (class, aria-hidden, title), the protocol badge (a plain rectangle), the facts words, the mapped strip of a group, and a source node no taller than SOURCE_H.
+//   nodes       the status dot (class, aria-hidden, title), the protocol icon tile (a plain rectangle) and the protocol line, the status word and origin, "N of M mapped" (W12c: the source card), the mapped strip of a group, and a source node no taller than SOURCE_H.
 //   highlight   hovering a point lights exactly its path (the nodes and edges the DOM edges say) after a short rest, dims the rest to about .35, clears when the pointer
 //               leaves, shows nothing during a drag, and a sweep across the pane between two lit nodes never clears (a MutationObserver on the wrapper's class watches it).
 //   live edges  only the online source's source-to-group edges and the mapped links under it flow (a mapped link keeps a mostly solid `8 2` dash), never a group-to-point or an asset-to-asset edge;
@@ -31,16 +31,16 @@ import {
 //   find        Ctrl+K on the canvas opens Find (and not the top bar's quick find), the jump opens the parents and focuses the node, Escape gives the focus back, Ctrl+K from the
 //               page body is still the quick find; at 6,000 points the list is capped at 50, a point deep in a paged group widens the page, and one too far down for the node
 //               budget is honest about it (W12b).
-//   hint        the short line and the tip that lists the keys, also while the graph loads.
-//   placement   at 1440 x 900, 1024 x 640 and 800 x 600 with the offer shown AND the source panel open: the offer, the tools and the Find card do not overlap and stay in the canvas.
+//   hint        the short line (also while the graph loads) and the shortcuts bubble that lists the keys (W12c; it was the `?` tip).
+//   placement   at 1440 x 900, 1024 x 640 and 800 x 600 with the offer shown AND the source panel open: the offer and the Find card do not overlap and stay in the canvas, the card does not cover the panel's Close button, and Find and Snap to grid are in the bar (W12c: they left the canvas panel).
 //   perf        (about 2,000 nodes, W12b: DRAG_SHAPES opened by repeated Expand all) the frames of a 3 s drag with guides, without the minimap and with snap off; hover to the lit path and the frames during the opacity
 //               transition; the keystroke-to-results time of Find at 6,000 points; the idle cost of 100 flowing edges against the same graph without motion. The numbers go to
 //               .superpowers/sdd/2026-10-15-w7u-discovery-premium/measure.json and into each case's `measure` annotation (a test title is fixed before the run, so it cannot hold them);
 //               the assertions are generous on purpose, the controller reads the numbers.
 //
 // Locators. Playwright matches a name by case-insensitive SUBSTRING: every lookup of a new control is `exact: true` (the top bar's field is `Quick find`, a substring of
-// `Find`). The Find field is the combobox `Search the graph`; the tools are measured through `.graph-tools-bar` and `.graph-find` (the panel `.graph-tools` itself spans the
-// canvas and lets clicks through). Positions are read in FLOW coordinates from a node's transform, never from a screen box. A case that presses a node or reads a box waits for
+// `Find`). The Find field is the combobox `Search the graph`; the Find button and Snap to grid are buttons of the bar (W12c) and the Find CARD is `.graph-find`, in the canvas's top-right panel
+// `.graph-tools` (which spans the canvas and lets clicks through). Positions are read in FLOW coordinates from a node's transform, never from a screen box. A case that presses a node or reads a box waits for
 // the camera to come to rest first (`cameraStill`): a source's own + now pans for 300 ms and Fit View glides. Screenshots go to .superpowers/sdd/overnight-w7/gallery/W7u/
 // when W7U_GALLERY=1.
 
@@ -135,8 +135,9 @@ const titleOf = (page: Page, id: string) => nodeEl(page, id).locator(".node-titl
 const canvasEl = (page: Page) => page.locator(".graph-canvas");
 const bar = (page: Page) => page.locator(".graph-bar");
 const barButton = (page: Page, name: string) => bar(page).getByRole("button", { name, exact: true });
-const findButton = (page: Page) => page.getByRole("button", { name: "Find", exact: true });
-const snapButton = (page: Page) => page.getByRole("button", { name: "Snap to grid", exact: true });
+// W12c: Find and Snap to grid are buttons of the bar (Find's CARD is still in the canvas). A narrow bar may take the words of Snap to grid away (it keeps its name) or move it into the overflow menu.
+const findButton = (page: Page) => bar(page).getByRole("button", { name: "Find", exact: true });
+const snapButton = (page: Page) => bar(page).getByRole("button", { name: "Snap to grid", exact: true });
 const findField = (page: Page) => page.getByRole("combobox", { name: "Search the graph", exact: true });
 /** The options of the Find card's list (scoped: other lists on the page have options of their own). */
 const findOptions = (page: Page) => page.locator(".graph-find").getByRole("option");
@@ -144,7 +145,9 @@ const quickFind = (page: Page) => page.getByRole("combobox", { name: "Quick find
 const minimap = (page: Page) => page.getByRole("img", { name: "Overview of the whole graph", exact: true });
 const menuEl = (page: Page) => page.locator('.graph-menu[role="menu"]');
 const toast = (page: Page, text: string | RegExp) => page.locator(".toast-stack .toast").filter({ hasText: text });
-const tipButton = (page: Page) => page.getByRole("button", { name: "What can I do on the canvas?", exact: true });
+// W12c: the `?` tip is the shortcuts bubble behind a keyboard button in the bar. The bubble and its button share one accessible name, so each is looked up by role.
+const shortcutsButton = (page: Page) => bar(page).getByRole("button", { name: "Keyboard shortcuts and controls", exact: true });
+const shortcutsBubble = (page: Page) => page.getByRole("dialog", { name: "Keyboard shortcuts and controls", exact: true });
 const clusters = (page: Page) => page.locator('.react-flow__node[data-id^="cluster:"]');
 const pointNodes = (page: Page) => page.locator('.react-flow__node[data-id^="point:"]');
 
@@ -323,17 +326,19 @@ async function boxSelect(page: Page, ids: string[]): Promise<void> {
 // nodes
 
 test.describe("W7u: the nodes", () => {
-  test("a source node has a status dot, a protocol badge and its facts; a group has a progress strip of its mapped share; no source node is taller than SOURCE_H", async ({ page }) => {
+  test("a source node is a card: a status dot with its word, a protocol icon and line, the mapped share in words, and no source node is taller than SOURCE_H; a group has a progress strip of its mapped share", async ({ page }) => {
     test.setTimeout(120_000);
     await arrive(page, smallModel());
     await expandSmall(page);
     const zoom = await zoomOf(page);
 
+    // W12c: the card says, line by line, the short title, the protocol and where it listens, the status word and the origin, "N of M mapped" under a 4 px bar, Details, and when it was last seen.
+    // (W7u had a protocol badge, a facts line and a separate needs-credentials badge; the first is now an icon tile and a line, the second the status and mapped lines, the third the status word.)
     const cases = [
-      { id: SMALL.alpha, key: "online", title: "online", proto: "OPC UA", facts: `discovered ${DOT} online ${DOT} 9 points` },
-      { id: SMALL.bravo, key: "offline", title: "offline", proto: "Modbus", facts: `discovered ${DOT} offline ${DOT} 2 points` },
-      { id: SMALL.charlie, key: "credentials", title: "needs credentials", proto: "OPC UA", facts: `discovered ${DOT} unknown ${DOT} 2 points` },
-      { id: SMALL.delta, key: "idle", title: "disabled", proto: "Simulator", facts: `manual ${DOT} unknown ${DOT} 2 points` },
+      { id: SMALL.alpha, key: "online", title: "online", icon: "protoOpcua", proto: `OPC UA ${DOT} 10.20.0.11:4840`, status: `online ${DOT} discovered`, mapped: "4 of 9 mapped" },
+      { id: SMALL.bravo, key: "offline", title: "offline", icon: "protoModbus", proto: `Modbus ${DOT} 10.20.0.12:502`, status: `offline ${DOT} discovered`, mapped: "0 of 2 mapped" },
+      { id: SMALL.charlie, key: "credentials", title: "needs credentials", icon: "protoOpcua", proto: `OPC UA ${DOT} 10.20.0.13:4840`, status: `needs credentials ${DOT} discovered`, mapped: "0 of 2 mapped" },
+      { id: SMALL.delta, key: "idle", title: "disabled", icon: "protoSimulator", proto: `Simulator ${DOT} w7u`, status: `disabled ${DOT} manual`, mapped: "0 of 2 mapped" },
     ];
     for (const c of cases) {
       await test.step(`${c.key}: ${c.proto}`, async () => {
@@ -346,16 +351,22 @@ test.describe("W7u: the nodes", () => {
         const dotBox = await boxOf(dot, "the dot");
         expect.soft(dotBox.width / zoom, "the dot is 8 px").toBeGreaterThan(7);
         expect.soft(dotBox.width / zoom).toBeLessThan(9);
-        await expect(src.locator(".gproto"), "the protocol badge").toHaveText(c.proto);
-        const radius = await src.locator(".gproto").evaluate((el) => parseFloat(getComputedStyle(el).borderTopLeftRadius));
+        const tile = src.locator(".gicon.gsrc-tile");
+        await expect(tile, "the protocol icon").toHaveAttribute("data-icon", c.icon);
+        await expect(tile, "decoration: the protocol is in the words under the title").toHaveAttribute("aria-hidden", "true");
+        const radius = await tile.evaluate((el) => parseFloat(getComputedStyle(el).borderTopLeftRadius));
         expect.soft(radius, "a plain rectangle, never a pill").toBeLessThanOrEqual(6);
-        await expect(src.locator(".gnode-facts"), "the words stay in the node's text").toContainText(c.facts);
+        await expect(src.locator(".gsrc-sub"), "the protocol line: the protocol and where the source listens").toHaveText(c.proto);
+        await expect(src.locator(".gsrc-status"), "the status word, then the origin").toHaveText(c.status);
+        await expect(src.locator(".gsrc-words"), "the mapped share in words").toHaveText(c.mapped);
+        await expect(src.locator(".gsrc-bar"), "and its bar is a picture of the same share").toHaveAttribute("aria-hidden", "true");
         const height = (await boxOf(src.locator(".gnode"), "the source node")).height / zoom;
         expect.soft(height, `the node is ${height.toFixed(1)} px high, the block gives it ${SOURCE_H}`).toBeLessThanOrEqual(SOURCE_H + 1);
       });
     }
-    await expect(nodeEl(page, nid.source(SMALL.charlie)).locator(".badge")).toHaveText("needs credentials");
-    for (const id of [SMALL.alpha, SMALL.bravo, SMALL.delta]) await expect(nodeEl(page, nid.source(id)).locator(".badge")).toHaveCount(0);
+    await expect(nodeEl(page, nid.source(SMALL.charlie)).locator(".gsrc-attn"), "the one that needs something says it in the status line").toHaveText("needs credentials");
+    for (const id of [SMALL.alpha, SMALL.bravo, SMALL.delta]) await expect(nodeEl(page, nid.source(id)).locator(".gsrc-attn")).toHaveCount(0);
+    await expect(nodeEl(page, nid.source(SMALL.charlie)).locator(".badge"), "there is no separate badge any more").toHaveCount(0);
 
     await test.step("a group's strip is the share of its points that are mapped", async () => {
       for (const [source, key, width, title] of [
@@ -877,41 +888,44 @@ test.describe("W7u: Find", () => {
 // hint
 
 test.describe("W7u: the hint", () => {
-  test("the line is short, the tip lists the keys, and both are there while the graph loads", async ({ page }) => {
+  // W12c: the hint is one short sentence under the title, and the keys left the `?` tip for the shortcuts bubble behind the keyboard button in the bar (the tip button is gone). The bar is not
+  // there while the graph loads (its place is held), so the bubble is checked once loaded; the line is the same in the loading branch.
+  test("the line is short, the shortcuts bubble lists the keys, and the line is there while the graph loads", async ({ page }) => {
     test.setTimeout(120_000);
     const stub = await prepare(page, smallModel(), { delayMs: 1500 });
     await page.goto("/discovery");
     await test.step("while loading", async () => {
       await expect(page.locator(".graph-bar-space"), "the loading branch").toBeVisible({ timeout: 30_000 });
-      await expect(page.locator(".page-head .sub")).toContainText("Dashed: discovered. Solid: assets.");
-      await expect(tipButton(page), "the tip is in the loading branch too").toBeVisible();
+      await expect(page.locator(".page-head .sub")).toContainText("Dashed means discovered, solid means assets.");
+      await expect(page.getByRole("button", { name: "What can I do on the canvas?", exact: true }), "the old tip button is gone").toHaveCount(0);
     });
     await expect(page.locator(".react-flow__node").first()).toBeVisible({ timeout: 30_000 });
     expect(stub.reads).toBeGreaterThan(0);
 
     await test.step("once loaded", async () => {
       const hint = ((await page.locator(".page-head .sub").textContent()) ?? "").trim();
-      expect(hint).toContain("Dashed: discovered. Solid: assets.");
-      expect(hint).toContain(`Drag a group onto an asset or press New asset${ELLIPSIS}`);
+      expect(hint).toBe("Dashed means discovered, solid means assets. Drag a group onto an asset to map it.");
       expect(hint.length, `the line is ${hint.length} characters`).toBeLessThanOrEqual(100);
-      await expect(tipButton(page)).toHaveCount(1);
-      await tipButton(page).click();
-      const bubble = page.getByRole("note");
+      await expect(page.getByRole("button", { name: "What can I do on the canvas?", exact: true })).toHaveCount(0);
+      await expect(shortcutsButton(page)).toHaveCount(1);
+      await shortcutsButton(page).click();
+      const bubble = shortcutsBubble(page);
       await expect(bubble).toBeVisible();
       const text = (await bubble.innerText()).replace(/\s+/g, " ");
       for (const [what, pattern] of [
         ["Alt or Option moves a node alone", /Alt or Option/i],
         ["Shift-drag selects", /Shift/i],
         ["Ctrl or Cmd adds", /Ctrl or Cmd/i],
-        ["Ctrl+K finds", /Ctrl\+K/i],
+        ["Ctrl+K finds (the keys are separate caps: Ctrl or Cmd + K)", /Ctrl or Cmd \+ K/i],
         ["right-click opens the actions", /right-click/i],
-        ["Shift+F10 does too", /Shift\+F10/],
+        ["Shift+F10 does too (Shift + F10)", /Shift \+ F10/],
         ["hovering lights the path", /hover/i],
         ["Escape clears a selection", /Escape/i],
-        ["W12b: the arrow keys move between nodes and Enter opens or closes one", /Arrow keys move between nodes\. Enter opens or closes one\./],
+        ["W12b: the arrow keys move between nodes and Enter opens or closes one", /Arrow keys.*Enter/],
       ] as const) expect(text, what).toMatch(pattern);
       await page.keyboard.press("Escape");
       await expect(bubble).toHaveCount(0);
+      await expect(shortcutsButton(page), "Escape gives the focus back to the button").toBeFocused();
     });
   });
 });
@@ -921,7 +935,7 @@ test.describe("W7u: the hint", () => {
 
 test.describe("W7u: placement", () => {
   for (const [width, height] of [[1440, 900], [1024, 640], [800, 600]] as const) {
-    test(`at ${width} x ${height} with the offer shown and the source panel open, the offer, the tools and the Find card do not overlap and stay in the canvas`, async ({ page }) => {
+    test(`at ${width} x ${height} with the offer shown and the source panel open, the offer and the Find card do not overlap and stay in the canvas, the Find card does not cover the panel's Close button, and Find and Snap to grid are in the bar`, async ({ page }) => {
       test.setTimeout(180_000);
       await arrive(page, smallModel(), { width, height });
       const alpha = nid.source(SMALL.alpha);
@@ -944,11 +958,10 @@ test.describe("W7u: placement", () => {
         await expect(findOptions(page)).toHaveCount(1);
       });
 
+      // W12c: the Find BUTTON and Snap to grid are controls of the bar above the canvas now; only the offer and the Find CARD (the card stays in the canvas, at its top right) are placed in it.
       const canvas = await boxOf(canvasEl(page), "the canvas");
       const parts: [string, Box][] = [
         ["the offer", await boxOf(page.locator(".offer-bar"), "the offer")],
-        ["Find", await boxOf(findButton(page), "the Find button")],
-        ["Snap to grid", await boxOf(snapButton(page), "the Snap to grid button")],
         ["the Find card", await boxOf(page.locator(".graph-find"), "the Find card")],
       ];
       test.info().annotations.push({ type: "measure", description: `${width} x ${height}: canvas ${canvas.width.toFixed(0)} x ${canvas.height.toFixed(0)}; ${parts.map(([n, b]) => `${n} ${b.width.toFixed(0)} x ${b.height.toFixed(0)} at (${(b.x - canvas.x).toFixed(0)}, ${(b.y - canvas.y).toFixed(0)})`).join("; ")}` });
@@ -956,6 +969,32 @@ test.describe("W7u: placement", () => {
       for (let i = 0; i < parts.length; i++) {
         for (let j = i + 1; j < parts.length; j++) expect.soft(overlap(parts[i][1], parts[j][1]), `${parts[i][0]} and ${parts[j][0]} do not overlap`).toBe(false);
       }
+      await test.step("the Find card does not cover the Source details panel (its Close button above all)", async () => {
+        const panel = page.getByRole("complementary", { name: "Source details" });
+        const close = await boxOf(panel.getByRole("button", { name: "Close", exact: true }), "the panel's Close button");
+        expect.soft(overlap(parts[1][1], close), "the Find card and the Close button do not overlap").toBe(false);
+        expect.soft(overlap(parts[1][1], await boxOf(panel, "the Source details panel")), "nor does the card reach into the panel").toBe(false);
+        // ...and the press lands on Close, not on the card: the card is the topmost thing at the button's centre only if it covers it.
+        const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest("aside")?.getAttribute("aria-label") ?? null, centreOf(close));
+        expect.soft(hit, "the topmost element at the Close button's centre is inside the Source details panel").toBe("Source details");
+      });
+      await test.step("Find and Snap to grid are controls of the bar, above the canvas, not in it", async () => {
+        const barBox = await boxOf(bar(page), "the bar");
+        const find = await boxOf(findButton(page), "the Find button");
+        expect.soft(inside(find, barBox), "the Find button lies inside the bar").toBe(true);
+        expect.soft(overlap(find, canvas), "and not over the canvas").toBe(false);
+        // Snap to grid is inline, or (a narrow bar) the item "Turn on/off Snap to grid" of the overflow menu: in exactly one of the two places.
+        const inline = await snapButton(page).count();
+        await page.keyboard.press("Escape"); // the Find card first (it holds the focus), so the menu below opens on a clean page
+        await barButton(page, "More Discovery actions").click();
+        const menu = page.getByRole("menu", { name: "Discovery actions", exact: true });
+        await expect(menu).toBeVisible();
+        const inMenu = await menu.getByRole("menuitem", { name: /^Turn (on|off) Snap to grid$/ }).count();
+        expect.soft(inline + inMenu, `Snap to grid is in exactly one place (${inline} in the bar, ${inMenu} in the menu)`).toBe(1);
+        if (inline === 1) expect.soft(inside(await boxOf(snapButton(page), "the Snap to grid button"), barBox), "Snap to grid lies inside the bar").toBe(true);
+        await page.keyboard.press("Escape");
+        await expect(menu).toBeHidden();
+      });
       expect.soft(await overflowOf(page), "no sideways overflow").toBeLessThanOrEqual(1);
       await shot(page, `placement-${width}`);
     });
