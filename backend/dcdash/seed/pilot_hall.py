@@ -63,7 +63,7 @@ SOURCE_NAME = "seeded-pilot-hall"
 ELECTRICAL_NAME = "Electrical"
 UNDO = 'delete the "Seeded pilot hall" asset and the source "seeded-pilot-hall" with the normal deletes (Assets Tree and Sources)'
 INTERVAL_CHOICES = history.INTERVAL_CHOICES
-DEFAULT_INTERVAL_MINUTES = 15  # measured on the scratch stack (w16 task 5): about 650,000 readings and a minute at 15, 160,000 and half a minute at 60
+DEFAULT_INTERVAL_MINUTES = 30  # measured on the scratch stack (w16 task 5): 442 points, so about 1,000,000 readings over a full month at 30 minutes and twice that at 15
 
 RACKS_PER_ROW = ((15, 15, 14, 15), (15, 15, 13, 15))  # Hall 1, Hall 2: the racks of Row 1 to Row 4, 117 in all
 FREE_RACKS = 6

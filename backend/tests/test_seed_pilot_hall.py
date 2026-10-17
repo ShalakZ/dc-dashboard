@@ -193,7 +193,7 @@ def _rack_of(layout: pilot_hall.Layout, feed_key: str) -> pilot_hall.Rack:
 def test_the_module_names_and_the_interval_are_the_plans():
     assert pilot_hall.ROOT_NAME == "Seeded pilot hall" and pilot_hall.SOURCE_NAME == "seeded-pilot-hall"
     assert pilot_hall.ELECTRICAL_NAME == "Electrical"
-    assert pilot_hall.INTERVAL_CHOICES is history.INTERVAL_CHOICES and pilot_hall.DEFAULT_INTERVAL_MINUTES == 15
+    assert pilot_hall.INTERVAL_CHOICES is history.INTERVAL_CHOICES and pilot_hall.DEFAULT_INTERVAL_MINUTES == 30
 
 
 def test_the_tree_has_the_planned_shape(layout):
@@ -1391,12 +1391,12 @@ def test_the_kinds_line_names_every_role_and_the_fallback():
 
 async def test_the_default_interval_is_run_against_the_database(site, allowed, capsys):
     layout = pilot_hall.build_layout()
-    plan = history.make_plan(NOW, ZONE, 1, raw_retention_days=30, step_seconds=900)
+    plan = history.make_plan(NOW, ZONE, 1, raw_retention_days=30, step_seconds=1800)
     expected = sum(len(values) for _ts, values in pilot_hall.samples(plan, layout))
-    assert await seed_pilot(["--days", "1"]) == 0  # no --interval-minutes: the default of 15 minutes
+    assert await seed_pilot(["--days", "1"]) == 0  # no --interval-minutes: the default of 30 minutes
     out = capsys.readouterr().out
-    assert "interval  15 minutes" in out and f"readings  {expected}" in out
-    assert {row["interval_seconds"] for row in await site.fetch("SELECT interval_seconds FROM mappings")} == {900}
+    assert "interval  30 minutes" in out and f"readings  {expected}" in out
+    assert {row["interval_seconds"] for row in await site.fetch("SELECT interval_seconds FROM mappings")} == {1800}
     assert await site.fetchval("SELECT count(*) FROM mappings") == 442
     assert await site.fetchval("SELECT count(*) FROM readings") == expected
     per_point = {row["n"] for row in await site.fetch("SELECT count(*) AS n FROM readings GROUP BY point_id")}
