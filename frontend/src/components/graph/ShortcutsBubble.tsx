@@ -8,16 +8,19 @@ const NAME = "Keyboard shortcuts and controls";
 const EDGE = 8; // kept free below the bubble (placeTip's own margin)
 
 const Key = ({ children }: { children: ReactNode }) => <kbd className="gkeys-key">{children}</kbd>;
+/** The little words between the caps ("or", "+"): muted, so a key group reads as caps and words. */
+const Sep = ({ children }: { children: ReactNode }) => <span className="gkeys-or">{children}</span>;
 
 interface Group { title: string; rows: { what: string; keys: ReactNode }[] }
 
-// The words of the bubble. Every shortcut named here is real (useCanvasKeys, useGraphNav, the page's Ctrl+Z, the highlight and the value card).
+// The words of the bubble: a short label on the left (it may wrap onto two lines) and its keys on the right (they never wrap). Every shortcut
+// named here is real (useCanvasKeys, useGraphNav, the page's Ctrl+Z, the highlight and the value card).
 const GROUPS: Group[] = [
   { title: "Move and select", rows: [
     { what: "Move a node", keys: <>Drag it</> },
-    { what: "Move a node alone", keys: <><Key>Alt</Key> or <Key>Option</Key> + drag</> },
-    { what: "Select several nodes", keys: <><Key>Shift</Key> + drag</> },
-    { what: "Add one to the selection", keys: <><Key>Ctrl</Key> or <Key>Cmd</Key> + click</> },
+    { what: "Move a node alone", keys: <><Key>Alt</Key> <Sep>or</Sep> <Key>Option</Key> <Sep>+</Sep> drag</> },
+    { what: "Select several nodes", keys: <><Key>Shift</Key> <Sep>+</Sep> drag</> },
+    { what: "Add to the selection", keys: <><Key>Ctrl</Key> <Sep>or</Sep> <Key>Cmd</Key> <Sep>+</Sep> click</> },
   ] },
   { title: "Camera", rows: [
     { what: "Zoom", keys: <>Scroll to zoom</> },
@@ -25,11 +28,11 @@ const GROUPS: Group[] = [
     { what: "See everything", keys: <>The Fit view button</> },
   ] },
   { title: "Find", rows: [
-    { what: "Find a node", keys: <><Key>Ctrl</Key> or <Key>Cmd</Key> + <Key>K</Key></> },
+    { what: "Find a node", keys: <><Key>Ctrl</Key> <Sep>or</Sep> <Key>Cmd</Key> <Sep>+</Sep> <Key>K</Key></> },
   ] },
   { title: "Menus", rows: [
     { what: "Open a node's menu", keys: <>Right-click</> },
-    { what: "From the keyboard", keys: <><Key>Shift</Key> + <Key>F10</Key> or the <Key>Menu</Key> key</> },
+    { what: "Keyboard", keys: <><Key>Shift</Key> <Sep>+</Sep> <Key>F10</Key> <Sep>or the</Sep> <Key>Menu</Key> key</> },
   ] },
   { title: "Mapping", rows: [
     { what: "Map a group", keys: <>Drag it onto an asset</> },
@@ -41,10 +44,10 @@ const GROUPS: Group[] = [
     { what: "Open or close a node", keys: <><Key>Enter</Key></> },
     { what: "Select a node", keys: <><Key>Space</Key></> },
     { what: "Clear the selection", keys: <><Key>Escape</Key></> },
-    { what: "Undo the last mapping change (for 10 seconds)", keys: <><Key>Ctrl</Key> or <Key>Cmd</Key> + <Key>Z</Key></> },
+    { what: "Undo the last mapping change (for 10 seconds)", keys: <><Key>Ctrl</Key> <Sep>or</Sep> <Key>Cmd</Key> <Sep>+</Sep> <Key>Z</Key></> },
     { what: "Open this list", keys: <><Key>?</Key></> },
     { what: "Light a node's path", keys: <>Hover a node</> },
-    { what: "See a value", keys: <>Hovering a mapped point shows its last value</> },
+    { what: "Last value", keys: <>Hover a mapped point</> },
   ] },
 ];
 

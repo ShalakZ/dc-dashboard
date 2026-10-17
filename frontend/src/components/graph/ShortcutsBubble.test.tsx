@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { createRef } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { parseRules, stripComments } from "../../test/cssTools";
 import { ShortcutsBubble } from "./ShortcutsBubble";
 
 type Handle = { open(): void } | null;
@@ -78,7 +80,84 @@ describe("ShortcutsBubble", () => {
     expect(box).toHaveTextContent("Right-click");
     expect(box).toHaveTextContent("Create assets");
     expect(box).toHaveTextContent("Undo the last mapping change");
-    expect(box).toHaveTextContent("a mapped point shows its last value");
+    expect(box).toHaveTextContent("Last value");
+    expect(box).toHaveTextContent("Hover a mapped point");
+  });
+
+  it("every row is a short label and its keys, and all the facts are there (the long sentences are split, the labels that wrapped are shorter)", async () => {
+    setup();
+    await userEvent.click(button());
+    const rows = Array.from(bubble()!.querySelectorAll(".gkeys-row")).map((row) => [
+      row.querySelector("dt")!.textContent,
+      row.querySelector("dd")!.textContent!.replace(/\s+/g, " ").trim(),
+    ]);
+    expect(rows).toEqual([
+      ["Move a node", "Drag it"],
+      ["Move a node alone", "Alt or Option + drag"],
+      ["Select several nodes", "Shift + drag"],
+      ["Add to the selection", "Ctrl or Cmd + click"],
+      ["Zoom", "Scroll to zoom"],
+      ["Pan", "Drag the canvas"],
+      ["See everything", "The Fit view button"],
+      ["Find a node", "Ctrl or Cmd + K"],
+      ["Open a node's menu", "Right-click"],
+      ["Keyboard", "Shift + F10 or the Menu key"],
+      ["Map a group", "Drag it onto an asset"],
+      ["Make assets from groups", "Create assets"],
+      ["Add one by hand", "New asset"],
+      ["Move between nodes", "Arrow keys"],
+      ["Open or close a node", "Enter"],
+      ["Select a node", "Space"],
+      ["Clear the selection", "Escape"],
+      ["Undo the last mapping change (for 10 seconds)", "Ctrl or Cmd + Z"],
+      ["Open this list", "?"],
+      ["Light a node's path", "Hover a node"],
+      ["Last value", "Hover a mapped point"],
+    ]);
+  });
+
+  it("the little words between the caps ('or', '+') are muted text of their own, so a key group reads as caps and words", async () => {
+    setup();
+    await userEvent.click(button());
+    const keys = Array.from(bubble()!.querySelectorAll(".gkeys-row")).find((row) => row.querySelector("dt")!.textContent === "Move a node alone")!.querySelector("dd")!;
+    expect(Array.from(keys.querySelectorAll(".gkeys-or")).map((el) => el.textContent)).toEqual(["or", "+"]);
+    expect(Array.from(keys.querySelectorAll("kbd")).map((el) => el.textContent)).toEqual(["Alt", "Option"]);
+    for (const sep of Array.from(bubble()!.querySelectorAll(".gkeys-or"))) expect(sep.closest("kbd")).toBeNull();
+  });
+
+  describe("its stylesheet (css is not applied in jsdom, so the rules are read as text)", () => {
+    const text = stripComments(readFileSync("src/styles/graph-keys.css", "utf8"));
+    const rules = parseRules(text);
+    const body = (selector: string, inside?: RegExp) =>
+      rules.find((r) => r.selector === selector && (inside ? r.at.some((a) => inside.test(a)) : !r.at.some((a) => a.startsWith("@media"))))?.body ?? "";
+    const WIDE = /@media \(min-width: 900px\)/;
+
+    it("keeps the keys of a row on ONE line (a group never breaks) and lets only the label wrap", () => {
+      expect(body(".gkeys-keys")).toMatch(/white-space:\s*nowrap/);
+      expect(body(".gkeys-keys")).toMatch(/flex:\s*0 0 auto/);
+      expect(body(".gkeys-what")).not.toMatch(/nowrap/);
+      expect(body(".gkeys-what")).toMatch(/min-width:\s*0/);
+      expect(body(".gkeys-or")).toMatch(/color:\s*var\(--text-2\)/);
+    });
+
+    it("is one column below 900px and two columns from 900px, at most 720px wide, and never wider than the window", () => {
+      expect(body(".gkeys-grid")).toMatch(/columns:\s*1\b/);
+      expect(body(".gkeys-grid", WIDE)).toMatch(/columns:\s*2\b/);
+      const single = Number(/width:\s*(\d+)px/.exec(body(".gkeys"))?.[1]);
+      const wide = Number(/width:\s*(\d+)px/.exec(body(".gkeys", WIDE))?.[1]);
+      expect(single).toBeGreaterThanOrEqual(360);
+      expect(single).toBeLessThanOrEqual(480);
+      expect(wide).toBeGreaterThanOrEqual(680);
+      expect(wide).toBeLessThanOrEqual(720);
+      expect(body(".gkeys")).toMatch(/max-width:\s*calc\(100vw - 16px\)/);
+      expect(body(".gkeys")).toMatch(/overflow-y:\s*auto/); // it scrolls inside its max-height (800x600)
+    });
+
+    it("uses only tokens the stylesheet of the app already defines (no new colour token, no transition, no animation)", () => {
+      const app = readFileSync("src/app.css", "utf8");
+      for (const name of new Set(Array.from(text.matchAll(/var\((--[a-z0-9-]+)/g), (m) => m[1]))) expect(app, name).toContain(`${name}:`);
+      expect(text).not.toMatch(/transition|animation/);
+    });
   });
 
   it("Escape closes it and gives the focus back to the button when the button opened it", async () => {
