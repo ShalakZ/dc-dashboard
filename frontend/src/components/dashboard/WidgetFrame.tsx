@@ -2,6 +2,8 @@ import { useState, type ReactNode } from "react";
 import type { RangePreset, WidgetConfig, WidgetType } from "../../api/types";
 import { downloadCsv } from "../../lib/download";
 import { noMetricText, removedText } from "../../lib/widgetFormat";
+import { Icon } from "../Icon";
+import { WidgetSkeleton } from "../Skeleton";
 
 export interface CsvSource { type: WidgetType; config: WidgetConfig; range: RangePreset }
 
@@ -19,19 +21,35 @@ interface Props {
   since?: string;
   /** Present = show the CSV button; this is the query the export repeats. */
   csv?: CsvSource;
-  /** Extra header buttons (the editor's Edit and Delete). */
+  /** Present = show the Details button, which calls this. It waits (aria-disabled) while the data loads. */
+  details?: () => void;
+  /** The widget's type: the shape of the loading skeleton. */
+  type?: WidgetType;
+  /** Keep the footer line's room while loading, for a widget whose "since" line is known before its data (rolling energy and cost). */
+  footSpace?: boolean;
+  /** Extra header buttons (the editor's Edit and Delete); the caller wraps them in `.widget-actions`. */
   actions?: ReactNode;
   /** Mark the header as the grab area of the editor's grid. */
   dragHandle?: boolean;
   children?: ReactNode;
 }
 
-/** The box around every widget: title, CSV button, the warning chips, the marker hint, and the loading and error states. */
-export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint = "", since = "", csv, actions, dragHandle = false, children }: Props) {
+/** A chip: the words for the card that has room, the bare count (hidden from a screen reader, which reads the words) for a narrow one. */
+function Chip({ title, words, count }: { title: string; words: string; count: number }) {
+  return (
+    <span className="chip chip-warn" title={title}>
+      <span className="chip-long">{words}</span>
+      <span className="chip-short" aria-hidden="true">{count}</span>
+    </span>
+  );
+}
+
+/** The box around every widget: title, Details and CSV buttons, the warning chips, the footer line, and the loading and error states. */
+export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint = "", since = "", csv, details, type, footSpace = false, actions, dragHandle = false, children }: Props) {
   const [busy, setBusy] = useState(false);
   const [csvError, setCsvError] = useState<string | null>(null);
   const exportCsv = async () => {
-    if (!csv) return;
+    if (!csv || busy) return; // aria-disabled keeps the button focusable, so the click has to be guarded
     setBusy(true);
     setCsvError(null);
     try {
@@ -45,24 +63,53 @@ export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint
   return (
     <section className="widget-frame" aria-label={title}>
       <header className={dragHandle ? "widget-head widget-drag-handle" : "widget-head"}>
-        <h3 title={title}>{title}</h3>
-        {missing > 0 && <span className="chip chip-warn" title="Assets this widget used were deleted; it shows the rest.">{removedText(missing)}</span>}
-        {noMetric > 0 && <span className="chip chip-warn" title="These assets have no reading of this metric; they are left out.">{noMetricText(noMetric)}</span>}
+        {dragHandle && <span className="widget-grip" aria-hidden="true"><Icon name="grip" /></span>}
+        <h2 className="widget-title" title={title}>{title}</h2>
+        {(missing > 0 || noMetric > 0) && (
+          <span className="widget-chips">
+            {missing > 0 && <Chip title="Assets this widget used were deleted; it shows the rest." words={removedText(missing)} count={missing} />}
+            {noMetric > 0 && <Chip title="These assets have no reading of this metric; they are left out." words={noMetricText(noMetric)} count={noMetric} />}
+          </span>
+        )}
         <span className="spacer" />
-        {csv && <button type="button" onClick={exportCsv} disabled={busy} aria-label={`Download CSV for ${title}`}>CSV</button>}
-        {actions}
+        <span className="widget-tools">
+          {details && (
+            <button
+              type="button" className="icon-btn widget-details-btn" aria-label={`Details for ${title}`} aria-haspopup="dialog"
+              aria-disabled={loading ? true : undefined} onClick={() => { if (!loading) details(); }}
+            >
+              <Icon name="info" />
+            </button>
+          )}
+          {csv && (
+            <button type="button" className="icon-btn widget-csv-btn" aria-label={`Download CSV for ${title}`} aria-disabled={busy ? true : undefined} onClick={exportCsv}>
+              <Icon name="download" />
+            </button>
+          )}
+          {actions}
+        </span>
       </header>
       {csvError && <p className="error" role="alert">CSV export failed: {csvError}</p>}
-      {(since || hint) && (
-        <p className="widget-notes muted">
-          {since && <small>{since}</small>}
-          {hint && <small>{hint}</small>}
-        </p>
+      {loading ? (
+        <>
+          <WidgetSkeleton type={type} label={`Loading ${title}`} />
+          {footSpace && <p className="widget-foot" aria-hidden="true" />}
+        </>
+      ) : (
+        <>
+          <div className="widget-body">
+            {error && <p className="widget-error" role="alert"><Icon name="alert" />{error.message}</p>}
+            {children}
+          </div>
+          {(since || hint) && (
+            <p className="widget-foot">
+              {since && <small className="widget-since" title={since}>{since}</small>}
+              {since && hint && " · "}
+              {hint && <small className="widget-hint" title={hint}>{hint}</small>}
+            </p>
+          )}
+        </>
       )}
-      <div className="widget-body">
-        {error && <p className="error" role="alert">{error.message}</p>}
-        {loading ? <p className="muted">loading…</p> : children}
-      </div>
     </section>
   );
 }

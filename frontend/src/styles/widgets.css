@@ -51,6 +51,7 @@
   .widget-frame > .widget-sk { flex: 1; height: auto; padding: var(--widget-pad); }
   .widget-sk[data-type="timeseries"] .sk-block, .widget-sk[data-type="bar"] .sk-block { flex: 1; height: auto; min-height: 0; }
   .widget-sk[data-type="gauge"] .sk-block { height: auto; margin: 0 auto; aspect-ratio: 2 / 1; border-radius: 999px 999px 0 0; }
+  .widget-sk[data-type="gauge"] > span { text-align: center; } /* the figure's and the name's lines sit under the dial, as the real ones do */
 
   /* ===== Stat (Task 3): the figure, its unit, the asset name, and the age of a stale reading ===== */
   .stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

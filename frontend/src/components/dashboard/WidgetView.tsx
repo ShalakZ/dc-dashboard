@@ -21,6 +21,8 @@ export interface WidgetViewProps {
   csv?: boolean;
   /** Follow the dashboard's live stream when eligible (default true). The editor preview and edit mode turn it off. */
   live?: boolean;
+  /** Show the Details button and its panel (default true); the editor preview and edit mode turn it off. */
+  details?: boolean;
   actions?: ReactNode;
   dragHandle?: boolean;
 }
@@ -34,16 +36,19 @@ export function WidgetView({ widgetKey, type, title, config, dashboardRange, tim
   const data = query.data;
   const following = live && isLiveWidget(type, config, preset);
   useLiveRegistration(widgetKey, following ? pointIdsOf(data) : NO_IDS);
+  // Rolling energy and cost windows start at a whole hour, not at "now minus the range": say where. The config already tells whether the line will come, before the data does.
+  const sinceExpected = config.source !== "metric" && isRolling(preset);
   return (
     <WidgetFrame
       title={title}
+      type={type}
+      footSpace={sinceExpected}
       loading={query.isLoading}
       error={query.error}
       missing={data?.missing.length ?? 0}
       noMetric={data?.no_metric.length ?? 0}
-      // A stat and a table explain the markers next to their own figures; a chart has only its legend, which may be off.
-      hint={data && type !== "stat" && type !== "table" ? markerHint(flagsOf(data)) : ""}
-      // Rolling energy and cost windows start at a whole hour, not at "now minus the range": say where.
+      // The footer explains the markers for every type: a chart's legend may be off, and a figure carries only its mark.
+      hint={data ? markerHint(flagsOf(data)) : ""}
       since={data && data.source !== "metric" && isRolling(data.range.preset) ? sinceText(data.range.start, data.range.end, timezone) : ""}
       csv={csv ? { type, config, range: preset } : undefined}
       actions={actions}
