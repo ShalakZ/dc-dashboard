@@ -7,6 +7,7 @@ import { mockFetch } from "../../test/fetchMock";
 import { renderWithProviders } from "../../test/render";
 import { LiveValuesContext } from "./LiveValuesContext";
 import { WidgetEditor } from "./WidgetEditor";
+import { WidgetView } from "./WidgetView";
 
 vi.mock("echarts-for-react", () => ({ default: (props: { option: unknown }) => <pre data-testid="chart">{JSON.stringify(props.option)}</pre> }));
 
@@ -261,10 +262,36 @@ describe("the preview", () => {
     await userEvent.type(screen.getByLabelText("Title"), "Load");
     await userEvent.click(screen.getByRole("radio", { name: "LV Panel 1" }));
     await userEvent.type(screen.getByLabelText("Gauge maximum"), "250"); // "2", "25" and "250" are each a valid maximum
-    await screen.findByTestId("chart");
+    await screen.findByRole("meter"); // the gauge is an SVG arc with a meter role, not an ECharts canvas
     const gauges = previews(calls).filter((c) => (c.body as { type: string }).type === "gauge");
     expect(gauges).toHaveLength(1);
     expect((gauges[0].body as { config: { max: number } }).config.max).toBe(250);
+  });
+
+  it("is the real widget card of the dashboard, without its Details and CSV buttons, in a box that knows the type", async () => {
+    // The same stat config drawn once the way a dashboard draws it, once in the dialog's preview: the card has the same shape and text.
+    const [draft] = toDrafts([widget(1, "stat", { title: "Hall power", config: config({ aggregation: "last" }) })]);
+    mockFetch({ ...authed("operator"), "POST /api/widget-data": widgetDataRoute });
+    renderWithProviders(<WidgetView widgetKey="1" type="stat" title="Hall power" config={draft.config} dashboardRange="24h" timezone="Asia/Qatar" />);
+    const dashboardCard = await screen.findByRole("region", { name: "Hall power" });
+    await within(dashboardCard).findByText("10.50");
+    const shape = (card: HTMLElement) => {
+      const tools = card.querySelector(".widget-tools");
+      const parts = [card, ...card.querySelectorAll<HTMLElement>("*")].filter((el) => !tools?.contains(el));
+      return { tags: parts.map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].sort().join(".")}`), text: parts.map((el) => el.textContent).join("|") };
+    };
+    const inDashboard = shape(dashboardCard);
+    cleanup();
+    open(draft);
+    const previewCard = await screen.findByRole("region", { name: "Hall power" });
+    await within(previewCard).findByText("10.50");
+    expect(previewCard.closest(".widget-preview")).toHaveAttribute("data-type", "stat");
+    expect(previewCard.tagName).toBe("SECTION");
+    expect([...previewCard.classList]).toEqual([...dashboardCard.classList]);
+    expect(shape(previewCard)).toEqual(inDashboard);
+    expect(within(previewCard).queryByRole("button", { name: /^Details for/ })).not.toBeInTheDocument();
+    expect(within(previewCard).queryByRole("button", { name: /^Download CSV/ })).not.toBeInTheDocument();
+    expect(within(previewCard).getByRole("heading", { level: 2, name: "Hall power" })).toBeInTheDocument();
   });
 
   it("never asks the API about a form that is not valid yet, even when it just became valid", async () => {

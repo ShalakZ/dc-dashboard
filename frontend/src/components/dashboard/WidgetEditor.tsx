@@ -167,10 +167,11 @@ export function WidgetEditor({ initial, assets, metricAssets, dashboardRange, ti
             ) : !settledValid ? (
               <p className="muted">Preparing the preview…</p>
             ) : (
-              <div className="widget-preview">
+              // The real widget card, as a dashboard draws it, minus the buttons that act on a saved widget (Details, CSV) and the stream.
+              <div className="widget-preview" data-type={settledFields.type}>
                 <WidgetView
                   widgetKey={PREVIEW_KEY} type={settledFields.type} title={settledFields.title} config={settledFields.config}
-                  dashboardRange={dashboardRange} timezone={timezone} csv={false} live={false}
+                  dashboardRange={dashboardRange} timezone={timezone} csv={false} details={false} live={false}
                 />
               </div>
             )}

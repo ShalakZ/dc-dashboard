@@ -55,6 +55,12 @@ describe("DashboardGrid", () => {
     expect(props.layout.map(({ i, x, y, w, h }: Record<string, unknown>) => ({ i, x, y, w, h }))).toEqual(d.map(({ key, x, y, w, h }) => ({ i: key, x, y, w, h })));
   });
 
+  it("keeps the class the widget stylesheet dresses the library's handles and placeholder through, and the cell around each widget", () => {
+    const { container } = render(<DashboardGrid drafts={drafts()} onChange={vi.fn()} renderWidget={(w) => <p>{w.title}</p>} />);
+    expect(container.firstElementChild).toHaveClass("dash-grid-edit"); // styles/widgets.css: `.dash-grid-edit .react-grid-item > .react-resizable-handle` and the placeholder
+    expect(screen.getByText("Now").parentElement?.parentElement).toBe(screen.getByTestId("rgl")); // one wrapper div per widget, directly under the grid
+  });
+
   it("changes nothing on its own", () => {
     const { onChange } = show();
     expect(onChange).not.toHaveBeenCalled();

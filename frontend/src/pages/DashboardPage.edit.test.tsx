@@ -246,6 +246,27 @@ describe("editing", () => {
     expect((putBody(calls) as { widgets: unknown[] }).widgets).toEqual([]);
   });
 
+  it("dresses a card in edit mode with a grab header and two icon buttons, and no Details or CSV button", async () => {
+    open("operator");
+    await startEditing();
+    const card = within(screen.getByRole("region", { name: "Current power" }));
+    const edit = card.getByRole("button", { name: "Edit Current power" });
+    const del = card.getByRole("button", { name: "Delete Current power" });
+    expect(edit).toHaveClass("icon-btn");
+    expect(edit).toHaveAttribute("title", "Edit Current power");
+    expect(edit.querySelector("svg")).not.toBeNull(); // the pencil: no word on the button any more
+    expect(edit).toHaveTextContent("");
+    expect(del).toHaveClass("icon-btn", "trash-btn");
+    expect(del).toHaveTextContent("");
+    expect(edit.parentElement).toHaveClass("widget-actions"); // the grid's drag exclusion (`cancel`) names this class
+    expect(del.parentElement).toBe(edit.parentElement);
+    const head = screen.getByRole("region", { name: "Current power" }).querySelector("header")!;
+    expect(head).toHaveClass("widget-head", "widget-drag-handle");
+    expect(head.querySelector(".widget-grip")).not.toBeNull();
+    expect(card.queryByRole("button", { name: /^Details for/ })).not.toBeInTheDocument();
+    expect(card.queryByRole("button", { name: /^Download CSV/ })).not.toBeInTheDocument();
+  });
+
   it("saves a new name and range", async () => {
     const { calls } = open("operator");
     await startEditing();
@@ -294,6 +315,8 @@ describe("undo after a delete", () => {
 
   it("offers Undo after a delete and puts the widget back where it was", async () => {
     await openThree();
+    // Each loading widget draws its own skeleton region (role "status"): wait for those to go, so the Undo notice is the one status left.
+    await waitFor(() => expect(document.querySelector(".widget-sk")).toBeNull());
     await userEvent.click(screen.getByRole("button", { name: "Delete B" }));
     expect(screen.queryByRole("button", { name: "Edit B" })).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Removed “B”");
