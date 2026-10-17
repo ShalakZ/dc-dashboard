@@ -5,6 +5,7 @@ These tests do not touch the old layout's figures (`test_seed_history.py` pins t
 database: it checks the plan arithmetic, the batch writer's checks and the undo texts of `dcdash.seed.history`."""
 import asyncio
 import math
+import random
 import re
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -165,7 +166,20 @@ def _children(layout: pilot_hall.Layout, key: str) -> list[pilot_hall.Node]:
 
 
 def _feed_meters(layout: pilot_hall.Layout) -> list[pilot_hall.Meter]:
+    """Every meter on a feed: a counter, its kW twin, or a power-only feed's single kW meter."""
     return [meter for meter in layout.meters if meter.kind in ("counter", "power")]
+
+
+def _twins(layout: pilot_hall.Layout) -> list[pilot_hall.Meter]:
+    """The kW meters that sit next to a counter on the same feed."""
+    counted = {meter.node for meter in layout.meters if meter.kind == "counter"}
+    return [meter for meter in layout.meters if meter.kind == "power" and meter.node in counted]
+
+
+def _power_only(layout: pilot_hall.Layout) -> list[pilot_hall.Meter]:
+    """The feeds that report kW and have no energy counter."""
+    counted = {meter.node for meter in layout.meters if meter.kind == "counter"}
+    return [meter for meter in layout.meters if meter.kind == "power" and meter.node not in counted]
 
 
 def _panel_meters(layout: pilot_hall.Layout) -> list[pilot_hall.Meter]:
@@ -253,9 +267,10 @@ def test_the_variety_counts(layout):
             assert 0.15 <= rack.kw <= 0.45 and set(rack.feeds) <= metered
         else:
             assert 2.0 <= rack.kw <= 11.0
-    assert len(_feed_meters(layout)) == 217 and len(_panel_meters(layout)) == 16 and len(layout.meters) == 233
-    power = [meter for meter in layout.meters if meter.kind == "power"]
-    assert len(power) == 8
+    # 217 metered feeds: 209 with a kWh counter (and its kW twin) and 8 that report kW only
+    assert len(_feed_meters(layout)) == 426 and len(_panel_meters(layout)) == 16 and len(layout.meters) == 442
+    power = _power_only(layout)
+    assert len(power) == 8 and len(_twins(layout)) == 209
     for meter in power:
         assert meter.metric is Metric.ACTIVE_POWER_KW and meter.counter_base is None
         assert meter.node.startswith("h2/") and meter.node.endswith("/b") and _rack_of(layout, meter.node).status == "live"
@@ -264,8 +279,9 @@ def test_the_variety_counts(layout):
     assert all(2000 <= meter.counter_base <= 90000 and meter.counter_base == round(meter.counter_base, 3) for meter in counters)
     gap = [meter for meter in layout.meters if meter.gap]
     reset = [meter for meter in layout.meters if meter.resets]
-    assert len(gap) == 1 and len(reset) == 1 and gap[0].node != reset[0].node
-    for meter in gap + reset:
+    assert len(gap) == 2 and len(reset) == 1 and gap[0].node == gap[1].node != reset[0].node  # the gap feed's counter AND its twin
+    assert [meter.kind for meter in gap] == ["counter", "power"]
+    for meter in gap[:1] + reset:
         assert meter.kind == "counter" and meter.node.startswith("h1/") and meter.node.endswith("/a")
         assert _rack_of(layout, meter.node).status == "live"
     assert not gap[0].resets and not reset[0].gap
@@ -273,12 +289,33 @@ def test_the_variety_counts(layout):
 
 
 def test_the_meters_come_in_tree_order_feeds_first_then_the_panels(layout):
-    assert [meter.kind for meter in layout.meters[217:]] == ["voltage", "current"] * 8
-    assert [meter.node for meter in layout.meters[217::2]] == [f"elec/p{pod}{letter}" for pod in "1234" for letter in "ab"]
-    assert all(meter.node == layout.meters[217 + 2 * (index // 2)].node for index, meter in enumerate(layout.meters[217:]))
+    assert [meter.kind for meter in layout.meters[426:]] == ["voltage", "current"] * 8  # the 16 panel meters are the last ones
+    assert [meter.node for meter in layout.meters[426::2]] == [f"elec/p{pod}{letter}" for pod in "1234" for letter in "ab"]
+    assert all(meter.node == layout.meters[426 + 2 * (index // 2)].node for index, meter in enumerate(layout.meters[426:]))
+    assert list(layout.meters[:426]) == _feed_meters(layout)  # and the feed meters are exactly the first 426
     feed_nodes = [meter.node for meter in _feed_meters(layout)]
-    tree_order = [node.key for node in layout.nodes if node.role == "feed" and node.key in set(feed_nodes)]
-    assert feed_nodes == tree_order  # a rack's A before its B, racks in tree order
+    metered = set(feed_nodes)
+    tree_order = [node.key for node in layout.nodes if node.role == "feed" and node.key in metered]
+    assert list(dict.fromkeys(feed_nodes)) == tree_order  # a rack's A before its B, racks in tree order, a feed once per meter
+
+
+def test_every_counter_feed_has_a_kw_twin_right_after_its_counter(layout):
+    meters = list(layout.meters)
+    counters = [(index, meter) for index, meter in enumerate(meters) if meter.kind == "counter"]
+    assert len(counters) == 209
+    for index, counter in counters:
+        twin = meters[index + 1]
+        assert (twin.node, twin.metric, twin.kind) == (counter.node, Metric.ACTIVE_POWER_KW, "power")
+        assert twin.gap == counter.gap  # the hole is in both or in neither
+        assert twin.counter_base is None and twin.resets is False and twin.feeds == ()
+        assert twin.id == f"{counter.node}|active_power_kw" != counter.id
+    assert {meter for meter in _twins(layout)} == {meters[index + 1] for index, _ in counters}
+    # the 8 power-only feeds keep their one power meter: no counter before them, no twin after
+    for meter in _power_only(layout):
+        index = meters.index(meter)
+        assert meters[index - 1].node != meter.node and meters[index + 1].node != meter.node
+    assert Counter(meter.node for meter in _feed_meters(layout)).most_common(1)[0][1] == 2
+    assert sum(1 for count in Counter(meter.node for meter in _feed_meters(layout)).values() if count == 2) == 209
 
 
 def test_a_panel_current_follows_the_feeds_of_its_pod_and_letter(layout):
@@ -318,7 +355,7 @@ def test_a_rack_shares_its_load_between_the_feeds(layout):
 
 def test_meter_ids_are_unique(layout):
     ids = [meter.id for meter in layout.meters]
-    assert len(set(ids)) == len(ids) == 233
+    assert len(set(ids)) == len(ids) == 442
     assert pilot_hall.Meter("h1/r01/a", Metric.ENERGY_KWH, "counter").id == "h1/r01/a|energy_kwh"
 
 
@@ -355,8 +392,37 @@ def test_addresses_and_paths(layout):
     assert units == {"counter": "kWh", "power": "kW", "voltage": "V", "current": "A"}
 
 
-def test_one_day_fits_the_writer_buffer(layout):
-    assert len(layout.meters) * 288 < 90_000  # a UTC day at the 5-minute step stays under Writer(max_buffer=100_000)
+def test_no_batch_is_larger_than_the_batch_size(layout):
+    """A UTC day at the 5-minute step is up to 442 x 288 = 127,296 rows, over the Writer's buffer of 100,000: `_batches` cuts
+    each day into slices of at most BATCH_ROWS, and the slices of a day add up to that day's rows."""
+    assert pilot_hall.BATCH_ROWS == 50_000 and pilot_hall.BATCH_ROWS < 100_000  # under Writer(max_buffer=100_000)
+    assert len(layout.meters) * 288 > 100_000  # the reason for the slicing
+    plan = history.make_plan(NOW, ZONE, 2, raw_retention_days=30, step_seconds=300)
+    point_ids = {meter.id: index for index, meter in enumerate(layout.meters)}
+    by_day = dict(pilot_hall.readings_by_day(plan, layout))
+    days = {day: len(rows) for day, rows in by_day.items()}
+    assert max(days.values()) > pilot_hall.BATCH_ROWS  # a full day of this plan really is cut
+    batches = list(pilot_hall._batches(plan, layout, point_ids, len(days)))
+    assert all(0 < len(rows) <= pilot_hall.BATCH_ROWS for _day, rows in batches)
+    added: Counter[date] = Counter()
+    for day, rows in batches:
+        added[day] += len(rows)
+    assert dict(added) == days
+    assert [day for day, _ in batches] == sorted(day for day, _ in batches)  # the days stay in order, slices of a day side by side
+    assert len(batches) > len(days)
+    full = max(days, key=days.get)  # the slices of one day put together are that day's rows, in order, nothing lost or reordered
+    sliced = [(point, ts, value) for day, rows in batches if day == full for point, ts, value, _quality in rows]
+    assert sliced == [(point_ids[meter_id], ts, value) for meter_id, ts, value in by_day[full]]
+
+
+def test_a_small_day_stays_one_batch(layout, monkeypatch):
+    plan = history.make_plan(NOW, ZONE, 2, raw_retention_days=30, step_seconds=HOUR)
+    point_ids = {meter.id: index for index, meter in enumerate(layout.meters)}
+    days = [(day, len(rows)) for day, rows in pilot_hall.readings_by_day(plan, layout)]
+    assert max(count for _day, count in days) < pilot_hall.BATCH_ROWS
+    assert [(day, len(rows)) for day, rows in pilot_hall._batches(plan, layout, point_ids, len(days))] == days
+    monkeypatch.setattr(pilot_hall, "BATCH_ROWS", 1000)  # the constant is read when a batch is cut, so a test can shrink it
+    assert all(len(rows) <= 1000 for _day, rows in pilot_hall._batches(plan, layout, point_ids, len(days)))
 
 
 # ---- the pilot-hall series (task 3): pure, no database ---------------------------------------------------------------------
@@ -418,7 +484,7 @@ def test_the_gap_meter_has_no_samples_in_its_gap_and_the_others_do():
     in_gap = [ts for ts in plan.times() if plan.in_gap(ts)]
     assert len(in_gap) == 24  # six hours of quarter hours
     gap_meters = [meter for meter in layout.meters if meter.gap]
-    assert len(gap_meters) == 1
+    assert [meter.kind for meter in gap_meters] == ["counter", "power"]  # the gap feed's counter and its kW twin: both have the hole
     for meter in layout.meters:
         seen = [ts for ts, _ in _series(frames, meter.id)]
         if meter.gap:
@@ -460,7 +526,9 @@ def test_a_rack_is_about_the_sum_of_its_feeds_and_a_panel_follows_its_feeds(smal
     both = [a + b for a, b in zip(feed_power(f"{rack.node}/a"), feed_power(f"{rack.node}/b"))]
     zone = ZoneInfo(ZONE)
     expected = [rack.kw * pilot_hall.curve(history.base_kw(ts, zone)) for ts in times[:-1]]
-    assert sum(both) / len(both) == pytest.approx(sum(expected) / len(expected), rel=0.08)
+    # 12 %, not 8: each local day now has its own factor of 0.95 to 1.05 (`day_factor`) on top of the +-3 % jitter, and these 73
+    # samples cover four local days (two of them only in part), so the mean can sit up to 5 % off the flat curve
+    assert sum(both) / len(both) == pytest.approx(sum(expected) / len(expected), rel=0.12)
     assert sum(feed_power(f"{rack.node}/a")) / sum(both) == pytest.approx(rack.share_a, abs=0.02)
 
     # Panel 1B carries the Feed B of Hall 1 Pod A: plain counters only; its current is the power of those feeds
@@ -508,12 +576,92 @@ def test_daylight_saving_inside_the_range():
 
 def test_power_only_feeds_report_kw_in_range(small):
     plan, layout, frames = small
-    powers = [meter for meter in layout.meters if meter.kind == "power"]
+    powers = _power_only(layout)
     assert len(powers) == 8
     for meter in powers:
         values = [value for _, value in _series(frames, meter.id)]
         assert len(values) == plan.count and all(0.0 < value < 12.0 for value in values)
         assert all(round(value, 3) == value for value in values)
+
+
+def test_the_twin_reads_the_counters_power(small):
+    plan, layout, frames = small
+    step_hours = plan.step_seconds / 3600
+    tolerance = 0.0015 / step_hours + 0.0006  # the counter's two values and the twin are each rounded to 3 decimals
+    twins = _twins(layout)
+    assert len(twins) == 209
+    checked = 0
+    for twin in twins:
+        counter = f"{twin.node}|energy_kwh"
+        counts, powers = dict(_series(frames, counter)), dict(_series(frames, twin.id))
+        resets = next(meter for meter in layout.meters if meter.id == counter).resets
+        for ts, later in zip(plan.times(), plan.times()[1:]):
+            if ts not in counts or later not in counts or ts not in powers:
+                continue  # the hole of the gap feed
+            if resets and later == plan.reset_at:
+                continue  # the restart: that pair is a drop, not a rise
+            assert (counts[later] - counts[ts]) / step_hours == pytest.approx(powers[ts], abs=tolerance), (twin.node, ts)
+            checked += 1
+    assert checked > 209 * 60  # nearly every pair of every counter feed was compared
+    assert all(round(value, 3) == value for twin in twins for _ts, value in _series(frames, twin.id))
+
+
+def test_the_twin_has_the_same_gap():
+    plan = history.make_plan(NOW, ZONE, 3, raw_retention_days=30, step_seconds=900)
+    layout = pilot_hall.build_layout()
+    frames = list(pilot_hall.samples(plan, layout))
+    counter = next(meter for meter in layout.meters if meter.gap and meter.kind == "counter")
+    twin = next(meter for meter in layout.meters if meter.gap and meter.kind == "power")
+    assert twin.node == counter.node
+    in_gap = {ts for ts in plan.times() if plan.in_gap(ts)}
+    assert len(in_gap) == 24
+    seen_counter = {ts for ts, _ in _series(frames, counter.id)}
+    seen_twin = {ts for ts, _ in _series(frames, twin.id)}
+    assert seen_counter == seen_twin == set(plan.times()) - in_gap  # missing together, present together
+    # every other twin has all its samples, as its counter has
+    for other in _twins(layout):
+        if other is not twin:
+            assert len(_series(frames, other.id)) == plan.count, other.node
+
+
+def test_a_twin_draws_nothing(small):
+    """The twin takes the power its counter integrates and draws no random number, so the stream a panel voltage reads is the one
+    it read before the twins existed. These first five values were printed by the code as it was before the twins."""
+    plan, _layout, frames = small
+    assert plan.seed == history.DEFAULT_SEED
+    assert [value for _, value in _series(frames, "elec/p1a|voltage_v")][:5] == [397.3, 399.9, 401.5, 398.0, 399.9]
+    assert [value for _, value in _series(frames, "elec/p4b|voltage_v")][:5] == [397.6, 401.0, 401.1, 400.7, 398.0]
+
+
+def test_day_factor():
+    days = [date(2026, 10, 1) + timedelta(days=n) for n in range(60)]
+    factors = [pilot_hall.day_factor(day, 7) for day in days]
+    assert all(0.95 <= factor <= 1.05 for factor in factors)
+    assert factors == [pilot_hall.day_factor(day, 7) for day in days]  # the same day and seed give the same number, every time
+    assert len({round(factor, 6) for factor in factors}) > 55  # the days differ from each other
+    assert factors != [pilot_hall.day_factor(day, 8) for day in days]  # and the seed changes them
+    assert min(factors) < 0.97 and max(factors) > 1.03  # the whole range is used, not just a sliver
+    assert pilot_hall.day_factor(days[0], 7) == 0.95 + 0.10 * random.Random("7:2026-10-01").random()  # a string seed: same in every process
+
+
+def test_the_daily_totals_vary_but_stay_within_five_percent():
+    """Three whole local days of the whole layout's feed power: each day has its own factor, so the days are not alike."""
+    plan = history.make_plan(NOW + timedelta(days=1), ZONE, 4, raw_retention_days=30, step_seconds=3600)
+    layout = pilot_hall.build_layout()
+    zone = ZoneInfo(ZONE)
+    power_ids = [meter.id for meter in _twins(layout)]  # one kW per counter feed: the hall's draw without the 8 power-only feeds
+    per_day: dict[date, float] = defaultdict(float)
+    instants: Counter[date] = Counter()
+    for ts, values in pilot_hall.samples(plan, layout):
+        day = ts.astimezone(zone).date()
+        per_day[day] += sum(values[meter_id] for meter_id in power_ids if meter_id in values)
+        instants[day] += 1
+    whole = [day for day, count in sorted(instants.items()) if count == 24][:3]
+    assert len(whole) == 3
+    totals = [per_day[day] for day in whole]
+    spread = (max(totals) - min(totals)) / (sum(totals) / 3)
+    assert 0.005 < spread < 0.12  # more than a jitter's worth apart (so not "every day the same"), less than 0.95..1.05 can give
+    assert all(abs(total / (sum(totals) / 3) - 1) < 0.06 for total in totals)
 
 
 def test_the_series_is_deterministic_and_the_seed_changes_it(small):
@@ -716,13 +864,19 @@ async def test_a_run_creates_exactly_the_planned_rows(site, allowed, capsys):
     plan = history.make_plan(NOW, ZONE, 1, raw_retention_days=30, step_seconds=HOUR)
     frames = list(pilot_hall.samples(plan, layout))
     expected = sum(len(values) for _, values in frames)
-    assert plan.gap is None and expected == len(layout.meters) * plan.count == 233 * 25
+    assert plan.gap is None and expected == len(layout.meters) * plan.count == 442 * 25
 
     assert await seed_pilot(QUICK) == 0
     out = capsys.readouterr().out
     assert out.splitlines()[0] == "Seeded pilot hall created."
     assert "assets    370 (site 1, halls 2, pods 4, rows 8, racks 117, feeds 229, electrical 1, panels 8)" in out and len(layout.nodes) == 370
-    assert "points    233" in out and "interval  60 minutes" in out and f"readings  {expected}" in out
+    assert "points    442" in out and "interval  60 minutes" in out and f"readings  {expected}" in out
+    # the report names the kind of EVERY role (the registry is empty here, so each is its first preferred name, unregistered)
+    assert (
+        '  kinds     site "Site", hall "Data hall", pod "Room", row "Row", rack "Rack", feed "Circuit", electrical "Room", '
+        'panel "Panel"\n'
+    ) in out
+    assert out.index("  points    442") < out.index("  kinds     ") < out.index("  range     ")
     assert "range     " in out and f" in {ZONE}" in out and "clamped" not in out
     assert re.search(r"took \d+(\.\d+)? s writing, \d+(\.\d+)? s refreshing the rollups", out)
     assert "Set a site rate in Tariffs to see costs." in out and f"To undo it: {pilot_hall.UNDO}." in out
@@ -801,6 +955,13 @@ async def test_totals_do_not_double_count(site, allowed):
     # Hall 1 is exact; Hall 2 holds the power-only feeds the engine has to estimate, and the Site above it shows the same "~"
     assert total("h1")["estimated"] is False
     assert total("h2")["estimated"] is True and total("site")["estimated"] is True
+    # The kW twins add no energy: where a feed has a counter AND a kW twin, the counter wins (so the figure is exact, not "~"), and
+    # only the 8 power-only feeds are estimated.
+    estimated = {meter.node for meter in layout.meters if meter.kind == "power" and total(meter.node)["estimated"]}
+    assert estimated == {meter.node for meter in _power_only(layout)} and len(estimated) == 8
+    twins = _twins(layout)
+    assert len(twins) == 209 and all(total(twin.node) is not None and total(twin.node)["estimated"] is False for twin in twins)
+    assert all(total(rack.node)["estimated"] is False for rack in layout.racks if rack.hall == 1 and rack.status != "free")
 
 
 async def test_a_feed_matches_the_generator(site, allowed):
@@ -971,8 +1132,9 @@ async def test_the_dry_run_says_what_it_would_make(site, capsys):
     by_status = Counter(rack.status for rack in layout.racks)
     gap_meter = next(meter for meter in layout.meters if meter.gap)
     reset_meter = next(meter for meter in layout.meters if meter.resets)
-    power_only = [meter for meter in layout.meters if meter.kind == "power"]
-    expected = len(layout.meters) * plan.count - int((plan.gap[1] - plan.gap[0]) / plan.step)
+    power_only = _power_only(layout)
+    hole = int((plan.gap[1] - plan.gap[0]) / plan.step)
+    expected = len(layout.meters) * plan.count - 2 * hole  # the gap feed's counter and its kW twin both miss the hole
 
     assert f'{DRY}source   "seeded-pilot-hall" (simulator, DISABLED: nothing ever polls it)' in out
     assert f"{DRY}assets   370 (site 1, halls 2, pods 4, rows 8, racks 117, feeds 229, electrical 1, panels 8)" in out
@@ -981,14 +1143,17 @@ async def test_the_dry_run_says_what_it_would_make(site, capsys):
     assert f"{DRY}racks    117 ({by_status['live']} live, {by_status['idle']} idle, {by_status['single']} single-feed" in out
     assert (by_status["live"], by_status["idle"], by_status["single"], by_status["free"]) == (100, 6, 5, 6)
     assert f"{by_status['free']} free" in out
-    assert f"{DRY}points   233, each mapped with an interval of 3600 seconds: 209 energy counters" in out
-    assert "8 power-only feeds" in out and "8 panel voltages" in out and "8 panel currents" in out
+    assert (
+        f"{DRY}points   442, each mapped with an interval of 3600 seconds: 209 energy counters (kWh) each with a power point (kW), "
+        "8 power-only feeds (kW), 8 panel voltages (V) and 8 panel currents (A)\n"
+    ) in out
     assert (
         f"{DRY}range    {history._local(plan.start, ZONE)} to {history._local(plan.end, ZONE)} in {ZONE} "
         f"({plan.start:%Y-%m-%d %H:%M} to {plan.end:%Y-%m-%d %H:%M} UTC), one sample every 60 minutes"
     ) in out
     assert "clamped" not in out  # --days replaces the range: nothing is cut back
-    assert re.search(rf"{DRY}readings {expected} \(", out) and expected == 233 * 73 - 6
+    assert re.search(rf"{DRY}readings {expected} \(", out) and expected == 442 * 73 - 12 and hole == 6
+    assert f"({len(layout.meters)} points x {plan.count} samples, minus {2 * hole} in the gap)" in out
     assert len(power_only) == 8 and all(meter.node.startswith("h2/") for meter in power_only)
     assert f"{DRY}power    8 feeds (all in Hall 2) report kW instead of a kWh counter" in out
     assert (
@@ -1021,7 +1186,7 @@ async def test_the_dry_run_estimate_equals_the_real_count(site, capsys, zone, ar
     printed = re.search(rf"{DRY}readings (\d+) ", out)
     assert printed is not None and int(printed.group(1)) == real
     assert (plan.gap is None) == ("gap      none (the range holds no complete day)" in out)
-    assert real == 233 * plan.count - (0 if plan.gap is None else int((plan.gap[1] - plan.gap[0]) / plan.step))
+    assert real == 442 * plan.count - (0 if plan.gap is None else 2 * int((plan.gap[1] - plan.gap[0]) / plan.step))
 
 
 async def test_the_dry_run_works_without_a_database(monkeypatch, capsys):
@@ -1036,7 +1201,7 @@ async def test_the_dry_run_works_without_a_database(monkeypatch, capsys):
         f"using the time zone {history._default_timezone()})"
     ) in out
     assert f'{DRY}assets   370 (' in out and f'{DRY}kinds    hall "Data hall"\n' in out  # the plan is still shown, kinds by preference
-    assert f"{DRY}points   233, " in out and f"{DRY}readings " in out
+    assert f"{DRY}points   442, " in out and f"{DRY}readings " in out
     assert WARNING not in out and "would be refused" not in out  # nothing is claimed about the registry or about leftovers
     assert out.splitlines()[-2] == f"To do it, run again with --yes and {history.SWITCH}=1 in the environment."
 
@@ -1191,3 +1356,90 @@ async def test_a_site_zone_billing_cannot_use_prints_the_warning(site, allowed, 
     out = capsys.readouterr().out
     assert "Billing cannot use this site time zone" in out and " in Asia/Kolkata" in out
     assert out.splitlines()[0] == "Seeded pilot hall created."
+
+
+async def test_the_dry_run_warns_about_a_site_zone_billing_cannot_use(site, allowed, capsys):
+    warning = "warning   Billing cannot use this site time zone"
+    await set_zone(site, "Asia/Kolkata")  # UTC+5:30: Billing works in whole hours
+    out = await dry_output(capsys, QUICK)
+    lines = out.splitlines()
+    note = next(line for line in lines if warning in line)
+    assert note.startswith("  warning   Billing cannot use this site time zone (") and note.endswith(
+        "); the figures will not show until it is changed"
+    )
+    assert "Asia/Kolkata" in note and "would be refused" not in out  # a warning, not a refusal: the dry run ends as always
+    assert lines.index(note) > max(index for index, line in enumerate(lines) if line.startswith(DRY))  # after the plan lines
+    assert lines[-2].startswith("To do it, run again with --yes")
+    assert await seed_pilot(QUICK) == 0  # the real run's report prints the very same line
+    assert [line for line in capsys.readouterr().out.splitlines() if warning in line] == [note]
+    await site.execute("DELETE FROM sources; DELETE FROM assets")
+    await set_zone(site, ZONE)
+    assert warning not in await dry_output(capsys, QUICK)  # a zone of whole hours: no warning
+
+
+def test_the_kinds_line_names_every_role_and_the_fallback():
+    basic = {"site", "room", "row", "rack", "circuit", "panel"}
+    assert pilot_hall._kinds_summary(pilot_hall.choose_kinds(basic)) == (
+        'site "Site", hall "Room" (preferred "Data hall"), pod "Room", row "Row", rack "Rack", feed "Circuit", electrical "Room", '
+        'panel "Panel"'
+    )
+    assert pilot_hall._kinds_summary(pilot_hall.choose_kinds(basic | {"data hall"})) == (
+        'site "Site", hall "Data hall", pod "Room", row "Row", rack "Rack", feed "Circuit", electrical "Room", panel "Panel"'
+    )
+    assert pilot_hall._kinds_summary(pilot_hall.choose_kinds(set())).count("(preferred") == 0  # unregistered: its first name, no fallback
+
+
+async def test_the_default_interval_is_run_against_the_database(site, allowed, capsys):
+    layout = pilot_hall.build_layout()
+    plan = history.make_plan(NOW, ZONE, 1, raw_retention_days=30, step_seconds=900)
+    expected = sum(len(values) for _ts, values in pilot_hall.samples(plan, layout))
+    assert await seed_pilot(["--days", "1"]) == 0  # no --interval-minutes: the default of 15 minutes
+    out = capsys.readouterr().out
+    assert "interval  15 minutes" in out and f"readings  {expected}" in out
+    assert {row["interval_seconds"] for row in await site.fetch("SELECT interval_seconds FROM mappings")} == {900}
+    assert await site.fetchval("SELECT count(*) FROM mappings") == 442
+    assert await site.fetchval("SELECT count(*) FROM readings") == expected
+    per_point = {row["n"] for row in await site.fetch("SELECT count(*) AS n FROM readings GROUP BY point_id")}
+    assert per_point == {plan.count}  # every point holds a sample at every quarter hour of the range (no gap in a single day)
+
+
+async def test_a_day_cut_into_small_batches_still_writes_every_reading(site, allowed, monkeypatch, capsys):
+    monkeypatch.setattr(pilot_hall, "BATCH_ROWS", 1000)
+    layout = pilot_hall.build_layout()
+    plan = history.make_plan(NOW, ZONE, 1, raw_retention_days=30, step_seconds=HOUR)
+    expected = sum(len(values) for _ts, values in pilot_hall.samples(plan, layout))
+    sizes: list[int] = []
+    real = history.write_batches
+
+    async def watching(pool, batches):
+        def counted():
+            for day, rows in batches:
+                sizes.append(len(rows))
+                yield day, rows
+
+        return await real(pool, counted())
+
+    monkeypatch.setattr(history, "write_batches", watching)
+    assert await seed_pilot(QUICK) == 0
+    assert f"readings  {expected}" in capsys.readouterr().out
+    assert len(sizes) > 10 and max(sizes) == 1000 and sum(sizes) == expected  # a day of 11,050 rows became 1000-row slices
+    assert await site.fetchval("SELECT count(*) FROM readings") == expected
+
+
+async def test_slices_still_report_days_not_slices(site, allowed, monkeypatch, capsys):
+    monkeypatch.setattr(pilot_hall, "BATCH_ROWS", 500)  # many slices per day; the progress lines must still count days
+
+    async def drains(pool, batches):
+        return sum(len(rows) for _day, rows in batches)
+
+    async def no_refresh(pool, plan):
+        return None
+
+    monkeypatch.setattr(history, "write_batches", drains)
+    monkeypatch.setattr(history, "refresh_rollups", no_refresh)
+    plan = history.make_plan(NOW, ZONE, 11, raw_retention_days=30, step_seconds=HOUR)
+    days = len({ts.date() for ts in plan.times()})
+    assert days == 12
+    assert await seed_pilot(["--days", "11", "--interval-minutes", "60"]) == 0
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("written ")]
+    assert lines == [f"written 5 of {days} days", f"written 10 of {days} days"]

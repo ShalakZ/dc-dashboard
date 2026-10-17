@@ -22,6 +22,16 @@ Variety, with the counts fixed and the choice of racks moved by the seed: 6 free
 6 idle racks (a fraction of a kW), 5 single-feed racks (only Feed A, carrying everything) and the rest live (2 to 11 kW). A live
 rack shares its load about half and half between the feeds. Eight of the Hall 2 B feeds report power instead of an energy counter
 (so the engine has to estimate them), one Hall 1 Feed A counter has a gap in its samples and another one resets once.
+
+Every feed that has an energy counter also reports its power: a second meter on the same feed, the counter's "kW twin" (an
+`active_power_kw` point next to the `energy_kwh` one). It reads the very power the counter integrates and draws no random number of
+its own, and a gap applies to both of them. The engine takes the energy counter over the power mapping of the same asset, so no
+energy figure changes and the 8 power-only feeds are still the only estimated ones; what the twins give is a live power that adds
+up at every level (rack, row, pod, hall, Site) and a kW trend on every feed. That makes 442 points: 209 counters, their 209 twins,
+8 power-only feeds and 16 panel meters.
+
+The load of every feed also moves with the local day (`day_factor`, 0.95 to 1.05), so a month of Billing does not read as one day
+repeated.
 """
 import argparse
 import asyncio
@@ -85,10 +95,10 @@ class Rack:
 class Meter:
     node: str
     metric: Metric
-    kind: str  # "counter" | "power" | "voltage" | "current"
-    counter_base: float | None = None  # where an energy counter starts
-    resets: bool = False  # the counter drops back to near zero once
-    gap: bool = False  # the counter has a hole in its samples
+    kind: str  # "counter" | "power" | "voltage" | "current"; a "power" meter is a power-only feed OR the kW twin of a counter
+    counter_base: float | None = None  # where an energy counter starts (never set on a twin)
+    resets: bool = False  # the counter drops back to near zero once (never set on a twin)
+    gap: bool = False  # the counter has a hole in its samples; its kW twin has the same flag, so the hole is in both
     feeds: tuple[str, ...] = ()  # for a current meter: the feed nodes whose power it carries
 
     @property
@@ -101,7 +111,9 @@ class Layout:
     seed: int
     nodes: tuple[Node, ...]  # parents before children, depth first
     racks: tuple[Rack, ...]  # in tree order
-    meters: tuple[Meter, ...]  # the feeds' meters in tree order, then the panels' (voltage, current)
+    # the feeds' meters in tree order (a counter is followed at once by its kW twin on the same node; a power-only feed has one
+    # meter), 426 of them, then the panels' (voltage, current), 16: 442 in all
+    meters: tuple[Meter, ...]
 
 
 def build_layout(seed: int = history.DEFAULT_SEED) -> Layout:
@@ -156,9 +168,9 @@ def build_layout(seed: int = history.DEFAULT_SEED) -> Layout:
                 meters.append(Meter(feed, Metric.ACTIVE_POWER_KW, "power"))
             else:
                 base = round(rng.uniform(2000, 90000), 3)
-                meters.append(
-                    Meter(feed, Metric.ENERGY_KWH, "counter", base, resets=is_a and index == reset_at, gap=is_a and index == gap_at)
-                )
+                has_gap = is_a and index == gap_at
+                meters.append(Meter(feed, Metric.ENERGY_KWH, "counter", base, resets=is_a and index == reset_at, gap=has_gap))
+                meters.append(Meter(feed, Metric.ACTIVE_POWER_KW, "power", gap=has_gap))  # its kW twin: draws no random number
 
     metered = {meter.node for meter in meters}
     for hall in (1, 2):
@@ -255,30 +267,47 @@ def curve(load_kw: float) -> float:
     return 0.86 + 0.14 * (load_kw - 20) / 60
 
 
+def day_factor(day: date, seed: int) -> float:
+    """How busy a local day is compared with the curve alone, 0.95 to 1.05: a made-up but repeatable number per day and seed, so the
+    days of a month are not copies of each other. A string seed is the same in every process (an int-and-date hash would not be)."""
+    return 0.95 + 0.10 * random.Random(f"{seed}:{day.isoformat()}").random()
+
+
 def samples(plan: history.Plan, layout: Layout) -> Iterator[tuple[datetime, dict[str, float]]]:
     """One item per instant of the plan: (instant, {meter id: value}) for the meters that are sampled at that instant.
 
     A counter is a running sum of the power: value[i+1] = value[i] + power[i] x step. The jitter is on the power, so a counter
     never ticks down by chance; the one reset drops it to near zero once, and the gap meter keeps counting through its hole without
-    emitting. The random draws are the same with or without a gap: one per feed meter per instant, then one per panel voltage."""
+    emitting. The power of a feed is its rack's load x its share x the daily curve x the factor of the local day x the jitter.
+    The random draws are the same with or without a gap: one per feed (a counter or a power-only meter) per instant, then one per
+    panel voltage. A kW twin draws nothing: it reads the power its counter has just integrated (and has the counter's hole)."""
     rng = random.Random(plan.seed)
     zone = ZoneInfo(plan.tz)
     step_hours = plan.step_seconds / 3600
     feed_of = {feed: (rack, feed[-1]) for rack in layout.racks for feed in rack.feeds}  # feed key -> (its rack, "a" or "b")
     counters = {meter.id: meter.counter_base for meter in layout.meters if meter.kind == "counter"}
+    day_factors: dict[date, float] = {}
     for index, ts in enumerate(plan.times()):
         factor = curve(history.base_kw(ts, zone))
+        local_day = ts.astimezone(zone).date()
+        if local_day not in day_factors:
+            day_factors[local_day] = day_factor(local_day, plan.seed)
+        factor *= day_factors[local_day]
         values: dict[str, float] = {}
         power_of: dict[str, float] = {}  # the true power of each feed now, also of the one that is not sampled
         volts_of: dict[str, float] = {}  # the voltage sample of each panel now, for its current
         for meter in layout.meters:
             if meter.kind in ("counter", "power"):
-                rack, letter = feed_of[meter.node]
-                share = rack.share_a if letter == "a" else 1 - rack.share_a
-                power = rack.kw * share * factor * (1 + rng.uniform(-history.JITTER, history.JITTER))
-                power_of[meter.node] = power
+                if meter.kind == "power" and meter.node in power_of:  # a kW twin: the power its counter integrates, no new draw
+                    power = power_of[meter.node]
+                else:
+                    rack, letter = feed_of[meter.node]
+                    share = rack.share_a if letter == "a" else 1 - rack.share_a
+                    power = rack.kw * share * factor * (1 + rng.uniform(-history.JITTER, history.JITTER))
+                    power_of[meter.node] = power
                 if meter.kind == "power":
-                    values[meter.id] = round(power, 3)
+                    if not (meter.gap and plan.in_gap(ts)):
+                        values[meter.id] = round(power, 3)
                     continue
                 if meter.resets and index == plan.reset_index:
                     counters[meter.id] = rng.uniform(0.1, 1.0)  # the meter restarted
@@ -412,22 +441,49 @@ async def create_rows(
 # ---- the command ----------------------------------------------------------------------------------------------------------
 
 PROGRESS_EVERY_DAYS = 5
+BATCH_ROWS = 50_000  # a batch is at most this many rows: a UTC day at the 5-minute step is up to 442 x 288 = 127,296, and the
+# Writer drops what does not fit its buffer of 100,000
 
 
 def _batches(
     plan: history.Plan, layout: Layout, point_ids: dict[str, int], total_days: int
 ) -> Iterator[tuple[date, list[history.Row]]]:
-    """The UTC days as `history.write_batches` takes them, with meter ids turned into point ids. The writer asks for the next day
-    only after it has written the one before, so a progress line printed when a day is asked for (or when the days run out) says
-    how many days are really in the database."""
+    """The UTC days as `history.write_batches` takes them, with meter ids turned into point ids, each day cut into slices of at
+    most BATCH_ROWS rows (a small day is one batch). The writer asks for the next batch only after it has written the one before,
+    so a progress line printed when a day is asked for (or when the days run out) says how many days are really in the database;
+    it counts days, never slices."""
     done = 0
     for day, rows in readings_by_day(plan, layout):
         if done and done % PROGRESS_EVERY_DAYS == 0:
             print(f"written {done} of {total_days} days", flush=True)
-        yield day, [(point_ids[meter_id], ts, value, GOOD) for meter_id, ts, value in rows]
+        for start in range(0, len(rows), BATCH_ROWS):
+            yield day, [(point_ids[meter_id], ts, value, GOOD) for meter_id, ts, value in rows[start:start + BATCH_ROWS]]
         done += 1
     if done and done % PROGRESS_EVERY_DAYS == 0:
         print(f"written {done} of {total_days} days", flush=True)
+
+
+def _power_only(layout: Layout) -> list[Meter]:
+    """The feeds that report kW and have no energy counter (a kW twin sits on a node that has a counter)."""
+    counted = {meter.node for meter in layout.meters if meter.kind == "counter"}
+    return [meter for meter in layout.meters if meter.kind == "power" and meter.node not in counted]
+
+
+def _kinds_summary(kinds: dict[str, KindChoice]) -> str:
+    """Every role with the kind its assets get, in the order of `choose_kinds`; a role that fell back says what it wanted."""
+    return ", ".join(
+        f'{role} "{choice.name}"' + (f' (preferred "{choice.preferred}")' if choice.name != choice.preferred else "")
+        for role, choice in kinds.items()
+    )
+
+
+def _zone_warning(tz: str) -> str | None:
+    """The sentence the dry run and the report print when Billing cannot work in the site's time zone, else None."""
+    try:
+        validate_whole_hour_zone(tz)
+    except ValueError as exc:
+        return f"warning   Billing cannot use this site time zone ({exc}); the figures will not show until it is changed"
+    return None
 
 
 def _by_role(layout: Layout) -> str:
@@ -461,8 +517,8 @@ def _layout_lines(layout: Layout, kinds: dict[str, KindChoice], known: bool, ste
     )
     lines.append(
         f"points   {len(layout.meters)}, each mapped with an interval of {step_seconds} seconds: {by_kind['counter']} energy "
-        f"counters (kWh), {by_kind['power']} power-only feeds (kW), {by_kind['voltage']} panel voltages (V) and "
-        f"{by_kind['current']} panel currents (A)"
+        f"counters (kWh) each with a power point (kW), {len(_power_only(layout))} power-only feeds (kW), {by_kind['voltage']} "
+        f"panel voltages (V) and {by_kind['current']} panel currents (A)"
     )
     return lines
 
@@ -471,6 +527,7 @@ def _plan_lines(layout: Layout, plan: history.Plan) -> list[str]:
     """What the dry run says about the range and the series. The reading count is arithmetic: the series is never generated."""
     tz = plan.tz
     gap_instants = 0 if plan.gap is None else int((plan.gap[1] - plan.gap[0]) / plan.step)
+    gap_missing = gap_instants * sum(1 for meter in layout.meters if meter.gap)  # the gap feed's counter AND its kW twin
     lines = [
         f"range    {history._local(plan.start, tz)} to {history._local(plan.end, tz)} in {tz}"
         + ("" if tz == "UTC" else f" ({plan.start:%Y-%m-%d %H:%M} to {plan.end:%Y-%m-%d %H:%M} UTC)")
@@ -482,10 +539,10 @@ def _plan_lines(layout: Layout, plan: history.Plan) -> list[str]:
             f"{plan.raw_retention_days} days, so it starts no earlier than {plan.raw_retention_days - 1} days back"
         )
     lines.append(
-        f"readings {len(layout.meters) * plan.count - gap_instants} ({len(layout.meters)} points x {plan.count} samples"
-        + (f", minus {gap_instants} in the gap)" if gap_instants else ")")
+        f"readings {len(layout.meters) * plan.count - gap_missing} ({len(layout.meters)} points x {plan.count} samples"
+        + (f", minus {gap_missing} in the gap)" if gap_missing else ")")
     )
-    power_only = [meter for meter in layout.meters if meter.kind == "power"]
+    power_only = _power_only(layout)
     if power_only:
         hall_of = {feed: rack.hall for rack in layout.racks for feed in rack.feeds}
         halls = ", ".join(f"Hall {hall}" for hall in sorted({hall_of[meter.node] for meter in power_only}))
@@ -536,6 +593,9 @@ async def dry_run(args: argparse.Namespace) -> int:
         plan = history.make_plan(history._now(), tz, args.days, args.seed, retention, step_seconds=step_seconds)
         for line in _plan_lines(layout, plan):
             print(f"  would create  {line}")
+        zone_warning = _zone_warning(tz)  # known now, not after ~650,000 readings are written
+        if zone_warning is not None:
+            print(f"  {zone_warning}")
         if pool is not None:
             problem = await history.pending_drop(pool, plan)
     except history.Refused as refused:
@@ -598,6 +658,7 @@ async def seed(args: argparse.Namespace) -> int:
         print(f'  root      "{ROOT_NAME}" id {created.root_id}')
         print(f"  assets    {len(layout.nodes)} ({_by_role(layout)})")
         print(f"  points    {len(layout.meters)}")
+        print(f"  kinds     {_kinds_summary(kinds)}")
         print(
             f"  range     {history._local(plan.start, tz)} to {history._local(plan.end, tz)} in {tz}"
             + (" (clamped to the raw retention)" if plan.clamped else "")
@@ -608,10 +669,9 @@ async def seed(args: argparse.Namespace) -> int:
                 print(f'  kind "{choice.name}" for {role} is not in the Asset kinds list (preferred "{choice.preferred}")')
         print(f"  readings  {readings}")
         print(f"  took {written - started:.1f} s writing, {refreshed - written:.1f} s refreshing the rollups")
-        try:
-            validate_whole_hour_zone(tz)
-        except ValueError as exc:
-            print(f"  warning   Billing cannot use this site time zone ({exc}); the figures will not show until it is changed")
+        zone_warning = _zone_warning(tz)
+        if zone_warning is not None:
+            print(f"  {zone_warning}")
         print("  Set a site rate in Tariffs to see costs.")
         print(f"To undo it: {UNDO}.")
         return 0
