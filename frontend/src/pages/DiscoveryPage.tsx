@@ -3,7 +3,7 @@ import {
   type Edge, type Node, type NodeMouseHandler, type OnConnectEnd, type OnNodeDrag,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FocusEvent } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
 import { keys, useAssetKinds, useAssets, useGraph, useInvalidate, useRemoveDiscoveredSources, useSite, useTidyLayout } from "../api/queries";
@@ -20,9 +20,10 @@ import { GraphContextMenu } from "../components/graph/GraphContextMenu";
 import { GraphMiniMap } from "../components/graph/GraphMiniMap";
 import { NewAssetDialog } from "../components/graph/NewAssetDialog";
 import { AddConnectionLine, nodeTypes } from "../components/graph/nodes";
+import { PointValueTip } from "../components/graph/PointValueTip";
 import { ReviewDialog, type InitialTarget } from "../components/graph/ReviewDialog";
+import { ShortcutsBubble } from "../components/graph/ShortcutsBubble";
 import { SourcePanel } from "../components/graph/SourcePanel";
-import { InfoTip } from "../components/InfoTip";
 import { PageHeader } from "../components/PageHeader";
 import type { RowAction } from "../components/RowActions";
 import { CanvasSkeleton, GraphBarSpace } from "../components/Skeleton";
@@ -36,6 +37,7 @@ import { useGraphHighlight } from "../hooks/useGraphHighlight";
 import { useGraphNav } from "../hooks/useGraphNav";
 import { useMappingActions, type MappedInfo } from "../hooks/useMappingActions";
 import { reducedMotion, useReducedMotion } from "../hooks/useReducedMotion";
+import { useValueTip } from "../hooks/useValueTip";
 import { afterPaint } from "../lib/afterPaint";
 import { dropPayload, mappableClusters, multiPointDrop, pickDropTarget, takenMetrics, type DropPayload } from "../lib/drop";
 import {
@@ -52,33 +54,16 @@ import {
 } from "../lib/graphPrefs";
 import { reuseEdges, reuseNodes } from "../lib/graphReuse";
 import {
-  canCollapse, canExpand, changeNote, collapseAll, collapseTargets, EXPAND_NODE_BUDGET, expandAll, expandNote, expandTargets, graphSummary, selectionStates,
+  canCollapse, canExpand, changeNote, collapseAll, collapseTargets, EXPAND_NODE_BUDGET, expandAll, expandNote, expandTargets, graphCounts, graphSummary, selectionStates,
   type Change,
 } from "../lib/graphView";
 import { mappedRefs, mappedSourcesByAsset, mappingsWhat } from "../lib/mappedRefs";
 
-/** One line under the title; the rest of what the canvas can do is in the tip beside it (the same line in the loading branch, so nothing moves when the graph arrives). */
-const HINT = "Dashed: discovered. Solid: assets. Drag a group onto an asset or press New asset…";
-
-function HintLine() {
-  return (
-    <>
-      {HINT}{" "}
-      <InfoTip label="What can I do on the canvas?">
-        <ul className="graph-hint-list">
-          <li>Dragging a node takes its open children along. Alt or Option moves it alone.</li>
-          <li>Shift-drag selects. Ctrl or Cmd adds.</li>
-          <li>Ctrl+K finds while the canvas has focus.</li>
-          <li>Right-click or Shift+F10 opens the actions.</li>
-          <li>Arrow keys move between nodes. Enter opens or closes one.</li>
-          <li>Ctrl+Z undoes the last mapping change for 10 seconds.</li>
-          <li>Hovering or selecting lights the path.</li>
-          <li>Click empty space or press Escape to clear a selection.</li>
-        </ul>
-      </InfoTip>
-    </>
-  );
-}
+/**
+ * The one sentence under the title, the same in all three states of the page (loading, empty, loaded) so the header never changes height. The rest of what the
+ * canvas can do is in the shortcuts bubble beside the bar's other page controls.
+ */
+const SUB = "Dashed means discovered, solid means assets. Drag a group onto an asset to map it.";
 
 /** A node's box for the camera: its measured size, else the width of a node and the height of a short one (a node not yet measured). */
 const NODE_W = 220;
@@ -161,6 +146,19 @@ function groupOfNode(model: GraphModel, clusterId: string): Group | undefined {
   return undefined;
 }
 
+/** The mapping a point node stands for: null for any other node and for a point that is not mapped (nothing to show a value of). */
+const mappingOf = (node: Pick<Node, "type" | "data">): number | null =>
+  node.type === "point" ? (node.data as PointNodeData).point.mapping_id : null;
+
+/** The highlight's own rule (`useGraphHighlight`) for "the keyboard put the focus here": a click on a node's button is not it. A browser that cannot answer says no. */
+function keyboardFocus(target: Element): boolean {
+  try {
+    return target.matches(":focus-visible");
+  } catch {
+    return false;
+  }
+}
+
 const NO_MAPPED: ReadonlyMap<number, MappedSource[]> = new Map();
 
 /** The New asset form lists the assets and offers their kinds, so it needs both views as well as the right to make one (the roles editor only offers the pair; the server does not enforce it). */
@@ -178,9 +176,12 @@ interface SourceFacts { seen: string; groups: number; removable: boolean }
  * The callbacks a node gets in its data (it renders a button only for a callback it has). Sources and clusters toggle and
  * sources open their details;
  * for someone who may accept scan results (`canAccept`), a cluster with something left to map offers both mapping buttons and an
- * unmapped point offers "Map", and a source with at least one group to turn into an asset offers "Create assets" (`facts.groups`, 0 for
- * a role that may not accept). A source offers "Remove" only when it is removable and the person may change the graph (`canRemove`).
+ * unmapped point offers "Map", and a source with at least one group to turn into an asset gets "Create assets" (`facts.groups`, 0 for
+ * a role that may not accept). A source gets "Remove" only when it is removable and the person may change the graph (`canRemove`).
  * The conditions mirror what `dropPayload` accepts, so a button is never shown for something that could not be mapped.
+ *
+ * W12c: a source node draws neither of those two; they are items of its menu, so a source gets the callback `onMenu` (the Source actions button) exactly when it has
+ * at least one of them.
  *
  * For a role with assets.edit (`canEdit`), a mapped point and a group with something mapped also get the menu button and the unmap and move
  * callbacks (W12a), and an asset node gets the sources that have mappings on it (`mappedBy`) with the callback that takes all of one source's off.
@@ -199,10 +200,15 @@ function nodeData(
   if (node.type === "source") {
     const data = node.data as SourceNodeData;
     const fact = facts.get(data.source.id);
+    const creates = fact !== undefined && fact.groups > 0;
+    const removes = canRemove && fact?.removable === true;
     return {
       ...data, onToggle, onSelect, seen: fact?.seen,
-      ...(fact && fact.groups > 0 ? { onCreateAssets, groups: fact.groups } : {}),
-      ...(canRemove && fact?.removable ? { onRemove } : {}),
+      ...(creates ? { onCreateAssets, groups: fact.groups } : {}),
+      ...(removes ? { onRemove } : {}),
+      // (W12c) The node draws no Create assets and no Remove: they are items of the menu its Source actions button opens (the right-click menu's own).
+      // A source with neither has nothing to put in it that Details and the fold do not already do, so it gets no button.
+      ...(creates || removes ? { onMenu } : {}),
     };
   }
   if (node.type === "cluster") {
@@ -275,7 +281,14 @@ function Canvas({ model }: { model: GraphModel }) {
   const reduced = useReducedMotion(); // the dashes on live edges stop, and the Controls' fit-view button jumps instead of gliding
   const [snap, setSnap] = useState(readSnap);
   const onSnapChange = useCallback((on: boolean) => { setSnap(on); writeSnap(on); }, []);
-  const findRef = useRef<{ open(): void } | null>(null);
+  // Find (W12c): the BUTTON is in the bar and the CARD in the canvas's top-right panel, so whether it is open lives here. `findOpenNow` is what `openFind` reads when
+  // it is called, so that callback keeps one identity.
+  const [findOpen, setFindOpen] = useState(false);
+  const findOpenNow = useRef(false);
+  findOpenNow.current = findOpen;
+  const findCardId = useId();
+  const findButton = useRef<HTMLButtonElement>(null);
+  const keysRef = useRef<{ open(): void } | null>(null); // the shortcuts bubble's `open()`, for the ? key
   const [dragging, setDragging] = useState(false);
   // The alignment guides: where the nodes that do not move with the drag stand (taken once, when it starts), the last dragged node, the one pending frame,
   // and the handle the guides' own component gives back (its state lives there, so a drag frame does not render this page a second time).
@@ -696,6 +709,10 @@ function Canvas({ model }: { model: GraphModel }) {
   }, [nodes]);
   const selectedIds = dragging ? NO_IDS : selectedNow;
   const { shownNodes, shownEdges, active: dimming, handlers: highlight } = useGraphHighlight({ nodes, edges, selectedIds, dragging });
+  // The last value of a mapped point (W12c): a card after a short rest on its node, by the pointer or by the keyboard. Every function of `tip` has one identity for the
+  // life of the page, so the handlers below that combine them with the highlight's have one too: a new handler identity would re-render every node wrapper (measured, W12b).
+  const tip = useValueTip();
+  const { enter: tipEnter, leave: tipLeave, focus: tipFocus, blur: tipBlur, hide: tipHide } = tip;
   // The node Find has just jumped to wears the class `flash`: set through its className (a class added to the element itself would be lost the next time
   // React Flow rewrites the node's classes, e.g. when the focus lights its path). One new object, made after the highlight's own, so `lit flash` sit together.
   const flashed = useMemo(
@@ -724,7 +741,8 @@ function Canvas({ model }: { model: GraphModel }) {
     drag.current = { alone, starts, followers, below: [...below], pins, own: ownPlaces(model, { moved: moved.current, ignoreSaved: tidyRuns > 0 }) };
     setOffer(null);
     setDragging(true);
-  }, [model, tidyRuns, getNodes]);
+    tipHide(); // a card stays where the node was: it does not follow a drag
+  }, [model, tidyRuns, getNodes, tipHide]);
 
   /** The followers stand where they started plus how far the dragged node has gone from where IT started (never a dragged id: they are React Flow's). */
   const placeFollowers = useCallback((snapshot: DragSnapshot, node: Node) => {
@@ -814,6 +832,7 @@ function Canvas({ model }: { model: GraphModel }) {
   // (aria-disabled and a click guard, never `disabled`: it may hold the focus the click gave it).
   // These are worked out once per change of the graph, the open set, the view or the selection, not on every render (a hover renders the page).
   const summary = useMemo(() => graphSummary(model, view), [model, view]);
+  const counts = useMemo(() => graphCounts(model, view), [model, view]); // the bar's chips (decoration); the sentence above is what is announced
   const collapsible = useMemo(() => canCollapse(model, open, view), [model, open, view]);
   const expandable = useMemo(() => canExpand(model, open, view), [model, open, view]);
   const states = useMemo(() => selectionStates(model, open, view, selectedNow), [model, open, view, selectedNow]);
@@ -907,19 +926,32 @@ function Canvas({ model }: { model: GraphModel }) {
       refreshRef.current?.focus();
     }
   }, [removal]);
-  // The bulk-create dialog does not restore focus itself (the page decides): its Create assets… button, or, when every group has become an asset
-  // and the button is gone, the node's Details button.
+  // The bulk-create dialog does not restore focus itself (the page decides): the node's Source actions button (the menu holds Create assets…) while a group is
+  // left to map, or, when every group has become an asset and the node has no menu button any more, the node's Details button.
   useEffect(() => {
     if (createFor !== null || focusAfterCreate.current === null) return;
     const node = canvas.current?.querySelector(`[data-id="src:${focusAfterCreate.current}"]`);
     focusAfterCreate.current = null;
-    (node?.querySelector<HTMLElement>('button[aria-label^="Create assets for"]') ?? node?.querySelector<HTMLElement>('button[aria-label^="Details for"]'))?.focus();
+    (node?.querySelector<HTMLElement>('button[aria-label^="Source actions for"]') ?? node?.querySelector<HTMLElement>('button[aria-label^="Details for"]'))?.focus();
   }, [createFor]);
 
   // ---- Find (Ctrl+K on the canvas), the right-click menus and the canvas's keys ----
   const findIndex = useMemo(() => buildFindIndex(model), [model]);
   const search = useCallback((query: string) => findMatches(findIndex, query), [findIndex]);
-  const openFind = useCallback(() => findRef.current?.open(), []);
+  /** Ctrl+K (on the canvas, or on the bar outside the card): opens the card, or, when it is open, takes the focus back into its field. */
+  const openFind = useCallback(() => {
+    if (!findOpenNow.current) {
+      setFindOpen(true);
+      return;
+    }
+    const field = canvas.current?.querySelector<HTMLInputElement>('.graph-find input[role="combobox"]');
+    field?.focus({ preventScroll: true });
+    field?.select();
+  }, []);
+  const toggleFind = useCallback(() => setFindOpen((was) => !was), []);
+  const closeFind = useCallback(() => setFindOpen(false), []);
+  const find = useMemo(() => ({ open: findOpen, cardId: findCardId, onToggle: toggleFind, buttonRef: findButton }), [findOpen, findCardId, toggleFind]);
+  const openKeys = useCallback(() => keysRef.current?.open(), []);
   useEffect(() => () => {
     // The page goes away: no frame, no outline timer left behind.
     if (guideFrame.current) cancelAnimationFrame(guideFrame.current);
@@ -960,7 +992,7 @@ function Canvas({ model }: { model: GraphModel }) {
   const clearSelection = useCallback(() => {
     setNodes((current) => (current.some((n) => n.selected) ? current.map((n) => (n.selected ? { ...n, selected: false } : n)) : current));
   }, [setNodes]);
-  const canvasKeys = useCanvasKeys({ canvas, openFind, openMenuFor: openFromKey, onEscape: clearSelection });
+  const canvasKeys = useCanvasKeys({ canvas, openFind, openMenuFor: openFromKey, onEscape: clearSelection, openKeys });
   // Enter on a focused node: a source or a group opens or closes, an asset with sub-assets folds; the hook only knows "toggle this id", the page knows which kind it is.
   const navToggle = useCallback((id: string) => {
     if (id.startsWith("asset:")) {
@@ -978,20 +1010,54 @@ function Canvas({ model }: { model: GraphModel }) {
   }, []);
   const onNodeContextMenu: NodeMouseHandler = useCallback((event, node) => openNode(node.id, event), [openNode]);
 
+  // ---- The handlers that combine the highlight's with the last-value card's (W12c) ----
+  const onNodeMouseEnter: NodeMouseHandler = useCallback((event, node) => {
+    highlight.onNodeMouseEnter(event, node);
+    const mappingId = mappingOf(node);
+    const wrapper = event.currentTarget instanceof Element ? event.currentTarget.closest(".react-flow__node") ?? event.currentTarget : null;
+    if (mappingId !== null && wrapper) tipEnter(node.id, mappingId, wrapper);
+    else tipLeave(); // a node that has no value to show: the card of the one just left goes after its short grace
+  }, [highlight, tipEnter, tipLeave]);
+  const onNodeMouseLeave: NodeMouseHandler = useCallback((event, node) => {
+    highlight.onNodeMouseLeave(event, node);
+    tipLeave();
+  }, [highlight, tipLeave]);
+  // The same rule as the highlight's for what counts as the keyboard's focus; `getNodes` is read when the focus lands (a node may have been rebuilt since the last render).
+  const onCanvasFocus = useCallback((event: FocusEvent<HTMLElement>) => {
+    highlight.onFocus(event);
+    const target = event.target;
+    const wrapper = target instanceof Element ? target.closest<HTMLElement>(".react-flow__node") : null;
+    const id = wrapper?.dataset.id;
+    const found = id !== undefined && keyboardFocus(target) ? getNodes().find((n) => n.id === id) : undefined;
+    const mappingId = found ? mappingOf(found) : null;
+    if (wrapper && id !== undefined && mappingId !== null) tipFocus(id, mappingId, wrapper);
+    else tipBlur();
+  }, [highlight, getNodes, tipFocus, tipBlur]);
+  const onCanvasBlur = useCallback((event: FocusEvent<HTMLElement>) => {
+    highlight.onBlur(event);
+    tipBlur();
+  }, [highlight, tipBlur]);
+  // The canvas moving under the menu or the card (a pan, a wheel zoom: no scroll event comes with those) takes both away.
+  const onMoveStart = useCallback(() => {
+    closeMenu();
+    tipHide();
+  }, [closeMenu, tipHide]);
+
   // The menu's items come from the node's own callbacks (the ones its buttons use), so a role sees exactly the actions it has buttons for.
   const nodeActions = (node: Node): RowAction[] => {
-    const d = node.data as NodeActions & Pick<AssetNodeData, "mapped" | "onUnmapSource" | "children" | "collapsed"> & { expanded?: boolean };
+    const d = node.data as NodeActions & Pick<AssetNodeData, "mapped" | "onUnmapSource" | "children" | "collapsed"> & Pick<SourceNodeData, "groups"> & { expanded?: boolean };
     const group = node.type === "cluster";
     const items: RowAction[] = [];
     if (d.onSelect) items.push({ label: "Details", onSelect: () => d.onSelect?.(node.id) });
     if (d.onToggle) items.push({ label: d.expanded ? "Collapse" : "Expand", onSelect: () => d.onToggle?.(node.id) });
-    if (d.onCreateAssets) items.push({ label: "Create assets…", onSelect: () => d.onCreateAssets?.(node.id) });
+    // (W12c) A source has no Create assets or Remove button on its card: these two items, in its Source actions menu and its right-click menu, are where they are.
+    if (d.onCreateAssets) items.push({ label: d.groups === undefined ? "Create assets…" : `Create assets for ${d.groups} ${d.groups === 1 ? "group" : "groups"}…`, onSelect: () => d.onCreateAssets?.(node.id) });
     if (d.onMap) items.push({ label: "Map…", onSelect: () => d.onMap?.(node.id) });
     // The three that open the asset form wait for the asset list (`formWait`: aria-disabled, skipped by the keys).
     if (d.onNewAsset) items.push({ label: "New asset…", disabled: d.formWait, onSelect: () => d.onNewAsset?.(node.id) });
     if (d.menuNewAsset) items.push({ label: "New asset…", disabled: d.formWait, onSelect: () => d.menuNewAsset?.(node.id) }); // an unmapped point: its menu only
     if (d.onAdd) items.push({ label: "New sub-asset…", disabled: d.formWait, onSelect: () => d.onAdd?.(node.id) });
-    if (d.onRemove) items.push({ label: "Remove", tone: "danger", onSelect: () => d.onRemove?.(node.id) });
+    if (d.onRemove) items.push({ label: "Remove from Discovery…", tone: "danger", onSelect: () => d.onRemove?.(node.id) });
     // W12a, after the rest: what takes a mapping off an asset or moves it (only with assets.edit: the callbacks are not given otherwise).
     if (d.onUnmap) items.push({ label: group ? "Unmap this group…" : "Unmap…", tone: "danger", onSelect: () => d.onUnmap?.(node.id) });
     if (d.onMove) items.push({ label: group ? "Move this group's mappings…" : "Move to another asset…", onSelect: () => d.onMove?.(node.id) });
@@ -1045,33 +1111,21 @@ function Canvas({ model }: { model: GraphModel }) {
 
   return (
     <>
-      <PageHeader
-        title="Discovery"
-        sub={<HintLine />}
-        actions={
-          <>
-            <button type="button" ref={refreshRef} onClick={() => invalidate(keys.graph)}>Refresh</button>
-            {/* Always drawn for a role that may use it (never a slot that comes and goes); with nothing to clear it is aria-disabled, not disabled, so it keeps the focus it may hold. */}
-            {canRemove && (
-              <button
-                type="button"
-                className="discovery-clear"
-                aria-disabled={removable.length === 0 || undefined}
-                title={removable.length === 0 ? "Nothing to clear" : undefined}
-                onClick={clearUnmapped}
-              >{`Clear unmapped (${removable.length})`}</button>
-            )}
-          </>
-        }
-      />
+      <PageHeader title="Discovery" icon="discovery" sub={SUB} />
+      {/* Refresh, Clear unmapped (a role that has it, in the overflow menu), Find, Snap to grid and the shortcuts bubble are controls of the bar now. */}
       <GraphBar
-        summary={summary} collapsible={collapsible} expandable={expandable} tidying={tidying}
+        summary={summary} counts={counts} collapsible={collapsible} expandable={expandable} tidying={tidying}
         unmappedOnly={unmappedOnly} onUnmappedOnly={onFilter}
         onCollapseAll={onCollapseAll} onExpandAll={onExpandAll} onTidy={() => void onTidy()}
         expandSelection={states.expandSelection} collapseSelection={states.collapseSelection}
         expandBranch={states.expandBranch} collapseBranch={states.collapseBranch}
         onExpandSelection={() => expandBy(selectedNow, false)} onCollapseSelection={() => collapseBy(selectedNow, false)}
         onExpandBranch={() => expandBy(selectedNow, true)} onCollapseBranch={() => collapseBy(selectedNow, true)}
+        snap={snap} onSnap={onSnapChange}
+        find={find} onFindKey={openFind}
+        onRefresh={() => invalidate(keys.graph)} refreshRef={refreshRef}
+        clear={canRemove ? { count: removable.length, onClear: clearUnmapped } : undefined}
+        shortcuts={<ShortcutsBubble openRef={keysRef} />}
       />
       {saveError && <p className="error" role="alert">{saveError}</p>}
       <div className="graph-layout">
@@ -1082,8 +1136,8 @@ function Canvas({ model }: { model: GraphModel }) {
           tabIndex={-1}
           role="group" // named, because it is a focus target (a pane click, and the return of Escape from a menu or from Find): a screen reader says "Discovery graph", not the whole canvas text
           aria-label="Discovery graph"
-          onFocus={highlight.onFocus}
-          onBlur={highlight.onBlur}
+          onFocus={onCanvasFocus}
+          onBlur={onCanvasBlur}
           onKeyDown={canvasKeys.onKeyDown}
           onKeyDownCapture={nav.onKeyDownCapture}
         >
@@ -1094,12 +1148,12 @@ function Canvas({ model }: { model: GraphModel }) {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeClick={onNodeClick}
-            onNodeMouseEnter={highlight.onNodeMouseEnter}
-            onNodeMouseLeave={highlight.onNodeMouseLeave}
+            onNodeMouseEnter={onNodeMouseEnter}
+            onNodeMouseLeave={onNodeMouseLeave}
             onNodeContextMenu={onNodeContextMenu}
             onPaneContextMenu={openPane}
             onSelectionContextMenu={openSelection} // while a box selection stands, its rectangle takes the right-click that would reach a node
-            onMoveStart={closeMenu} // the menu is placed at a point of the screen: the canvas moving under it closes it
+            onMoveStart={onMoveStart} // the menu and the value card are placed at a point of the screen: the canvas moving under them closes them
             onNodeDragStart={onNodeDragStart}
             onNodeDrag={onNodeDrag}
             onNodeDragStop={onNodeDragStop}
@@ -1123,7 +1177,7 @@ function Canvas({ model }: { model: GraphModel }) {
             <Background />
             <GraphMiniMap />
             {GUIDES_ENABLED && <AlignGuides handleRef={guides} />}
-            <CanvasTools search={search} onChoose={onFind} snap={snap} onSnapChange={onSnapChange} openRef={findRef} />
+            <CanvasTools search={search} onChoose={onFind} open={findOpen} onClose={closeFind} triggerRef={findButton} cardId={findCardId} />
           </ReactFlow>
           {canAccept && offer && (
             <div className="offer-bar" role="status">
@@ -1155,6 +1209,8 @@ function Canvas({ model }: { model: GraphModel }) {
       )}
       {askDialog}
       {maps.dialogs}
+      {/* Outside the canvas, like the menus: a portal of its own on the body. It asks the server for a value only while it shows a card, and only for a role that may read values. */}
+      <PointValueTip target={tip.target} canView={can("assets.view")} onDismiss={tipHide} />
       {/* Outside the canvas on purpose: React passes the events of a portal up to its parents, and the canvas's focus and key handlers must not hear the menu. */}
       {menu && <GraphContextMenu key={menu.id} at={menu.at} items={menuItems} label={menuLabel} returnFocus={menu.returnFocus} onClose={closeMenu} />}
       {removal && (
@@ -1169,22 +1225,8 @@ function Canvas({ model }: { model: GraphModel }) {
   );
 }
 
-/**
- * The header's actions while the graph loads: the words of the real buttons (Refresh, and Clear unmapped for a role that has it), hidden. The actions
- * column takes its width from them, so the hint beside it wraps onto the same number of lines as it will beside the real buttons and the canvas does not
- * drop when the graph arrives (a bare gap, `ActionsSpace`, holds the height but not the width). Not focusable and not read out.
- */
-function LoadingActions({ withClear }: { withClear: boolean }) {
-  return (
-    <span className="graph-actions-space" aria-hidden="true">
-      <button type="button" tabIndex={-1}>Refresh</button>
-      {withClear && <button type="button" tabIndex={-1}>Clear unmapped (0)</button>}
-    </span>
-  );
-}
-
 export function DiscoveryPage() {
-  const { loading, can } = useAuth();
+  const { loading } = useAuth();
   const { data: model, error, isLoading } = useGraph();
   const empty = !model || (model.sources.length === 0 && model.unidentified.length === 0);
   // A Clear unmapped that takes the last source away leaves the empty page: the canvas, with the dialog and the button that had the focus, is
@@ -1199,10 +1241,11 @@ export function DiscoveryPage() {
     }
   }, [model, empty]);
   if (loading || isLoading) {
-    // Inside .graph-page from the first paint: the shell's one-window-tall rules key on it, and the canvas takes what the header leaves.
+    // Inside .graph-page from the first paint: the shell's one-window-tall rules key on it, and the canvas takes what the header leaves. The header has no actions
+    // (the buttons are in the bar), so it is the real header, icon and sentence included.
     return (
       <div className="graph-page">
-        <PageHeader title="Discovery" sub={<HintLine />} actions={<LoadingActions withClear={can("discovery.edit")} />} />
+        <PageHeader title="Discovery" icon="discovery" sub={SUB} />
         <GraphBarSpace />
         <CanvasSkeleton label="Loading the graph" />
       </div>
@@ -1212,7 +1255,7 @@ export function DiscoveryPage() {
   if (!model || empty) {
     return (
       <>
-        <PageHeader title="Discovery" />
+        <PageHeader title="Discovery" icon="discovery" sub={SUB} />
         <div className="empty">
           <div className="empty-icon">
             <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.2" /><circle cx="19" cy="5" r="2.2" /><circle cx="19" cy="19" r="2.2" /><path d="M7 11 17 6M7 13l10 5" /></svg>

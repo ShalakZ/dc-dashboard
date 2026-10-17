@@ -297,8 +297,9 @@ export function ActionsSpace({ height = 34 }: { height?: number } = {}) {
 }
 
 /**
- * The room of the Discovery bar (the summary and its three buttons) while the graph loads, so the canvas does not drop when the bar arrives. It
- * shares one rule with the bar (`.graph-bar, .graph-bar-space` in discovery-tidy.css: 36px and 8px under it), so the two cannot drift apart.
+ * The room of the Discovery bar (its chips and its three groups of controls) while the graph loads, so the canvas does not drop when the bar arrives. It
+ * shares one rule with the bar (`.graph-bar, .graph-bar-space` in discovery-tidy.css: 36px and 8px under it), so the two cannot drift apart. The page header
+ * above it has no actions to hold a place for (Refresh and Clear unmapped are in the bar), so this and the header are all the page has to reserve.
  * Empty, not grey, and outside any region, like `ActionsSpace`.
  */
 export function GraphBarSpace() {

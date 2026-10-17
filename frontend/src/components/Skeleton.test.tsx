@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { render, screen } from "@testing-library/react";
 import { StrictMode, type ReactElement } from "react";
 import { CHART_HEIGHT } from "../lib/chartBox";
@@ -426,6 +427,23 @@ describe("GraphBarSpace", () => {
     expect(gap.className).not.toMatch(/\bsk-/);
     expect(gap.textContent).toBe("");
     expect(gap.children).toHaveLength(0);
+  });
+
+  it("holds the bar's 36px (and the 8px under it) because the bar and its place are ONE rule in discovery-tidy.css, and nothing else in the stylesheet names the place", () => {
+    const css = readFileSync("src/styles/discovery-tidy.css", "utf8");
+    const shared = /\.graph-bar,\s*\.graph-bar-space\s*\{([^}]*)\}/.exec(css);
+    expect(shared, "the shared rule").not.toBeNull();
+    expect(shared![1]).toMatch(/height:\s*36px/);
+    expect(shared![1]).toMatch(/margin-bottom:\s*8px/);
+    // The place is named in that one rule and nowhere else: nothing, not even a width tier of the bar, may give it another size.
+    expect(css.match(/\.graph-bar-space/g)).toHaveLength(1);
+  });
+
+  it("is the only room the Discovery page holds for its toolbar: the header actions placeholder is gone from this file's exports and from the stylesheet", () => {
+    const css = readFileSync("src/styles/discovery-tidy.css", "utf8");
+    expect(css).not.toContain("graph-actions-space");
+    const source = readFileSync("src/components/Skeleton.tsx", "utf8");
+    expect(source).not.toContain("graph-actions-space");
   });
 });
 
