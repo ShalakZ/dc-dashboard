@@ -554,7 +554,7 @@ test("the 2 x 2 gauge is 170 px high at 1024, 1440 and 1920 px, with its figure 
       }
       expect(fit.body.scroll, `the body scrolls vertically (${fit.body.scroll} of ${fit.body.client}px): something is clipped`).toBeLessThanOrEqual(fit.body.client + 1);
       expect(fit.body.scrollW, `the body scrolls sideways (${fit.body.scrollW} of ${fit.body.clientW}px)`).toBeLessThanOrEqual(fit.body.clientW + 1);
-      expect(fit.boxes.arc.height, "the dial is tall enough to see").toBeGreaterThanOrEqual(32);
+      expect(fit.svg.height, "the dial is tall enough to see").toBeGreaterThanOrEqual(32);
       expect(fit.cut.figure, "the figure is cut").toBeLessThanOrEqual(1);
       expect(fit.cut.name, "the name is cut with an ellipsis").toBeLessThanOrEqual(1);
       expect(Math.max(...fit.cut.scale), "an end of the scale is cut").toBeLessThanOrEqual(1);

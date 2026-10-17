@@ -83,7 +83,7 @@
   .gauge-track, .gauge-fill { fill: none; stroke-linecap: round; stroke-width: var(--gauge-width); vector-effect: non-scaling-stroke; }
   .gauge-track { stroke: var(--gauge-track); }
   .gauge-fill { stroke: var(--gauge-fill); }
-  .gauge-scale { position: absolute; bottom: 0; left: 0; right: 0; margin-inline: auto; width: min(88cqw, calc((100cqh - var(--gauge-scale-h)) * 88 / 52)); display: flex; justify-content: space-between; gap: 8px; color: var(--text-2); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; line-height: var(--gauge-scale-h); }
+  .gauge-scale { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); width: min(88cqw, calc((100cqh - var(--gauge-scale-h)) * 88 / 52)); min-width: max-content; display: flex; justify-content: space-between; gap: 8px; color: var(--text-2); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; line-height: var(--gauge-scale-h); }
   .gauge-scale > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .gauge-figure { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 0 4px; margin: 0; color: var(--text); font-size: var(--widget-figure); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; }
   .gauge-figure.muted { color: var(--stale); }

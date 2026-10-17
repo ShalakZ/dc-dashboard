@@ -339,7 +339,9 @@ describe("styles/widgets.css", () => {
       const scale = bodyOf(".gauge-scale");
       expect(scale).toMatch(/position:\s*absolute/);
       expect(scale).toMatch(/bottom:\s*0/);
-      expect(scale).toMatch(/margin-inline:\s*auto/);
+      expect(scale, "centred under the dial").toMatch(/left:\s*50%/);
+      expect(scale).toMatch(/transform:\s*translateX\(-50%\)/);
+      expect(scale, "a long max grows the row about its centre instead of being cut (re-review m1)").toMatch(/min-width:\s*max-content/);
       expect(scale, "foot to foot: 88% (94 - 6) of the drawn width").toMatch(/width:\s*min\(88cqw, calc\(\(100cqh - var\(--gauge-scale-h\)\) \* 88 \/ 52\)\)/);
       expect(scale).toMatch(/justify-content:\s*space-between/);
     });
