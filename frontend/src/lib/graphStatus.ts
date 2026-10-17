@@ -30,3 +30,34 @@ export function protocolLabel(type: string): string {
 export function isLive(source: Pick<GraphSource, "enabled" | "status">): boolean {
   return source.enabled && source.status === "online";
 }
+
+/** Where a source listens, as `host:port` (`host` alone when there is no numeric port): from `config.host` and `config.port` (Modbus), else from the host and port of `config.endpoint` (OPC UA) or `config.url` (simulator), without the scheme and the path; "" when the config says nothing usable. Never throws. */
+export function sourceAddress(source: Pick<GraphSource, "config">): string {
+  const { config } = source;
+  const text = (key: string) => (typeof config[key] === "string" ? (config[key] as string).trim() : "");
+  const host = text("host");
+  if (host) return typeof config.port === "number" ? `${host}:${config.port}` : host;
+  for (const url of [text("endpoint"), text("url")]) {
+    if (!url) continue;
+    try {
+      const found = new URL(url).host;
+      if (found) return found;
+    } catch {
+      // not a url: try the next one
+    }
+  }
+  return "";
+}
+
+/**
+ * The name of a source without the address the scan appended to it ("OPC UA server at 172.20.0.2:4840" -> "OPC UA server", "Modbus Schneider PM5560 at
+ * 10.0.0.5:502" -> "Modbus Schneider PM5560"): only when the name ENDS with ` at ` plus this source's own address, so a name somebody typed, or an
+ * address that is not the source's, stays as it is, and so does a name that would be left empty. The full name stays the source's accessible name.
+ */
+export function sourceTitle(source: Pick<GraphSource, "name" | "config">): string {
+  const address = sourceAddress(source);
+  const tail = ` at ${address}`;
+  if (!address || !source.name.endsWith(tail)) return source.name;
+  const head = source.name.slice(0, -tail.length).trimEnd();
+  return head === "" ? source.name : head;
+}

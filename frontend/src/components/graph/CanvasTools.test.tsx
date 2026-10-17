@@ -6,8 +6,8 @@ import type { FindEntry, FindResult } from "../../lib/graphFind";
 import { CanvasTools } from "./CanvasTools";
 
 const ENTRIES: FindEntry[] = [
-  { id: "src:1", kind: "source", label: "Plant OPC", context: "source", text: "plant opc" },
-  { id: "pt:3", kind: "point", label: "LVP01 kW", context: "point in LVP01", text: "lvp01 kw" },
+  { id: "src:1", kind: "source", label: "Plant OPC", context: "source", text: "plant opc", icon: "protoOpcua" },
+  { id: "pt:3", kind: "point", label: "LVP01 kW", context: "point in LVP01", text: "lvp01 kw", icon: "rate" },
 ];
 const search = (q: string): FindResult => ({ items: ENTRIES.filter((e) => e.text.includes(q.toLowerCase())), more: 0 });
 

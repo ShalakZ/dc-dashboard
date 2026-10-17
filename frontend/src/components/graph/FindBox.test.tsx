@@ -1,14 +1,22 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { FindEntry, FindResult } from "../../lib/graphFind";
+import { Icon, type IconName } from "../Icon";
 import { FindBox } from "./FindBox";
 
-const entry = (id: string, kind: FindEntry["kind"], label: string, context: string): FindEntry => ({ id, kind, label, context, text: `${label} ${context}`.toLowerCase() });
+const entry = (id: string, kind: FindEntry["kind"], label: string, context: string, icon: IconName): FindEntry => ({ id, kind, label, context, icon, text: `${label} ${context}`.toLowerCase() });
 const ENTRIES = [
-  entry("src:1", "source", "Plant OPC", "source · opc.tcp://plc:4840"),
-  entry("pt:3", "point", "LVP01 kW", "point in LVP01 · Plant OPC"),
-  entry("asset:10", "asset", "LVP room", "asset · room"),
+  entry("src:1", "source", "Plant OPC", "source · opc.tcp://plc:4840", "protoOpcua"),
+  entry("pt:3", "point", "LVP01 kW", "point in LVP01 · Plant OPC", "metricVoltage"),
+  entry("asset:10", "asset", "LVP room", "asset · room", "kindRoom"),
 ];
+/** The markup an icon draws, to compare with what an option shows. */
+const drawn = (name: IconName) => {
+  const { container, unmount } = render(<Icon name={name} />);
+  const html = container.querySelector("svg")!.innerHTML;
+  unmount();
+  return html;
+};
 /** A search over ENTRIES: every term a substring of the entry's text; `more` is whatever the test says. */
 const searcher = (more = 0) => (query: string): FindResult => ({
   items: ENTRIES.filter((e) => query.toLowerCase().split(/\s+/).every((term) => e.text.includes(term))),
@@ -65,6 +73,25 @@ describe("FindBox", () => {
     expect(input).toHaveAttribute("aria-activedescendant", options()[0].id);
     expect(document.querySelector("[aria-live]")).toHaveTextContent("2 results");
     expect(options()[0]).toHaveTextContent("point in LVP01 · Plant OPC"); // the muted second line
+  });
+
+  it("draws each option's own icon (its entry's, not one per kind), decorative", async () => {
+    const { input } = open();
+    await userEvent.type(input, "lvp");
+    const [point, room] = options();
+    expect(point.querySelector("svg")!.innerHTML).toBe(drawn("metricVoltage"));
+    expect(room.querySelector("svg")!.innerHTML).toBe(drawn("kindRoom"));
+    expect(point.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("takes the icon from the entry, so two points of one kind can differ", async () => {
+    const two = [entry("pt:1", "point", "Alpha V", "x", "metricVoltage"), entry("pt:2", "point", "Alpha A", "x", "metricCurrent")];
+    const { input } = open({ search: () => ({ items: two, more: 0 }) });
+    await userEvent.type(input, "alpha");
+    const [volts, amps] = options();
+    expect(volts.querySelector("svg")!.innerHTML).toBe(drawn("metricVoltage"));
+    expect(amps.querySelector("svg")!.innerHTML).toBe(drawn("metricCurrent"));
+    expect(volts.querySelector("svg")!.innerHTML).not.toBe(amps.querySelector("svg")!.innerHTML);
   });
 
   it("says '1 result' for one, 'No match' for none, and how many more there are when the search cut the list off", async () => {

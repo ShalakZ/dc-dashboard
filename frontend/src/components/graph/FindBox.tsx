@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type RefObject } from "react";
-import type { FindEntry, FindKind, FindResult } from "../../lib/graphFind";
-import { Icon, type IconName } from "../Icon";
+import type { FindEntry, FindResult } from "../../lib/graphFind";
+import { Icon } from "../Icon";
 
 export interface FindBoxProps {
   /** The search is injected (the page passes `(q) => findMatches(index, q)`): the card knows nothing about the graph. */
@@ -13,7 +13,6 @@ export interface FindBoxProps {
 }
 
 const NONE: FindResult = { items: [], more: 0 };
-const KIND_ICON: Record<FindKind, IconName> = { source: "sources", asset: "assets", cluster: "layers", point: "readings" };
 
 /** The live line under the list: what a screen reader hears after each keystroke, and what everyone reads. */
 function noteOf(query: string, { items, more }: FindResult) {
@@ -146,7 +145,7 @@ export function FindBox({ search, onChoose, onClose, trigger, id }: FindBoxProps
               className="graph-find-opt"
               onClick={() => choose(item)}
             >
-              <Icon name={KIND_ICON[item.kind]} />
+              <Icon name={item.icon} />
               <span className="graph-find-label">{item.label}</span>
               <small className="graph-find-context">{item.context}</small>
             </li>

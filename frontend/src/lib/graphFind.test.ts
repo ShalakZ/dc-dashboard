@@ -3,6 +3,8 @@ import { model, point, source } from "../test/graphFixtures";
 import { buildFindIndex, findMatches, findPlan, type FindEntry, type FindKind } from "./graphFind";
 import { NO_VIEW, PAGE_SIZE, nodeId, UNGROUPED, type GraphView, type OpenState } from "./graph";
 import { EXPAND_NODE_BUDGET } from "./graphView";
+import { assetIcon } from "./assetIcons";
+import { clusterIcon } from "./graphIcons";
 
 const closed = (): OpenState => ({ sources: new Set(), clusters: new Set() });
 const openOf = (sources: number[], clusters: string[] = []): OpenState => ({ sources: new Set(sources), clusters: new Set(clusters) });
@@ -232,7 +234,7 @@ describe("findPlan", () => {
 
   it("an id the graph no longer holds (it was refreshed while the box was open) changes nothing", () => {
     const open = openOf([2]);
-    const result = findPlan(m, open, { id: "point:999", kind: "point", label: "x", context: "", text: "x" });
+    const result = findPlan(m, open, { id: "point:999", kind: "point", label: "x", context: "", text: "x", icon: "metricOther" });
     expect(result.open).toBe(open);
     expect(result.targetId).toBe("point:999");
     expect(result.note).toBeNull();
@@ -631,5 +633,66 @@ describe("findPlan with a view", () => {
       plan(m, "MIXED 0", closed(), view);
       expect(view.unmappedOnly).toBe(true);
     });
+  });
+});
+
+describe("buildFindIndex icons (w12c)", () => {
+  const withIcons = model({
+    sources: [
+      source(1, { name: "Plant OPC", clusters: [{ key: "G", points: [
+        point(1, "Volts", { mapped_metric: "voltage_v" }),
+        point(2, "Amps", { suggestion: { metric: "current_a", scale: 1, interval_seconds: 5, custom_unit: null } }),
+        point(3, "Power", { mapped_metric: "active_power_kw" }),
+        point(4, "Energy", { mapped_metric: "energy_kwh" }),
+        point(5, "Other"),
+      ] }] }),
+      source(2, { name: "Meter bus", connector_type: "modbus" }),
+      source(3, { name: "Sim", connector_type: "simulator" }),
+      source(4, { name: "Mystery", connector_type: "http" }),
+    ],
+    assets: [
+      { id: 10, parent_id: null, name: "Chosen", kind: "generic", icon: "battery", kind_icon: "panel" },
+      { id: 11, parent_id: 10, name: "From kind", kind: "weird", icon: null, kind_icon: "ups" },
+      { id: 12, parent_id: 10, name: "By guess", kind: "UPS room" },
+    ],
+  });
+  const index = buildFindIndex(withIcons);
+
+  it("gives a source the icon of its protocol, and the generic one for a type it does not know", () => {
+    expect(byId(index, nodeId.source(1)).icon).toBe("protoOpcua");
+    expect(byId(index, nodeId.source(2)).icon).toBe("protoModbus");
+    expect(byId(index, nodeId.source(3)).icon).toBe("protoSimulator");
+    expect(byId(index, nodeId.source(4)).icon).toBe("sources");
+  });
+
+  it("gives an asset the very icon assetIcon gives (a chosen one, the kind's, or the keyword guess)", () => {
+    for (const asset of withIcons.assets) expect(byId(index, nodeId.asset(asset.id)).icon, asset.name).toBe(assetIcon(asset));
+    expect(byId(index, nodeId.asset(10)).icon).toBe("kindBattery");
+    expect(byId(index, nodeId.asset(11)).icon).toBe("kindUps");
+  });
+
+  it("gives a group the layers icon", () => {
+    expect(byId(index, nodeId.cluster(1, "G")).icon).toBe(clusterIcon);
+  });
+
+  it("gives a point the icon of its mapped metric, else of the suggested one", () => {
+    expect(byId(index, nodeId.point(1)).icon).toBe("metricVoltage");
+    expect(byId(index, nodeId.point(2)).icon).toBe("metricCurrent");
+    expect(byId(index, nodeId.point(3)).icon).toBe("rate");
+    expect(byId(index, nodeId.point(4)).icon).toBe("energy");
+    expect(byId(index, nodeId.point(5)).icon).toBe("metricOther");
+  });
+
+  it("changes nothing else: the order, the ids, the labels, the contexts and the search text of the old index", () => {
+    const plain = buildFindIndex(model());
+    expect(plain.map((e) => e.id)).toEqual([
+      nodeId.source(1), nodeId.source(2), nodeId.asset(10), nodeId.asset(11),
+      nodeId.cluster(1, "LVP01"), nodeId.point(1), nodeId.point(2), nodeId.point(3),
+      nodeId.cluster(1, "LVP02"), nodeId.point(4), nodeId.point(5), nodeId.point(6),
+      nodeId.cluster(1, UNGROUPED), nodeId.point(7),
+      nodeId.cluster(2, "M"), nodeId.point(8), nodeId.point(9),
+    ]);
+    expect(byId(plain, nodeId.point(2))).toMatchObject({ label: "LVP01 kWh", context: "point in LVP01 · s1", text: expect.stringContaining("lvp01 kwh") });
+    expect(plain.every((e) => typeof e.icon === "string" && e.icon.length > 0)).toBe(true);
   });
 });

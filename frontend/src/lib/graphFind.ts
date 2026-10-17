@@ -1,9 +1,13 @@
 import type { GraphModel, GraphSource } from "../api/types";
 import { NO_VIEW, drawnCount, groupVisible, groupsOf, nodeId, sourceVisible, visiblePoints, type GraphView, type Group, type OpenState } from "./graph";
 import { EXPAND_NODE_BUDGET } from "./graphView";
+import type { IconName } from "../components/Icon";
+import { assetIcon } from "./assetIcons";
+import { clusterIcon, metricIcon, pointMetric, protocolIcon } from "./graphIcons";
 
 export type FindKind = "source" | "asset" | "cluster" | "point";
-export interface FindEntry { id: string; kind: FindKind; label: string; context: string; text: string }
+/** `icon` is what the Find list draws before the label: the protocol of a source, the icon of an asset, the group icon, the icon of a point's metric. */
+export interface FindEntry { id: string; kind: FindKind; label: string; context: string; text: string; icon: IconName }
 export interface FindResult { items: FindEntry[]; more: number }
 
 /** How many results the Find box lists at most; `more` says how many were left out. */
@@ -33,25 +37,25 @@ export function buildFindIndex(model: GraphModel): FindEntry[] {
     const endpoint = endpointOf(source);
     entries.push({
       id: nodeId.source(source.id), kind: "source", label: source.name,
-      context: `source · ${endpoint || source.connector_type}`, text: `${source.name} ${endpoint}`.toLowerCase(),
+      context: `source · ${endpoint || source.connector_type}`, text: `${source.name} ${endpoint}`.toLowerCase(), icon: protocolIcon(source.connector_type),
     });
   }
   for (const asset of model.assets) {
     const parent = asset.parent_id === null ? undefined : names.get(asset.parent_id);
     entries.push({
       id: nodeId.asset(asset.id), kind: "asset", label: asset.name,
-      context: `${asset.kind} asset${parent === undefined ? "" : ` in ${parent}`}`, text: `${asset.name} ${asset.kind}`.toLowerCase(),
+      context: `${asset.kind} asset${parent === undefined ? "" : ` in ${parent}`}`, text: `${asset.name} ${asset.kind}`.toLowerCase(), icon: assetIcon(asset),
     });
   }
   for (const source of model.sources) {
     for (const group of groupsOf(source)) {
       entries.push({
         id: nodeId.cluster(source.id, group.key), kind: "cluster", label: group.label,
-        context: `group in ${source.name}`, text: group.label.toLowerCase(),
+        context: `group in ${source.name}`, text: group.label.toLowerCase(), icon: clusterIcon,
       });
       const context = `point in ${group.label} · ${source.name}`;
       for (const p of group.points) {
-        entries.push({ id: nodeId.point(p.id), kind: "point", label: p.name, context, text: `${p.name} ${p.address}`.toLowerCase() });
+        entries.push({ id: nodeId.point(p.id), kind: "point", label: p.name, context, text: `${p.name} ${p.address}`.toLowerCase(), icon: metricIcon(pointMetric(p)) });
       }
     }
   }
