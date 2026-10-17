@@ -90,33 +90,42 @@ docker compose exec -T -e DCDASH_ALLOW_SEED_HISTORY=1 api python -m dcdash.seed.
 Run them in the folder that holds `compose.yaml`. The same two lines work on Linux, macOS and WSL and in Windows PowerShell 5.1: on the
 work laptop run `scripts\update.ps1` first so the code is current, then type them in the install folder (PowerShell passes
 `-e DCDASH_ALLOW_SEED_HISTORY=1`, `--layout pilot-hall` and `--yes` to docker unchanged). Options: `--interval-minutes 5|10|15|30|60`
-(default 15), `--days N` (the last N days instead of the previous month) and `--seed N`.
+(default 30, the spacing of the samples), `--days N` (the last N days instead of the previous month) and `--seed N`.
 
 - **What it makes.** The Site **Seeded pilot hall** with **Hall 1** and **Hall 2**, two pods each (**Pod A**, **Pod B**), two rows per
   pod, 117 racks (Rack 01 to 59 in Hall 1, 01 to 58 in Hall 2), each with **Feed A** and **Feed B**; beside the halls an **Electrical**
-  group with eight panels (Panel 1A to Panel 4B). That is 370 assets and 233 points in a disabled simulator source
+  group with eight panels (Panel 1A to Panel 4B). That is 370 assets and 442 points in a disabled simulator source
   `seeded-pilot-hall`. 100 racks draw 2 to 11 kW, split about half and half between A and B; 6 are idle (a fraction of a kW); 5 have
-  only Feed A; 6 are free (the feeds exist, nothing is metered, so no figure). Eight B feeds in Hall 2 report power only, so their
-  energy is an estimate (`~`): Hall 2, the Site and the totals show it, Hall 1 is exact. One Hall 1 feed has a 6-hour gap and another
-  resets once. Every name is made up, there are no tenants, and it writes no tariff, dashboard, audit row or asset kind.
+  only Feed A; 6 are free (the feeds exist, nothing is metered, so no figure). A feed has an energy counter (`energy_kwh`) and a power
+  point (`active_power_kw`) that reads the same load; the load follows the hour of the day and differs by a few per cent from one day
+  to the next. Eight B feeds in Hall 2 have only the power point, so their energy is an estimate (`~`): Hall 2, the Site and the totals
+  show it, Hall 1 is exact. One Hall 1 feed has a 6-hour gap and another resets once. Every name is made up, there are no tenants, and
+  it writes no tariff, dashboard, audit row or asset kind.
 - **Kinds.** It uses only kinds that exist. A fresh install has Site, Room, Row, Rack, Circuit and Panel, so a hall and a pod are
   "Room" there; press **Add all 39 data-centre kinds** on the Asset kinds page first
   ([The starter pack](assets-and-kinds.md#the-starter-pack)) to get **Data hall** for the halls. The dry run and the final report say
   which kind each level got.
-- **Size and time.** At 15 minutes: about 650,000 readings and about a minute on a development PC (the database grew by about 250 MB).
-  5 minutes is three times as many readings and about three minutes; 60 minutes is about 160,000 and half a minute; a slow laptop takes
-  longer, and `--days 7` makes it small. It prints "written 5 of 30 days" lines while it works.
+- **Size and time.** Measured on a development PC. With the default 30 minutes and the default 30-day raw retention (29 days of data):
+  about 615,000 readings and a minute and a half. With the raw retention raised to 60 days (a whole previous month, 47 days): about
+  1,000,000 readings and a little over two minutes. `--interval-minutes 15` doubles both and `--interval-minutes 60` halves them;
+  `--interval-minutes 5` is estimated at six times the default and was not run over a whole month. A slow laptop takes longer, a
+  repeated seed on one database takes longer too (a rollup refresh also recomputes the readings of earlier, removed seeds), and
+  `--days 7` makes it small. It prints "written 5 of 30 days" lines while it works.
 - **The range.** From the start of the previous site month up to now, but never earlier than the raw retention allows (30 days by
   default), with the same raw-retention and rollup refusals as above. On 18 October the previous month therefore holds only 19 to 30
   September, and the first 18 days of September read 0.0 in Billing. For the whole previous month raise the raw retention first
   (Settings, Storage, 60 days; then the range starts on 1 September; see [Storage](storage.md#the-storage-page)).
 - **Seeing past data.** Set a rate first: Tariffs, a site-wide rate with an effective-from date before the range, for example
   2020-01-01. Then in Billing pick the previous month (the Year and Month selects): the Site total and every hall, row and rack are
-  there, with the day columns on the right. In the Assets Tree a Feed page has a Trend with a metric and the 7d range; a hall, row or
-  rack page shows only Energy today and Cost today, because it has no meter of its own. The data ends at the moment the command ran,
-  so "Energy today" and the 1h, 6h and 24h trends only show something in the hours after the run: run it shortly before a demo.
-- **Live power.** A parent lists the live power of the feeds below it that report power, so Hall 2 and the Site show a figure and
-  Hall 1 shows a dash.
+  there, with the day columns on the right (the Billing CSV has one row per asset and day at every level, so do not add up its kWh
+  column). In the Assets Tree a Feed page has a Trend: pick the metric (`active_power_kw` shows the daily curve, `energy_kwh` a
+  rising counter) and the 7d range; a hall, row or rack page shows Live power, Energy today and Cost today, because it adds up the
+  feeds below it, but no Trend of its own. The tree opens fully expanded (370 assets): use Collapse all in its header, the filter, or
+  Ctrl+K. The data ends at the moment the command ran, so "Energy today", the 1h, 6h and 24h trends and the live chip only show
+  something in the hours after the run: run it shortly before a demo.
+- **Live power.** A parent adds up the live power of the feeds below it: the Site reads about 580 kW and each rack a few kW. About
+  an hour and a half after the run (three sample spacings) the feeds count as not reporting and a parent says so; Billing and the
+  7d and month views are not affected.
 - **Why the panels carry no kWh.** A parent without a meter adds up every child. A kWh meter on a panel beside the halls would count
   the same energy twice at the Site and in the total of Billing, so the panels carry voltage and current only (the current follows the
   feeds of their pod). Energy per panel needs a "fed by" relation between assets, which does not exist yet.
@@ -126,9 +135,9 @@ work laptop run `scripts\update.ps1` first so the code is current, then type the
   assets, points, mappings and readings) and says so. If the process was killed, the next run is refused and you remove the seed by
   hand, as below. Ctrl+C on `docker compose exec` stops your terminal, not the command inside the container: wait for it to finish
   before you start another.
-- **Remove it.** In the Assets Tree pick **Seeded pilot hall** and Delete (the dialog says 370 assets and 233 mappings), then in
-  Sources delete `seeded-pilot-hall`. It takes under a second. As with the old layout, the readings of the removed points stay behind as
-  orphans until the raw retention drops them.
+- **Remove it.** In the Assets Tree pick **Seeded pilot hall** and Delete (the dialog says 370 assets and 442 mappings), then in
+  Sources delete `seeded-pilot-hall`. It takes under a second. As with the old layout, the readings and rollup rows of the removed
+  points stay behind as orphans: the raw readings until the raw retention drops them, the rollups much later.
 
 ## Conventions
 
