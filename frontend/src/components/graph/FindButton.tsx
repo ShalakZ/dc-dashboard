@@ -23,7 +23,7 @@ export function FindButton({ open, cardId, onToggle, buttonRef }: {
       onClick={onToggle}
     >
       <Icon name="search" />
-      <span className="gbar-lbl">Find</span>
+      <span className="gbar-lbl gbar-lbl-find">Find</span>
     </button>
   );
 }

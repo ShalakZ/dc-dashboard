@@ -26,8 +26,10 @@ const notDrawn = (el: HTMLElement | null) => el !== null && getComputedStyle(el)
  * The bar above the Discovery canvas, left to right: chips (what the graph holds), View controls (Collapse all, Expand all, each with a chevron
  * menu for the selection and the branch, the Unmapped only switch, Tidy layout), Canvas controls (Find, Snap to grid) and Page controls
  * (Refresh, the shortcuts bubble the page hands in, and an overflow menu). It is 36px tall in every state and its width tiers are CSS
- * container queries (discovery-tidy.css): chips shrink to icon and number, controls to icons (their words stay in the accessibility tree,
- * visually hidden), and below that Unmapped only, Tidy layout and Snap to grid leave the bar and are offered in the overflow menu.
+ * container queries (discovery-tidy.css): chips shrink to icon and number first, then the controls lose their words ONE AT A TIME (Snap to grid,
+ * Find, Tidy layout, Unmapped only, then Collapse all and Expand all together; each word has its own `gbar-lbl-*` class, and the word stays in the
+ * accessibility tree, visually hidden, with the control's `title`), and below that Unmapped only, Tidy layout and Snap to grid leave the bar and
+ * are offered in the overflow menu.
  *
  * The one announcer of the area is the summary sentence (visually hidden, `aria-live`); the chips are decoration. A button with nothing to do
  * keeps its place and says so (`aria-disabled` and a click guard, never `disabled`: it may hold the focus the click gave it).
@@ -117,7 +119,7 @@ export function GraphBar({
           aria-disabled={!collapsible || undefined}
           title={collapsible ? "Collapse all" : "Nothing is open"}
           onClick={() => { if (collapsible) onCollapseAll(); }}
-        ><Icon name="collapse" /><span className="gbar-lbl">Collapse all</span></button>
+        ><Icon name="collapse" /><span className="gbar-lbl gbar-lbl-fold">Collapse all</span></button>
         <BarMenu
           name="More ways to collapse"
           menuLabel="Collapse options"
@@ -133,7 +135,7 @@ export function GraphBar({
           aria-disabled={!expandable || undefined}
           title={expandable ? "Expand all" : "Everything is open"}
           onClick={() => { if (expandable) onExpandAll(); }}
-        ><Icon name="expandAll" /><span className="gbar-lbl">Expand all</span></button>
+        ><Icon name="expandAll" /><span className="gbar-lbl gbar-lbl-fold">Expand all</span></button>
         <BarMenu
           name="More ways to expand"
           menuLabel="Expand options"
@@ -148,7 +150,7 @@ export function GraphBar({
         <label ref={switchRef} className="check graph-bar-switch gbar-narrow" title="Unmapped only">
           <input type="checkbox" role="switch" checked={unmappedOnly} onChange={(event) => onUnmappedOnly(event.target.checked)} />
           <Icon name="filter" />
-          <span className="gbar-lbl">Unmapped only</span>
+          <span className="gbar-lbl gbar-lbl-unmapped">Unmapped only</span>
         </label>
         <button
           type="button"
@@ -157,7 +159,7 @@ export function GraphBar({
           aria-disabled={tidying || undefined}
           title="Tidy layout"
           onClick={() => { if (!tidying) onTidy(); }}
-        ><Icon name="tidy" /><span className="gbar-lbl">Tidy layout</span></button>
+        ><Icon name="tidy" /><span className="gbar-lbl gbar-lbl-tidy">Tidy layout</span></button>
       </div>
       <span className="gbar-divider" aria-hidden="true" />
       <div className="gbar-group" role="group" aria-label="Canvas controls">
@@ -169,7 +171,7 @@ export function GraphBar({
           aria-pressed={snap}
           title="Snap to grid"
           onClick={() => onSnap(!snap)}
-        ><Icon name="grid" /><span className="gbar-lbl">Snap to grid</span></button>
+        ><Icon name="grid" /><span className="gbar-lbl gbar-lbl-snap">Snap to grid</span></button>
       </div>
       <span className="gbar-divider" aria-hidden="true" />
       <div className="gbar-group" role="group" aria-label="Page controls">

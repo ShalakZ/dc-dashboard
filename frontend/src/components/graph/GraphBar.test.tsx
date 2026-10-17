@@ -170,6 +170,22 @@ describe("GraphBar", () => {
     }
   });
 
+  it("each word has its own class, so the stylesheet can take the words out one control at a time, and every such control keeps a tooltip with them", () => {
+    bar();
+    const classes = {
+      "Snap to grid": "gbar-lbl-snap", "Find": "gbar-lbl-find", "Tidy layout": "gbar-lbl-tidy",
+      "Unmapped only": "gbar-lbl-unmapped", "Collapse all": "gbar-lbl-fold", "Expand all": "gbar-lbl-fold",
+    } as const;
+    for (const [word, cls] of Object.entries(classes)) {
+      const control = word === "Unmapped only" ? switchLabel() : screen.getByRole("button", { name: word });
+      const span = control.querySelector(".gbar-lbl") as HTMLElement;
+      expect(span, word).toHaveClass(cls);
+      expect(control.getAttribute("title"), `${word} has a tooltip`).toContain(word);
+      // the classes that mean "this word is dropped" belong to this one word: nothing else in the control carries one
+      expect([...control.querySelectorAll("[class*='gbar-lbl-']")], word).toEqual([span]);
+    }
+  });
+
   it("the Unmapped only switch shows the state it is given and calls back with the new one", async () => {
     const off = bar();
     const toggle = screen.getByRole("switch", { name: "Unmapped only" });
@@ -463,30 +479,58 @@ describe("the bar's stylesheet (discovery-tidy.css)", () => {
     expect(rules.filter((r) => /container-type/.test(r.body)).map((r) => r.selector)).toEqual([".graph-bar"]);
   });
 
-  it("holds three @container tiers, widest first: the chips lose their words, the controls lose theirs, three controls go to the menu", () => {
-    const [chips, labels, narrow] = [".gbar-chip-word", ".gbar-lbl", ".gbar-narrow"].map((selector) => tiers.find((r) => r.selector === selector));
-    for (const tier of [chips, labels, narrow]) expect(tier, "a tier rule").toBeDefined();
-    const [a, b, c] = [chips, labels, narrow].map((t) => widthOf(t!));
-    expect(a).toBeGreaterThan(b);
-    expect(b).toBeGreaterThan(c);
-    expect(c).toBeGreaterThan(400); // below the smallest bar the page makes (an 800px window, the sidebar open) there is nothing more to take away
-    expect(a).toBeLessThan(2000);
+  // Words leave the bar one control at a time as it narrows, in this order; each has its own class so one @container rule takes it out.
+  const DROPS = [
+    [".gbar-lbl-snap", "Snap to grid"], [".gbar-lbl-find", "Find"], [".gbar-lbl-tidy", "Tidy layout"], [".gbar-lbl-unmapped", "Unmapped only"], [".gbar-lbl-fold", "Collapse all and Expand all"],
+  ] as const;
+
+  it("holds the @container tiers in priority order: the chips lose their words, then Snap to grid, Find, Tidy layout, Unmapped only and Collapse/Expand all lose theirs, then three controls go to the menu", () => {
+    const order = [".gbar-chip-word", ...DROPS.map(([selector]) => selector), ".gbar-narrow"];
+    const widths = order.map((selector) => {
+      const tier = tiers.find((r) => r.selector === selector);
+      expect(tier, `a tier rule for ${selector}`).toBeDefined();
+      return widthOf(tier!);
+    });
+    for (let i = 1; i < widths.length; i++) expect(widths[i - 1], `${order[i - 1]} leaves before ${order[i]}`).toBeGreaterThan(widths[i]);
+    expect(widths[widths.length - 1]).toBeGreaterThan(400); // below the smallest bar the page makes (an 800px window, the sidebar open) there is nothing more to take away
+    expect(widths[0]).toBeLessThan(2000);
     // the measured table at the top of the rules names the thresholds that are used
-    for (const width of [a, b, c]) expect(raw, `the comment states ${width}`).toContain(String(width));
+    for (const width of widths) expect(raw, `the comment states ${width}`).toContain(String(width));
     expect(raw).toMatch(/worst/i);
   });
 
+  it("the words stay while there is room for them: at a 1148px bar (a 1440px window, the sidebar open) only Snap to grid has gone; at a 744px bar (1024px) the words have gone from every control", () => {
+    const at = (selector: string) => widthOf(tiers.find((r) => r.selector === selector)!);
+    // a tier applies when the bar is at most its threshold wide
+    expect(at(".gbar-lbl-snap"), "Snap to grid has gone at 1148").toBeGreaterThanOrEqual(1148);
+    for (const keep of [".gbar-lbl-find", ".gbar-lbl-tidy", ".gbar-lbl-unmapped", ".gbar-lbl-fold"]) expect(at(keep), `${keep} is still drawn at 1148`).toBeLessThan(1148);
+    for (const [selector, word] of DROPS) expect(at(selector), `${word} has gone at 744`).toBeGreaterThanOrEqual(744);
+    expect(at(".gbar-lbl-fold")).toBeGreaterThan(at(".gbar-narrow")); // the overflow tier is the last of all
+  });
+
   it("an icon-only control keeps its words in the accessibility tree: the clip pattern, never display: none or visibility: hidden", () => {
-    const clip = body(".gbar-lbl", tiers.find((r) => r.selector === ".gbar-lbl")!.at);
-    expect(clip).toMatch(/position:\s*absolute/);
-    expect(clip).toMatch(/width:\s*1px/);
-    expect(clip).toMatch(/height:\s*1px/);
-    expect(clip).toMatch(/overflow:\s*hidden/);
-    expect(clip).toMatch(/clip:\s*rect\(0 0 0 0\)/);
-    for (const r of rules.filter((x) => /\.(gbar-lbl|graph-summary)(?![\w-])/.test(x.selector))) {
+    for (const [selector, word] of DROPS) {
+      const tier = tiers.find((r) => r.selector === selector)!;
+      const clip = body(selector, tier.at);
+      expect(clip, word).toMatch(/position:\s*absolute/);
+      expect(clip, word).toMatch(/width:\s*1px/);
+      expect(clip, word).toMatch(/height:\s*1px/);
+      expect(clip, word).toMatch(/overflow:\s*hidden/);
+      expect(clip, word).toMatch(/clip:\s*rect\(0 0 0 0\)/);
+    }
+    for (const r of rules.filter((x) => /\.(gbar-lbl[\w-]*|graph-summary)(?![\w-])/.test(x.selector))) {
       expect(r.body, `"${r.selector}"`).not.toMatch(/display:\s*none|visibility:\s*hidden/);
     }
     expect(body(".graph-summary")).toMatch(/clip:\s*rect\(0 0 0 0\)/); // the one live sentence is read, not drawn
+  });
+
+  it("a button that loses its word loses the padding the word needed in the same tier, so it is as wide as the icon-only buttons beside it", () => {
+    for (const [selector, word] of DROPS.filter(([selector]) => selector !== ".gbar-lbl-unmapped")) { // the switch is a label: it has no button padding
+      const tier = tiers.find((r) => r.selector === selector)!;
+      const padding = tiers.filter((r) => r.at.join() === tier.at.join() && r.selector !== selector && r.selector.includes(selector));
+      expect(padding.map((r) => r.selector), word).toEqual([`.gbar-group button:has(> ${selector})`]);
+      expect(padding[0].body, word).toMatch(/padding:\s*0 8px/);
+    }
   });
 
   it("display: none is used for three things only: chip words (decoration), the three narrow controls (their menu twins carry the names) and the narrow-only overflow button", () => {

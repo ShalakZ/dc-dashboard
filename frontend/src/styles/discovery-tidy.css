@@ -37,31 +37,56 @@
   .graph-bar .gbar-overflow[aria-expanded="true"] { background: var(--accent-tint); color: var(--accent); }
   .graph-bar .gbar-overflow-narrow { display: none; }
 
-  /* The width tiers, measured (Chromium on Linux, 2026-10-17, GraphBar's own markup with the built stylesheet in a wrapper 1920 down to 460px wide; the fallback sans for "Segoe UI" is wider than
-     Segoe UI, so the thresholds err on the safe side). "Worst" is 12 sources, 1,240 points with the filter on and 2 sources needing credentials: four chips with four-digit counts.
-       what a part needs (px)                              typical     worst
-       controls with their words, all in the bar             961        961   (925: a role without Clear unmapped, no overflow button)
-       controls as icons, all in the bar                     442        442   (406)
-       controls as icons, three of them in the menu          315        315
-       chips with their words                                295        539
-       chips as icon and number                              136        267
-       the bar = controls + 8 gap + chips
-         words + labels                                     1264       1508
-         icon and number + labels                           1105       1236
-         icon and number + icons                             586        717
-     Thresholds are the worst case's need, rounded up, so that no chip is ever dropped at any count: 1520 (chips lose their words), 1240 (controls lose their words), 720 (Unmapped only, Tidy layout and
-     Snap to grid go to the overflow menu). Sweep at 1920 1500 1400 1300 1200 1100 1000 900 800 700 600 500: the bar is 36px tall at every width, its scrollWidth equals its clientWidth (nothing clips) and
-     nothing wraps; the chips draw whole chips from the left and drop the rest only when the room is below even their icon-and-number width (the worst case under about 590 inside the narrowest tier). */
+  /* The width tiers, measured (Chromium on Linux, 2026-10-17, GraphBar's own markup with the built stylesheet in a wrapper 1920 down to 560px wide; the fallback sans for "Segoe UI" is wider than Segoe UI,
+     so the thresholds err on the safe side). The words of the controls leave ONE CONTROL AT A TIME as the bar narrows, so the bar keeps as many words as it has room for. "Worst" is 12 sources, 1,240
+     points with the filter on and 2 sources needing credentials: four chips with four-digit counts; "typical" is 3 sources, 120 points, 6 mapped.
+       controls (px)                                              admin   reader (no overflow button)
+         every word in the bar                                      961     925
+         Snap to grid as an icon                                    864     828
+         + Find as an icon                                          819     783
+         + Tidy layout as an icon                                   729     693
+         + Unmapped only as an icon                                 621     585
+         + Collapse all and Expand all as icons (all icons)         442     406
+         all icons, three controls in the overflow menu             315     315   (the reader gets the overflow button here)
+       chips (px)                                                 typical    worst
+         with their words                                           295       539
+         as icon and number                                         136       267
+       the bar needs controls + 8 gap + chips, so with the worst chips as icon and number (267 + 8 = 275 beside the controls):
+         every word                                                1236   (the chips keep their words only while 961 + 8 + 539 = 1508 fit)
+         Snap to grid as an icon                                   1139
+         + Find as an icon                                         1094
+         + Tidy layout as an icon                                  1004
+         + Unmapped only as an icon                                 896
+         + Collapse all and Expand all as icons                     717
+     Each threshold is the need of the state it leaves, rounded up, so a chip is never dropped while a control could have dropped a word instead (the chips lose their words first, at 1520; then
+     Snap to grid at 1240, Find at 1140, Tidy layout at 1100, Unmapped only at 1010, Collapse all and Expand all together at 900; then Unmapped only, Tidy layout and Snap to grid go to the overflow
+     menu at 720). Sweep at 1920 1500 1400 1300 1200 1148 1100 1000 920 900 800 720 700 600: the bar is 36px tall at every width, its scrollWidth equals its clientWidth (nothing clips), nothing wraps
+     and the chips are whole (the worst case under about 590 inside the narrowest tier loses its last chip, never half of one). */
   /* Tier 1: the chips keep their icon and number, their words go (the full words are in each chip's title and in the summary sentence). The chips are decoration (aria-hidden), so display: none is right here. */
   @container (max-width: 1520px) {
     .gbar-chip-word { display: none; }
   }
-  /* Tier 2: the controls keep their icon and lose their words VISUALLY: the words stay in the accessibility tree (the clip pattern, never display: none), so every control keeps its name. */
+  /* Tiers 2 to 6: a control keeps its icon and loses its word VISUALLY: the word stays in the accessibility tree (the clip pattern, never display: none), and the control keeps a title with it. A button
+     also gives back the padding the word needed, so it is as wide as the icon-only buttons beside it. */
   @container (max-width: 1240px) {
-    .gbar-lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-    .gbar-group button:not(.icon-btn, .graph-bar-more) { padding: 0 8px; }
+    .gbar-lbl-snap { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .gbar-group button:has(> .gbar-lbl-snap) { padding: 0 8px; }
   }
-  /* Tier 3: Unmapped only, Tidy layout and Snap to grid leave the bar (their menu twins in the overflow menu carry the names), and the overflow button is drawn for every role. */
+  @container (max-width: 1140px) {
+    .gbar-lbl-find { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .gbar-group button:has(> .gbar-lbl-find) { padding: 0 8px; }
+  }
+  @container (max-width: 1100px) {
+    .gbar-lbl-tidy { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .gbar-group button:has(> .gbar-lbl-tidy) { padding: 0 8px; }
+  }
+  @container (max-width: 1010px) {
+    .gbar-lbl-unmapped { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  }
+  @container (max-width: 900px) {
+    .gbar-lbl-fold { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .gbar-group button:has(> .gbar-lbl-fold) { padding: 0 8px; }
+  }
   @container (max-width: 720px) {
     .gbar-narrow { display: none; }
     .graph-bar .gbar-overflow-narrow { display: grid; } /* .icon-btn is a grid: the same look as the overflow button of a role that may clear unmapped */
