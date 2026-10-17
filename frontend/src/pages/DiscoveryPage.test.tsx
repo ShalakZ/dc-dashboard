@@ -30,6 +30,8 @@ const flow = vi.hoisted(() => {
     viewport: { x: 0, y: 0, zoom: 1 },
     // The connection props of the "+" (W12a), as the page gave them to React Flow on its last render.
     connect: {} as { nodesConnectable?: boolean; isValidConnection?: (c: unknown) => boolean; connectionLineComponent?: unknown; onConnectEnd?: (event: unknown, state: unknown) => void },
+    // (W12c) The handlers the page gave React Flow, one entry per render of the canvas: React Flow re-renders every node wrapper when one of them changes identity.
+    handlers: [] as { enter: unknown; leave: unknown; moveStart: unknown }[],
   };
   return {
     state, getIntersectingNodes: vi.fn((_node: unknown) => state.intersecting), getNodes: vi.fn(() => state.nodes), fitView: vi.fn(),
@@ -63,6 +65,7 @@ vi.mock("@xyflow/react", async (importOriginal) => {
     }: any) => {
       flow.state.nodes = nodes;
       flow.state.connect = { nodesConnectable, isValidConnection, connectionLineComponent, onConnectEnd };
+      flow.state.handlers.push({ enter: onNodeMouseEnter, leave: onNodeMouseLeave, moveStart: onMoveStart });
       return (
         <div
           data-testid="flow" data-color-mode={colorMode} data-edges-focusable={String(edgesFocusable)} data-nodes-draggable={String(nodesDraggable)}
@@ -165,11 +168,14 @@ const routes = (role: string, model: GraphModel | (() => GraphModel) = graph()) 
 });
 const open = () => renderWithProviders(<><DiscoveryPage /><SignedIn /></>, { route: "/discovery", path: "/discovery" });
 const node = (id: string) => document.querySelector(`[data-id="${id}"]`) as HTMLElement;
+/** The one sentence under the title (W12c), the same in the loading, empty and loaded states. */
+const SUB = "Dashed means discovered, solid means assets. Drag a group onto an asset to map it.";
 
 beforeEach(() => {
   flow.state.dropAt = { x: 7, y: 8 };
   flow.state.partner = null;
   flow.state.viewport = { x: 0, y: 0, zoom: 1 };
+  flow.state.handlers = [];
   flow.fitView.mockClear();
   flow.setViewport.mockClear();
   flow.setCenter.mockClear();
@@ -616,7 +622,7 @@ describe("DiscoveryPage mapping", () => {
 });
 
 describe("DiscoveryPage look (W6)", () => {
-  it("has one h1 in a page header with the hint as its sub line and Refresh in its actions", async () => {
+  it("has one h1 in a page header with the page icon and the one-sentence hint as its sub line, and no actions (Refresh moved into the bar)", async () => {
     mockFetch(routes("operator"));
     open();
     await screen.findByText("Plant OPC"); // (the header is there while the graph loads; look at it once the graph is in)
@@ -624,15 +630,23 @@ describe("DiscoveryPage look (W6)", () => {
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     const header = title.closest("header")!;
     expect(header).toHaveClass("page-head");
-    expect(within(header).getByText(/Dashed: discovered/)).toHaveClass("sub");
-    expect(within(header.querySelector(".actions") as HTMLElement).getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+    expect(within(header).getByText(SUB)).toHaveClass("sub");
+    expect(header.querySelector(".page-title .page-tile svg")).not.toBeNull(); // the Discovery icon, beside the title
+    expect(header.querySelector(".actions")).toBeNull();
+    expect(within(header).queryByRole("button")).toBeNull();
+    // Refresh is the bar's icon button now, in the Page controls group, with the same name.
+    const bar = document.querySelector(".graph-bar") as HTMLElement;
+    expect(within(within(bar).getByRole("group", { name: "Page controls" })).getByRole("button", { name: "Refresh" })).toBeInTheDocument();
   });
 
-  it("with nothing discovered, still has the page's h1 and shows the empty look with the link to Scans", async () => {
+  it("with nothing discovered, still has the page's h1, the icon and the sentence, and shows the empty look with the link to Scans", async () => {
     mockFetch(routes("operator", { sources: [], unidentified: [], assets: [], layout: {} }));
     open();
     expect(await screen.findByText(/Nothing discovered yet/)).toBeInTheDocument(); // (the header is there while the graph loads)
-    expect(screen.getByRole("heading", { level: 1, name: "Discovery" })).toBeInTheDocument();
+    const title = screen.getByRole("heading", { level: 1, name: "Discovery" });
+    expect(title).toBeInTheDocument();
+    expect(title.closest("header")!.querySelector(".page-title .page-tile svg")).not.toBeNull();
+    expect(screen.getByText(SUB)).toHaveClass("sub");
     expect(screen.getByText(/Nothing discovered yet/).closest(".empty")).not.toBeNull();
     expect(screen.getByRole("link", { name: "run a scan" })).toHaveAttribute("href", "/scans");
   });
@@ -654,8 +668,11 @@ describe("DiscoveryPage while the graph loads", () => {
     const title = screen.getByRole("heading", { level: 1, name: "Discovery" });
     expect(wrapper.contains(title)).toBe(true);
     expect(title.closest("header")).toHaveClass("page-head");
-    expect(screen.getByText(/Dashed: discovered/)).toHaveClass("sub");
-    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument(); // a gap holds its place until the graph is in
+    expect(screen.getByText(SUB)).toHaveClass("sub");
+    expect(title.closest("header")!.querySelector(".page-title .page-tile svg")).not.toBeNull(); // the real header: the icon is there from the first paint
+    expect(title.closest("header")!.querySelector(".actions")).toBeNull(); // no actions to hold a place for: Refresh is in the bar
+    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument(); // the bar's place is held empty until the graph is in
+    expect(document.querySelector(".graph-bar-space")).not.toBeNull();
     const region = screen.getByText(LABEL).parentElement!;
     expect(region).toHaveAttribute("role", "status");
     expect(region).toHaveClass("graph-layout");
@@ -670,38 +687,27 @@ describe("DiscoveryPage while the graph loads", () => {
     expect(document.querySelector(".graph-page")).not.toBeNull();
   });
 
-  it("holds the header's actions column at its real width: the words of the real buttons, hidden, not focusable, not read out, gone when the graph is in", async () => {
-    const page = openHeld({}); // an operator has no discovery.edit: Refresh only
-    const space = document.querySelector(".page-head .actions .graph-actions-space") as HTMLElement;
-    expect(space).not.toBeNull();
-    expect(space).toHaveAttribute("aria-hidden", "true");
-    expect([...space.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Refresh"]);
-    expect([...space.querySelectorAll("button")].every((b) => b.tabIndex === -1)).toBe(true);
-    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
-    page.release();
-    await screen.findByText("Plant OPC");
-    expect(document.querySelector(".graph-actions-space")).toBeNull();
-  });
-
-  it("with discovery.edit the placeholder holds Clear unmapped's words too", async () => {
+  it("holds no placeholder for header actions any more (the header has none, for any role), and the bar's own place is the only room held", async () => {
     mockFetch(routes("admin"));
     const held = holdFetch((_method, path) => path === "/api/discovery/graph");
     open();
-    await waitFor(() => { // the permissions arrive while the graph is still held
-      const space = document.querySelector(".graph-actions-space") as HTMLElement;
-      expect([...space.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Refresh", "Clear unmapped (0)"]);
-    });
+    await waitFor(() => expect(document.querySelector(".graph-bar-space")).not.toBeNull());
+    expect(document.querySelector(".graph-actions-space")).toBeNull();
+    expect(document.querySelector(".page-head .actions")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Refresh|Clear unmapped/ })).not.toBeInTheDocument();
     held.release();
     await screen.findByText("Plant OPC");
+    expect(document.querySelector(".graph-bar-space")).toBeNull();
+    expect(document.querySelector(".graph-actions-space")).toBeNull();
   });
 
-  it("the placeholder is invisible and takes no focus (visibility hidden), so its buttons never show", () => {
+  it("no stylesheet rule is left for the old placeholder, and the bar and its placeholder still share one 36px rule", () => {
     const css = readFileSync("src/styles/discovery-tidy.css", "utf8");
-    const rule = /\.graph-actions-space\s*\{([^}]*)\}/.exec(css);
-    expect(rule, "a rule for the placeholder").not.toBeNull();
-    expect(rule![1]).toMatch(/visibility:\s*hidden/);
-    expect(rule![1]).toMatch(/display:\s*flex/);
-    expect(rule![1]).toMatch(/gap:\s*8px/);
+    expect(css).not.toMatch(/\.graph-actions-space/);
+    expect(css).not.toMatch(/\.discovery-clear/);
+    const rule = /\.graph-bar,\s*\.graph-bar-space\s*\{([^}]*)\}/.exec(css);
+    expect(rule, "the shared rule").not.toBeNull();
+    expect(rule![1]).toMatch(/height:\s*36px/);
   });
 
   it("ends in the error, no region left, when the graph cannot be loaded", async () => {
@@ -799,7 +805,6 @@ describe("DiscoveryPage controls follow the permissions of the role (a custom ro
 
 // ---- W7r: remove and clear unmapped discovered sources, last seen, the click path to create assets ----
 
-const HINT = "Dashed: discovered. Solid: assets. Drag a group onto an asset or press New asset…";
 const kw = (id: number, name: string, extra: Partial<GraphPoint> = {}) =>
   point(id, name, { suggestion: { metric: "active_power_kw", scale: 1, interval_seconds: 5, custom_unit: null }, ...extra });
 const srcOf = (id: number, name: string, over: Partial<GraphSource> = {}): GraphSource => ({
@@ -841,21 +846,43 @@ const openToasts = (route = "/discovery") => {
   const view = renderWithProviders(<><main id="main" tabIndex={-1} /><DiscoveryPage /><SignedIn /></>, { route, path: "/discovery", toasts: toasts.api });
   return { ...view, toasts };
 };
-const removeButton = (name: string) => screen.findByRole("button", { name: `Remove ${name} from Discovery` });
-const clearButton = (n: number) => screen.getByRole("button", { name: `Clear unmapped (${n})` });
+// W12c: a source's Create assets and Remove are items of the menu its Source actions button opens (the right-click menu holds the same ones), and Clear unmapped is an
+// item of the bar's overflow menu, "More Discovery actions".
+const sourceActions = (name: string) => screen.findByRole("button", { name: `Source actions for ${name}` });
+const pickFromSource = async (name: string, item: string | RegExp) => {
+  await userEvent.click(await sourceActions(name));
+  await userEvent.click(await screen.findByRole("menuitem", { name: item }));
+};
+const removeFrom = (name: string) => pickFromSource(name, "Remove from Discovery…");
+const overflowButton = () => screen.getByRole("button", { name: "More Discovery actions" });
+const clearItemName = (n: number) => new RegExp(`^Clear unmapped \\(${n}\\)`);
+const openOverflow = async () => {
+  await userEvent.click(await screen.findByRole("button", { name: "More Discovery actions" }));
+  return screen.findByRole("menu", { name: "Discovery actions" });
+};
+const pressClear = async (n: number) => {
+  const menu = await openOverflow();
+  await userEvent.click(within(menu).getByRole("menuitem", { name: clearItemName(n) }));
+};
 const confirmDialog = (name: string) => screen.findByRole("dialog", { name });
 const removeCalls = (calls: { method: string; path: string; body?: unknown }[]) => calls.filter((c) => c.method === "POST" && c.path === "/api/discovery/sources/remove");
 
 describe("DiscoveryPage hint and last seen (W7r)", () => {
-  it("the sub line says to drag a group onto an asset or press New asset…", async () => {
+  it("the sub line is the one sentence: dashed means discovered, solid means assets, drag a group onto an asset to map it", async () => {
     serverWith("operator", [srcOf(1, "Plant OPC")]);
     openToasts();
     await screen.findByText("Plant OPC");
-    expect(screen.getByText(/Dashed: discovered/)).toHaveTextContent(HINT);
+    expect(screen.getByText(/Dashed means discovered/)).toHaveTextContent(SUB);
+    expect(screen.getByText(/Dashed means discovered/)).toHaveClass("sub");
   });
 
-  it("the hint is short (under 100 characters: the keys live in the tip beside it)", () => {
-    expect(HINT.length).toBeLessThan(100);
+  it("the hint is short (under 100 characters) and the old tip beside it is gone: the keys live in the shortcuts bubble", async () => {
+    expect(SUB.length).toBeLessThan(100);
+    serverWith("operator", [srcOf(1, "Plant OPC")]);
+    openToasts();
+    await screen.findByText("Plant OPC");
+    expect(screen.queryByRole("button", { name: "What can I do on the canvas?" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keyboard shortcuts and controls" })).toBeInTheDocument();
   });
 
   it("every source says when it was last seen: the scan and how long ago, added by hand, or not seen yet", async () => {
@@ -867,7 +894,7 @@ describe("DiscoveryPage hint and last seen (W7r)", () => {
     ]);
     openToasts();
     await screen.findByText("Plant OPC");
-    expect(within(node("src:1")).getByText("Seen in scan #6, 10 min ago")).toHaveClass("gnode-seen");
+    expect(within(node("src:1")).getByText("Seen in scan #6, 10 min ago")).toHaveClass("gsrc-seen");
     expect(within(node("src:2")).getByText("Added by hand")).toBeInTheDocument();
     expect(within(node("src:3")).getByText("Not seen in a scan yet")).toBeInTheDocument();
     expect(within(node("src:4")).getByText("Seen in scan #2")).toBeInTheDocument(); // over two weeks: the scan, no ago part
@@ -901,19 +928,40 @@ describe("DiscoveryPage Remove (W7r)", () => {
   it("a role that may edit the graph sees Remove on a discovered source with nothing mapped, and no one else does", async () => {
     serverWith("admin", [srcOf(1, "Plant OPC"), mappedSource(2, "Lab"), srcOf(3, "Bench", { origin: "manual" })]);
     openToasts();
-    const remove = await removeButton("Plant OPC");
-    expect(remove.textContent).toBe(""); // the bin alone: its name is the label, its tooltip the title
-    expect(remove).toHaveAttribute("title", "Remove");
-    expect(remove.querySelector("svg.i")).not.toBeNull();
-    expect(screen.queryByRole("button", { name: "Remove Lab from Discovery" })).not.toBeInTheDocument(); // something is mapped
-    expect(screen.queryByRole("button", { name: "Remove Bench from Discovery" })).not.toBeInTheDocument(); // added by hand
+    // The card draws no Remove button any more (W12c): "Remove from Discovery…" is an item of the menu its Source actions button opens, and of the right-click menu.
+    expect(screen.queryByRole("button", { name: /from Discovery$/ })).not.toBeInTheDocument();
+    await userEvent.click(await sourceActions("Plant OPC"));
+    const menu = await screen.findByRole("menu", { name: "Actions for Plant OPC" });
+    const remove = within(menu).getByRole("menuitem", { name: "Remove from Discovery…" });
+    expect(remove).toHaveClass("danger-item");
+    await userEvent.keyboard("{Escape}");
+    // Lab has something mapped and no group left to turn into an asset: nothing to put in a menu, so no Source actions button (the positive check beside it: Plant OPC has one).
+    expect(screen.queryByRole("button", { name: "Source actions for Lab" })).not.toBeInTheDocument();
+    // Bench was added by hand: it has a group to create assets from but cannot be removed, so its menu has Create assets and no Remove.
+    await userEvent.click(await sourceActions("Bench"));
+    const bench = await screen.findByRole("menu", { name: "Actions for Bench" });
+    expect(within(bench).getByRole("menuitem", { name: "Create assets for 1 group…" })).toBeInTheDocument();
+    expect(within(bench).queryByRole("menuitem", { name: /Remove from Discovery/ })).not.toBeInTheDocument();
+  });
+
+  it("the right-click menu of a source holds the same Remove from Discovery… item, and only for the source that can be removed", async () => {
+    serverWith("admin", [srcOf(1, "Plant OPC"), mappedSource(2, "Lab")]);
+    openToasts();
+    await screen.findByText("Plant OPC");
+    fireEvent.contextMenu(node("src:1"));
+    expect(within(await screen.findByRole("menu", { name: "Actions for Plant OPC" })).getByRole("menuitem", { name: "Remove from Discovery…" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    fireEvent.contextMenu(node("src:2"));
+    const labMenu = await screen.findByRole("menu", { name: "Actions for Lab" });
+    expect(within(labMenu).getByRole("menuitem", { name: "Details" })).toBeInTheDocument(); // (a menu of its own, and positive)
+    expect(within(labMenu).queryByRole("menuitem", { name: /Remove from Discovery/ })).not.toBeInTheDocument();
   });
 
   it.each([
-    ["operator (discovery.view)", "operator", undefined],
-    ["discovery.accept alone", "custom", ["discovery.view", "discovery.accept"] as PermissionId[]],
-    ["sources.edit alone", "custom", ["discovery.view", "sources.edit"] as PermissionId[]],
-  ])("%s sees neither Remove nor Clear unmapped", async (_name, role, permissions) => {
+    ["operator (discovery.view)", "operator", undefined, false],
+    ["discovery.accept alone", "custom", ["discovery.view", "discovery.accept"] as PermissionId[], true],
+    ["sources.edit alone", "custom", ["discovery.view", "sources.edit"] as PermissionId[], false],
+  ])("%s sees neither Remove nor Clear unmapped", async (_name, role, permissions, mayCreate) => {
     mockFetch({
       ...routes(role, world([srcOf(1, "Plant OPC")])),
       ...(permissions ? { "GET /api/me": { body: userFor(role, { permissions }) } } : {}),
@@ -922,8 +970,28 @@ describe("DiscoveryPage Remove (W7r)", () => {
     openToasts();
     await screen.findByText("Plant OPC");
     await accountKnown();
+    // Remove and Create assets were buttons on the card; now they are menu items, so the checks look in the places they live (with a positive check beside each absent
+    // one: Details is still on the card, and the menu is there). A source has a Source actions button only when it has an item for the person to choose.
+    expect(screen.getByRole("button", { name: "Details for Plant OPC" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Clear unmapped/ })).not.toBeInTheDocument();
+    if (mayCreate) {
+      await userEvent.click(await sourceActions("Plant OPC"));
+      const own = await screen.findByRole("menu", { name: "Actions for Plant OPC" });
+      expect(within(own).getByRole("menuitem", { name: "Create assets for 1 group…" })).toBeInTheDocument();
+      expect(within(own).queryByRole("menuitem", { name: /Remove from Discovery/ })).not.toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+    } else {
+      expect(screen.queryByRole("button", { name: "Source actions for Plant OPC" })).not.toBeInTheDocument();
+    }
+    // At the full width these roles have no overflow button that does anything: it carries the modifier that shows it in the narrowest tier only, and opens no menu.
+    expect(overflowButton()).toHaveClass("gbar-overflow-narrow");
+    await userEvent.click(overflowButton());
+    expect(screen.queryByRole("menu", { name: "Discovery actions" })).not.toBeInTheDocument();
+    fireEvent.contextMenu(node("src:1"));
+    const menu = await screen.findByRole("menu", { name: "Actions for Plant OPC" });
+    expect(within(menu).getByRole("menuitem", { name: "Details" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: /Remove from Discovery/ })).not.toBeInTheDocument();
   });
 
   it("discovery.edit alone sees Remove and Clear unmapped, but not Create assets", async () => {
@@ -933,15 +1001,20 @@ describe("DiscoveryPage Remove (W7r)", () => {
       "GET /api/site": { body: { timezone: "UTC", currency: null } },
     });
     openToasts();
-    expect(await removeButton("Plant OPC")).toBeInTheDocument();
-    expect(clearButton(1)).toBeInTheDocument();
+    await userEvent.click(await sourceActions("Plant OPC"));
+    const menu = await screen.findByRole("menu", { name: "Actions for Plant OPC" });
+    expect(within(menu).getByRole("menuitem", { name: "Remove from Discovery…" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: /^Create assets/ })).not.toBeInTheDocument(); // (the positive check is the Remove item above)
+    await userEvent.keyboard("{Escape}");
+    const overflow = await openOverflow();
+    expect(within(overflow).getByRole("menuitem", { name: clearItemName(1) })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Create assets/ })).not.toBeInTheDocument();
   });
 
   it("asks first, in the delete dialog: what it takes, that nothing depends on it, and that a scan can find it again", async () => {
     const { calls } = serverWith("admin", two());
     openToasts();
-    await userEvent.click(await removeButton("Plant OPC"));
+    await removeFrom("Plant OPC");
     const dialog = await confirmDialog('Remove "Plant OPC" from Discovery?');
     expect(dialog).toHaveTextContent("It has nothing mapped, so no asset, billing figure or dashboard depends on it. A scan can find it again.");
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
@@ -949,13 +1022,13 @@ describe("DiscoveryPage Remove (W7r)", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(removeCalls(calls)).toHaveLength(0);
-    expect(screen.getByRole("button", { name: "Remove Plant OPC from Discovery" })).toHaveFocus(); // Cancel hands the focus back to the button
+    expect(screen.getByRole("button", { name: "Source actions for Plant OPC" })).toHaveFocus(); // Cancel hands the focus back to the button the menu was opened from
   });
 
   it("confirming sends the one id, takes the node away, toasts, closes the dialog and puts the focus on Refresh", async () => {
     const { calls } = serverWith("admin", two());
     const { toasts } = openToasts();
-    await userEvent.click(await removeButton("Plant OPC"));
+    await removeFrom("Plant OPC");
     await userEvent.click(within(await confirmDialog('Remove "Plant OPC" from Discovery?')).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(removeCalls(calls)[0].body).toEqual({ source_ids: [1] });
@@ -972,7 +1045,7 @@ describe("DiscoveryPage Remove (W7r)", () => {
     openToasts();
     await userEvent.click(await screen.findByRole("button", { name: "Details for Plant OPC" }));
     expect(await screen.findByRole("complementary", { name: "Source details" })).toBeInTheDocument();
-    await userEvent.click(await removeButton("Plant OPC"));
+    await removeFrom("Plant OPC");
     await userEvent.click(within(await confirmDialog('Remove "Plant OPC" from Discovery?')).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(screen.queryByRole("complementary")).not.toBeInTheDocument());
   });
@@ -982,7 +1055,7 @@ describe("DiscoveryPage Remove (W7r)", () => {
     openToasts();
     await userEvent.click(await screen.findByRole("button", { name: "Details for Plant OPC" }));
     await screen.findByRole("complementary", { name: "Source details" });
-    await userEvent.click(await removeButton("Plant OPC"));
+    await removeFrom("Plant OPC");
     await confirmDialog('Remove "Plant OPC" from Discovery?');
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -992,7 +1065,7 @@ describe("DiscoveryPage Remove (W7r)", () => {
   it("a source that gained a mapping meanwhile is kept: the dialog closes with an error toast that says why", async () => {
     const { state } = serverWith("admin", [srcOf(1, "Plant OPC")]);
     const { toasts } = openToasts();
-    await userEvent.click(await removeButton("Plant OPC"));
+    await removeFrom("Plant OPC");
     const dialog = await confirmDialog('Remove "Plant OPC" from Discovery?');
     state.sources = [mappedSource(1, "Plant OPC"), srcOf(2, "Rack 7")]; // the other tab mapped it, and a second source is there now
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
@@ -1008,7 +1081,7 @@ describe("DiscoveryPage Remove (W7r)", () => {
       "POST /api/discovery/sources/remove": { status: 409, body: { detail: "A scan is running. Remove discovered sources when it has finished." } },
     });
     const { toasts } = openToasts();
-    await userEvent.click(await removeButton("Plant OPC"));
+    await removeFrom("Plant OPC");
     const dialog = await confirmDialog('Remove "Plant OPC" from Discovery?');
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("A scan is running. Remove discovered sources when it has finished.");
@@ -1022,27 +1095,31 @@ describe("DiscoveryPage Remove (W7r)", () => {
 describe("DiscoveryPage Clear unmapped (W7r)", () => {
   const some = () => [srcOf(1, "Plant OPC"), srcOf(2, "Rack 7"), mappedSource(3, "Lab"), srcOf(4, "Bench", { origin: "manual" })];
 
-  it("sits beside Refresh in the header and counts the sources it would remove", async () => {
+  it("is an item of the bar's overflow menu, beside Refresh in the Page controls, and counts the sources it would remove", async () => {
     serverWith("admin", some());
     openToasts();
     await screen.findByText("Plant OPC");
-    const actions = document.querySelector(".page-head .actions") as HTMLElement;
-    expect(within(actions).getByRole("button", { name: "Refresh" })).toBeInTheDocument();
-    expect(within(actions).getByRole("button", { name: "Clear unmapped (2)" })).toHaveAttribute("type", "button");
+    expect(document.querySelector(".page-head .actions")).toBeNull();
+    const group = screen.getByRole("group", { name: "Page controls" });
+    expect(within(group).getByRole("button", { name: "Refresh" })).toHaveAttribute("type", "button");
+    const menu = await openOverflow();
+    expect(within(group).getByRole("button", { name: "More Discovery actions" })).toHaveAttribute("aria-expanded", "true");
+    const item = within(menu).getByRole("menuitem", { name: "Clear unmapped (2)" });
+    expect(item).not.toHaveAttribute("aria-disabled");
   });
 
-  it("with nothing to clear it keeps its place, is aria-disabled with a title, never natively disabled, and opens nothing", async () => {
+  it("with nothing to clear its item keeps its place, is aria-disabled with the reason, and opens nothing", async () => {
     serverWith("admin", [mappedSource(3, "Lab")]);
     openToasts();
     await screen.findByText("Lab");
-    const clear = clearButton(0);
-    expect(clear).toHaveAttribute("aria-disabled", "true");
-    expect(clear).toHaveAttribute("title", "Nothing to clear");
-    expect(clear).not.toBeDisabled();
-    await userEvent.click(clear);
+    const menu = await openOverflow();
+    const item = within(menu).getByRole("menuitem", { name: clearItemName(0) });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveTextContent("Nothing to clear");
+    expect(item).not.toBeDisabled();
+    await userEvent.click(item);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    clear.focus();
-    expect(clear).toHaveFocus();
+    expect(menu).toBeInTheDocument(); // a disabled item does not close the menu
   });
 
   it("lists the first five names and the rest as a count, and says that mapped sources are never touched", async () => {
@@ -1050,7 +1127,7 @@ describe("DiscoveryPage Clear unmapped (W7r)", () => {
     serverWith("admin", seven);
     openToasts();
     await screen.findByText("Unit 1");
-    await userEvent.click(clearButton(7));
+    await pressClear(7);
     const dialog = await confirmDialog("Remove 7 unmapped sources?");
     expect(dialog).toHaveTextContent("Unit 1, Unit 2, Unit 3, Unit 4, Unit 5 and 2 more.");
     expect(dialog).toHaveTextContent("Sources with a mapped point are never touched. A scan can find these again.");
@@ -1060,14 +1137,14 @@ describe("DiscoveryPage Clear unmapped (W7r)", () => {
   it("two sources are named in full", async () => {
     serverWith("admin", [srcOf(1, "Plant OPC"), srcOf(2, "Rack 7")]);
     openToasts();
-    await userEvent.click(await screen.findByRole("button", { name: "Clear unmapped (2)" }));
+    await pressClear(2);
     expect(await confirmDialog("Remove 2 unmapped sources?")).toHaveTextContent("Plant OPC and Rack 7.");
   });
 
   it("sends the ids it listed when the dialog opened: a source a scan adds afterwards is never in the request", async () => {
     const { state, calls } = serverWith("admin", [srcOf(1, "Plant OPC"), srcOf(2, "Rack 7")]);
     openToasts();
-    await userEvent.click(await screen.findByRole("button", { name: "Clear unmapped (2)" }));
+    await pressClear(2);
     const dialog = await confirmDialog("Remove 2 unmapped sources?");
     state.sources = [...state.sources, srcOf(9, "Found later")];
     await userEvent.click(screen.getByRole("button", { name: "Refresh" })); // the graph is read again behind the dialog
@@ -1078,25 +1155,25 @@ describe("DiscoveryPage Clear unmapped (W7r)", () => {
     expect(screen.getByText("Found later")).toBeInTheDocument();
   });
 
-  it("removes them, says how many, and hands the focus back to the Clear button (now aria-disabled)", async () => {
+  it("removes them, says how many, and hands the focus back to the overflow button (its Clear item is aria-disabled now)", async () => {
     const { calls } = serverWith("admin", some());
     const { toasts } = openToasts();
-    await userEvent.click(await screen.findByRole("button", { name: "Clear unmapped (2)" }));
+    await pressClear(2);
     await userEvent.click(within(await confirmDialog("Remove 2 unmapped sources?")).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(removeCalls(calls)[0].body).toEqual({ source_ids: [1, 2] });
     expect(toasts.calls).toEqual([{ kind: "success", text: "Removed 2 sources" }]);
     expect(screen.queryByText("Plant OPC")).not.toBeInTheDocument();
     expect(screen.getByText("Lab")).toBeInTheDocument();
-    const clear = clearButton(0);
-    expect(clear).toHaveAttribute("aria-disabled", "true");
-    expect(clear).toHaveFocus();
+    expect(overflowButton()).toHaveFocus(); // the menu gave the focus back to its button before the dialog opened, and the dialog gave it back there
+    const menu = await openOverflow();
+    expect(within(menu).getByRole("menuitem", { name: clearItemName(0) })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("when one of them gained a mapping meanwhile, the rest go, and an error toast says why one stayed", async () => {
     const { state } = serverWith("admin", [srcOf(1, "Plant OPC"), srcOf(2, "Rack 7")]);
     const { toasts } = openToasts();
-    await userEvent.click(await screen.findByRole("button", { name: "Clear unmapped (2)" }));
+    await pressClear(2);
     const dialog = await confirmDialog("Remove 2 unmapped sources?");
     state.sources = [mappedSource(1, "Plant OPC"), srcOf(2, "Rack 7")];
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
@@ -1109,12 +1186,12 @@ describe("DiscoveryPage Clear unmapped (W7r)", () => {
   it("Escape and Cancel remove nothing", async () => {
     const { calls } = serverWith("admin", some());
     openToasts();
-    await userEvent.click(await screen.findByRole("button", { name: "Clear unmapped (2)" }));
+    await pressClear(2);
     await confirmDialog("Remove 2 unmapped sources?");
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(removeCalls(calls)).toHaveLength(0);
-    expect(clearButton(2)).toHaveFocus();
+    expect(overflowButton()).toHaveFocus();
   });
 
   it("a clear that empties the graph leaves the empty page, and the focus goes to the main area without scrolling", async () => {
@@ -1122,7 +1199,7 @@ describe("DiscoveryPage Clear unmapped (W7r)", () => {
     openToasts();
     const main = document.getElementById("main") as HTMLElement;
     const focus = vi.spyOn(main, "focus");
-    await userEvent.click(await screen.findByRole("button", { name: "Clear unmapped (1)" }));
+    await pressClear(1);
     await userEvent.click(within(await confirmDialog('Remove "Plant OPC" from Discovery?')).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText(/Nothing discovered yet/)).toBeInTheDocument();
     await waitFor(() => expect(main).toHaveFocus());
@@ -1144,13 +1221,16 @@ describe("DiscoveryPage Create assets (W7r)", () => {
   ] });
   beforeEach(() => { bulk.props.length = 0; });
 
-  it("a collapsed source offers Create assets… with its number of groups, and it opens the dialog for that source", async () => {
+  it("a collapsed source offers Create assets for N groups… in its Source actions menu, and it opens the dialog for that source", async () => {
     serverWith("admin", [three()]);
     openToasts();
-    const button = await screen.findByRole("button", { name: "Create assets for 3 groups of Plant OPC" });
-    expect(button).toHaveTextContent("Create assets…");
+    expect(await sourceActions("Plant OPC")).toHaveAttribute("aria-haspopup", "menu");
+    expect(screen.queryByRole("button", { name: /^Create assets/ })).not.toBeInTheDocument(); // the card draws no such button any more
+    await userEvent.click(await sourceActions("Plant OPC"));
+    const menu = await screen.findByRole("menu", { name: "Actions for Plant OPC" });
+    const item = within(menu).getByRole("menuitem", { name: "Create assets for 3 groups…" });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    await userEvent.click(button);
+    await userEvent.click(item);
     expect(await screen.findByRole("dialog", { name: "Create assets stub" })).toBeInTheDocument();
     const props = bulk.props[bulk.props.length - 1];
     expect(props.source.id).toBe(1);
@@ -1158,7 +1238,18 @@ describe("DiscoveryPage Create assets (W7r)", () => {
     expect(props.model.sources.map((s) => s.id)).toEqual([1]);
   });
 
-  it("is not offered to a role without discovery.accept, even for a source with groups to map", async () => {
+  it("the right-click menu of the node lists the same item, and one group says group", async () => {
+    serverWith("admin", [three(), srcOf(2, "Rack 7")]);
+    openToasts();
+    await screen.findByText("Plant OPC");
+    fireEvent.contextMenu(node("src:1"));
+    expect(within(await screen.findByRole("menu", { name: "Actions for Plant OPC" })).getByRole("menuitem", { name: "Create assets for 3 groups…" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    fireEvent.contextMenu(node("src:2"));
+    expect(within(await screen.findByRole("menu", { name: "Actions for Rack 7" })).getByRole("menuitem", { name: "Create assets for 1 group…" })).toBeInTheDocument();
+  });
+
+  it("is not offered to a role without discovery.accept, even for a source with groups to map (its menu has Remove, and no Create assets)", async () => {
     mockFetch({
       ...routes("custom", world([three()])),
       "GET /api/me": { body: userFor("custom", { permissions: ["discovery.view", "discovery.edit"] }) },
@@ -1167,7 +1258,10 @@ describe("DiscoveryPage Create assets (W7r)", () => {
     openToasts();
     await screen.findByText("Plant OPC");
     await accountKnown();
-    expect(screen.queryByRole("button", { name: /^Create assets/ })).not.toBeInTheDocument();
+    await userEvent.click(await sourceActions("Plant OPC"));
+    const menu = await screen.findByRole("menu", { name: "Actions for Plant OPC" });
+    expect(within(menu).getByRole("menuitem", { name: "Remove from Discovery…" })).toBeInTheDocument(); // (the positive check: the menu is the right one)
+    expect(within(menu).queryByRole("menuitem", { name: /^Create assets/ })).not.toBeInTheDocument();
   });
 
   it("is not offered when no group is left to map (Ungrouped only, a custom guess with no unit, or everything mapped)", async () => {
@@ -1178,26 +1272,37 @@ describe("DiscoveryPage Create assets (W7r)", () => {
     ]);
     openToasts();
     await screen.findByText("Ungrouped only");
-    expect(screen.queryByRole("button", { name: /^Create assets/ })).not.toBeInTheDocument();
+    for (const name of ["Ungrouped only", "No unit"]) {
+      await userEvent.click(await sourceActions(name)); // (removable, so it has a menu: Remove is the positive check)
+      const menu = await screen.findByRole("menu", { name: `Actions for ${name}` });
+      expect(within(menu).getByRole("menuitem", { name: "Remove from Discovery…" })).toBeInTheDocument();
+      expect(within(menu).queryByRole("menuitem", { name: /^Create assets/ })).not.toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+    }
+    expect(screen.queryByRole("button", { name: "Source actions for Lab" })).not.toBeInTheDocument(); // nothing to offer: mapped, so neither item
+    fireEvent.contextMenu(node("src:3"));
+    const lab = await screen.findByRole("menu", { name: "Actions for Lab" });
+    expect(within(lab).getByRole("menuitem", { name: "Details" })).toBeInTheDocument();
+    expect(within(lab).queryByRole("menuitem", { name: /^Create assets/ })).not.toBeInTheDocument();
   });
 
-  it("closing the dialog puts the focus back on the Create assets… button", async () => {
+  it("closing the dialog puts the focus back on the node's Source actions button", async () => {
     serverWith("admin", [three()]);
     openToasts();
-    await userEvent.click(await screen.findByRole("button", { name: "Create assets for 3 groups of Plant OPC" }));
+    await pickFromSource("Plant OPC", "Create assets for 3 groups…");
     await userEvent.click(within(await screen.findByRole("dialog", { name: "Create assets stub" })).getByRole("button", { name: "Close stub" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Create assets for 3 groups of Plant OPC" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Source actions for Plant OPC" })).toHaveFocus();
   });
 
-  it("when every group has been made into an asset the button is gone, and the focus goes to the node's Details button", async () => {
+  it("when every group has been made into an asset the menu button is gone, and the focus goes to the node's Details button", async () => {
     const { state } = serverWith("admin", [three()]);
     openToasts();
-    await userEvent.click(await screen.findByRole("button", { name: "Create assets for 3 groups of Plant OPC" }));
+    await pickFromSource("Plant OPC", "Create assets for 3 groups…");
     const dialog = await screen.findByRole("dialog", { name: "Create assets stub" });
     state.sources = [srcOf(1, "Plant OPC", { clusters: three().clusters.map((c) => ({ key: c.key, points: c.points.map((p) => ({ ...p, asset_id: 10, mapping_id: p.id, mapped_metric: "active_power_kw" as const })) })) })];
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(screen.queryByRole("button", { name: /^Create assets/ })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Source actions for Plant OPC" })).not.toBeInTheDocument());
     await userEvent.click(within(dialog).getByRole("button", { name: "Close stub" }));
     expect(screen.getByRole("button", { name: "Details for Plant OPC" })).toHaveFocus();
   });
@@ -1559,11 +1664,31 @@ describe("DiscoveryPage Tidy layout, the bar, collapse and expand all (W7t)", ()
       expect(summary).not.toHaveAttribute("role");
       expect(summary).toHaveAttribute("title", summary.textContent as string);
       // W12b: a chevron beside each of the first two (named by aria-label, it draws only an icon) and the Unmapped only switch (not a button); the three old names keep their order.
+      // W12c: then the canvas controls (Find, Snap to grid) and the page controls (Refresh, the shortcuts bubble, the overflow menu), in three named groups.
       expect(within(bar).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
         "Collapse all", "More ways to collapse", "Expand all", "More ways to expand", "Tidy layout",
+        "Find", "Snap to grid", "Refresh", "Keyboard shortcuts and controls", "More Discovery actions",
       ]);
+      expect(within(bar).getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual(["View controls", "Canvas controls", "Page controls"]);
       expect(within(bar).getByRole("switch", { name: "Unmapped only" })).not.toBeChecked();
       for (const button of within(bar).getAllByRole("button")) expect(button).toHaveAttribute("type", "button");
+      // Exactly one live region in the bar: the chips are decoration (aria-hidden) and say the same numbers as the sentence.
+      expect(bar.querySelectorAll("[aria-live]")).toHaveLength(1);
+      expect(bar.querySelectorAll(".gbar-chip")).toHaveLength(3);
+      for (const chip of bar.querySelectorAll(".gbar-chip")) expect(chip).toHaveAttribute("aria-hidden", "true");
+    });
+
+    it("the chips say what the sentence says: sources, points (N of M with Unmapped only on), mapped, and a needs-credentials chip only when there is one", async () => {
+      const withCreds = graph();
+      withCreds.sources[0].needs_credentials = true;
+      mockFetch(routes("operator", withCreds));
+      open();
+      await screen.findByText("Plant OPC");
+      const bar = document.querySelector(".graph-bar") as HTMLElement;
+      const chips = () => [...bar.querySelectorAll(".gbar-chip")].map((c) => c.getAttribute("title"));
+      expect(chips()).toEqual(["1 source", "4 points", "0 mapped", "1 needs credentials"]);
+      await userEvent.click(within(bar).getByRole("switch", { name: "Unmapped only" }));
+      expect(chips()).toEqual(["1 source", "4 of 4 points", "0 mapped", "1 needs credentials"]);
     });
 
     it.each([
@@ -1948,12 +2073,26 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
     it("a source's menu holds Details, Expand, Create assets… and Remove for an admin, with the focus on the first", async () => {
       mockFetch(routes("admin", world([srcOf(1, "Plant OPC")]))); // (a group with a unit, so there is something to create assets from)
       open();
-      await screen.findByRole("button", { name: /Create assets for/ }); // (the account is known: the node's own buttons are there)
+      await screen.findByRole("button", { name: "Source actions for Plant OPC" }); // (the account is known: the node's own menu button is there)
       rightClick("src:1");
       const menu = await screen.findByRole("menu", { name: "Actions for Plant OPC" });
-      expect(labelsOf(menu)).toEqual(["Details", "Expand", "Create assets…", "Remove", "Expand this branch", "Collapse this branch"]); // (W12b: the branch items come last)
+      expect(labelsOf(menu)).toEqual(["Details", "Expand", "Create assets for 1 group…", "Remove from Discovery…", "Expand this branch", "Collapse this branch"]); // (W12b: the branch items come last; W12c: the two renamed items)
       expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus();
-      expect(within(menu).getByRole("menuitem", { name: "Remove" })).toHaveClass("danger-item");
+      expect(within(menu).getByRole("menuitem", { name: "Remove from Discovery…" })).toHaveClass("danger-item");
+    });
+
+    it("the Source actions button opens the very same menu as the right-click, next to the button, and returns the focus to it", async () => {
+      mockFetch(routes("admin", world([srcOf(1, "Plant OPC")])));
+      open();
+      const button = await screen.findByRole("button", { name: "Source actions for Plant OPC" });
+      expect(button).toHaveAttribute("aria-haspopup", "menu");
+      await userEvent.click(button);
+      const own = await screen.findByRole("menu", { name: "Actions for Plant OPC" });
+      const labels = labelsOf(own);
+      await userEvent.keyboard("{Escape}");
+      expect(button).toHaveFocus();
+      rightClick("src:1");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Plant OPC" }))).toEqual(labels);
     });
 
     it("a role with discovery.view alone gets Details and Expand: no Create assets… and no Remove (the menu is gated like the buttons)", async () => {
@@ -2189,6 +2328,62 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       expect(flow.setCenter).toHaveBeenCalledWith(x + 110, y + 40, expect.anything());
     });
 
+    it("the Find button is in the bar's Canvas controls and the card opens in the canvas's top-right panel, named by the button's aria-controls (W12c)", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      const group = screen.getByRole("group", { name: "Canvas controls" });
+      expect(within(group).getByRole("button", { name: "Find" })).toBe(findButton());
+      expect(findButton()).toHaveAttribute("aria-expanded", "false");
+      expect(findButton()).not.toHaveAttribute("aria-controls");
+      expect(document.querySelector(".graph-tools")).toBeNull(); // the panel holds only the card: nothing is drawn while it is closed
+      await userEvent.click(findButton());
+      const card = await screen.findByRole("search", { name: "Graph search" });
+      expect(findButton()).toHaveAttribute("aria-expanded", "true");
+      expect(findButton()).toHaveAttribute("aria-controls", card.id);
+      expect(card.closest(".graph-tools")?.closest(".graph-canvas")).not.toBeNull(); // in the canvas, over it,
+      expect(card.closest(".graph-bar")).toBeNull(); // not in the bar
+      expect(within(document.querySelector(".graph-tools") as HTMLElement).queryAllByRole("button")).toHaveLength(0); // and the panel has no buttons of its own
+      await userEvent.click(findButton()); // the button toggles
+      expect(screen.queryByRole("search", { name: "Graph search" })).not.toBeInTheDocument();
+      expect(findButton()).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("Escape gives the focus back to the Find button when that is what opened the card", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      act(() => findButton().focus());
+      await userEvent.click(findButton());
+      await screen.findByRole("combobox");
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+      expect(findButton()).toHaveFocus();
+    });
+
+    it("Ctrl+K on a control of the bar opens Find (the key goes no further), and with the card open it takes the focus back into its field", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      const heard = vi.fn((event: KeyboardEvent) => event.key);
+      document.addEventListener("keydown", heard);
+      try {
+        const snap = screen.getByRole("button", { name: "Snap to grid" });
+        act(() => snap.focus());
+        fireEvent.keyDown(snap, { key: "k", ctrlKey: true });
+        const field = await screen.findByRole("combobox");
+        expect(field).toHaveFocus();
+        expect(heard.mock.calls.filter(([event]) => event.key === "k")).toHaveLength(0); // the top bar's quick find never sees it
+        act(() => findButton().focus()); // (the button is part of the card's own zone, so the card stays)
+        expect(screen.getByRole("combobox")).toBeInTheDocument();
+        fireEvent.keyDown(findButton(), { key: "k", ctrlKey: true });
+        expect(screen.getByRole("combobox")).toHaveFocus();
+        expect(screen.getAllByRole("combobox")).toHaveLength(1);
+      } finally {
+        document.removeEventListener("keydown", heard);
+      }
+    });
+
     it("Escape in the Find card closes only the card: the selection stays", async () => {
       mockFetch(routes("operator"));
       open();
@@ -2239,36 +2434,75 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
     });
   });
 
-  describe("the hint and its tip", () => {
-    const TIP = "What can I do on the canvas?";
+  describe("the hint, the shortcuts bubble and the ? key (W12c)", () => {
+    const BUBBLE = "Keyboard shortcuts and controls";
+    const focusNode = (id: string) => act(() => node(id).focus());
 
-    it("the canvas draws the short line and a tip that lists the keys", async () => {
+    it("the canvas draws the one short sentence and the page icon, and no tip beside it", async () => {
       mockFetch(routes("operator"));
       open();
       await screen.findByText("Plant OPC");
-      expect(screen.getByText(/Dashed: discovered/)).toHaveClass("sub");
-      expect(screen.getByText(/Dashed: discovered/).textContent!.trim().length).toBeLessThan(100);
-      await userEvent.click(screen.getByRole("button", { name: TIP }));
-      const lines = within(await screen.findByRole("note")).getAllByRole("listitem").map((item) => item.textContent);
-      expect(lines).toHaveLength(8);
-      expect(lines[0]).toContain("Alt or Option moves it alone.");
-      expect(lines.join("\n")).toMatch(/Arrow keys move between nodes\. Enter opens or closes one\./);
-      expect(lines.join("\n")).toContain("Ctrl+Z undoes the last mapping change for 10 seconds.");
-      expect(lines.join("\n")).toMatch(/Shift-drag selects/);
-      expect(lines.join("\n")).toMatch(/Ctrl\+K finds/);
-      expect(lines.join("\n")).toMatch(/Shift\+F10/);
-      expect(lines.join("\n")).toMatch(/Escape/);
+      expect(screen.getByText(SUB)).toHaveClass("sub");
+      expect(SUB.length).toBeLessThan(100);
+      expect(screen.queryByRole("button", { name: "What can I do on the canvas?" })).not.toBeInTheDocument();
+      expect(document.querySelector(".page-head .page-tile svg")).not.toBeNull();
     });
 
-    it("the loading branch draws the same line and tip, so nothing moves when the graph arrives", async () => {
+    it("the loading branch draws the same sentence and icon, so nothing moves when the graph arrives", async () => {
       mockFetch(routes("operator"));
       const held = holdFetch((_method, path) => path === "/api/discovery/graph");
       open();
-      expect(screen.getByText(/Dashed: discovered/)).toHaveClass("sub");
-      expect(screen.getByRole("button", { name: TIP })).toBeInTheDocument();
+      expect(screen.getByText(SUB)).toHaveClass("sub");
+      expect(document.querySelector(".page-head .page-tile svg")).not.toBeNull();
       held.release();
       await screen.findByText("Plant OPC");
-      expect(screen.getAllByRole("button", { name: TIP })).toHaveLength(1);
+      expect(screen.getAllByText(SUB)).toHaveLength(1);
+    });
+
+    it("the shortcuts button is in the bar's Page controls and opens the bubble: six groups, the keys the canvas really has", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      const button = within(screen.getByRole("group", { name: "Page controls" })).getByRole("button", { name: BUBBLE });
+      expect(button).toHaveAttribute("aria-expanded", "false");
+      await userEvent.click(button);
+      const bubble = await screen.findByRole("dialog", { name: BUBBLE });
+      expect(button).toHaveAttribute("aria-expanded", "true");
+      expect(within(bubble).getAllByRole("heading").map((h) => h.textContent)).toEqual(["Move and select", "Camera", "Find", "Menus", "Mapping", "Navigation"]);
+    });
+
+    it("? on a focused node opens the bubble, and Escape gives the focus back to that node", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      focusNode("src:1");
+      expect(node("src:1")).toHaveFocus();
+      await userEvent.keyboard("?");
+      const bubble = await screen.findByRole("dialog", { name: BUBBLE });
+      expect(bubble).toHaveFocus();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog", { name: BUBBLE })).not.toBeInTheDocument();
+      expect(node("src:1")).toHaveFocus();
+    });
+
+    it("? typed in the Find card's field is a character: nothing opens", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await userEvent.click(screen.getByRole("button", { name: "Find" }));
+      const field = await screen.findByRole("combobox");
+      await userEvent.type(field, "?");
+      expect(field).toHaveValue("?");
+      expect(screen.queryByRole("dialog", { name: BUBBLE })).not.toBeInTheDocument();
+    });
+
+    it("? with a modal dialog open does nothing for the canvas", async () => {
+      mockFetch(routes("admin", world([srcOf(1, "Plant OPC")])));
+      open();
+      await removeFrom("Plant OPC");
+      await screen.findByRole("dialog", { name: 'Remove "Plant OPC" from Discovery?' });
+      fireEvent.keyDown(node("src:1"), { key: "?", shiftKey: true });
+      expect(screen.queryByRole("dialog", { name: BUBBLE })).not.toBeInTheDocument();
     });
   });
 });
@@ -2651,7 +2885,7 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
 
     it("the bulk create hands its own sentence and what it made to the same toast", async () => {
       const { toasts } = await start([KW_ON_PANEL]);
-      await userEvent.click(await screen.findByRole("button", { name: /^Create assets for/ }));
+      await userEvent.click(await sourceActions("Plant OPC")); await userEvent.click(await screen.findByRole("menuitem", { name: /^Create assets for/ }));
       await screen.findByRole("dialog", { name: "Create assets stub" });
       const info = { text: "Created 2 of 3 assets", kind: "error" as const, mappings: [{ id: 5, assetId: 30, name: "a" }], newAssets: ["LVP01"], undoTitle: "Unmap the points it mapped; the assets stay (Ctrl+Z)" };
       act(() => bulk.props[bulk.props.length - 1].onMapped(info));
@@ -2662,7 +2896,7 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
 
     it("the bulk create's Undo puts the focus on the canvas group too", async () => {
       const { toasts } = await start([KW_ON_PANEL]);
-      await userEvent.click(await screen.findByRole("button", { name: /^Create assets for/ }));
+      await userEvent.click(await sourceActions("Plant OPC")); await userEvent.click(await screen.findByRole("menuitem", { name: /^Create assets for/ }));
       await screen.findByRole("dialog", { name: "Create assets stub" });
       act(() => bulk.props[bulk.props.length - 1].onMapped({ text: "Created 1 asset", kind: "success", mappings: [{ id: 21, assetId: 11 }], newAssets: ["LVP01"] }));
       (document.activeElement as HTMLElement | null)?.blur();
@@ -2673,7 +2907,7 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
 
     it("the bulk create's toast has no Undo for discovery.accept alone", async () => {
       const { toasts } = await start([KW_ON_PANEL], ["discovery.view", "discovery.accept", "assets.view"]);
-      await userEvent.click(await screen.findByRole("button", { name: /^Create assets for/ }));
+      await userEvent.click(await sourceActions("Plant OPC")); await userEvent.click(await screen.findByRole("menuitem", { name: /^Create assets for/ }));
       await screen.findByRole("dialog", { name: "Create assets stub" });
       act(() => bulk.props[bulk.props.length - 1].onMapped({ text: "Created 1 asset", kind: "success", mappings: [{ id: 5, assetId: 30 }], newAssets: ["LVP01"] }));
       expect(toasts.calls).toEqual([{ kind: "success", text: "Created 1 asset" }]);
@@ -3890,7 +4124,12 @@ describe("DiscoveryPage arrow keys, camera and focus rules (W12b)", () => {
         await later(80);
         canvasGroup().getBoundingClientRect = () => box(100, 700);
         screen.getByTestId("minimap").getBoundingClientRect = () => box(450, 602, 600, 800);
-        document.querySelector(".graph-tools")!.getBoundingClientRect = () => box(108, 150);
+        // (W12c) The tools panel holds only the Find card now, so it is in the canvas only while the card is open, and the card closes when the focus moves to a node. The camera's
+        // rule is about whatever sits there when a jump is made, so this stands a panel in for it and measures it the same way.
+        const tools = document.createElement("div");
+        tools.className = "graph-tools";
+        tools.getBoundingClientRect = () => box(108, 150);
+        canvasGroup().append(tools);
         flow.state.viewport = { x: 0, y: targetTop - Number(node("cluster:1:LVP02").dataset.y), zoom: 1 }; // the target (80 tall) stands at screen y targetTop
         flow.setViewport.mockClear();
         focusOn("cluster:1:LVP01");
@@ -3998,13 +4237,15 @@ describe("DiscoveryPage arrow keys, camera and focus rules (W12b)", () => {
       expect(node("asset:10")).toHaveAccessibleDescription(DESCRIPTION);
     });
 
-    it("the tip lists the arrow keys", async () => {
+    it("the shortcuts bubble lists the arrow keys (the old tip beside the title is gone)", async () => {
       mockFetch(routes("operator"));
       open();
       await screen.findByText("Plant OPC");
-      await userEvent.click(screen.getByRole("button", { name: "What can I do on the canvas?" }));
-      const lines = within(await screen.findByRole("note")).getAllByRole("listitem").map((item) => item.textContent);
-      expect(lines).toContain("Arrow keys move between nodes. Enter opens or closes one.");
+      expect(screen.queryByRole("button", { name: "What can I do on the canvas?" })).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Keyboard shortcuts and controls" }));
+      const bubble = await screen.findByRole("dialog", { name: "Keyboard shortcuts and controls" });
+      expect(within(bubble).getByText("Move between nodes")).toBeInTheDocument();
+      expect(within(bubble).getByText("Arrow keys")).toBeInTheDocument();
     });
   });
 
@@ -4136,5 +4377,225 @@ describe("DiscoveryPage arrow keys, camera and focus rules (W12b)", () => {
         expect(node("point:12")).toHaveFocus();
       });
     });
+  });
+});
+
+// ---- W12c: the last value of a mapped point on hover or keyboard focus, and the handlers the page gives React Flow ----
+
+describe("DiscoveryPage last value card (W12c)", () => {
+  const MAPPED = 21;
+  /** One source with an open-able group of two points: point 1 is mapped (mapping 21), point 2 is not. */
+  const mappedWorld = () => graph({
+    sources: [{
+      ...graph().sources[0],
+      clusters: [{ key: "LVP01", points: [point(1, "LVP01 kW", { mapping_id: MAPPED, asset_id: 11, mapped_metric: "active_power_kw" }), point(2, "LVP01 V")] }],
+      ungrouped: [],
+    }],
+  });
+  const latestBody = (over: Record<string, unknown> = {}) => ({
+    mapping_id: MAPPED, value: 12.4, unit: "kW", ts: "2026-10-17T10:00:00Z", quality: 0, age_seconds: 3, stale: false, ...over,
+  });
+  const latestRoute = (body: Record<string, unknown> = latestBody()) => ({ [`GET /api/mappings/${MAPPED}/latest`]: { body } });
+  const latestCalls = (calls: { path: string }[]) => calls.filter((c) => c.path.endsWith("/latest"));
+  const expandBoth = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: "Expand Plant OPC" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Expand LVP01" }));
+  };
+  const card = () => screen.queryByRole("tooltip");
+  /** Real time passing, with the page's timers (the dwell) allowed to fire inside act. */
+  const rest = (ms: number) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+  /** The browser's own word for "the keyboard put the focus here" (jsdom says yes to a click too). */
+  const keyboard = { on: false };
+  beforeEach(() => {
+    keyboard.on = false;
+    const matches = Element.prototype.matches;
+    vi.spyOn(Element.prototype, "matches").mockImplementation(function (this: Element, selector: string) {
+      return selector === ":focus-visible" ? keyboard.on : matches.call(this, selector);
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("resting on a mapped point shows its last value after the dwell, in the project's number format", async () => {
+    const calls = mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    expect(card()).toBeNull(); // not before the dwell, and nothing asked yet
+    expect(latestCalls(calls)).toHaveLength(0);
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent("12.40 kW, 3 s ago"));
+    expect(latestCalls(calls).map((c) => c.path)).toEqual([`/api/mappings/${MAPPED}/latest`]);
+    // the node's description is kept and the card's id is appended to it while the card shows, and taken off again when it goes
+    expect(node("point:1").getAttribute("aria-describedby")).toBe(`flow-node-desc ${screen.getByRole("tooltip").id}`);
+    fireEvent.click(screen.getByTestId("leave-point:1"));
+    await waitFor(() => expect(card()).toBeNull());
+    expect(node("point:1").getAttribute("aria-describedby")).toBe("flow-node-desc");
+  });
+
+  it("an unmapped point shows no card and asks for nothing", async () => {
+    const calls = mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.click(screen.getByTestId("enter-point:2"));
+    await rest(500); // (longer than the dwell)
+    expect(card()).toBeNull();
+    expect(latestCalls(calls)).toHaveLength(0);
+  });
+
+  it("a group, a source and an asset have no value either", async () => {
+    const calls = mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    for (const id of ["cluster:1:LVP01", "src:1", "asset:10"]) fireEvent.click(screen.getByTestId(`enter-${id}`));
+    await rest(500);
+    expect(card()).toBeNull();
+    expect(latestCalls(calls)).toHaveLength(0);
+  });
+
+  it("a role without assets.view makes no value request and shows no card (the positive check: the same hover with the permission does)", async () => {
+    const calls = mockFetch({
+      ...routes("custom", mappedWorld()),
+      "GET /api/me": { body: userFor("custom", { permissions: ["discovery.view"] }) },
+      ...latestRoute(),
+    });
+    open();
+    await expandBoth();
+    await accountKnown();
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await rest(600);
+    expect(card()).toBeNull();
+    expect(latestCalls(calls)).toHaveLength(0);
+  });
+
+  it("the keyboard's focus on a mapped point shows the card too, and a click's focus does not", async () => {
+    mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    keyboard.on = false;
+    act(() => node("point:1").focus());
+    await rest(500);
+    expect(card()).toBeNull(); // a mouse focus
+    act(() => (document.activeElement as HTMLElement).blur());
+    keyboard.on = true;
+    act(() => node("point:1").focus());
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent("12.40 kW, 3 s ago"));
+    act(() => node("point:1").blur());
+    await waitFor(() => expect(card()).toBeNull());
+    expect(node("point:1").getAttribute("aria-describedby")).toBe("flow-node-desc");
+  });
+
+  it("a pan or zoom (the canvas moving) takes the card away", async () => {
+    mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    fireEvent.click(screen.getByTestId("move-start"));
+    await waitFor(() => expect(card()).toBeNull());
+  });
+
+  it("starting to drag the node takes the card away", async () => {
+    mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    fireEvent.click(screen.getByTestId("dragstart-point:1"));
+    await waitFor(() => expect(card()).toBeNull());
+  });
+
+  it("the card goes when its node leaves the canvas (a collapse)", async () => {
+    mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    await userEvent.click(screen.getByRole("button", { name: "Collapse LVP01" }));
+    await waitFor(() => expect(card()).toBeNull());
+  });
+
+  // ---- the card beside a menu and Find: the card (z-index 200) would cover the menu (90), and one Escape would close both ----
+
+  it("a right-click on the point with the card showing takes the card away, and ONE Escape then closes the menu only", async () => {
+    mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    fireEvent.contextMenu(node("point:1"));
+    await screen.findByRole("menu", { name: "Actions for LVP01 kW" });
+    await waitFor(() => expect(card()).toBeNull());
+    expect(node("point:1").getAttribute("aria-describedby")).toBe("flow-node-desc"); // and its id is off the node again
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(node("point:1")).toHaveFocus();
+    expect(card()).toBeNull();
+  });
+
+  it("the node's own menu button does the same (the pointer rests on the node when it is pressed)", async () => {
+    mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    await userEvent.click(screen.getByRole("button", { name: "Mapping actions for LVP01 kW" }));
+    await screen.findByRole("menu", { name: "Actions for LVP01 kW" });
+    await waitFor(() => expect(card()).toBeNull());
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mapping actions for LVP01 kW" })).toHaveFocus();
+  });
+
+  it("resting on a mapped point while a menu is open shows no card and asks for nothing; it shows again once the menu has closed", async () => {
+    const calls = mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.contextMenu(node("point:1")); // the menu first, no card yet
+    await screen.findByRole("menu", { name: "Actions for LVP01 kW" });
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await rest(600); // (longer than the dwell)
+    expect(card()).toBeNull();
+    expect(latestCalls(calls)).toHaveLength(0);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+  });
+
+  it("opening Find takes a shown card away, no card shows while Find is open, and Escape in the Find field closes Find first", async () => {
+    const calls = mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    await userEvent.click(screen.getByRole("button", { name: "Find" }));
+    const field = await screen.findByRole("combobox");
+    await waitFor(() => expect(card()).toBeNull());
+    expect(latestCalls(calls)).toHaveLength(1); // the one read of the first show
+    fireEvent.click(screen.getByTestId("leave-point:1"));
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await rest(600);
+    expect(card()).toBeNull(); // Find is open: nothing starts
+    expect(latestCalls(calls)).toHaveLength(1);
+    act(() => field.focus());
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument(); // the first Escape closes Find
+  });
+
+  it("the hover handlers React Flow is given keep one identity across renders (a new identity re-renders every node), and so does the move handler", async () => {
+    mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.click(screen.getByTestId("enter-point:1")); // a render of the canvas (the path highlight and the card both change state)
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    fireEvent.click(screen.getByTestId("leave-point:1"));
+    await waitFor(() => expect(card()).toBeNull());
+    await userEvent.click(screen.getByRole("button", { name: "Snap to grid" })); // and another
+    const seen = flow.state.handlers;
+    expect(seen.length).toBeGreaterThan(4);
+    expect(new Set(seen.map((h) => h.enter)).size).toBe(1);
+    expect(new Set(seen.map((h) => h.leave)).size).toBe(1);
+    expect(new Set(seen.map((h) => h.moveStart)).size).toBe(1);
   });
 });

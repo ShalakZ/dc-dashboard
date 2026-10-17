@@ -1,99 +1,47 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import type { ActionState } from "../../lib/graphView";
-import type { Box } from "../../lib/placePanel";
-import { Icon } from "../Icon";
-import { GraphContextMenu } from "./GraphContextMenu";
+import { useRef, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import type { ActionState, GraphCounts } from "../../lib/graphView";
+import { Icon, type IconName } from "../Icon";
+import { BarMenu, type BarMenuItem } from "./BarMenu";
+import { FindButton } from "./FindButton";
 
-interface Item {
-  label: string;
-  state: ActionState;
-  onSelect: () => void;
-}
+const ok: ActionState = { enabled: true };
 
-/**
- * The small chevron beside Collapse all / Expand all: a menu button with two items (the selection, the branch). A chevron with nothing to offer
- * keeps its place and says why: `aria-disabled` (never native `disabled`, it may hold the focus the click gave it), a click guard, the reason as its
- * title and as a hidden description that is always in the DOM (so a chevron that becomes blocked adds no node and moves nothing).
- *
- * The menu closes itself on any press outside it, and the click that follows a press on the chevron would open it again: the press is noted first
- * (capture phase, before the menu's own listener), so the second press on the chevron closes the menu and only closes it (as `useCanvasMenu` does).
- */
-function MoreWays({ name, menuLabel, items }: { name: string; menuLabel: string; items: [Item, Item] }) {
-  const button = useRef<HTMLButtonElement>(null);
-  const [menu, setMenu] = useState<{ id: number; box: Box } | null>(null);
-  const sequence = useRef(0);
-  const reasonId = useId();
-  const standing = useRef(false); // whether the menu is open as the next press will find it
-  standing.current = menu !== null;
-  const pressed = useRef(false); // the last press landed on the chevron while its menu stood
-  const close = useCallback(() => setMenu(null), []);
-
-  useEffect(() => {
-    const note = (event: Event) => {
-      pressed.current = event.type === "pointerdown" && standing.current && event.target instanceof Node && !!button.current?.contains(event.target);
-    };
-    document.addEventListener("pointerdown", note, true);
-    document.addEventListener("keydown", note, true); // a key press forgets the press: a button pressed and left with no click must not swallow the next open
-    return () => {
-      document.removeEventListener("pointerdown", note, true);
-      document.removeEventListener("keydown", note, true);
-    };
-  }, []);
-
-  const blocked = items.every((item) => !item.state.enabled);
-  const reason = items.find((item) => item.state.reason)?.state.reason;
-
-  const onClick = () => {
-    if (pressed.current) {
-      pressed.current = false; // the second half of the press that already closed the menu
-      return;
-    }
-    if (blocked) return;
-    if (menu) return close();
-    const at = button.current?.getBoundingClientRect();
-    if (at) setMenu({ id: ++sequence.current, box: { top: at.top, left: at.left, right: at.right, bottom: at.bottom } });
-  };
-
+/** One count of the graph, drawn as decoration: the sentence beside it (`.graph-summary`) is what is announced. */
+function Chip({ icon, num, word, tone }: { icon: IconName; num: string; word: string; tone?: "warn" }) {
   return (
-    <>
-      <button
-        ref={button}
-        type="button"
-        className="graph-bar-more"
-        aria-label={name}
-        aria-haspopup="menu"
-        aria-expanded={menu !== null}
-        aria-disabled={blocked || undefined}
-        aria-describedby={reasonId}
-        title={blocked ? reason : undefined}
-        onClick={onClick}
-      ><Icon name="caret" /></button>
-      <span id={reasonId} className="sr-only">{blocked ? reason : ""}</span>
-      {menu && (
-        <GraphContextMenu
-          key={menu.id}
-          at={{ box: menu.box }}
-          label={menuLabel}
-          returnFocus={() => button.current}
-          onClose={close}
-          items={items.map((item) => ({ label: item.label, disabled: !item.state.enabled, reason: item.state.reason, onSelect: item.onSelect }))}
-        />
-      )}
-    </>
+    <span className={tone ? `gbar-chip gbar-chip-${tone}` : "gbar-chip"} title={`${num} ${word}`} aria-hidden="true">
+      <Icon name={icon} />
+      <span className="gbar-chip-num">{num}</span>
+      <span className="gbar-chip-word">{word}</span>
+    </span>
   );
 }
 
+const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
+
+/** Whether the bar's own copy of a control is not drawn (its stylesheet has taken it out for lack of room): the CSS decides, the menu asks. */
+const notDrawn = (el: HTMLElement | null) => el !== null && getComputedStyle(el).display === "none";
+
 /**
- * The bar above the Discovery canvas: what the graph holds (the one polite announcer of the area), Collapse all, Expand all and Tidy layout, a
- * chevron menu beside each of the first two for the selection and the branch, and the Unmapped only switch at the end. A button with nothing to do
+ * The bar above the Discovery canvas, left to right: chips (what the graph holds), View controls (Collapse all, Expand all, each with a chevron
+ * menu for the selection and the branch, the Unmapped only switch, Tidy layout), Canvas controls (Find, Snap to grid) and Page controls
+ * (Refresh, the shortcuts bubble the page hands in, and an overflow menu). It is 36px tall in every state and its width tiers are CSS
+ * container queries (discovery-tidy.css): chips shrink to icon and number first, then the controls lose their words ONE AT A TIME (Snap to grid,
+ * Find, Tidy layout, Unmapped only, then Collapse all and Expand all together; each word has its own `gbar-lbl-*` class, and the word stays in the
+ * accessibility tree, visually hidden, with the control's `title`), and below that Unmapped only, Tidy layout and Snap to grid leave the bar and
+ * are offered in the overflow menu.
+ *
+ * The one announcer of the area is the summary sentence (visually hidden, `aria-live`); the chips are decoration. A button with nothing to do
  * keeps its place and says so (`aria-disabled` and a click guard, never `disabled`: it may hold the focus the click gave it).
  */
 export function GraphBar({
-  summary, collapsible, expandable, tidying, unmappedOnly, onUnmappedOnly, onCollapseAll, onExpandAll, onTidy,
+  summary, counts, collapsible, expandable, tidying, unmappedOnly, onUnmappedOnly, onCollapseAll, onExpandAll, onTidy,
   expandSelection, collapseSelection, expandBranch, collapseBranch,
   onExpandSelection, onCollapseSelection, onExpandBranch, onCollapseBranch,
+  snap, onSnap, find, onRefresh, refreshRef, clear, shortcuts, onFindKey,
 }: {
   summary: string;
+  counts: GraphCounts;
   collapsible: boolean;
   expandable: boolean;
   tidying: boolean;
@@ -110,45 +58,134 @@ export function GraphBar({
   onCollapseSelection: () => void;
   onExpandBranch: () => void;
   onCollapseBranch: () => void;
+  snap: boolean;
+  onSnap: (on: boolean) => void;
+  /** The Find button: the card itself stays in the canvas (`CanvasTools`), and the page owns whether it is open. */
+  find: { open: boolean; cardId: string; onToggle: () => void; buttonRef: Ref<HTMLButtonElement> };
+  onRefresh: () => void;
+  /** Where the page's focus goes after a source is removed from the graph. */
+  refreshRef?: Ref<HTMLButtonElement>;
+  /** Present only for a role that may clear unmapped sources. */
+  clear?: { count: number; onClear: () => void };
+  /** The shortcuts bubble's trigger, drawn among the page controls. */
+  shortcuts: ReactNode;
+  /** Ctrl or Cmd + K pressed on the bar (not inside the Find card or a menu): the page opens Find. */
+  onFindKey: () => void;
 }) {
+  const switchRef = useRef<HTMLLabelElement>(null);
+  const tidyRef = useRef<HTMLButtonElement>(null);
+  const snapRef = useRef<HTMLButtonElement>(null);
+
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || (event.key ?? "").toLowerCase() !== "k") return;
+    if (event.target instanceof Element && event.target.closest(".graph-find, .graph-menu")) return; // those keep their own Ctrl+K
+    event.preventDefault(); // the top bar's quick find listens on the document
+    event.stopPropagation();
+    onFindKey();
+  };
+
+  // Read when the menu opens, not on every render: a narrow control is listed only if the bar's copy of it is not drawn right then.
+  const overflowItems = (): BarMenuItem[] => {
+    const items: BarMenuItem[] = [];
+    if (notDrawn(switchRef.current)) items.push({ label: `Turn ${unmappedOnly ? "off" : "on"} Unmapped only`, state: ok, onSelect: () => onUnmappedOnly(!unmappedOnly) });
+    if (notDrawn(tidyRef.current)) items.push({ label: "Tidy layout", state: { enabled: !tidying }, onSelect: () => { if (!tidying) onTidy(); } });
+    if (notDrawn(snapRef.current)) items.push({ label: `Turn ${snap ? "off" : "on"} Snap to grid`, state: ok, onSelect: () => onSnap(!snap) });
+    if (clear) {
+      items.push({
+        label: `Clear unmapped (${clear.count})`,
+        state: clear.count === 0 ? { enabled: false, reason: "Nothing to clear" } : ok,
+        onSelect: clear.onClear,
+      });
+    }
+    return items;
+  };
+
+  const pointsNum = unmappedOnly ? `${counts.unmapped} of ${counts.points}` : String(counts.points);
+
   return (
-    <div className="graph-bar">
+    <div className="graph-bar" onKeyDown={onKeyDown}>
       {/* The one announcer of this area: React leaves the text alone when the numbers do not change, so it speaks only when they do. */}
       <p className="graph-summary" aria-live="polite" aria-atomic="true" title={summary}>{summary}</p>
-      <button
-        type="button"
-        aria-disabled={!collapsible || undefined}
-        title={collapsible ? undefined : "Nothing is open"}
-        onClick={() => { if (collapsible) onCollapseAll(); }}
-      >Collapse all</button>
-      <MoreWays
-        name="More ways to collapse"
-        menuLabel="Collapse options"
-        items={[
-          { label: "Collapse selection", state: collapseSelection, onSelect: onCollapseSelection },
-          { label: "Collapse this branch", state: collapseBranch, onSelect: onCollapseBranch },
-        ]}
-      />
-      <button
-        type="button"
-        aria-disabled={!expandable || undefined}
-        title={expandable ? undefined : "Everything is open"}
-        onClick={() => { if (expandable) onExpandAll(); }}
-      >Expand all</button>
-      <MoreWays
-        name="More ways to expand"
-        menuLabel="Expand options"
-        items={[
-          { label: "Expand selection", state: expandSelection, onSelect: onExpandSelection },
-          { label: "Expand this branch", state: expandBranch, onSelect: onExpandBranch },
-        ]}
-      />
-      <button type="button" aria-disabled={tidying || undefined} onClick={() => { if (!tidying) onTidy(); }}>Tidy layout</button>
-      {/* Always drawn, with its words fixed, so the bar never changes width; the same words as the Points page's checkbox. */}
-      <label className="check graph-bar-switch">
-        <input type="checkbox" role="switch" checked={unmappedOnly} onChange={(event) => onUnmappedOnly(event.target.checked)} />
-        Unmapped only
-      </label>
+      <div className="gbar-chips">
+        <Chip icon="sources" num={String(counts.sources)} word={plural(counts.sources, "source", "sources")} />
+        <Chip icon="readings" num={pointsNum} word={plural(counts.points, "point", "points")} />
+        <Chip icon="link" num={String(counts.mapped)} word="mapped" />
+        {counts.needing > 0 && <Chip icon="alert" tone="warn" num={String(counts.needing)} word={plural(counts.needing, "needs credentials", "need credentials")} />}
+      </div>
+      <span className="gbar-divider" aria-hidden="true" />
+      <div className="gbar-group" role="group" aria-label="View controls">
+        <button
+          type="button"
+          aria-disabled={!collapsible || undefined}
+          title={collapsible ? "Collapse all" : "Nothing is open"}
+          onClick={() => { if (collapsible) onCollapseAll(); }}
+        ><Icon name="collapse" /><span className="gbar-lbl gbar-lbl-fold">Collapse all</span></button>
+        <BarMenu
+          name="More ways to collapse"
+          menuLabel="Collapse options"
+          icon="caret"
+          className="graph-bar-more"
+          items={[
+            { label: "Collapse selection", state: collapseSelection, onSelect: onCollapseSelection },
+            { label: "Collapse this branch", state: collapseBranch, onSelect: onCollapseBranch },
+          ]}
+        />
+        <button
+          type="button"
+          aria-disabled={!expandable || undefined}
+          title={expandable ? "Expand all" : "Everything is open"}
+          onClick={() => { if (expandable) onExpandAll(); }}
+        ><Icon name="expandAll" /><span className="gbar-lbl gbar-lbl-fold">Expand all</span></button>
+        <BarMenu
+          name="More ways to expand"
+          menuLabel="Expand options"
+          icon="caret"
+          className="graph-bar-more"
+          items={[
+            { label: "Expand selection", state: expandSelection, onSelect: onExpandSelection },
+            { label: "Expand this branch", state: expandBranch, onSelect: onExpandBranch },
+          ]}
+        />
+        {/* Always drawn, so the bar never changes width when the filter is turned on; the same words as the Points page's checkbox. */}
+        <label ref={switchRef} className="check graph-bar-switch gbar-narrow" title="Unmapped only">
+          <input type="checkbox" role="switch" checked={unmappedOnly} onChange={(event) => onUnmappedOnly(event.target.checked)} />
+          <Icon name="filter" />
+          <span className="gbar-lbl gbar-lbl-unmapped">Unmapped only</span>
+        </label>
+        <button
+          type="button"
+          ref={tidyRef}
+          className="gbar-narrow"
+          aria-disabled={tidying || undefined}
+          title="Tidy layout"
+          onClick={() => { if (!tidying) onTidy(); }}
+        ><Icon name="tidy" /><span className="gbar-lbl gbar-lbl-tidy">Tidy layout</span></button>
+      </div>
+      <span className="gbar-divider" aria-hidden="true" />
+      <div className="gbar-group" role="group" aria-label="Canvas controls">
+        <FindButton open={find.open} cardId={find.cardId} onToggle={find.onToggle} buttonRef={find.buttonRef} />
+        <button
+          type="button"
+          ref={snapRef}
+          className="gbar-narrow"
+          aria-pressed={snap}
+          title="Snap to grid"
+          onClick={() => onSnap(!snap)}
+        ><Icon name="grid" /><span className="gbar-lbl gbar-lbl-snap">Snap to grid</span></button>
+      </div>
+      <span className="gbar-divider" aria-hidden="true" />
+      <div className="gbar-group" role="group" aria-label="Page controls">
+        <button type="button" ref={refreshRef} className="icon-btn" aria-label="Refresh" title="Refresh" onClick={onRefresh}><Icon name="refresh" /></button>
+        {shortcuts}
+        {/* A role that may not clear unmapped has nothing in the menu while every control is drawn: its button shows only in the narrowest tier. */}
+        <BarMenu
+          name="More Discovery actions"
+          menuLabel="Discovery actions"
+          icon="more"
+          className={clear ? "icon-btn gbar-overflow" : "icon-btn gbar-overflow gbar-overflow-narrow"}
+          items={overflowItems}
+        />
+      </div>
     </div>
   );
 }

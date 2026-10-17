@@ -3,7 +3,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_permission
@@ -217,3 +217,34 @@ async def series(
         "tier": found.tier,
         "points": [{"ts": p.ts, "avg": p.avg, "min": p.min, "max": p.max} for p in found.points],
     }
+
+
+@router.get("/mappings/{mapping_id}/latest")
+async def mapping_latest(mapping_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    """The last reading of one mapped point, for the hover card in Discovery: the scaled value, its unit, when it was read and
+    how old that is. Light on purpose (one row, no rollup, no cost), so a hover can ask for it. The age is the database's
+    clock against the reading's own time, the same clock `GET /api/status` uses, and `stale` is derived from that age
+    by the widgets' rule, so the two numbers can never disagree. Nothing read yet: value, ts, quality and age are null."""
+    age = func.extract("epoch", func.now() - PointLatest.ts)
+    row = (
+        await db.execute(
+            select(Mapping, PointLatest, age.label("age"))
+            .outerjoin(PointLatest, PointLatest.point_id == Mapping.point_id)
+            .where(Mapping.id == mapping_id)
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(404, "mapping not found")
+    mapping, latest, seconds = row
+    result: dict[str, Any] = {
+        "mapping_id": mapping.id, "value": None, "unit": unit_for(Metric(mapping.metric), mapping.custom_unit),
+        "ts": None, "quality": None, "age_seconds": None, "stale": False,
+    }
+    if latest is not None:
+        age_seconds = max(0.0, float(seconds))  # a reading stamped ahead of the database's clock is "just now", never negative
+        result.update(
+            value=None if latest.value is None else latest.value * mapping.scale,
+            ts=latest.ts, quality=latest.quality, age_seconds=age_seconds,
+            stale=is_stale(latest.ts, latest.ts + timedelta(seconds=age_seconds), mapping.interval_seconds),
+        )
+    return result

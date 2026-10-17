@@ -255,7 +255,8 @@ export interface GraphSource {
 export interface GraphModel {
   sources: GraphSource[];
   unidentified: { host: string; port: number; scan_id: number }[];
-  assets: Pick<Asset, "id" | "parent_id" | "name" | "kind">[];
+  /** `icon` (the one chosen, null = Automatic) and `kind_icon` (the registry's, resolved) are what `assetIcon` needs; left out by an older response and by old fixtures. */
+  assets: (Pick<Asset, "id" | "parent_id" | "name" | "kind"> & { icon?: string | null; kind_icon?: string | null })[];
   layout: Record<string, { x: number; y: number }>;
 }
 export interface AcceptPointIn { point_id: number; metric: Metric; scale: number; interval_seconds: number | null; custom_unit: string | null }

@@ -20,13 +20,29 @@ export interface ApiSource {
   last_error: string | null; has_secret: boolean; needs_credentials: boolean; point_count: number; clusters: ApiCluster[]; ungrouped: ApiPoint[];
   last_scan: { scan_id: number; at: string } | null;
 }
-export interface ApiAsset { id: number; parent_id: number | null; name: string; kind: string }
+/**
+ * W12c: an asset of the graph carries `icon` (the one somebody chose; null is Automatic) and `kind_icon` (the registry's icon for its kind; null when the kind is not
+ * registered), the same two fields `/api/assets` serves: the node draws `assetIcon({ kind, icon, kind_icon })`.
+ */
+export interface ApiAsset { id: number; parent_id: number | null; name: string; kind: string; icon: string | null; kind_icon: string | null }
 export interface ApiGraphModel {
   sources: ApiSource[];
   unidentified: { host: string; port: number; scan_id: number }[];
   assets: ApiAsset[];
   layout: Record<string, XY>;
 }
+
+/**
+ * W12c: the answer of `GET /api/mappings/{id}/latest`, the newest reading of a mapped point (value already multiplied by the scale), which the value card asks for after a point node has
+ * been hovered or focused for a moment. The mappings of a generated graph do not exist on the stack, so a spec that stubs the graph answers this route too (`page.route`) with a body from here.
+ * `value`, `ts`, `quality` and `age_seconds` are null when the point has no reading yet.
+ */
+export interface ApiLatest {
+  mapping_id: number; value: number | null; unit: string; ts: string | null; quality: number | null; age_seconds: number | null; stale: boolean;
+}
+export const latestBody = (mappingId: number, over: Partial<ApiLatest> = {}): ApiLatest => ({
+  mapping_id: mappingId, value: 12.4, unit: "kW", ts: "2026-10-17T10:00:00+00:00", quality: 0, age_seconds: 3, stale: false, ...over,
+});
 
 /** The ids the page gives its nodes (src/lib/graph.ts `nodeId`). */
 export const node = {
@@ -151,8 +167,9 @@ export function smallModel(): ApiGraphModel {
     sources: [alpha, bravo, charlie, delta].map(withCount),
     unidentified: [],
     assets: [
-      { id: SMALL.hall, parent_id: null, name: SMALL_NAMES.hall, kind: "generic" },
-      { id: SMALL.rack, parent_id: SMALL.hall, name: SMALL_NAMES.rack, kind: "generic" },
+      // The hall is Automatic (no chosen icon: the kind's, the generic one); the rack has the Rack icon CHOSEN over its kind's (the node must draw the chosen one).
+      { id: SMALL.hall, parent_id: null, name: SMALL_NAMES.hall, kind: "generic", icon: null, kind_icon: "generic" },
+      { id: SMALL.rack, parent_id: SMALL.hall, name: SMALL_NAMES.rack, kind: "generic", icon: "rack", kind_icon: "generic" },
     ],
     layout: {},
   };
@@ -207,7 +224,7 @@ export function bigModel(shapes: readonly Shape[], assets = 12): ApiGraphModel {
     }));
   });
   const list: ApiAsset[] = [];
-  for (let a = 1; a <= assets; a++) list.push({ id: BASE + 800 + a, parent_id: null, name: `W7u Big asset ${a}`, kind: "generic" });
+  for (let a = 1; a <= assets; a++) list.push({ id: BASE + 800 + a, parent_id: null, name: `W7u Big asset ${a}`, kind: "generic", icon: null, kind_icon: "generic" });
   return { sources, unidentified: [], assets: list, layout: {} };
 }
 

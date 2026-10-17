@@ -95,7 +95,7 @@ async def seed(db, user_id: int) -> dict[str, Any]:
     await db.execute("UPDATE sources SET last_error = $2 WHERE id = $1", source, ERROR_TEXT)
     point = await make_point(db, source, "P1")
     asset = await make_asset(db, "Hall A")
-    await make_mapping(db, point, asset)
+    mapping = await make_mapping(db, point, asset)
     discovered = await db.fetchval(
         "INSERT INTO sources (name, connector_type, config, enabled, origin, last_error) "
         "VALUES ('found', 'simulator', $1, false, 'discovered', $2) RETURNING id",
@@ -121,7 +121,7 @@ async def seed(db, user_id: int) -> dict[str, Any]:
     )
     dashboard = await db.fetchval("INSERT INTO dashboards (name) VALUES ('Overview') RETURNING id")
     return {
-        "source_id": source, "asset_id": asset, "job_id": job, "scan_id": scan, "scope_id": scope,
+        "source_id": source, "asset_id": asset, "mapping_id": mapping, "job_id": job, "scan_id": scan, "scope_id": scope,
         "dashboard_id": dashboard,
     }
 

@@ -114,6 +114,22 @@ export const ICONS = {
   info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5.5M12 7.8h.01" /></>,
   alert: <><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5.5M12 16.2h.01" /></>,
   kindGeneric: <><path d="M12 3 4 7.5v9l8 4.5 8-4.5v-9L12 3Z" /><path d="m4 7.5 8 4.5 8-4.5M12 12v9" /></>,
+  // w12c Discovery polish. The bar: a keyboard (four keys over a space bar), a circular arrow, two arrows pointing out of the corners, bars lined up on an edge
+  // (Tidy layout), a 3 by 3 grid (Snap to grid) and two chain links:
+  keyboard: <><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6.5 9.8h.01M10.2 9.8h.01M13.8 9.8h.01M17.5 9.8h.01" /><path d="M7.5 14.5h9" /></>,
+  refresh: <><path d="M19.5 12a7.5 7.5 0 1 1-1.5-4.5" /><path d="M18 3v4.5h-4.5" /></>,
+  expandAll: <><path d="M14 4h6v6M20 4l-7 7" /><path d="M10 20H4v-6M4 20l7-7" /></>,
+  tidy: <><path d="M4 3.5v17" /><rect x="8" y="3.75" width="12" height="3.5" rx="1" /><rect x="8" y="10.25" width="7" height="3.5" rx="1" /><rect x="8" y="16.75" width="10" height="3.5" rx="1" /></>,
+  grid: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M3 15h18M9 3v18M15 3v18" /></>,
+  link: <><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3.1-3.1a4.5 4.5 0 0 0-6.4-6.4l-1.1 1.1" /><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3.1 3.1a4.5 4.5 0 0 0 6.4 6.4l1.1-1.1" /></>,
+  // One per connector (`lib/graphIcons.ts`): a flat-topped hexagon holding a U (OPC UA), a serial-port plug with its pins (Modbus) and a lab flask (the simulator).
+  protoOpcua: <><path d="M7.5 4.2h9L21 12l-4.5 7.8h-9L3 12l4.5-7.8Z" /><path d="M9.2 9.2v3.3a2.8 2.8 0 0 0 5.6 0V9.2" /></>,
+  protoModbus: <><path d="M4 7h16l-2.5 10h-11L4 7Z" /><path d="M8 10.5h.01M12 10.5h.01M16 10.5h.01M10 13.8h.01M14 13.8h.01" /></>,
+  protoSimulator: <><path d="M9.5 3h5M10.5 3v6L5 19.2a1.6 1.6 0 0 0 1.4 2.3h11.2a1.6 1.6 0 0 0 1.4-2.3L13.5 9V3" /><path d="M7.8 15h8.4" /></>,
+  // One per kind of reading, beside `rate` (power) and `energy`: a voltmeter (V in a ring), an ammeter (A in a ring) and four small rings for anything else.
+  metricVoltage: <><circle cx="12" cy="12" r="9" /><path d="M8.5 8.8 12 16l3.5-7.2" /></>,
+  metricCurrent: <><circle cx="12" cy="12" r="9" /><path d="M8.5 16 12 8l3.5 8M9.9 13.6h4.2" /></>,
+  metricOther: <><circle cx="7.5" cy="7.5" r="2.5" /><circle cx="16.5" cy="7.5" r="2.5" /><circle cx="7.5" cy="16.5" r="2.5" /><circle cx="16.5" cy="16.5" r="2.5" /></>,
 } satisfies Record<string, ReactNode>;
 export type IconName = keyof typeof ICONS;
 

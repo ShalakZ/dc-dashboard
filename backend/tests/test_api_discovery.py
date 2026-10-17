@@ -3,6 +3,7 @@ from datetime import datetime
 
 import pytest
 
+from dcdash.core.asset_kinds import kind_key
 from helpers import listening, login_as, make_asset, make_mapping, make_source
 
 SIGNALS = (("kW", "kW"), ("kWh", "kWh"), ("V", "V"))
@@ -85,12 +86,36 @@ async def test_graph_shows_mappings_assets_layout_and_manual_sources(client, db)
     mapping = await make_mapping(db, ids["LVP01_kW"], site)
     await db.execute("INSERT INTO graph_layout VALUES ($1, 5, 6)", f"asset:{site}")
     graph = (await client.get("/api/discovery/graph")).json()
-    assert graph["assets"] == [{"id": site, "parent_id": None, "name": "Site", "kind": "generic"}]
+    assert graph["assets"] == [
+        {"id": site, "parent_id": None, "name": "Site", "kind": "generic", "icon": None, "kind_icon": None}
+    ]
     assert graph["layout"] == {f"asset:{site}": {"x": 5.0, "y": 6.0}}
     mapped = next(p for c in graph["sources"][0]["clusters"] for p in c["points"] if p["id"] == ids["LVP01_kW"])
     assert mapped["mapping_id"] == mapping and mapped["asset_id"] == site and mapped["mapped_metric"] == "active_power_kw"
     unmapped = next(p for c in graph["sources"][0]["clusters"] for p in c["points"] if p["id"] == ids["LVP01_kWh"])
     assert unmapped["mapping_id"] is None and unmapped["mapped_metric"] is None
+
+
+async def test_graph_assets_carry_their_own_icon_and_the_registry_icon_of_their_kind(client, db):
+    await login_as(client, db, "admin")
+    await db.execute("INSERT INTO asset_kinds (name, key, icon) VALUES ('Rack', $1, 'server')", kind_key("Rack"))
+    automatic = await make_asset(db, "Automatic")  # kind generic, which no registry row names
+    registered = await make_asset(db, "Registered")
+    chosen = await make_asset(db, "Chosen")
+    unregistered = await make_asset(db, "Unregistered")
+    await db.execute("UPDATE assets SET kind = '  RACK ' WHERE id = $1", registered)  # the spelling does not matter
+    await db.execute("UPDATE assets SET kind = 'Rack', icon = 'ups' WHERE id = $1", chosen)
+    await db.execute("UPDATE assets SET kind = 'Fan' WHERE id = $1", unregistered)  # free text, not in the registry
+    graph = (await client.get("/api/discovery/graph")).json()
+    by_id = {a["id"]: a for a in graph["assets"]}
+    assert {i: (a["icon"], a["kind_icon"]) for i, a in by_id.items()} == {
+        automatic: (None, None),  # Automatic: nothing stored, nothing resolved
+        registered: (None, "server"),  # the icon follows the kind
+        chosen: ("ups", "server"),  # a chosen icon is sent as chosen; the kind's icon rides along for the fallback
+        unregistered: (None, None),
+    }
+    assert set(by_id[chosen]) == {"id", "parent_id", "name", "kind", "icon", "kind_icon"}  # the old keys are unchanged
+    assert (by_id[chosen]["name"], by_id[chosen]["kind"], by_id[chosen]["parent_id"]) == ("Chosen", "Rack", None)
 
 
 async def finding(db, source, outcome):

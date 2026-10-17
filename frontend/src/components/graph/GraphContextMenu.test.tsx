@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RowAction } from "../RowActions";
-import { GraphContextMenu, placeAtPoint } from "./GraphContextMenu";
+import { GraphContextMenu, placeAtPoint, placeBelowBox } from "./GraphContextMenu";
 
 const items = (over: Partial<Record<string, Partial<RowAction>>> = {}): RowAction[] => [
   { label: "Details", onSelect: vi.fn(), ...over.Details },
@@ -197,6 +197,51 @@ describe("GraphContextMenu", () => {
     open({ at: { box: { top: 300, left: 500, right: 700, bottom: 380 } } });
     // placePanel: beside the box at the left, on its top edge
     expect(screen.getByRole("menu").style.top).toBe("300px");
+  });
+
+  it("with `below`, a menu hangs from the box: under it with a 4px gap, its left edge on the box's ('start') or its right edge on the box's ('end')", () => {
+    const box = { top: 300, left: 500, right: 700, bottom: 380 };
+    const view = open({ at: { box, below: "start" } });
+    expect(screen.getByRole("menu").style.top).toBe("384px"); // jsdom measures the panel as 0x0
+    expect(screen.getByRole("menu").style.left).toBe("500px");
+    view.unmount();
+    open({ at: { box, below: "end" } });
+    expect(screen.getByRole("menu").style.top).toBe("384px");
+    expect(screen.getByRole("menu").style.left).toBe("700px");
+  });
+});
+
+describe("placeBelowBox (a menu that hangs from a horizontal bar opens under its button)", () => {
+  const viewport = { width: 1000, height: 700 };
+  const panel = { width: 200, height: 160 };
+  const button = { top: 100, left: 300, right: 340, bottom: 130 };
+  it.each([
+    ["start: under the box, left edges aligned", button, "start", { left: 300, top: 134, placement: "down", maxHeight: 558 }],
+    ["end: under the box, right edges aligned", button, "end", { left: 140, top: 134, placement: "down", maxHeight: 558 }],
+    ["end at the left edge of the window: kept 8px from it", { ...button, left: 10, right: 50 }, "end", { left: 8, top: 134, placement: "down" }],
+    ["start at the right edge of the window: kept 8px from it", { ...button, left: 950, right: 990 }, "start", { left: 792, top: 134, placement: "down" }],
+    ["no room below: flipped above the box, 4px clear of it", { ...button, top: 600, bottom: 630 }, "start", { left: 300, top: 436, placement: "up", maxHeight: 256 }],
+    ["room below to exactly the bottom margin: stays below", { ...button, top: 498, bottom: 528 }, "start", { top: 532, placement: "down", maxHeight: 160 }],
+  ] as const)("%s", (_name, box, align, expected) => {
+    expect(placeBelowBox(box, panel, viewport, align, 4, 52)).toMatchObject(expected);
+  });
+
+  it("a box right under the top bar still gives a menu that starts under the bar", () => {
+    expect(placeBelowBox({ ...button, top: 0, bottom: 20 }, panel, viewport, "start", 4, 52).top).toBe(52);
+  });
+
+  it("a panel that fits neither below nor above stays below, clamped to the window and scrolling inside its maxHeight", () => {
+    const tall = { width: 200, height: 700 };
+    const placed = placeBelowBox(button, tall, viewport, "start", 4, 52);
+    expect(placed).toMatchObject({ top: 134, placement: "down", maxHeight: 700 - 134 - 8 });
+    expect(placed.top + placed.maxHeight).toBeLessThanOrEqual(700 - 8);
+  });
+
+  it("a window narrower than the panel keeps the left margin, for either alignment", () => {
+    const narrow = { width: 300, height: 700 };
+    const wide = { width: 400, height: 100 };
+    expect(placeBelowBox(button, wide, narrow, "start", 4, 52).left).toBe(8);
+    expect(placeBelowBox(button, wide, narrow, "end", 4, 52).left).toBe(8);
   });
 });
 

@@ -46,3 +46,48 @@ describe("the interface icons (W7j)", () => {
     expect(container.querySelector("path")!.getAttribute("d")).toBe("m9 6 6 6-6 6");
   });
 });
+
+// The twelve icons of the Discovery polish (w12c): the toolbar's, the protocols' and the metrics'. None starts with "kind".
+const DISCOVERY: IconName[] = [
+  "keyboard", "refresh", "expandAll", "tidy", "grid", "link",
+  "protoOpcua", "protoModbus", "protoSimulator",
+  "metricVoltage", "metricCurrent", "metricOther",
+];
+
+describe("the Discovery icons (w12c)", () => {
+  it("are all there, 12 of them, and none is named like an asset kind", () => {
+    expect(DISCOVERY).toHaveLength(12);
+    expect(new Set(DISCOVERY).size).toBe(12);
+    for (const name of DISCOVERY) {
+      expect(Object.keys(ICONS), name).toContain(name);
+      expect(name.startsWith("kind"), name).toBe(false);
+    }
+  });
+
+  it.each(DISCOVERY)("%s is one decorative svg of the 24-unit box with at least one shape and no colour of its own", (name) => {
+    const { container } = render(<Icon name={name} />);
+    const svg = container.firstElementChild!;
+    expect(svg.tagName.toLowerCase()).toBe("svg");
+    expect(svg).toHaveClass("i");
+    expect(svg).toHaveAttribute("viewBox", "0 0 24 24");
+    expect(svg).toHaveAttribute("aria-hidden", "true");
+    expect(svg.querySelectorAll("path, circle, rect, ellipse").length).toBeGreaterThan(0);
+    // The stroke, the fill and the colour come from `svg.i`; a shape that sets its own would not follow the theme.
+    for (const attr of ["fill", "stroke", "stroke-width", "style", "color"]) expect(svg.querySelector(`[${attr}]`), attr).toBeNull();
+  });
+
+  it("are drawn differently from each other and from the icons they sit next to", () => {
+    const drawn = (name: IconName) => {
+      const { container, unmount } = render(<Icon name={name} />);
+      const html = container.querySelector("svg")!.innerHTML;
+      unmount();
+      return html;
+    };
+    const all = DISCOVERY.map(drawn);
+    expect(new Set(all).size).toBe(DISCOVERY.length);
+    // Find, the Details button, the overflow, the sources icon and the metrics' neighbours in the Find list.
+    for (const other of ["search", "more", "sources", "discovery", "layers", "rate", "energy", "readings", "settings", "trend", "filter", "collapse", "caret", "chevron", "kindServer"] as const) {
+      expect(all, `not the same as ${other}`).not.toContain(drawn(other));
+    }
+  });
+});

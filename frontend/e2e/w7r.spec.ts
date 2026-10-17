@@ -30,11 +30,12 @@ import { rowAction, userBlock } from "./shell";
 //                 Scope cell and the drawer's scope line both show 4080.
 //   last seen     `Seen in scan #<id>, <ago>` on every discovered node a scan found, `Added by hand` on the hand-added one, and the same line in
 //                 the source panel.
-//   remove one    a discovered source with nothing mapped has Remove; the dialog (Escape gives the focus back), confirm; the node is gone, its
-//                 layout rows too, the focus is on Refresh, a toast, the Audit page reads `Deleted source <name>` and the row's detail says
-//                 `unmapped_only`.
-//   clear         `Clear unmapped (N)`: the dialog lists the names the API lists (one source reads as the single-source dialog), Escape returns
-//                 the focus, confirm removes exactly those, the button is aria-disabled at 0, a rescan brings the Modbus source back as a new row.
+//   remove one    a discovered source with nothing mapped has Remove (an item of its `Source actions for <name>` menu since W12c); the dialog
+//                 (Escape gives the focus back to that menu button), confirm; the node is gone, its layout rows too, the focus is on Refresh, a toast,
+//                 the Audit page reads `Deleted source <name>` and the row's detail says `unmapped_only`.
+//   clear         `Clear unmapped (N)`, an item of the bar's `More Discovery actions` menu since W12c: the dialog lists the names the API lists (one
+//                 source reads as the single-source dialog), Escape returns the focus to the overflow button, confirm removes exactly those, the item
+//                 is aria-disabled at 0, a rescan brings the Modbus source back as a new row.
 //   scan running  while a scan is queued or running the remove route answers 409 with the sentence the dialog shows, whatever the ids.
 //   mapped safe   ONE point of the Modbus source's sixty is mapped to an asset of the case (so a check that wants every point mapped, or
 //                 compares mapped points with the point count, would let it go): its node has no Remove, it is not in the Clear list, and a
@@ -42,20 +43,22 @@ import { rowAction, userBlock } from "./shell";
 //                 id that does not exist), leaving it whole; the asset is deleted at the end, which unmaps the source again.
 //   manual wins   a hand-added Modbus source at simulator:5020, made AFTER a scan created the discovered one: the next scan's 5020 finding is
 //                 that source and says `existing source`, and the older discovered duplicate is not browsed (its last scan stays the old one).
-//   permission    a role with `discovery.view` only sees the nodes and none of Remove, Clear unmapped, Create assets; the API answers 403 and
-//                 the source stays; a role with `discovery.edit` as well sees Remove and Clear unmapped and still no Create assets.
-//   layout        at 1440 and 1024 px: no horizontal overflow on Scans and Discovery, the drawer fits the window, the header actions fit, the three
-//                 buttons of a source node stay inside it; and a fresh load at 1024 x 640 (the window as it is) opens on the first sources: the first
-//                 Create assets button is inside the canvas and the title text is at least 9 px at the opening zoom.
-//   create assets (LAST: it maps the Modbus source) the collapsed source node has `Create assets for N groups of <name>`; its dialog lists the
+//   permission    a role with `discovery.view` only sees the nodes and has none of Remove, Clear unmapped, Create assets (no `Source actions` button, no
+//                 such item in the right-click menu, no `More Discovery actions` button at 1440); the API answers 403 and the source stays; a role with
+//                 `discovery.edit` as well has Remove (in the node's menu) and Clear unmapped (in the overflow menu) and still no Create assets.
+//   layout        at 1440 and 1024 px: no horizontal overflow on Scans and Discovery, the drawer fits the window, the bar's Refresh and overflow
+//                 buttons fit, the buttons of a source node stay inside it; and a fresh load at 1024 x 640 (the window as it is) opens on the first
+//                 sources: the first `Source actions` button is inside the canvas and the title text is at least 9 px at the opening zoom.
+//   create assets (LAST: it maps the Modbus source) the collapsed source node's menu has `Create assets for N groups…`; its dialog lists the
 //                 groups, one parent, two groups chosen and renamed; the assets exist under the parent with six mappings each, the audit log
-//                 counts two more accepts, the focus is back on the node's button.
+//                 counts two more accepts, the focus is back on the node's `Source actions` button.
 //
 // Locators. A scan's row is `tr:has([data-scan-details="<id>"])` (the Scope name `cell-name` is also in the Scopes table). Playwright matches a
 // name by case-insensitive SUBSTRING: `Remove`, `Details`, `Close`, `Cancel` and `Refresh` are `exact: true`; a source node's buttons are named
-// by their aria-label (`Details for <name>`, `Remove <name> from Discovery`, `Create assets for N groups of <name>`, a regular expression with the
-// name escaped: it holds `:`); the confirm button of the delete dialog is `Remove` and the bulk dialog's is `Create 2 assets` (the node's button
-// has a longer name). The numbers use the em dash and the multiplication sign the page uses.
+// by their aria-label (`Details for <name>`, `Source actions for <name>`); since W12c Remove and Create assets are MENU ITEMS (`Remove from
+// Discovery…`, `Create assets for N groups…`, with the ellipsis the page writes) of the menu named `Actions for <name>` and Clear unmapped is an item of the
+// menu named `Discovery actions` (its name at 0 also holds the reason, `Clear unmapped (0) Nothing to clear`); the confirm button of the delete dialog is
+// `Remove` and the bulk dialog's is `Create 2 assets`. The numbers use the em dash and the multiplication sign the page uses.
 
 const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost/";
 const ADMIN = { username: "admin", password: "correct-horse" };
@@ -259,11 +262,40 @@ const toast = (page: Page, text: string) => page.locator(".toast-stack .toast").
 const node = (page: Page, id: string) => page.locator(`.react-flow__node[data-id="${id}"]`);
 const srcNode = (page: Page, source: { id: number }) => node(page, `src:${source.id}`);
 const refreshButton = (page: Page) => page.getByRole("button", { name: "Refresh", exact: true });
-const clearButton = (page: Page, count: number | RegExp = /\d+/) =>
-  page.getByRole("button", { name: typeof count === "number" ? `Clear unmapped (${count})` : new RegExp(`^Clear unmapped \\(${count.source}\\)$`), exact: typeof count === "number" });
-const removeButton = (page: Page, source: { name: string }) => page.getByRole("button", { name: `Remove ${source.name} from Discovery`, exact: true });
+// W12c: Clear unmapped (N) is an item of the menu the bar's overflow button opens. At 0 the item is aria-disabled and its name also holds the reason.
+const overflowButton = (page: Page) => page.getByRole("button", { name: "More Discovery actions", exact: true });
+const overflowMenu = (page: Page) => page.getByRole("menu", { name: "Discovery actions", exact: true });
+const clearItem = (page: Page, count: number | RegExp = /\d+/) =>
+  overflowMenu(page).getByRole("menuitem", { name: new RegExp(`^Clear unmapped \\(${typeof count === "number" ? String(count) : count.source}\\)(?: Nothing to clear)?$`) });
+/** Opens the bar's overflow menu (a press while it stands would close it) and returns it. */
+async function openOverflow(page: Page): Promise<Locator> {
+  const menu = overflowMenu(page);
+  if (!(await menu.isVisible())) await overflowButton(page).click();
+  await expect(menu).toBeVisible();
+  return menu;
+}
 const detailsButton = (page: Page, source: { name: string }) => page.getByRole("button", { name: `Details for ${source.name}`, exact: true });
-const createButton = (page: Page, source: { name: string }) => page.getByRole("button", { name: new RegExp(`^Create assets for \\d+ groups? of ${escaped(source.name)}$`) });
+// W12c: Remove from Discovery… and Create assets for N groups… are items of the source node's menu (its `Source actions for <name>` button, or the right-click menu).
+const sourceActions = (page: Page, source: { id: number; name: string }) => srcNode(page, source).getByRole("button", { name: `Source actions for ${source.name}`, exact: true });
+const nodeMenu = (page: Page, source: { name: string }) => page.getByRole("menu", { name: `Actions for ${source.name}`, exact: true });
+const removeItem = (page: Page) => page.getByRole("menuitem", { name: "Remove from Discovery…", exact: true });
+const createItem = (page: Page) => page.getByRole("menuitem", { name: /^Create assets for \d+ groups?…$/ });
+/** Opens the source node's menu from its `Source actions` button (the node is brought into the canvas first) and returns the menu. */
+async function openSourceMenu(page: Page, source: { id: number; name: string }): Promise<Locator> {
+  await ensureOnCanvas(page, srcNode(page, source));
+  await sourceActions(page, source).click();
+  const menu = nodeMenu(page, source);
+  await expect(menu).toBeVisible();
+  return menu;
+}
+/** Opens the same menu with a right-click on the node's title (a role without the `Source actions` button has this one) and returns it. */
+async function rightClickSource(page: Page, source: { id: number; name: string }): Promise<Locator> {
+  await ensureOnCanvas(page, srcNode(page, source));
+  await srcNode(page, source).locator(".gsrc-title").click({ button: "right" });
+  const menu = nodeMenu(page, source);
+  await expect(menu).toBeVisible();
+  return menu;
+}
 const scanRow = (page: Page, scanId: number) => page.locator(`tr:has([data-scan-details="${scanId}"])`);
 const scanDrawer = (page: Page, scanId: number, status = "done") => page.getByRole("dialog", { name: `Scan #${scanId} — ${status}`, exact: true });
 
@@ -487,10 +519,10 @@ test.describe("W7r: the Discovery graph", () => {
 
     await openDiscovery(page);
     for (const source of discovered) {
-      await expect(srcNode(page, source).locator(".gnode-seen"), `${source.name} was seen in scan #${scan.id}`).toHaveText(new RegExp(`^Seen in scan #${scan.id}(, .+)?$`));
+      await expect(srcNode(page, source).locator(".gsrc-seen"), `${source.name} was seen in scan #${scan.id}`).toHaveText(new RegExp(`^Seen in scan #${scan.id}(, .+)?$`));
     }
     for (const source of manual) {
-      await expect(srcNode(page, source).locator(".gnode-seen"), `${source.name} was added by hand`).toHaveText("Added by hand");
+      await expect(srcNode(page, source).locator(".gsrc-seen"), `${source.name} was added by hand`).toHaveText("Added by hand");
     }
 
     const first = discovered[0];
@@ -521,24 +553,26 @@ test.describe("W7r: the Discovery graph", () => {
     await openDiscovery(page);
     const target$ = srcNode(page, target);
     await ensureOnCanvas(page, target$);
-    await expect(removeButton(page, target)).toBeVisible();
     const nodesBefore = await page.locator(".react-flow__node").count();
     const text = removeDialogText([target.name]);
 
-    await removeButton(page, target).click();
+    // W12c: Remove is an item of the node's menu. Open it from the node's own `Source actions` button, choose Remove from Discovery…
+    await expect(await openSourceMenu(page, target)).toBeVisible();
+    await expect(removeItem(page), "the node's menu lists Remove").toBeVisible();
+    await removeItem(page).click();
     const dialog = page.getByRole("dialog", { name: text.title, exact: true });
     await expect(dialog).toBeVisible();
     await expect(dialog.locator(".confirm-body")).toHaveText(text.message);
 
-    await test.step("Escape closes the dialog and the focus is on the Remove button that opened it", async () => {
+    await test.step("Escape closes the dialog and the focus is on the Source actions button that opened it", async () => {
       await page.keyboard.press("Escape");
       await expect(dialog).toBeHidden();
-      await expect(removeButton(page, target)).toBeFocused();
+      await expect(sourceActions(page, target)).toBeFocused();
       await expect(target$, "nothing was removed").toBeVisible();
     });
 
-    await ensureOnCanvas(page, target$);
-    await removeButton(page, target).click();
+    await openSourceMenu(page, target);
+    await removeItem(page).click();
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Remove", exact: true }).click();
     await expect(dialog).toBeHidden();
@@ -576,8 +610,10 @@ test.describe("W7r: the Discovery graph", () => {
     const text = removeDialogText(names);
 
     await openDiscovery(page);
-    const clear = clearButton(page, names.length);
-    await expect(clear, "the count in the button").toBeVisible();
+    // W12c: Clear unmapped (N) is an item of the menu behind the bar's `More Discovery actions` button.
+    await openOverflow(page);
+    const clear = clearItem(page, names.length);
+    await expect(clear, "the count in the item").toBeVisible();
     await expect(clear).not.toHaveAttribute("aria-disabled", "true");
     await clear.click();
     const dialog = page.getByRole("dialog", { name: text.title, exact: true });
@@ -587,14 +623,16 @@ test.describe("W7r: the Discovery graph", () => {
       await expect(dialog.locator(".confirm-body"), `${kept.name} has a mapped point and is not in the list`).not.toContainText(kept.name);
     }
 
-    await test.step("Escape closes only the dialog and the focus is on the Clear button", async () => {
+    await test.step("Escape closes only the dialog and the focus is on the overflow button that opened the menu", async () => {
       await page.keyboard.press("Escape");
       await expect(dialog).toBeHidden();
-      await expect(clear).toBeFocused();
+      await expect(overflowButton(page)).toBeFocused();
+      await expect(overflowMenu(page), "the menu closed when the item was chosen").toBeHidden();
       for (const source of listed) await expect(srcNode(page, source)).toBeVisible();
     });
 
-    await clear.click();
+    await openOverflow(page);
+    await clearItem(page, names.length).click();
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Remove", exact: true }).click();
     await expect(dialog).toBeHidden();
@@ -602,15 +640,19 @@ test.describe("W7r: the Discovery graph", () => {
     for (const source of listed) await expect(srcNode(page, source), `${source.name} is gone`).toHaveCount(0);
     for (const source of keep) await expect(srcNode(page, source), `${source.name} stays`).toBeVisible();
 
-    await test.step("the button is aria-disabled at 0 and keeps the focus (or, if nothing is left at all, the page says so)", async () => {
+    await test.step("the item is aria-disabled at 0 and the overflow button keeps the focus (or, if nothing is left at all, the page says so)", async () => {
       const after = await graphOf(page.request);
       expect(removable(after), "nothing removable is left").toEqual([]);
       expect(after.sources.map((s) => s.id).sort(), "exactly the listed ones went").toEqual(keep.map((s) => s.id).sort());
       if (after.sources.length > 0) {
-        const zero = clearButton(page, 0);
+        await expect(overflowButton(page), "the dialog gave the focus back to the button that opened the menu").toBeFocused();
+        await openOverflow(page);
+        const zero = clearItem(page, 0);
         await expect(zero).toHaveAttribute("aria-disabled", "true");
         await expect(zero).toHaveAttribute("title", "Nothing to clear");
-        await expect(zero).toBeFocused();
+        await page.keyboard.press("Escape");
+        await expect(overflowMenu(page)).toBeHidden();
+        await expect(overflowButton(page)).toBeFocused();
       } else {
         await expect(page.getByText("Nothing discovered yet")).toBeVisible();
       }
@@ -623,7 +665,9 @@ test.describe("W7r: the Discovery graph", () => {
       expect(modbus, "the Modbus source is back").toBeDefined();
       expect(listed.map((s) => s.id), "as a new row").not.toContain(modbus!.id);
       await openDiscovery(page);
-      await expect(clearButton(page, removable(again).length)).toBeVisible();
+      await openOverflow(page);
+      await expect(clearItem(page, removable(again).length)).toBeVisible();
+      await page.keyboard.press("Escape");
     });
   });
 
@@ -671,23 +715,42 @@ test.describe("W7r: the Discovery graph", () => {
       const listed = removable(graph);
       expect(listed.map((s) => s.id), "the mapped source is not removable").not.toContain(mapped.id);
 
-      await test.step("the page: its node has Details and no Remove, and Clear unmapped counts only the others", async () => {
+      await test.step("the page: its node's menu has Details and no Remove, only the removable ones have Remove, and Clear unmapped counts only the others", async () => {
         await openDiscovery(page);
         await ensureOnCanvas(page, srcNode(page, mapped));
         await expect(detailsButton(page, mapped), "the node is there").toBeVisible();
-        await expect(removeButton(page, mapped), "and has no Remove").toHaveCount(0);
-        await expect(page.getByRole("button", { name: /^Remove .* from Discovery$/ }), "Remove only on the removable ones").toHaveCount(listed.length);
-        await expect(clearButton(page, listed.length)).toBeVisible();
+        // W12c: Remove is a menu item now, so "only on the removable ones" is read one source at a time, from the right-click menu every node has.
+        await rightClickSource(page, mapped);
+        await expect(page.getByRole("menuitem", { name: "Details", exact: true }), "the menu is there to be absent from").toBeVisible();
+        await expect(removeItem(page), "the mapped source has no Remove").toHaveCount(0);
+        await page.keyboard.press("Escape");
+        await expect(nodeMenu(page, mapped)).toBeHidden();
+        for (const source of listed) {
+          await rightClickSource(page, source);
+          await expect(removeItem(page), `${source.name} is removable and has Remove`).toBeVisible();
+          await page.keyboard.press("Escape");
+          await expect(nodeMenu(page, source)).toBeHidden();
+        }
+        if (full) {
+          await rightClickSource(page, full);
+          await expect(page.getByRole("menuitem", { name: "Details", exact: true }), "the fully mapped source's menu is there").toBeVisible();
+          await expect(removeItem(page), "and a fully mapped source has no Remove").toHaveCount(0);
+          await page.keyboard.press("Escape");
+          await expect(nodeMenu(page, full)).toBeHidden();
+        }
+        await openOverflow(page);
+        await expect(clearItem(page, listed.length)).toBeVisible();
         if (listed.length > 0) {
           const text = removeDialogText(listed.map((s) => s.name));
-          await clearButton(page, listed.length).click();
+          await clearItem(page, listed.length).click();
           const dialog = page.getByRole("dialog", { name: text.title, exact: true });
           await expect(dialog.locator(".confirm-body")).toHaveText(text.message);
           await expect(dialog.locator(".confirm-body"), "the mapped source is not named").not.toContainText(mapped.name);
           await page.keyboard.press("Escape");
           await expect(dialog).toBeHidden();
         } else {
-          await expect(clearButton(page, 0), "nothing left to clear").toHaveAttribute("aria-disabled", "true");
+          await expect(clearItem(page, 0), "nothing left to clear").toHaveAttribute("aria-disabled", "true");
+          await page.keyboard.press("Escape");
         }
       });
 
@@ -742,9 +805,14 @@ test.describe("W7r: the Discovery graph", () => {
       expect(stale!.point_count, "with its points").toBe(discovered!.point_count);
 
       await openDiscovery(page);
-      await expect(srcNode(page, { id: manualId }).locator(".gnode-seen")).toHaveText("Added by hand");
-      await expect(srcNode(page, discovered!).locator(".gnode-seen")).toHaveText(new RegExp(`^Seen in scan #${first.id}(, .+)?$`));
-      await expect(srcNode(page, { id: manualId }).getByRole("button", { name: /^Remove / }), "a hand-added source has no Remove").toHaveCount(0);
+      await expect(srcNode(page, { id: manualId }).locator(".gsrc-seen")).toHaveText("Added by hand");
+      await expect(srcNode(page, discovered!).locator(".gsrc-seen")).toHaveText(new RegExp(`^Seen in scan #${first.id}(, .+)?$`));
+      // W12c: Remove is an item of the node's menu, so look there (a node with nothing to put in its Source actions menu has no such button, but every node has the right-click one).
+      await expect(detailsButton(page, { name: MANUAL_NAME }), "the hand-added node is there to be absent from").toBeVisible();
+      await rightClickSource(page, { id: manualId, name: MANUAL_NAME });
+      await expect(page.getByRole("menuitem", { name: "Details", exact: true }), "its menu is there").toBeVisible();
+      await expect(removeItem(page), "a hand-added source has no Remove").toHaveCount(0);
+      await page.keyboard.press("Escape");
     } finally {
       if (manualId !== null) {
         const gone = await page.request.delete(`/api/sources/${manualId}?confirm=true`);
@@ -757,7 +825,7 @@ test.describe("W7r: the Discovery graph", () => {
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 test.describe("W7r: who sees what", () => {
-  test("discovery.view sees the graph and none of Remove, Clear unmapped or Create assets, and the API says 403; discovery.edit adds Remove and Clear unmapped", async ({ browser, page }) => {
+  test("discovery.view sees the graph and none of Remove, Clear unmapped or Create assets (menus and buttons), and the API says 403; discovery.edit adds Remove and Clear unmapped", async ({ browser, page }) => {
     test.setTimeout(300_000);
     await signIn(page);
     await runScan(page.request, (await simScope(page.request)).id);
@@ -792,16 +860,24 @@ test.describe("W7r: who sees what", () => {
       expect((await graphOf(page.request)).sources.some((s) => s.id === target.id), "the source is still there").toBe(true);
     });
 
-    await test.step("the page for discovery.view: the node and its Details, and none of the three", async () => {
+    // W12c: the three actions moved into menus, so "absent" is checked in the menus (a button that is not drawn would pass a check of the old places for any role).
+    await test.step("the page for discovery.view: the node and its Details, and none of the three (no Source actions button, no such item in the right-click menu, no overflow button at 1440)", async () => {
       await signInAs(page, READER);
       await openDiscovery(page);
       await expect(userBlock(page)).toContainText(READER.username);
       await ensureOnCanvas(page, srcNode(page, target));
       await expect(detailsButton(page, target), "something is there to be absent next to").toBeVisible();
-      await expect(refreshButton(page)).toBeVisible();
-      await expect(page.getByRole("button", { name: /^Remove .* from Discovery$/ })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: /^Clear unmapped/ })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: /^Create assets for / })).toHaveCount(0);
+      await expect(refreshButton(page), "Refresh is in the bar").toBeVisible();
+      expect(page.viewportSize()!.width, "the window is wide enough that the bar draws all its controls").toBeGreaterThanOrEqual(1200);
+      await expect(overflowButton(page), "a role with nothing to put in the overflow menu has no overflow button while every control is drawn").toBeHidden();
+      await expect(sourceActions(page, target), "no Source actions button: nothing to offer in it").toHaveCount(0);
+      await rightClickSource(page, target);
+      await expect(page.getByRole("menuitem", { name: "Details", exact: true }), "the right-click menu is there to be absent from").toBeVisible();
+      await expect(removeItem(page)).toHaveCount(0);
+      await expect(createItem(page)).toHaveCount(0);
+      await expect(page.getByRole("menuitem", { name: /^Clear unmapped/ })).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await expect(nodeMenu(page, target)).toBeHidden();
     });
 
     await test.step("the Scans page opens the drawer for discovery.view too", async () => {
@@ -814,14 +890,25 @@ test.describe("W7r: who sees what", () => {
       await expect(first).toBeFocused();
     });
 
-    await test.step("discovery.edit adds Remove and Clear unmapped, and still no Create assets (that is discovery.accept)", async () => {
+    await test.step("discovery.edit adds Remove (in the node's menu) and Clear unmapped (in the overflow menu), and still no Create assets (that is discovery.accept)", async () => {
       await signInAs(page, EDITOR);
       await openDiscovery(page);
       await expect(userBlock(page)).toContainText(EDITOR.username);
       await ensureOnCanvas(page, srcNode(page, target));
-      await expect(removeButton(page, target)).toBeVisible();
-      await expect(clearButton(page, count)).toBeVisible();
-      await expect(page.getByRole("button", { name: /^Create assets for / })).toHaveCount(0);
+      await openSourceMenu(page, target);
+      await expect(removeItem(page), "Remove is in the node's menu").toBeVisible();
+      await expect(createItem(page), "and Create assets is not").toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await expect(nodeMenu(page, target)).toBeHidden();
+      await expect(sourceActions(page, target), "the focus went back to the menu button").toBeFocused();
+      await rightClickSource(page, target);
+      await expect(removeItem(page), "the right-click menu lists Remove too").toBeVisible();
+      await expect(createItem(page), "and not Create assets").toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await openOverflow(page);
+      await expect(clearItem(page, count), "Clear unmapped is in the overflow menu").toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(overflowMenu(page)).toBeHidden();
     });
   });
 });
@@ -830,13 +917,13 @@ test.describe("W7r: who sees what", () => {
 
 test.describe("W7r: layout", () => {
   for (const [width, height] of [[1440, 900], [1024, 700]] as const) {
-    test(`at ${width} px: no sideways overflow on Scans and Discovery, the drawer fits the window, the header actions fit and a source node holds its three buttons`, async ({ page }) => {
+    test(`at ${width} px: no sideways overflow on Scans and Discovery, the drawer fits the window, the bar's Refresh and overflow buttons fit and a source node holds its buttons`, async ({ page }) => {
       test.setTimeout(240_000);
       await signIn(page);
       const scan = await runScan(page.request, (await simScope(page.request)).id);
       const graph = await graphOf(page.request);
       const target = removable(graph).find((s) => s.connector_type === "modbus") ?? removable(graph)[0];
-      expect(target, "a source with Remove and Create assets on its node").toBeDefined();
+      expect(target, "a source with a Source actions menu (Remove and Create assets) on its node").toBeDefined();
       await page.setViewportSize({ width, height });
 
       await test.step("Scans: the page and its tables do not scroll sideways", async () => {
@@ -859,29 +946,32 @@ test.describe("W7r: layout", () => {
         await expect(drawer).toBeHidden();
       });
 
-      await test.step("Discovery: no sideways overflow, the header actions fit, the node's buttons are inside the node", async () => {
+      await test.step("Discovery: no sideways overflow, the bar's Refresh and overflow buttons fit, the node's buttons are inside the node", async () => {
         await openDiscovery(page);
         const over = await sideways(page);
         expect(over.page, "the page").toBeLessThanOrEqual(1);
         await ensureOnCanvas(page, srcNode(page, target));
 
-        const head = page.locator(".page-head").first();
-        const headBox = (await head.boundingBox())!;
+        // W12c: Refresh and the overflow button (which holds Clear unmapped) are in the bar, not in the page header.
+        const bar = page.locator(".graph-bar");
+        const barBox = (await bar.boundingBox())!;
         const refresh = refreshButton(page);
-        const clear = clearButton(page);
-        const [a, b] = [(await refresh.boundingBox())!, (await clear.boundingBox())!];
+        const overflow = overflowButton(page);
+        const [a, b] = [(await refresh.boundingBox())!, (await overflow.boundingBox())!];
         await expectInWindow(page, refresh, "Refresh");
-        await expectInWindow(page, clear, "Clear unmapped");
+        await expectInWindow(page, overflow, "the overflow button");
         for (const box of [a, b]) {
-          expect(box.x, "inside the header, left").toBeGreaterThanOrEqual(headBox.x - 1);
-          expect(box.x + box.width, "inside the header, right").toBeLessThanOrEqual(headBox.x + headBox.width + 1);
+          expect(box.x, "inside the bar, left").toBeGreaterThanOrEqual(barBox.x - 1);
+          expect(box.x + box.width, "inside the bar, right").toBeLessThanOrEqual(barBox.x + barBox.width + 1);
+          expect(box.y, "inside the bar, top").toBeGreaterThanOrEqual(barBox.y - 1);
+          expect(box.y + box.height, "inside the bar, bottom").toBeLessThanOrEqual(barBox.y + barBox.height + 1);
         }
-        // Side by side, or (if the header ever wraps them) one above the other: never on top of each other.
-        expect(a.x + a.width <= b.x + 1 || a.y + a.height <= b.y + 1, `Refresh ${JSON.stringify(a)} and Clear unmapped ${JSON.stringify(b)} overlap`).toBe(true);
+        expect(a.x + a.width <= b.x + 1 || b.x + b.width <= a.x + 1, `Refresh ${JSON.stringify(a)} and the overflow button ${JSON.stringify(b)} overlap`).toBe(true);
 
         const box = (await srcNode(page, target).locator(".gnode").boundingBox())!;
         const buttons = srcNode(page, target).getByRole("button");
-        expect(await buttons.count(), "Toggle, Details, Create assets and Remove").toBeGreaterThanOrEqual(4);
+        expect(await buttons.count(), "Toggle, Details and Source actions").toBeGreaterThanOrEqual(3);
+        await expect(sourceActions(page, target), "the menu button is one of them").toBeVisible();
         for (const button of await buttons.all()) {
           const inner = (await button.boundingBox())!;
           const label = (await button.getAttribute("aria-label")) ?? "a button";
@@ -894,9 +984,9 @@ test.describe("W7r: layout", () => {
   }
 
   // I1 of the whole-wave review: at a laptop's width the graph used to open fitted to everything, which with a tall asset column zoomed to the
-  // floor and pushed the sources (the only nodes with Create assets and Remove) off the edge. It now opens on the first three sources, readable.
+  // floor and pushed the sources (the only nodes with a Source actions menu, which holds Create assets and Remove) off the edge. It now opens on the first three sources, readable.
   // Loaded directly in an ordinary window: openDiscovery makes the window taller and presses fit view, which would hide what is under test.
-  test("a fresh load at 1024 x 640 opens on the source column: the first Create assets button is inside the canvas and the node text is readable", async ({ page }) => {
+  test("a fresh load at 1024 x 640 opens on the source column: the first Source actions button is inside the canvas and the node text is readable", async ({ page }) => {
     test.setTimeout(240_000);
     await signIn(page);
     await runScan(page.request, (await simScope(page.request)).id);
@@ -924,14 +1014,14 @@ test.describe("W7r: layout", () => {
       expect(size * zoom, `the title is ${size}px at zoom ${zoom}`).toBeGreaterThanOrEqual(8.99); // 12 px at the 0.75 floor is exactly 9
     });
 
-    await test.step("the first Create assets button among the first three sources (if one has it) is inside the canvas", async () => {
+    await test.step("the first Source actions button among the first three sources (if one has it) is inside the canvas", async () => {
       for (const source of graph.sources.slice(0, 3)) {
-        const button = srcNode(page, source).getByRole("button", { name: /^Create assets for \d+ groups? of / });
+        const button = sourceActions(page, source);
         if ((await button.count()) === 0) continue;
-        expect(inCanvas((await button.boundingBox())!), `${source.name}: Create assets lies inside the canvas box`).toBe(true);
+        expect(inCanvas((await button.boundingBox())!), `${source.name}: Source actions lies inside the canvas box`).toBe(true);
         return;
       }
-      test.info().annotations.push({ type: "note", description: "none of the first three sources has a Create assets button on this stack" });
+      test.info().annotations.push({ type: "note", description: "none of the first three sources has a Source actions button on this stack" });
     });
 
     await test.step("the Controls' fit view still fits everything (it never zooms in past the opening view)", async () => {
@@ -953,7 +1043,7 @@ test.describe("W7r: layout", () => {
 // Last: this case maps the Modbus source (the afterAll deletes the assets, which unmaps it again).
 
 test.describe("W7r: creating assets from a source", () => {
-  test("the collapsed source node has Create assets; the dialog turns two chosen groups into assets under one parent, with their mappings", async ({ page }) => {
+  test("the collapsed source node's menu has Create assets; the dialog turns two chosen groups into assets under one parent, with their mappings", async ({ page }) => {
     test.setTimeout(300_000);
     await signIn(page);
     await runScan(page.request, (await simScope(page.request)).id);
@@ -966,9 +1056,11 @@ test.describe("W7r: creating assets from a source", () => {
 
     await openDiscovery(page);
     await ensureOnCanvas(page, srcNode(page, source!));
-    const open = createButton(page, source!);
-    await expect(open, "on the collapsed node, no expanding first").toBeVisible();
-    const total = Number(/for (\d+) groups? of/.exec((await open.getAttribute("aria-label")) ?? "")![1]);
+    // W12c: Create assets is an item of the node's menu, which the collapsed node's own Source actions button opens (no expanding first).
+    await openSourceMenu(page, source!);
+    const open = createItem(page);
+    await expect(open, "on the collapsed node's menu, no expanding first").toBeVisible();
+    const total = Number(/for (\d+) groups?…/.exec((await open.textContent()) ?? "")![1]);
     expect(total, "several groups to choose from").toBeGreaterThanOrEqual(2);
     await open.click();
 
@@ -1004,11 +1096,16 @@ test.describe("W7r: creating assets from a source", () => {
       expect(await auditTotal(page.request, "discovery.accepted"), "one accept per group").toBe(acceptedBefore + 2);
     });
 
-    await test.step("the node still offers the groups that are left, and the focus is on that button", async () => {
-      const left = createButton(page, source!);
-      await expect(left).toBeVisible();
-      await expect(left).toHaveAttribute("aria-label", `Create assets for ${plural(total - 2, "group")} of ${source!.name}`);
-      await expect(left).toBeFocused();
+    await test.step("the node still offers the groups that are left, and the focus is on its Source actions button", async () => {
+      const button = sourceActions(page, source!);
+      await expect(button, "the node keeps its menu button while groups are left").toBeVisible();
+      await expect(button).toBeFocused();
+      await button.click();
+      await expect(nodeMenu(page, source!)).toBeVisible();
+      await expect(createItem(page)).toHaveText(`Create assets for ${plural(total - 2, "group")}…`);
+      await page.keyboard.press("Escape");
+      await expect(nodeMenu(page, source!)).toBeHidden();
+      await expect(button, "Escape gives the focus back to the button").toBeFocused();
     });
   });
 });

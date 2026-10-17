@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { THEMES } from "../lib/appearance";
+import { SOURCE_H } from "../lib/graph";
 import { NON_TEXT, contrast, customProperties, parseRules, stripComments } from "../test/cssTools";
 
 // vitest runs from the frontend directory and reads the stylesheets as text (css: false).
@@ -66,12 +67,23 @@ describe("the Discovery node styles (W7u)", () => {
     for (const f of frames) expect(f.body.replace(/opacity:\s*[\d.]+;/, "").trim(), `"${f.selector}" sets opacity and nothing else`).toBe("");
   });
 
-  it("the protocol badge is a plain rectangle: a 1px border, the small radius, never a pill", () => {
-    const badge = rule(".gproto");
-    expect(badge).toMatch(/border:\s*1px solid var\(--border-strong\)/);
-    expect(badge).toMatch(/border-radius:\s*var\(--radius-sm\)/);
-    expect(badge).not.toMatch(/border-radius:\s*(9999|999|50%|[1-9]\d{2,})/);
-    expect(badge).not.toMatch(/font-family|monospace|italic/);
+  it("the protocol badge is gone: the source card (W12c) says the protocol in words and with an icon", () => {
+    expect(rules.filter((r) => /gproto/.test(r.selector))).toEqual([]);
+  });
+
+  it("the icon before a title (W12c) is 16px, in --text-2, never shrunk, with no transition; the title line holds it in a flex line that adds no row", () => {
+    const icon = rule(".gicon");
+    expect(icon).toMatch(/flex:\s*none/);
+    expect(icon).toMatch(/width:\s*16px/);
+    expect(icon).toMatch(/height:\s*16px/);
+    expect(icon).toMatch(/color:\s*var\(--text-2\)/);
+    expect(rule(".gicon svg.i")).toMatch(/width:\s*16px/);
+    expect(rule(".gicon svg.i")).toMatch(/height:\s*16px/);
+    const title = rule(".gtitle");
+    expect(title).toMatch(/display:\s*flex/);
+    expect(title).toMatch(/align-items:\s*flex-start/); // a title that wraps keeps the icon beside its first line
+    expect(title).not.toMatch(/(?:^|;)\s*(?:height|min-height|margin|padding)\s*:/); // nothing that could make a node taller
+    for (const r of rules.filter((x) => /gicon|gtitle/.test(x.selector))) expect(r.body, r.selector).not.toMatch(/transition|animation/);
   });
 
   it("the progress strip is 3px, absolutely placed on the bottom edge of a positioned host, so it adds no height", () => {
@@ -207,5 +219,81 @@ describe("the Discovery node styles (W7u)", () => {
       for (const fill of ["accent", "accent-hover"]) expect(contrast(tok("bg"), tok(fill)), `--bg on --${fill}`).toBeGreaterThanOrEqual(NON_TEXT);
       expect(contrast(tok("accent"), tok("bg")), "--accent on --bg").toBeGreaterThanOrEqual(NON_TEXT);
     });
+  });
+});
+
+// W12c: the source card's own stylesheet. Its six lines have FIXED heights, and the card fits the room the layout keeps for a source (`SOURCE_H`) by design, not by luck.
+describe("the source card styles (W12c, graph-source-card.css)", () => {
+  const cardText = stripComments(readFileSync("src/styles/graph-source-card.css", "utf8"));
+  const cardRules = parseRules(cardText);
+  const card = (selector: string) => {
+    const found = cardRules.filter((r) => r.selector === selector && r.at.join(" > ") === "@layer w6");
+    expect(found, `exactly one rule for "${selector}"`).toHaveLength(1);
+    return found[0].body;
+  };
+  const px = (body: string, property: string) => {
+    const m = new RegExp(`(?:^|[;\\s])${property}:\\s*(\\d+)px`).exec(body);
+    expect(m, `${property} in px in "${body}"`).not.toBeNull();
+    return Number(m![1]);
+  };
+
+  it("every line has a height in px, and the lines, their gaps, the node's padding and its border add up to at most 132px, inside SOURCE_H", () => {
+    const heights = {
+      head: px(card(".gsrc-head"), "height"),
+      sub: px(card(".gsrc-sub, .gsrc-status, .gsrc-seen"), "height"),
+      mapped: px(card(".gsrc-mapped"), "height"),
+      actions: px(card(".gsrc-actions"), "height"),
+    };
+    expect(heights).toEqual({ head: 20, sub: 16, mapped: 20, actions: 20 });
+    const gap = px(card(".gsrc-body"), "gap");
+    expect(gap).toBe(2);
+    // head, protocol line, status line, mapped line, Details, last seen: the full card
+    const lines = [heights.head, heights.sub, heights.sub, heights.mapped, heights.actions, heights.sub];
+    const padding = 6 + 6; // `.gnode { padding: 6px 8px }`
+    const border = 1 + 1;
+    const total = lines.reduce((a, b) => a + b, 0) + gap * (lines.length - 1) + padding + border;
+    expect(total).toBe(132);
+    expect(total).toBeLessThanOrEqual(SOURCE_H);
+    // the words line plus the bar under it fill the mapped line exactly
+    expect(px(card(".gsrc-words"), "height") + px(card(".gsrc-bar"), "margin-top") + px(card(".gsrc-bar"), "height")).toBe(heights.mapped);
+  });
+
+  it("the title, the protocol line, the status line and the last-seen line are ONE line each: no wrap, an ellipsis, and the title gives way first (min-width 0)", () => {
+    for (const selector of [".gsrc-head .gsrc-title", ".gsrc-sub, .gsrc-status, .gsrc-seen"]) {
+      const body = card(selector);
+      expect(body, selector).toMatch(/white-space:\s*nowrap/);
+      expect(body, selector).toMatch(/overflow:\s*hidden/);
+      expect(body, selector).toMatch(/text-overflow:\s*ellipsis/);
+    }
+    expect(card(".gsrc-head .gsrc-title")).toMatch(/min-width:\s*0/);
+    expect(card(".gsrc-head .gsrc-title")).toMatch(/flex:\s*1 1 0/);
+  });
+
+  it("the menu button and the icon tile are 20px squares on the title line, never shrunk (the title takes the squeeze)", () => {
+    const button = card(".gsrc-head .gnode-menu-btn");
+    expect(px(button, "width")).toBe(20);
+    expect(px(button, "height")).toBe(20);
+    expect(button).toMatch(/flex:\s*none/);
+    expect(px(card(".gsrc-head .gsrc-tile"), "width")).toBe(20);
+    expect(px(card(".gsrc-head .gsrc-tile"), "height")).toBe(20);
+    expect(card(".gsrc-head .gsrc-tile")).toMatch(/flex:\s*none/);
+  });
+
+  it("the bar is 4px, a plain rectangle in tokens (never a pill); its fill is the accent", () => {
+    const bar = card(".gsrc-bar");
+    expect(px(bar, "height")).toBe(4);
+    expect(bar).toMatch(/background:\s*var\(--border(-strong)?\)/);
+    expect(bar).not.toMatch(/border-radius/);
+    expect(card(".gsrc-fill")).toMatch(/background:\s*var\(--accent\)/);
+    expect(card(".gsrc-fill")).toMatch(/height:\s*100%/);
+  });
+
+  it("nothing in the card is hidden or moved by the stylesheet: no display none, no visibility, no absolute placement", () => {
+    for (const r of cardRules) expect(r.body, r.selector).not.toMatch(/display:\s*none|visibility\s*:|position:\s*absolute/);
+  });
+
+  it("the card names classes of its own only (gsrc-*), plus the menu button's, which graph-nodes.css never writes on its own", () => {
+    const named = new Set(cardRules.flatMap((r) => [...r.selector.matchAll(/\.([A-Za-z_][\w-]*)/g)].map((m) => m[1])));
+    for (const cls of named) expect(cls, `.${cls}`).toMatch(/^(gsrc-|gnode-menu-btn$|i$)/);
   });
 });

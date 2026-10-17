@@ -1,0 +1,10 @@
+@layer w6 {
+  /* w12c: the last-value card of a mapped point on the Discovery canvas (PointValueTip). It has the look of the ? bubble (.tip-bubble in app.css: the tooltip tokens) but
+     it is a hover card, not a button's bubble: it never takes the pointer (a hover on it would otherwise count as leaving the node), has no animation, and sits at z-index
+     200, above the canvas tools and the minimap and below the dialogs (1000) and the ? bubbles (1100). The colour strip on its left edge is decoration for a stale or
+     bad reading; the words ("stale", "bad reading") carry the meaning. Tokens only. */
+  .gtip { position: fixed; z-index: 200; width: max-content; max-width: min(320px, 80vw); padding: 6px 10px; border-left: 3px solid transparent; border-radius: var(--radius); background: var(--tooltip-bg); color: var(--tooltip-text); box-shadow: var(--shadow-tip); font-size: var(--fs-sm); font-weight: 400; line-height: 1.45; text-align: left; white-space: normal; pointer-events: none; }
+  .gtip-text { display: block; overflow-wrap: anywhere; }
+  .gtip-stale { border-left-color: var(--warn-line); }
+  .gtip-bad { border-left-color: var(--crit); }
+}

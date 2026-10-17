@@ -246,5 +246,15 @@ export default defineConfig({
       dependencies: ["w12a"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // Writes next to nothing, like w12b, and needs nothing from the stack: every Discovery case answers GET /api/discovery/graph, the layout's PUT and DELETE and GET /api/mappings/{id}/latest
+    // through page.route from a generated model (e2e/graphModel.ts), so it may stand after w12b. Each case sets its own size (1440 x 900, 1024 x 640, 800 x 600) and the bar's cases resize the window
+    // themselves; they pin no pixel width of a tier of the bar, only what holds at any width. The ONE case that writes is the last: it makes a role and an account (names start `w12c-`) to see
+    // the real route answer 403, and removes both again (afterAll sweeps what a failed run left, users first).
+    {
+      name: "w12c",
+      testMatch: "w12c.spec.ts",
+      dependencies: ["w12b"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

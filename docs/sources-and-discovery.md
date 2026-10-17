@@ -126,7 +126,7 @@ data-retrieval requests the connectors already use, nothing else.
    merged, moved or deleted by the scan itself.
 5. **The graph** (Discovery). Discovered sources, clusters and points are on the left with dashed
    borders; your assets are on the right with solid ones; mapped points are joined to their asset by a
-   solid edge. Sources and clusters start collapsed: use the + / − button on a node to expand or
+   solid edge. Sources and clusters start collapsed: use the small arrow at the left of a source, or the + / − button on a group, to expand or
    collapse it. Points are grouped into suggested clusters (for example one per panel). Dragging nodes
    saves their positions for everyone (admin); an operator's arrangement lasts for the session. The canvas opens on the first three
    sources at a readable size, so their buttons are in view; the assets on the right may be out of view until you pan or press **Fit
@@ -153,8 +153,12 @@ data-retrieval requests the connectors already use, nothing else.
    next node instead, see **Arrow keys** below). Dragging nodes you selected (with a Shift box or Ctrl-click) is a drag like any other: the whole selection
    moves, each node takes its open children along once, and the places are saved.
 
-   **The bar above the canvas** holds a one-line summary of what the graph shows, such as `3 sources, 120 points, 6 mapped, 1 needs
-   credentials` (it is read out only when a number changes), three buttons, a small arrow beside the first two, and a switch.
+   **The bar above the canvas** is one row of controls that keeps its height whatever it shows. It starts with small counts: `3 sources`,
+   `120 points` (`42 of 120 points` while **Unmapped only** is on), `6 mapped` and, when a source needs credentials, `1 needs credentials`.
+   The counts are only a picture; a screen reader is given the same figures as one sentence, such as `3 sources, 120 points, 6 mapped, 1
+   needs credentials`, which it reads out only when a number changes. After the counts come three groups of controls, set apart by thin
+   dividers: the **View controls** (the first four items below), the **Canvas controls** (**Find** and **Snap to grid**, described further
+   down) and the **Page controls** (**Refresh**, the keyboard button and **More Discovery actions**, described after the list).
 
    - **Collapse all** closes every source, and with it its groups. **Expand all** opens every source and then every group, but never draws
      more than 600 new nodes in one go: what does not fit stays closed and a message says so, for example `Opened 3 sources and 12 groups.
@@ -180,11 +184,24 @@ data-retrieval requests the connectors already use, nothing else.
      asks nothing and sends nothing: their own view is tidied until they reload, and a message says that the shared layout is
      unchanged. If the server refuses, nothing changes and the reason is shown.
 
-   **Unmapped only.** The switch at the right of the bar hides every point that is mapped, every group whose points are all mapped and
+   **Page controls.** **Refresh** (a button with the circular arrow) reads the graph again; it was in the page header before. The keyboard
+   button, named `Keyboard shortcuts and controls`, opens the list of keys (below). **More Discovery actions** (three dots) holds **Clear
+   unmapped (N)** (see **Removing leftovers**) for a role that has `discovery.edit`; it is greyed out and says `Nothing to clear` when no
+   source can go.
+
+   **A narrower window.** The bar keeps to one row. When the window is narrower, first the counts lose their words and keep
+   the icon and the number (hover for the words), then the controls lose their words and keep their icons; every button keeps its name
+   for a screen reader and for the tooltip. A count that still does not fit is left out whole rather than cut in half (the sentence a
+   screen reader hears is unaffected). On a still narrower window **Unmapped only**, **Tidy layout** and **Snap to grid** leave the bar
+   and appear in the **More Discovery actions** menu instead, as `Turn on Unmapped only` (or `Turn off ...`), `Tidy layout` and `Turn on Snap
+   to grid` (or `Turn off ...`), so each is in exactly one place. A role that may not clear unmapped sources has nothing else in that menu, so
+   it gets the More button only on a window that narrow.
+
+   **Unmapped only.** The switch in the bar's View controls hides every point that is mapped, every group whose points are all mapped and
    every source with at least one point and all of them mapped (a source with no points stays), and draws no line from a point to an
-   asset. It is for working through what is left. The summary then leads with the count and drops the repeat of the points, for example
-   `Showing 42 of 60 points, 3 sources, 18 mapped` (all the points of every source, not only the open ones, and `mapped` here means
-   linked to an asset); with the switch off the line is the one above. A group's title still shows its total, mapped points included. The
+   asset. It is for working through what is left. The points count then reads `42 of 60 points`, and the sentence a screen reader hears leads
+   with the count and drops the repeat of the points, for example `Showing 42 of 60 points, 3 sources, 18 mapped` (all the points of
+   every source, not only the open ones, and `mapped` here means linked to an asset); with the switch off the sentence is the one above. A group's title still shows its total, mapped points included. The
    choice is remembered in this browser, the same words as the **Unmapped only** tick on the Points page, and nothing is deleted or
    changed by it. Mapping a point while the switch is on removes it from the canvas, and the focus then goes to the next unmapped point
    of its group, else the group, else the source, else the canvas, never to nowhere. **Find** (below) still reaches a hidden node: it
@@ -228,16 +245,39 @@ data-retrieval requests the connectors already use, nothing else.
    only**, fold an asset or close a group, the rows of the default columns close up. A node you pinned by hand with an Alt-drag keeps
    the place you gave it, so rows that closed up can lie over it; **Tidy layout** puts everything back.
 
-   **What a node shows.** The facts line of a source starts with a small dot and the protocol of its connector, then the words it
-   always had: dot, `OPC UA`, `discovered · online · 60 points`. The dot is green for an enabled source that answered its last poll,
-   red for one that did not, amber for one that needs credentials, and grey for one that is disabled or has never been polled (the
-   status word beside it still says which, so colour is never the only signal; the green dot also pulses softly). The protocol reads
-   `OPC UA`, `Modbus` or `Simulator`, or the connector's own name when the app has no label for it. A group node keeps its `N mapped`
-   and gains a thin bar along its bottom edge, as long as the share of its points that are mapped (hover it for `3 of 6 mapped`).
-   None of this makes a node taller.
+   **Icons on every node.** Each node starts with a small icon, then its name. The icon is decoration: the name already says what the
+   node is. A source shows the icon of its protocol (OPC UA, Modbus and the simulator each have their own; any other connector gets a
+   plain source icon), a group a stack of layers, a point an icon for what it measures (a bolt for power, a ringed bolt for energy, a V
+   for volts, an A for amps, four small rings for anything else, including a point with no metric yet), and an asset its own icon: the
+   one chosen for it, else the one of its kind, else the one the name suggests (the same as in the Assets Tree). An unidentified service
+   has the plain source icon. **Find** lists its results with the same icons.
+
+   **The source card.** A source is a card of six lines, each of a fixed height, so a word that changes (a status, `9 min ago`) moves
+   nothing, and the card fits the room a source has always had, so no default place moved. From the top:
+
+   1. A small arrow to open or close the source, the protocol icon, the source's **short name** on one line, and, when it has
+      something to offer, a `⋯` button named `Source actions for <name>`. The short name is the name without the address a scan adds to it
+      (`OPC UA server`, not `OPC UA server at 172.20.0.2:4840`; `Modbus Schneider PM5560` for `Modbus Schneider PM5560 at
+      10.0.0.5:502`). A name you typed yourself is shown whole, and so is any name that does not end with the source's own address. The full
+      name is the tooltip and is what a screen reader reads and what the buttons are named after.
+   2. The protocol and where the source listens, for example `OPC UA · 172.20.0.2:4840` (just the protocol when no address is known).
+   3. A small dot, the status in words, and the origin: `online · discovered`, or `online · manual` for a source you added by hand. The
+      status words are `online`, `offline`, `needs credentials` (in bolder type),
+      `disabled` and `not polled`. The dot is green for an enabled source that answered its last poll,
+      red for one that did not, amber for one that needs credentials and grey for one that is disabled or has never been polled; the
+      word says which, so colour is never the only signal (the green dot also pulses softly).
+   4. `60 of 60 mapped` (`No points yet` for a source with none) with a thin bar under it, as long as the share of its points that are
+      mapped. The bar is only a picture; the words say the same.
+   5. **Details**, which opens the source's side panel.
+   6. When a scan last found it (`Seen in scan #6, 10 min ago`, `Added by hand` or `Not seen in a scan yet`).
+
+   The dashed border of a discovered source is kept. The protocol reads `OPC UA`, `Modbus` or `Simulator`, or the connector's own name when
+   the app has no label for it. **Create assets for N groups…** and **Remove from Discovery…** are not buttons on the card: they are in
+   the `⋯` menu (below, **Right-click menus**). A group node keeps its `N mapped` and gains a thin bar along its bottom edge, as long as
+   the share of its points that are mapped (hover it for `3 of 6 mapped`).
 
    **The camera glides.** Fit View (the bottom-left control), the refit after **Tidy layout** and **Find** (below) move the view
-   over about a third of a second instead of jumping. Opening a source with its + button (or **Expand** in its right-click menu) pans
+   over about a third of a second instead of jumping. Opening a source with its arrow (or **Expand** in its right-click menu) pans
    the view just far enough to keep the source and its groups in sight, with a margin of 40 px, and never changes the zoom; when they are
    already in view nothing moves. Opening a group, closing anything, **Expand all** and **Collapse all** leave the view alone, and
    so does the first view when the page opens.
@@ -248,8 +288,8 @@ data-retrieval requests the connectors already use, nothing else.
 
    **Snap to grid and guides.** A node you drag snaps to an 8 px grid, and the default place of every node lies on that grid, so
    nudging one group does not leave it a few pixels off its untouched neighbours (assets nested under an asset stand 224 px per level
-   further right, 4 px more than before, for the same reason). The **Snap to grid** button at the top right of the canvas turns
-   this off and on (pressed means on); it starts on and the choice is remembered in this browser. While you drag, thin accent-coloured
+   further right, 4 px more than before, for the same reason). The **Snap to grid** button in the bar's Canvas controls (beside
+   Find; on a narrow window it is an item of **More Discovery actions**) turns this off and on (pressed means on); it starts on and the choice is remembered in this browser. While you drag, thin accent-coloured
    guide lines appear when the node's left edge, centre or right edge, or its top, middle or bottom, lines up to the pixel with
    a nearby node's (the 200 nearest are compared). The guides only show; they never pull the node, so it is dropped exactly where
    you let go. With snap on, equal edges are common; with snap off a guide shows only on an exact match, which is rare by hand.
@@ -264,6 +304,18 @@ data-retrieval requests the connectors already use, nothing else.
    Nothing lights while you drag, for a node with no edge, or when the path has more than 400 nodes (a source with hundreds of drawn
    points). A touch screen has no hover and no Shift or Ctrl, so it lights no path. The dimmed text is below the usual contrast on
    purpose, and only while a path is lit; the same facts are on the lit nodes and in the summary above.
+
+   **The last value of a mapped point.** Rest the pointer on a point that is mapped to an asset for a moment, or Tab to it (when the focus
+   ring shows), and a small card appears just below it (above it near the bottom of the window) with its newest reading, for example
+   `12.40 kW, 3 s ago`: the figure already multiplied by the mapping's scale, in the unit of its metric, with an age that keeps counting
+   while the card stays. A reading older than the mapping's interval allows adds `stale` (`12.40 kW, 5 min ago, stale`), a reading whose
+   quality is not good adds `bad reading`, and a point nobody has read yet says `No reading yet`. While the answer is on its way the card
+   says `Reading…`, and when the server cannot be asked it says `Could not read the value`; it does not try again by itself, the next
+   hover does. The card is only for a mapped point (an unmapped point, a group, a source and an asset show none) and only for a person
+   who may see assets (`assets.view`): a role without it is never asked anything. One request is made per hover, never on a timer. The
+   card goes when the pointer leaves (after a short pause), when you drag a node, pan or zoom, scroll or resize, when you press Esc (that
+   key closes the card first and goes no further) and when the node is closed away; a screen reader is told its words as the node's
+   description while it shows. A touch screen has no hover and so shows no card on touch.
 
    **Live edges.** The edges of a source that is enabled and online flow: dashes travel along the dashed edges from the source to
    its groups and along the edges from its mapped nodes to their assets (these are almost solid, with a small gap that moves, so they
@@ -281,14 +333,17 @@ data-retrieval requests the connectors already use, nothing else.
    until you do.
 
    **Right-click menus.** Right-click a node for the actions it has. A source: **Details**, **Collapse** or **Expand**, **Create
-   assets…**, **Remove**. A group: **Collapse** or **Expand**, **Map…**, **New asset…**. A point: **Map…**, and **New asset…** while it is
+   assets for N groups…**, **Remove from Discovery…**. A group: **Collapse** or **Expand**, **Map…**, **New asset…**. A point: **Map…**, and **New asset…** while it is
    unmapped. A mapped point also holds **Unmap…** and **Move to another asset…**, and a group with mapped points (the Ungrouped bag
    too) **Unmap this group…** and **Move this group's mappings…**. An asset holds **New sub-asset…** and, for each source with points
    mapped to it (the first five by name), `Unmap everything from <source>…`. A source, a group and an asset that has sub-assets end with
    **Expand this branch** and **Collapse this branch** (everyone who can see Discovery has them), and an asset with sub-assets also
-   **Hide sub-assets** or **Show sub-assets**. Most are the same action as a button on the node, and
-   an item is there only when the action is for your role (**Map…**, **New asset…** on a group or a point and **Create assets…** need
-   `discovery.accept`, **Remove** needs `discovery.edit`, the unmap and move items need `assets.edit`, and **New sub-asset…** and
+   **Hide sub-assets** or **Show sub-assets**. Most are the same action as a button on the node. The two a source's card does not
+   draw as buttons, **Create assets for N groups…** and **Remove from Discovery…**, are here and in the `⋯` button on the card (named
+   `Source actions for <name>`), which opens this same menu beside the card. The card has that button only when at least one of the two is
+   for your role and the source (a source with nothing to create or remove has none: Details and the arrow already do the rest). An item is there only when
+   the action is for your role (**Map…**, **New asset…** on a group or a point and **Create assets for N groups…** need
+   `discovery.accept`, **Remove from Discovery…** needs `discovery.edit`, the unmap and move items need `assets.edit`, and **New sub-asset…** and
    **New asset…** (a point's, and the canvas's below) need `assets.edit` and `assets.view`, so a role that can only view sees Details
    and Collapse or Expand). An unidentified service, a selection frame, empty canvas and an asset with no item for your role open the
    canvas menu instead: **Expand all**, **Collapse all**, **Tidy layout** and **Fit view**, greyed out when the button above the
@@ -296,14 +351,15 @@ data-retrieval requests the connectors already use, nothing else.
    button at the right of their title, named `Mapping actions for <name>`, which opens the same menu beside it; it adds no height to
    the node. From the keyboard, press the Menu key or Shift+F10 on a node that has the focus; anywhere else inside the canvas the
    canvas menu opens at its centre. Up and Down move (and wrap), Home and End jump, Enter chooses, Esc closes the menu and puts the
-   focus back where it was (the node, or its `Mapping actions` button), and Tab closes it too. A click elsewhere, scrolling,
+   focus back where it was (the node, or its `Mapping actions` or `Source actions` button), and Tab closes it too. A click elsewhere, scrolling,
    resizing, moving the view and the graph refreshing close it too. Three items have no button of their own: `Unmap everything from
    <source>…` and the **New asset…** of empty canvas and of an unmapped point; the Menu key reaches them. Unmapping and moving,
    the new asset forms and the + on an asset are in item 6.
 
-   **Find.** The **Find** button at the top right of the canvas, or Ctrl+K (Cmd+K on a Mac) while the canvas has the focus (click
-   empty canvas first, or with the focus on the **Find** or **Snap to grid** button), opens a search card over the canvas. Type part of
-   a name and it lists matching sources (by name or endpoint), assets (by name or kind), groups (by name) and points (by name or address). Every word you type must appear; names that start with
+   **Find.** The **Find** button in the bar's Canvas controls (a second press closes the card), or Ctrl+K (Cmd+K on a Mac) while the
+   canvas has the focus (click empty canvas first) or the focus is anywhere on the bar, opens a search card over the top right of the
+   canvas: the button is in the bar, but the card stays in the canvas, so it never moves the bar. Type part of
+   a name and it lists matching sources (by name or endpoint), assets (by name or kind), groups (by name) and points (by name or address), each with the icon of its node. Every word you type must appear; names that start with
    it come first, then names with a word that starts with it, then the rest. At most 50 are listed, and `N more` says how many are
    not. Up and Down move through the list, Enter chooses, and Esc, or a click outside, closes the card and puts the focus back where
    it was. Choosing a result opens the source and group it sits in when they are closed, glides the view to it (zooming in to at
@@ -319,7 +375,8 @@ data-retrieval requests the connectors already use, nothing else.
 
    | Key | What it does |
    |---|---|
-   | Ctrl+K, or Cmd+K (canvas, or its Find and Snap buttons, has the focus) | Open Find; anywhere else on the page it opens Quick find |
+   | Ctrl+K, or Cmd+K (the canvas, or anything on the bar above it, has the focus) | Open Find; anywhere else on the page it opens Quick find |
+   | `?` on the canvas (not while typing in a field) | Open the list of keys and controls; the same as the keyboard button in the bar |
    | Shift-drag | Draw a selection box |
    | Ctrl-click, or Cmd-click | Add a node to the selection or remove it |
    | Alt, or Option, held when you start a drag | Move the node alone, without its children |
@@ -328,23 +385,28 @@ data-retrieval requests the connectors already use, nothing else.
    | Arrow keys on a node that is not selected, on **Show 50 more**, or on the canvas | Move to the next, previous, parent or first child node (Down or Right on the canvas goes to the first node); on a selected node they move it instead (8 px with Snap to grid on, 5 px without) |
    | Enter on a source, a group or an asset with sub-assets | Open or close it; on **Show 50 more** it shows the next 50 |
    | Space on a node (Enter too on a point, an asset without sub-assets and an unidentified service) | Select it |
-   | Esc | Close the open menu or Find card (one layer at a time), then clear a selection (on a selected node it clears the selection and the focus stays on the node) |
+   | Esc | Close the open value card, keys list, menu or Find card (one layer at a time), then clear a selection (on a selected node it clears the selection and the focus stays on the node) |
 
    **Reduced motion.** When your system asks for less motion, the camera moves at once, the green dot does not pulse, the edges do not
    flow (they keep their dashes) and the Find outline does not pulse (it still shows for 1.5 seconds). The path highlight needs no
    setting: it never fades, so lit and dimmed nodes always change at once.
 
-   **The hint under the title** is one line, `Dashed: discovered. Solid: assets. Drag a group onto an asset or press New asset…`,
-   followed by a `?` (named `What can I do on the canvas?`) that lists the keys above in a few short lines, one of them for the arrow keys.
+   **The hint under the title** is one sentence, `Dashed means discovered, solid means assets. Drag a group onto an asset to map it.`
+   The `?` that used to follow it is gone: the keys and controls are in the **Keyboard shortcuts and controls** button in the bar
+   (or the `?` key on the canvas), which opens a small list in six groups: Move and select, Camera, Find, Menus, Mapping and Navigation,
+   with the keys drawn as key caps. It is not modal, so the page behind stays usable; Esc, Tab, a click outside, a scroll or a resize
+   closes it; when Esc or Tab does, the focus goes back to where it was before (the button, or the canvas when the `?` key opened it).
 
    Each source node says when a scan last found it (`Seen in scan #6, 10 min ago`), or `Added by hand` for a source you made
    yourself, or `Not seen in a scan yet`. A scan only adds sources and refreshes their points; it never removes one, so a source
    whose device is gone, or that you deleted on Sources, stays or comes back until you remove it here.
 
-   **Removing leftovers** (needs `discovery.edit`). A discovered source with nothing mapped has a **Remove** button (a small bin at the
-   right end of its row of buttons, named `Remove <source> from Discovery` for a screen reader), and **Clear
-   unmapped (N)** above the graph removes every such source at once. Both ask first, in the same delete dialog as everywhere else, and
-   name the sources: the dialog lists the first five and says how many more. Removing takes the source, its points and their places on
+   **Removing leftovers** (needs `discovery.edit`). A discovered source with nothing mapped has **Remove from Discovery…** in its `⋯` menu
+   (`Source actions for <name>`, or a right-click on the source; it is no longer a button on the card), and **Clear unmapped (N)** in
+   the bar's **More Discovery actions** menu removes every such source at once. Both ask first, in the same delete dialog as everywhere
+   else, and name the sources: the dialog lists the first five and says how many more. When the dialog closes, the focus goes to
+   **Refresh** after a single removal and back to the **More Discovery actions** button after Clear unmapped (to the page itself when
+   nothing is left on Discovery). Removing takes the source, its points and their places on
    the graph; asset, billing and dashboard data never depended on it, because nothing is mapped. Only a discovered source with no
    mapped point can go. A source with a mapped point, or one you added by hand, is never removed here (the message says it was kept and
    why), and the server checks again at the moment of removal, so a point someone mapped after the dialog opened keeps its source.
@@ -363,7 +425,7 @@ data-retrieval requests the connectors already use, nothing else.
    unmapped clusters and unmapped points, **New asset…** on clusters (and in the menu of an unmapped point). The Ungrouped bag and fully
    mapped clusters get neither. After **Create mappings** a toast says `Mapped 6 points to Room 1.` (see **The Undo after mapping**).
 
-   **Create assets…** on a source node (needs `discovery.accept`) is the click path for a whole source. It opens
+   **Create assets for N groups…** in a source's `⋯` menu or right-click menu (needs `discovery.accept`) is the click path for a whole source. It opens
    one dialog with one parent asset (or the top level) and a row per group that can become an asset: a tick, the asset's name (the
    group's name, which you can change), the number of points and what the scan guessed for each point, such as `energy_kwh ×0.001`.
    **Create N assets** then makes them one after another, each the way New asset… on that group would. A name already used under
@@ -372,7 +434,7 @@ data-retrieval requests the connectors already use, nothing else.
    and stays in the list; the others are created. The guesses are the scan's: look them over before you press Create, because they
    cannot be changed here. To change a metric or a scale first, use New asset… on the group. The Ungrouped
    bag, groups that are fully mapped and groups where every point needs a decision are left out (the dialog names the last kind), and
-   a point whose metric repeats another one in its group stays unmapped, as the row says. The button is missing on a source with no
+   a point whose metric repeats another one in its group stays unmapped, as the row says. The menu item is missing on a source with no
    such group.
 
    **The Undo after mapping.** The toast after **Create mappings** reads `Mapped 6 points to Room 1.` and, for a person who holds
@@ -430,7 +492,7 @@ data-retrieval requests the connectors already use, nothing else.
    message. A role with `discovery.accept` but without `assets.edit` and `assets.view` keeps the older way: the Review's own **New
    asset** choice, with a name and a parent only.
 
-   **The + on an asset.** An asset node has a small round + at its top right corner (not the + that opens a source or a group; needs
+   **The + on an asset.** An asset node has a small round + at its top right corner (not the arrow or the + that opens a source or a group; needs
    `assets.edit` and `assets.view`). It shows while the pointer is on the node, while the node or the + has the keyboard focus (Tab to
    the node, then Tab again) and while the node is selected. Click it, or press Enter or Space on it, and **New asset** opens with
    that asset as the parent. You can also drag from it and let go on empty canvas: a dashed line follows the pointer and the same
@@ -493,6 +555,12 @@ harmless, it writes no audit row, and `PUT /api/discovery/layout` still saves po
 `GET /api/mappings/{id}` (`assets.edit`) answers one mapping with every stored value (`point_id`, `asset_id`, `metric`, `scale`,
 `interval_seconds`, `custom_unit`) or a 404 `mapping not found`; unmapping, moving and their Undo read it before they write.
 `DELETE /api/mappings/{id}` still answers 204.
+`GET /api/mappings/{id}/latest` (`assets.view`) answers the last reading of one mapped point and is what the value card on a
+mapped point in Discovery asks for: `mapping_id`, `value` (already multiplied by the scale), `unit`, `ts`, `quality`, `age_seconds`
+(by the database's clock) and `stale` (the same rule the dashboard widgets use). A mapping nobody has read yet answers `value`, `ts`,
+`quality` and `age_seconds` as `null` and `stale` as `false`; an unknown id is a 404 `mapping not found`. Each asset in
+`GET /api/discovery/graph` now also carries `icon` (the chosen icon, `null` for Automatic) and `kind_icon` (the icon of its kind in
+the registry, `null` when no kind matches), the same two fields `GET /api/assets` serves.
 Removing discovered sources is `POST /api/discovery/sources/remove` with `{"source_ids": [...]}`, 1 to 500 ids in a
 request (more is refused with a 422). It answers which sources were removed and which were skipped, each with the reason `mapped`,
 `manual` or `gone`, and refuses with a 409 and removes nothing while a scan is queued or running. Each scan in `GET /api/scans` carries

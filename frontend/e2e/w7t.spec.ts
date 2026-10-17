@@ -41,8 +41,8 @@ import { rowAction, treeLink, userBlock } from "./shell";
 //               shared layout is untouched.
 //   summary     the line above the canvas equals what the API holds, Expand all opens what fits the 600-node budget (and says so when something does not),
 //               Collapse all closes it, and each is aria-disabled when there is nothing to do.
-//   layout      at 1440 and at 1024 x 640: no sideways overflow, the bar and its three buttons whole, the hint short, the source node's Details, Create assets...
-//               and bin on ONE row inside the node, and (the w7r check, with the bar) the first source's title and Create assets button inside the canvas.
+//   layout      at 1440 and at 1024 x 640: no sideways overflow, the bar and its controls whole, in one row and not touching (the words a tier takes out of the bar are in the overflow menu), the hint short,
+//               the source node's Details and Source actions buttons inside it, and (the w7r check, with the bar) the first source's title and Source actions button inside the canvas.
 //   canvas drop with the graph response held for 1.5 s, the canvas row (`.graph-layout`) starts at the same height (0.5 px) in the loading branch and once the graph is
 //               in, at 1440 x 900, 1024 x 640 and 800 x 600 (the header's actions hold their real width while loading, so the hint wraps the same way).
 //   scope form  4080 warns with `4840 (OPC UA)`, 4840 and 4080 together still save (the Ports cell names 4840), 80 and 8080 do not warn, the Edit form warns too, and
@@ -270,6 +270,8 @@ const pointNode = (page: Page, pointId: number) => node(page, `point:${pointId}`
 const assetNode = (page: Page, assetId: number) => node(page, `asset:${assetId}`);
 const bar = (page: Page) => page.locator(".graph-bar");
 const barButton = (page: Page, name: string) => bar(page).getByRole("button", { name, exact: true });
+// W12c: a source node's menu button (Remove from Discovery… and Create assets for N groups… are items of the menu it opens).
+const sourceActions = (page: Page, source: { id: number; name: string }) => srcNode(page, source).getByRole("button", { name: `Source actions for ${source.name}`, exact: true });
 const settled = (page: Page) => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
 
 async function boxOf(target: Locator, what: string): Promise<Box> {
@@ -975,7 +977,7 @@ test.describe("W7t: the Discovery bar", () => {
     });
   });
 
-  test("at 1440 and at 1024 x 640: no sideways overflow, the bar and its three buttons whole, the hint short, a source node's Details, Create assets... and bin on ONE row, and the canvas opens on the first source with its Create assets button inside", async ({ page }) => {
+  test("at 1440 and at 1024 x 640: no sideways overflow, the bar and its controls whole, in one row and not touching, the hint short, a source node's Details and Source actions buttons inside it (Remove and Create assets are in that menu), and the canvas opens on the first source with its Source actions button inside", async ({ page }) => {
     test.setTimeout(240_000);
     await signIn(page);
     await clearLayout(page.request);
@@ -995,64 +997,98 @@ test.describe("W7t: the Discovery bar", () => {
         await settled(page);
         expect.soft(await overflowOf(page), `no sideways overflow at ${width}`).toBeLessThanOrEqual(1);
 
-        // The bar: its summary and buttons lie inside it, in a row, without touching, and inside the window. W12b: a chevron joins Collapse all and Expand all and the Unmapped only
-        // switch ends the row; the three old buttons keep their order.
+        // The bar (W12c): its controls lie inside it, in ONE row, without touching, and inside the window. The width tiers belong to the stylesheet, so no pixel width is pinned here: a control is
+        // either drawn (and measured) or, for the three narrow ones (Unmapped only, Tidy layout, Snap to grid), away from the bar and offered as an item of the overflow menu. Every control
+        // keeps its accessible name in the DOM either way. The summary sentence is visually hidden (the chips are the visible count), so it is not measured.
         const barBox = await boxOf(bar(page), "the bar");
         expect.soft(barBox.height, "the bar is about 36 px high").toBeGreaterThanOrEqual(34);
         expect.soft(barBox.height).toBeLessThanOrEqual(40);
-        const parts: [string, Box][] = [["the summary", await boxOf(page.locator(".graph-summary"), "the summary")]];
-        for (const name of ["Collapse all", "Expand all", "Tidy layout"]) parts.push([name, await boxOf(barButton(page, name), name)]);
-        parts.push(["Unmapped only", await boxOf(bar(page).locator(".graph-bar-switch"), "the Unmapped only switch")]);
+        const controls: [string, Locator][] = [
+          ["Collapse all", barButton(page, "Collapse all")],
+          ["Expand all", barButton(page, "Expand all")],
+          ["Unmapped only", bar(page).locator(".graph-bar-switch")],
+          ["Tidy layout", barButton(page, "Tidy layout")],
+          ["Find", barButton(page, "Find")],
+          ["Snap to grid", barButton(page, "Snap to grid")],
+          ["Refresh", barButton(page, "Refresh")],
+          ["Keyboard shortcuts and controls", barButton(page, "Keyboard shortcuts and controls")],
+          ["More Discovery actions", barButton(page, "More Discovery actions")],
+        ];
+        const NARROW = ["Unmapped only", "Tidy layout", "Snap to grid"];
+        const drawn: [string, Box][] = [];
+        const away: string[] = [];
+        for (const [name, control] of controls) {
+          expect.soft(await control.count(), `${name} is in the bar's DOM exactly once`).toBe(1);
+          if (await control.isVisible()) drawn.push([name, await boxOf(control, name)]);
+          else away.push(name);
+        }
+        expect.soft(away.filter((name) => !NARROW.includes(name)), "only the three narrow controls may leave the bar").toEqual([]);
         // A chevron is the other half of its button (it overlaps the button's border by 1 px on purpose): it is checked inside the bar, not for touching.
         const chevrons: [string, Box][] = [];
         for (const name of ["More ways to collapse", "More ways to expand"]) chevrons.push([name, await boxOf(barButton(page, name), name)]);
-        for (const [what, box] of [...parts, ...chevrons]) {
+        for (const [what, box] of [...drawn, ...chevrons]) {
           expect.soft(box.x, `${what}: left edge inside the bar`).toBeGreaterThanOrEqual(barBox.x - 1);
           expect.soft(box.x + box.width, `${what}: right edge inside the bar`).toBeLessThanOrEqual(barBox.x + barBox.width + 1);
           expect.soft(box.y, `${what}: top inside the bar`).toBeGreaterThanOrEqual(barBox.y - 1);
           expect.soft(box.y + box.height, `${what}: bottom inside the bar`).toBeLessThanOrEqual(barBox.y + barBox.height + 1);
           expect.soft(box.x + box.width, `${what}: inside the window`).toBeLessThanOrEqual(width + 1);
         }
-        for (let i = 1; i < parts.length; i++) expect.soft(parts[i - 1][1].x + parts[i - 1][1].width, `${parts[i - 1][0]} and ${parts[i][0]} do not touch`).toBeLessThanOrEqual(parts[i][1].x + 1);
+        for (let i = 1; i < drawn.length; i++) expect.soft(drawn[i - 1][1].x + drawn[i - 1][1].width, `${drawn[i - 1][0]} and ${drawn[i][0]} do not touch`).toBeLessThanOrEqual(drawn[i][1].x + 1);
+        const centres = drawn.map(([, box]) => centreOf(box).y);
+        expect.soft(Math.max(...centres) - Math.min(...centres), `the bar's controls share one row (centres ${centres.map((c) => c.toFixed(1)).join(", ")})`).toBeLessThanOrEqual(2);
+        if (away.length > 0) {
+          // What left the bar is in the overflow menu, once each (Clear unmapped is always there for this role).
+          await barButton(page, "More Discovery actions").click();
+          const menu = page.getByRole("menu", { name: "Discovery actions", exact: true });
+          await expect(menu).toBeVisible();
+          for (const name of away) await expect.soft(menu.getByRole("menuitem", { name: new RegExp(`^(Turn (on|off) )?${name}$`) }), `${name} is an item of the overflow menu`).toHaveCount(1);
+          await page.keyboard.press("Escape");
+          await expect(menu).toBeHidden();
+        }
         const canvas = await boxOf(page.locator(".graph-canvas"), "the canvas");
-        test.info().annotations.push({ type: "measure", description: `${width} x ${height}: the bar is ${barBox.height}px high, the canvas ${canvas.width} x ${canvas.height}px` });
+        test.info().annotations.push({ type: "measure", description: `${width} x ${height}: the bar is ${barBox.height}px high, ${drawn.length} controls drawn, ${away.length} in the overflow menu (${away.join(", ")}), the canvas ${canvas.width} x ${canvas.height}px` });
 
-        // The hint is the short one. W7u moved the keys (Alt or Option moves a node alone, and the rest) into the tip beside it.
+        // The hint is the short one (one sentence under the title). W7u moved the keys into the tip; W12c moved them into the shortcuts bubble behind the keyboard button in the bar.
         const hint = ((await page.locator(".page-head .sub").textContent()) ?? "").trim();
-        expect.soft(hint, "the hint is the legend and the way to map").toContain("Dashed: discovered. Solid: assets.");
+        expect.soft(hint, "the hint is the legend and the way to map").toContain("Dashed means discovered, solid means assets.");
         expect.soft(hint.length, `the hint is ${hint.length} characters`).toBeLessThanOrEqual(150);
         if (width === 1440) {
-          await page.getByRole("button", { name: "What can I do on the canvas?", exact: true }).click();
-          expect.soft(await page.getByRole("note").innerText(), "the tip names Alt and Option").toContain("Alt or Option");
+          await barButton(page, "Keyboard shortcuts and controls").click();
+          const bubble = page.getByRole("dialog", { name: "Keyboard shortcuts and controls", exact: true });
+          await expect(bubble).toBeVisible();
+          expect.soft(await bubble.innerText(), "the bubble names Alt and Option").toContain("Option");
           await page.keyboard.press("Escape");
-          await expect(page.getByRole("note"), "Escape closes the tip").toHaveCount(0);
+          await expect(bubble, "Escape closes the bubble").toHaveCount(0);
+          await expect(barButton(page, "Keyboard shortcuts and controls"), "and the focus is back on its button").toBeFocused();
         }
         if (width === 1440) await shot(page, "discovery-bar-1440");
 
-        // The source node: Details, Create assets... and the bin (no text) on one row, inside the node.
+        // The source node (W12c): Details and the Source actions button (the head row's end) stand inside the node; Remove and Create assets are not buttons of the node any more but items of that menu.
         if (target) {
-          const row = srcNode(page, target).locator(".gnode-actions");
-          const buttons = await row.getByRole("button").all();
-          expect.soft(buttons.length, "Details, Create assets... and Remove").toBeGreaterThanOrEqual(2);
           const nodeBox = await boxOf(srcNode(page, target).locator(".gnode"), "the source node");
-          const centres: number[] = [];
+          const buttons = await srcNode(page, target).getByRole("button").all();
+          expect.soft(buttons.length, "the fold, Details and Source actions").toBeGreaterThanOrEqual(3);
           for (const button of buttons) {
             const box = await boxOf(button, "a node button");
-            centres.push(centreOf(box).y);
             expect.soft(box.x, "a node button: left").toBeGreaterThanOrEqual(nodeBox.x - 1);
             expect.soft(box.x + box.width, "a node button: right").toBeLessThanOrEqual(nodeBox.x + nodeBox.width + 1);
             expect.soft(box.y + box.height, "a node button: bottom").toBeLessThanOrEqual(nodeBox.y + nodeBox.height + 1);
           }
-          expect.soft(Math.max(...centres) - Math.min(...centres), `the node's ${buttons.length} buttons share one row (centres ${centres.map((c) => c.toFixed(1)).join(", ")})`).toBeLessThanOrEqual(2);
-          const remove = row.getByRole("button", { name: `Remove ${target.name} from Discovery`, exact: true });
-          await expect.soft(remove, "the bin keeps its name").toHaveCount(1);
-          await expect.soft(remove).toHaveAttribute("title", "Remove");
-          expect.soft((await remove.innerText()).trim(), "and has no visible text").toBe("");
-          expect.soft((await boxOf(remove, "the bin")).width, "just an icon wide").toBeLessThanOrEqual(40);
+          await expect.soft(srcNode(page, target).getByRole("button", { name: /^(Remove|Create assets)/ }), "Remove and Create assets are no buttons of the node").toHaveCount(0);
+          const menuButton = sourceActions(page, target);
+          await expect.soft(menuButton, "the menu button is on the node").toBeVisible();
+          expect.soft((await menuButton.innerText()).trim(), "and has no visible text").toBe("");
+          expect.soft((await boxOf(menuButton, "Source actions")).width, "just an icon wide").toBeLessThanOrEqual(40);
+          await menuButton.click();
+          const menu = page.getByRole("menu", { name: `Actions for ${target.name}`, exact: true });
+          await expect.soft(menu, "its menu opens").toBeVisible();
+          await expect.soft(menu.getByRole("menuitem", { name: "Remove from Discovery…", exact: true }), "and lists Remove").toHaveCount(1);
+          await page.keyboard.press("Escape");
+          await expect(menu).toBeHidden();
         }
 
         if (width === 1024) {
-          // w7r's check, with the bar: the graph opens on the first sources, readable, and the first source's title and Create assets button are inside the canvas.
+          // w7r's check, with the bar: the graph opens on the first sources, readable, and the first source's title and Source actions button are inside the canvas.
           const inCanvas = (box: Box) =>
             box.x >= canvas.x - 1 && box.y >= canvas.y - 1 && box.x + box.width <= canvas.x + canvas.width + 1 && box.y + box.height <= canvas.y + canvas.height + 1;
           const title = first.locator(".node-title");
@@ -1064,13 +1100,13 @@ test.describe("W7t: the Discovery bar", () => {
           expect.soft(size * zoom, `the title is ${size}px at zoom ${zoom}`).toBeGreaterThanOrEqual(8.99);
           let checked = false;
           for (const source of graph.sources.slice(0, 3)) {
-            const button = srcNode(page, source).getByRole("button", { name: /^Create assets for \d+ groups? of / });
+            const button = sourceActions(page, source);
             if ((await button.count()) === 0) continue;
-            expect.soft(inCanvas(await boxOf(button, "Create assets")), `${source.name}: Create assets lies inside the canvas box`).toBe(true);
+            expect.soft(inCanvas(await boxOf(button, "Source actions")), `${source.name}: Source actions lies inside the canvas box`).toBe(true);
             checked = true;
             break;
           }
-          if (!checked) test.info().annotations.push({ type: "note", description: "none of the first three sources has a Create assets button on this stack" });
+          if (!checked) test.info().annotations.push({ type: "note", description: "none of the first three sources has a Source actions button on this stack" });
         }
       });
     }
