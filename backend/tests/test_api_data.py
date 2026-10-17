@@ -4,7 +4,7 @@ import pytest
 
 from dcdash.api.data import day_start
 from dcdash.core.config import get_settings
-from helpers import login_as, make_asset, make_mapping, make_point, make_source, settle_rollups
+from helpers import login_as, make_asset, make_mapping, make_point, make_role, make_source, settle_rollups
 
 MINUTE = timedelta(minutes=1)
 
@@ -95,6 +95,98 @@ async def test_summary_shows_scaled_latest_values(client, db):
     assert metrics["active_power_kw"]["unit"] == "kW" and metrics["active_power_kw"]["quality"] == 0
     assert datetime.fromisoformat(metrics["active_power_kw"]["ts"]) == ts
     assert metrics["voltage_v"]["value"] is None and metrics["voltage_v"]["ts"] is None
+
+
+async def latest_of(db, scale=5.0, value=2.0, age=3.0, interval=5, metric="active_power_kw", quality=0, custom_unit=None):
+    """A mapped point whose latest reading is `age` seconds old by the database's clock. Returns (mapping, point)."""
+    source = await make_source(db)
+    asset = await make_asset(db, "LV Panel 1")
+    point = await make_point(db, source, "LVP01_W")
+    mapping = await make_mapping(db, point, asset, metric, interval, scale=scale)
+    if custom_unit is not None:
+        await db.execute("UPDATE mappings SET custom_unit = $2 WHERE id = $1", mapping, custom_unit)
+    if value is not None or age is not None:
+        await db.execute(
+            "INSERT INTO point_latest (point_id, ts, value, quality) VALUES ($1, now() - make_interval(secs => $2), $3, $4)",
+            point, age, value, quality,
+        )
+    return mapping, point
+
+
+async def test_latest_gives_the_scaled_value_with_its_unit_quality_and_age(client, db):
+    await login_as(client, db, "viewer")
+    mapping, _ = await latest_of(db, scale=5.0, value=2.0, age=3.0)
+    response = await client.get(f"/api/mappings/{mapping}/latest")
+    assert response.status_code == 200
+    latest = response.json()
+    assert set(latest) == {"mapping_id", "value", "unit", "ts", "quality", "age_seconds", "stale"}
+    assert latest["mapping_id"] == mapping and latest["value"] == pytest.approx(10.0)  # 2.0 x scale 5
+    assert latest["unit"] == "kW" and latest["quality"] == 0 and latest["stale"] is False
+    assert 3.0 <= latest["age_seconds"] < 30.0  # the row is 3 s old by the database's clock; the request takes a moment
+    assert datetime.fromisoformat(latest["ts"]).tzinfo is not None
+
+
+async def test_latest_uses_the_custom_unit_of_a_custom_metric_and_keeps_a_bad_quality(client, db):
+    await login_as(client, db, "viewer")
+    mapping, _ = await latest_of(db, scale=0.5, value=4.0, metric="custom", custom_unit="bar", quality=1)
+    latest = (await client.get(f"/api/mappings/{mapping}/latest")).json()
+    assert latest["value"] == pytest.approx(2.0) and latest["unit"] == "bar" and latest["quality"] == 1
+
+
+async def test_latest_of_a_reading_without_a_value_is_null_but_still_timed(client, db):
+    await login_as(client, db, "viewer")
+    source = await make_source(db)
+    asset = await make_asset(db, "LV Panel 1")
+    point = await make_point(db, source, "LVP01_W")
+    mapping = await make_mapping(db, point, asset)
+    await db.execute("INSERT INTO point_latest (point_id, ts, value, quality) VALUES ($1, now(), NULL, 2)", point)
+    latest = (await client.get(f"/api/mappings/{mapping}/latest")).json()
+    assert latest["value"] is None and latest["quality"] == 2 and latest["ts"] is not None
+    assert latest["age_seconds"] is not None and latest["stale"] is False
+
+
+@pytest.mark.parametrize(
+    ("interval", "age", "stale"),
+    [
+        (5, 30, False),  # three intervals are 15 s, but a reading is never stale inside a minute
+        (5, 90, True),
+        (60, 120, False),  # three intervals of a minute are 3 minutes
+        (60, 240, True),
+    ],
+)
+async def test_latest_is_stale_by_the_rule_of_the_widgets(client, db, interval, age, stale):
+    await login_as(client, db, "viewer")
+    mapping, _ = await latest_of(db, interval=interval, age=float(age))
+    latest = (await client.get(f"/api/mappings/{mapping}/latest")).json()
+    assert latest["stale"] is stale
+    assert age <= latest["age_seconds"] < age + 30  # one clock, the database's, decides both numbers
+
+
+async def test_latest_of_a_mapping_nobody_has_read_yet_is_all_null_and_not_stale(client, db):
+    await login_as(client, db, "viewer")
+    mapping, _ = await latest_of(db, value=None, age=None)
+    latest = (await client.get(f"/api/mappings/{mapping}/latest")).json()
+    assert latest == {
+        "mapping_id": mapping, "value": None, "unit": "kW", "ts": None, "quality": None, "age_seconds": None, "stale": False,
+    }
+
+
+async def test_latest_of_an_unknown_mapping_is_a_404_and_a_text_id_a_422(client, db):
+    await login_as(client, db, "viewer")
+    assert (await client.get("/api/mappings/999999/latest")).status_code == 404
+    assert (await client.get("/api/mappings/abc/latest")).status_code == 422
+
+
+async def test_latest_needs_assets_view_and_nothing_more(client, db):
+    mapping, _ = await latest_of(db)
+    assert (await client.get(f"/api/mappings/{mapping}/latest")).status_code == 401
+    await make_role(db, "dashboards only", ["dashboards.view"])
+    await login_as(client, db, "dashboards only", username="d")
+    assert (await client.get(f"/api/mappings/{mapping}/latest")).status_code == 403
+    await client.post("/api/logout")
+    await make_role(db, "looker", ["assets.view"])
+    await login_as(client, db, "looker", username="l")
+    assert (await client.get(f"/api/mappings/{mapping}/latest")).status_code == 200
 
 
 async def test_energy_today_from_counter_handles_reset(client, db):

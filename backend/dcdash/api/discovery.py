@@ -13,6 +13,7 @@ from dcdash.api.assets import get_asset
 from dcdash.api.deps import current_user, get_db, notify, require_permission
 from dcdash.api.scans import SCAN_START_LOCK
 from dcdash.api.sources import _lock_source, _mapped_counts
+from dcdash.core.asset_kinds import icon_for, kind_icons
 from dcdash.core.audit import audit, hidden_values, safe_config, scrub_url_credentials
 from dcdash.core.discovery import MappingGuess, PointInfo, guess_mapping, suggest_groups
 from dcdash.core.metrics import Metric, Scale, default_interval
@@ -166,8 +167,12 @@ async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
         .order_by(ScanFinding.id)
     )
     assets = await db.execute(
-        select(Asset.id, Asset.parent_id, Asset.name, Asset.kind).order_by(Asset.sort_order, Asset.name, Asset.id)
+        select(Asset.id, Asset.parent_id, Asset.name, Asset.kind, Asset.icon).order_by(Asset.sort_order, Asset.name, Asset.id)
     )
+    # The same two icon fields /api/assets serves (a chosen icon, and the registry icon of the kind), so the canvas can draw
+    # what the tree draws without a second read that needs assets.view. One registry read, one lookup per distinct kind text.
+    icons = await kind_icons(db)
+    icon_cache: dict[str, str | None] = {}
     layout = await db.execute(select(GraphLayout.node_id, GraphLayout.x, GraphLayout.y))
     return {
         "sources": [
@@ -175,7 +180,13 @@ async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
             for s in sources
         ],
         "unidentified": [{"host": r.host, "port": r.port, "scan_id": r.scan_id} for r in unidentified],
-        "assets": [{"id": a.id, "parent_id": a.parent_id, "name": a.name, "kind": a.kind} for a in assets],
+        "assets": [
+            {
+                "id": a.id, "parent_id": a.parent_id, "name": a.name, "kind": a.kind, "icon": a.icon,
+                "kind_icon": icon_for(a.kind, icons, icon_cache),
+            }
+            for a in assets
+        ],
         "layout": {r.node_id: {"x": r.x, "y": r.y} for r in layout},
     }
 

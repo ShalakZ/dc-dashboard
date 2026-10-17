@@ -493,6 +493,12 @@ harmless, it writes no audit row, and `PUT /api/discovery/layout` still saves po
 `GET /api/mappings/{id}` (`assets.edit`) answers one mapping with every stored value (`point_id`, `asset_id`, `metric`, `scale`,
 `interval_seconds`, `custom_unit`) or a 404 `mapping not found`; unmapping, moving and their Undo read it before they write.
 `DELETE /api/mappings/{id}` still answers 204.
+`GET /api/mappings/{id}/latest` (`assets.view`) answers the last reading of one mapped point and is what the value card on a
+mapped point in Discovery asks for: `mapping_id`, `value` (already multiplied by the scale), `unit`, `ts`, `quality`, `age_seconds`
+(by the database's clock) and `stale` (the same rule the dashboard widgets use). A mapping nobody has read yet answers `value`, `ts`,
+`quality` and `age_seconds` as `null` and `stale` as `false`; an unknown id is a 404 `mapping not found`. Each asset in
+`GET /api/discovery/graph` now also carries `icon` (the chosen icon, `null` for Automatic) and `kind_icon` (the icon of its kind in
+the registry, `null` when no kind matches), the same two fields `GET /api/assets` serves.
 Removing discovered sources is `POST /api/discovery/sources/remove` with `{"source_ids": [...]}`, 1 to 500 ids in a
 request (more is refused with a 422). It answers which sources were removed and which were skipped, each with the reason `mapped`,
 `manual` or `gone`, and refuses with a 409 and removes nothing while a scan is queued or running. Each scan in `GET /api/scans` carries
