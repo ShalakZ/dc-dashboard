@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w12c (2026-10-17, MERGE_PENDING)
+## w12c (2026-10-17, 2572801)
 
 w12c (Discovery visual polish) tidies the look of Discovery without changing what it does. The bar above the canvas is one regrouped bar:
 on the left four small counts with icons (sources, points, mapped, and **needs credentials** when a source does), then **Collapse all** and
