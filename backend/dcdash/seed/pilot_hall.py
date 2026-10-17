@@ -5,8 +5,8 @@
 This part is only the LAYOUT: what the tree looks like, which racks are busy, idle, single-fed or empty, and which meter sits on
 which asset. Everything here is synthetic and generic ("Hall 1", "Pod A", "Row 1", "Rack 01", "Feed A", "Panel 1A"); no name comes
 from a real site. The layout is a pure function of a seed (one `random.Random(seed)`, no clock, no database), and the module does
-nothing on its own: importing it writes nothing and reads nothing. The series (the readings of every meter), the writer, the dry run
-and the command line are added by later tasks (3 and 4).
+nothing on its own: importing it writes nothing and reads nothing. The series (the readings of every meter) is the second part of
+this file, also pure; the writer, the dry run and the command line are added by a later task (4).
 
 The tree, with its keys (a key is a unique label in this module, not a path):
   - the Site "Seeded pilot hall" (`site`) > Hall 1, Hall 2 (`h1`, `h2`) > Pod A, Pod B (`h1/pa`, `h1/pb`) > Row 1 to Row 4 of each
@@ -20,9 +20,13 @@ Variety, with the counts fixed and the choice of racks moved by the seed: 6 free
 rack shares its load about half and half between the feeds. Eight of the Hall 2 B feeds report power instead of an energy counter
 (so the engine has to estimate them), one Hall 1 Feed A counter has a gap in its samples and another one resets once.
 """
+import math
 import random
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from dcdash.core.metrics import Metric, unit_for
 from dcdash.seed import history
@@ -218,3 +222,69 @@ def unit(meter: Meter) -> str:
 
 def point_address(meter: Meter) -> str:
     return f"seed/pilot/{meter.node}/{meter.metric.value}"
+
+
+# ---- the series: the readings of every meter, pure ------------------------------------------------------------------------
+
+NOMINAL_VOLTS = 400.0  # a panel's line voltage, +-1 % around it
+VOLTAGE_JITTER = 0.01
+POWER_FACTOR = 0.95  # for the panel current: I = P / (sqrt(3) x V x 0.95)
+
+
+def curve(load_kw: float) -> float:
+    """The part of a rack's rated load that is drawn at a moment, 0.86 (night) to 1.0 (peak): the old seeder's daily curve
+    (`history.base_kw`, 20 to 80 kW) scaled down to a gentle swing, since a rack's draw hardly follows the hall's schedule."""
+    return 0.86 + 0.14 * (load_kw - 20) / 60
+
+
+def samples(plan: history.Plan, layout: Layout) -> Iterator[tuple[datetime, dict[str, float]]]:
+    """One item per instant of the plan: (instant, {meter id: value}) for the meters that are sampled at that instant.
+
+    A counter is a running sum of the power: value[i+1] = value[i] + power[i] x step. The jitter is on the power, so a counter
+    never ticks down by chance; the one reset drops it to near zero once, and the gap meter keeps counting through its hole without
+    emitting. The random draws are the same with or without a gap: one per feed meter per instant, then one per panel voltage."""
+    rng = random.Random(plan.seed)
+    zone = ZoneInfo(plan.tz)
+    step_hours = plan.step_seconds / 3600
+    feed_of = {feed: (rack, feed[-1]) for rack in layout.racks for feed in rack.feeds}  # feed key -> (its rack, "a" or "b")
+    counters = {meter.id: meter.counter_base for meter in layout.meters if meter.kind == "counter"}
+    for index, ts in enumerate(plan.times()):
+        factor = curve(history.base_kw(ts, zone))
+        values: dict[str, float] = {}
+        power_of: dict[str, float] = {}  # the true power of each feed now, also of the one that is not sampled
+        volts_of: dict[str, float] = {}  # the voltage sample of each panel now, for its current
+        for meter in layout.meters:
+            if meter.kind in ("counter", "power"):
+                rack, letter = feed_of[meter.node]
+                share = rack.share_a if letter == "a" else 1 - rack.share_a
+                power = rack.kw * share * factor * (1 + rng.uniform(-history.JITTER, history.JITTER))
+                power_of[meter.node] = power
+                if meter.kind == "power":
+                    values[meter.id] = round(power, 3)
+                    continue
+                if meter.resets and index == plan.reset_index:
+                    counters[meter.id] = rng.uniform(0.1, 1.0)  # the meter restarted
+                if not (meter.gap and plan.in_gap(ts)):
+                    values[meter.id] = round(counters[meter.id], 3)
+                counters[meter.id] += power * step_hours
+            elif meter.kind == "voltage":
+                volts_of[meter.node] = round(NOMINAL_VOLTS * (1 + rng.uniform(-VOLTAGE_JITTER, VOLTAGE_JITTER)), 1)
+                values[meter.id] = volts_of[meter.node]
+            else:  # "current": the panel's voltage meter comes right before it in the layout
+                carried = sum(power_of[feed] for feed in meter.feeds)
+                values[meter.id] = round(carried * 1000 / (math.sqrt(3) * volts_of[meter.node] * POWER_FACTOR), 2)
+        yield ts, values
+
+
+def readings_by_day(plan: history.Plan, layout: Layout) -> Iterator[tuple[date, list[tuple[str, datetime, float]]]]:
+    """The samples grouped by UTC day, oldest day first, as (meter id, instant, value) rows: one day in memory at a time."""
+    day: date | None = None
+    rows: list[tuple[str, datetime, float]] = []
+    for ts, values in samples(plan, layout):
+        if day is not None and ts.date() != day:
+            yield day, rows
+            rows = []
+        day = ts.date()
+        rows.extend((meter_id, ts, value) for meter_id, value in values.items())
+    if day is not None:
+        yield day, rows
