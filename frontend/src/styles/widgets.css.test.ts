@@ -237,6 +237,13 @@ describe("styles/widgets.css", () => {
       for (const rule of rules) expect(rule.body, `"${rule.selector}"`).not.toMatch(/visibility:\s*hidden/);
     });
 
+    it("under 280px the footer's 'since' and its dot give way to the marker hint, but only when there is a hint to make room for (whole-wave review, Minor 1)", () => {
+      const gone = bodyOf(".widget-foot:has(.widget-hint) :is(.widget-since, .widget-dot)", inContainer("max-width: 279.98px"));
+      expect(gone).toMatch(/display:\s*none/);
+      expect(bodyOf(".widget-foot .widget-since, .widget-foot .widget-dot"), "outside the container rule they keep their text whole").toMatch(/flex:\s*none/);
+      expect(bodyOf(".widget-foot .widget-hint")).toMatch(/flex:\s*0 1 auto/);
+    });
+
     it("a waiting icon button looks disabled and takes the hover wash back, and is never a native :disabled (it may hold the focus the click gave it)", () => {
       expect(bodyOf('.widget-tools .icon-btn[aria-disabled="true"]')).toMatch(/opacity:\s*0\.55/);
       expect(bodyOf('.widget-tools .icon-btn[aria-disabled="true"]')).toMatch(/cursor:\s*not-allowed/);
@@ -312,12 +319,29 @@ describe("styles/widgets.css", () => {
   });
 
   describe("the gauge", () => {
-    it("is a flex column; the arc fills what is left (32px at least) and the SVG scales with it, its round caps never clipped (review M2)", () => {
+    it("is a flex column; the arc box fills what is left (a 32px dial and the 16px scale row at least) and the SVG scales with it, its round caps never clipped (review M2)", () => {
       expect(bodyOf(".gauge")).toMatch(/display:\s*flex/);
       expect(bodyOf(".gauge")).toMatch(/flex-direction:\s*column/);
       expect(bodyOf(".gauge-arc")).toMatch(/flex:\s*1/);
-      expect(bodyOf(".gauge-arc")).toMatch(/min-height:\s*32px/);
+      expect(bodyOf(".gauge-arc")).toMatch(/min-height:\s*48px/);
       expect(bodyOf(".gauge-svg")).toMatch(/overflow:\s*visible/);
+    });
+
+    it("the scale row is as wide as the DRAWN arc, so 0 and the max sit under its feet at every card size (whole-wave review I1)", () => {
+      // The svg is viewBox 0 0 100 52, xMidYMax meet, feet at x = 6 and 94: its drawn width is min(box width, dial height * 100 / 52). The arc box is a size container holding both the dial
+      // and the row, and the row is the 88 of those 100 between the feet.
+      const arc = bodyOf(".gauge-arc");
+      expect(arc).toMatch(/container-type:\s*size/);
+      expect(arc, "the row's height is one custom property, shared by the dial's inset and the row").toMatch(/--gauge-scale-h:\s*16px/);
+      const svg = bodyOf(".gauge-svg");
+      expect(svg).toMatch(/position:\s*absolute/);
+      expect(svg, "the dial fills the box above the row").toMatch(/height:\s*calc\(100% - var\(--gauge-scale-h\)\)/);
+      const scale = bodyOf(".gauge-scale");
+      expect(scale).toMatch(/position:\s*absolute/);
+      expect(scale).toMatch(/bottom:\s*0/);
+      expect(scale).toMatch(/margin-inline:\s*auto/);
+      expect(scale, "foot to foot: 88% (94 - 6) of the drawn width").toMatch(/width:\s*min\(88cqw, calc\(\(100cqh - var\(--gauge-scale-h\)\) \* 88 \/ 52\)\)/);
+      expect(scale).toMatch(/justify-content:\s*space-between/);
     });
 
     it("draws the track and the fill with the tokens, round caps and a stroke that does not scale with the viewBox", () => {

@@ -38,7 +38,7 @@
   /* One line under the body, only when there is something to say: "since 10:46", a dot, the marker hint. Each text is its own small and shrinks with an ellipsis. */
   .widget-foot { flex: none; display: flex; align-items: center; gap: 4px; min-height: 22px; margin: 0; padding: 0 var(--widget-pad) 6px; overflow: hidden; color: var(--text-2); font-size: var(--fs-xs); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
   .widget-foot small { min-width: 0; overflow: hidden; font-size: inherit; text-overflow: ellipsis; }
-  .widget-foot .widget-since { flex: none; }
+  .widget-foot .widget-since, .widget-foot .widget-dot { flex: none; }
   .widget-foot .widget-hint { flex: 0 1 auto; }
   .widget-frame > .error { margin: 0; padding: 0 var(--widget-pad) 6px; font-size: var(--fs-xs); } /* a failed CSV export, under the header */
   .widget-empty, .widget-error { margin: 0; font-size: var(--fs-sm); text-align: center; }
@@ -76,13 +76,14 @@
   .widget-table .cell-age { display: inline-block; margin-left: 4px; color: var(--text-2); font-size: var(--fs-xs); white-space: nowrap; } /* may drop under the figure, never splits */
 
   /* ===== Gauge (Task 3): a 180 degree SVG arc, then the scale ends, the figure and the name as plain text in the flow below it ===== */
-  .gauge { display: flex; flex-direction: column; gap: 2px; height: 100%; min-width: 0; min-height: 0; }
-  .gauge-arc { position: relative; flex: 1; min-height: 32px; }
-  .gauge-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; } /* the round caps reach past the viewBox at small scales */
+  .gauge { display: flex; flex-direction: column; gap: 2px; height: 100%; min-width: 0; min-height: 0; } /* the scale row sits at the bottom of the arc box, not in this column */
+  /* The arc box is a size container that holds the dial AND the scale row. The svg is viewBox 0 0 100 52, xMidYMax meet, so the arc is DRAWN min(box width, dial height * 100 / 52) wide, not as wide as the box. The feet are at x = 6 and 94 of its 100, so the row is 88% of the drawn width, centred: "0" starts under the left foot and the max ends under the right one at every card size (whole-wave review I1). 48px = a 32px dial and the 16px row. */
+  .gauge-arc { --gauge-scale-h: 16px; position: relative; flex: 1; min-height: 48px; container-type: size; }
+  .gauge-svg { position: absolute; top: 0; left: 0; width: 100%; height: calc(100% - var(--gauge-scale-h)); overflow: visible; } /* the round caps reach past the viewBox at small scales */
   .gauge-track, .gauge-fill { fill: none; stroke-linecap: round; stroke-width: var(--gauge-width); vector-effect: non-scaling-stroke; }
   .gauge-track { stroke: var(--gauge-track); }
   .gauge-fill { stroke: var(--gauge-fill); }
-  .gauge-scale { display: flex; justify-content: space-between; gap: 8px; color: var(--text-2); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; line-height: 16px; }
+  .gauge-scale { position: absolute; bottom: 0; left: 0; right: 0; margin-inline: auto; width: min(88cqw, calc((100cqh - var(--gauge-scale-h)) * 88 / 52)); display: flex; justify-content: space-between; gap: 8px; color: var(--text-2); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; line-height: var(--gauge-scale-h); }
   .gauge-scale > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .gauge-figure { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 0 4px; margin: 0; color: var(--text); font-size: var(--widget-figure); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; }
   .gauge-figure.muted { color: var(--stale); }
@@ -123,6 +124,8 @@
     /* a chip keeps its triangle and its count; its words stay for a screen reader (clipped, not display: none) */
     .widget-chips .chip-long { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .widget-chips .chip-short { display: inline; }
+    /* the footer: "since HH:MM" and its dot give way to the marker hint (it explains what the figure's marks mean), so "— no rate" and "~ estimated" fit even on a 116px card; a footer with no hint keeps its since */
+    .widget-foot:has(.widget-hint) :is(.widget-since, .widget-dot) { display: none; }
   }
   @container widget (max-width: 199.98px) {
     .widget-tools .widget-csv-btn { display: none; } /* it is the Details drawer's Download CSV below 200px */

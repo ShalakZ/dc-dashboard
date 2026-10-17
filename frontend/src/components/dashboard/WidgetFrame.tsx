@@ -113,7 +113,7 @@ export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint
           {(since || hint) && (
             <p className="widget-foot">
               {since && <small className="widget-since" title={since}>{since}</small>}
-              {since && hint && " · "}
+              {since && hint && <span className="widget-dot"> · </span>}
               {hint && <small className="widget-hint" title={hint}>{hint}</small>}
             </p>
           )}

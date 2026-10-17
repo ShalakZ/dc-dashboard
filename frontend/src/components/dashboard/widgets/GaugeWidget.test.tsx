@@ -112,6 +112,23 @@ describe("the gauge is a meter", () => {
     expect(img).not.toHaveAttribute("aria-valuenow");
   });
 
+  it("is an image that says the figure, not a meter, when the scale has no width (a max at or below the min would be an invalid meter)", () => {
+    for (const over of [config({ aggregation: "last", min: 50, max: 50 }), config({ aggregation: "last", min: 50, max: 10 })]) {
+      const { unmount } = gaugeOf(valuesData({ type: "gauge" }), over);
+      expect(screen.queryByRole("meter")).not.toBeInTheDocument();
+      const img = screen.getByRole("img", { name: "LV Panel 1: 10.50 kW" });
+      expect(img).not.toHaveAttribute("aria-valuemin");
+      expect(img).not.toHaveAttribute("aria-valuemax");
+      expect(img).not.toHaveAttribute("aria-valuenow");
+      unmount();
+    }
+  });
+
+  it("keeps the markers in that spoken figure", () => {
+    gaugeOf(valuesData({ type: "gauge", values: [valueRow({ estimated: true, partial: true })] }), config({ aggregation: "last", min: 5, max: 5 }));
+    expect(screen.getByRole("img", { name: "LV Panel 1: ~10.50* kW" })).toBeInTheDocument();
+  });
+
   it("says 'no value' for the plain dash", () => {
     gaugeOf(valuesData({ type: "gauge", values: [valueRow({ value: null })] }));
     expect(screen.getByRole("img", { name: "LV Panel 1: no value" })).toBeInTheDocument();
@@ -145,6 +162,13 @@ describe("the arc", () => {
       expect(fill(container)).toBeNull();
       unmount();
     }
+  });
+
+  it("holds the scale row in the arc's own box, under the dial, so the stylesheet can make it as wide as the drawn arc", () => {
+    const { container } = gaugeOf();
+    const box = container.querySelector(".gauge-arc")!;
+    expect([...box.children].map((c) => c.getAttribute("class"))).toEqual(["gauge-svg", "gauge-scale"]);
+    expect(container.querySelectorAll(".gauge-scale")).toHaveLength(1);
   });
 
   it("shows the ends of the scale as text, the unit once at the max", () => {

@@ -112,6 +112,11 @@ describe("WidgetFrame", () => {
     const foot = hint.parentElement as HTMLElement;
     expect(foot).toHaveClass("widget-foot");
     expect(foot.textContent).toBe("since 10:00 · ~ estimated, * partial, some hours have no rate"); // a dot between, each text in its own small
+    // The dot is an element of its own, so a narrow card can hide it with the "since" (widgets.css): it sits between the two.
+    const dot = foot.querySelector(".widget-dot");
+    expect(dot?.textContent?.trim()).toBe("·");
+    expect(since.nextElementSibling).toBe(dot);
+    expect(dot?.nextElementSibling).toBe(hint);
     expect(foot.previousElementSibling).toHaveClass("widget-body"); // under the body
     expect(document.querySelector(".widget-notes")).toBeNull();
   });
@@ -119,6 +124,7 @@ describe("WidgetFrame", () => {
   it("draws the footer for one of the two lines alone without a dot, and not at all for neither", () => {
     const { unmount } = frame({ since: "since 10:00" });
     expect(document.querySelector(".widget-foot")?.textContent).toBe("since 10:00");
+    expect(document.querySelector(".widget-dot"), "no dot beside a lone line").toBeNull();
     unmount();
     const hint = frame({ hint: "~ estimated" });
     expect(document.querySelector(".widget-foot")?.textContent).toBe("~ estimated");

@@ -60,11 +60,14 @@ export function GaugeWidget({ data, config, live }: { data: WidgetData; config: 
   const { num, unit } = gaugeFigure({ value, unit: data.unit, estimated: row?.estimated, partial: row?.partial, noData });
   const share = value === null ? 0 : gaugeShare(value, min, max);
   const out = value === null ? "" : value > max ? ", above the scale" : value < min ? ", below the scale" : "";
+  // A meter needs a scale with a width: with max <= min its aria-valuemax would sit below its aria-valuemin, so the figure is spoken as an image instead.
   const meaning = value === null
     ? { role: "img", "aria-label": `${name || "Gauge"}: ${noData ? NO_DATA : "no value"}` }
+    : !(max > min)
+    ? { role: "img", "aria-label": `${name || "Gauge"}: ${num}${unit}` }
     : {
       role: "meter", "aria-label": name || "Gauge", "aria-valuemin": min, "aria-valuemax": max,
-      "aria-valuenow": Math.min(Math.max(value, min), Math.max(max, min)), "aria-valuetext": `${num}${unit}${out}`,
+      "aria-valuenow": Math.min(Math.max(value, min), max), "aria-valuetext": `${num}${unit}${out}`,
     };
   const figureClasses = ["gauge-figure", ...(muted ? ["muted"] : []), ...(num === NO_DATA ? ["none"] : [])];
   return (
@@ -74,8 +77,8 @@ export function GaugeWidget({ data, config, live }: { data: WidgetData; config: 
           <path className="gauge-track" d={ARC} />
           {value !== null && <path className="gauge-fill" d={gaugeFillPath(share)} />}
         </svg>
+        <div className="gauge-scale"><span>{scaleText(min)}</span><span>{scaleText(max)}{unitSuffix(data.unit)}</span></div>
       </div>
-      <div className="gauge-scale"><span>{scaleText(min)}</span><span>{scaleText(max)}{unitSuffix(data.unit)}</span></div>
       <div className={figureClasses.join(" ")} title={noData ? NO_DATA : undefined}>
         <span className="stat-num">{num}</span>{unit && <small className="stat-unit">{unit}</small>}
       </div>
