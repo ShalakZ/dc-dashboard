@@ -21,8 +21,8 @@ interface Props {
   since?: string;
   /** Present = show the CSV button; this is the query the export repeats. */
   csv?: CsvSource;
-  /** Present = show the Details button, which calls this. It waits (aria-disabled) while the data loads. */
-  details?: () => void;
+  /** Present = show the Details button, which calls this with the button itself (the drawer gives focus back to it). It waits (aria-disabled) while the data loads. */
+  details?: (opener: HTMLElement) => void;
   /** The widget's type: the shape of the loading skeleton. */
   type?: WidgetType;
   /** Keep the footer line's room while loading, for a widget whose "since" line is known before its data (rolling energy and cost). */
@@ -44,22 +44,31 @@ function Chip({ title, words, count }: { title: string; words: string; count: nu
   );
 }
 
-/** The box around every widget: title, Details and CSV buttons, the warning chips, the footer line, and the loading and error states. */
-export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint = "", since = "", csv, details, type, footSpace = false, actions, dragHandle = false, children }: Props) {
+/**
+ * The widget's CSV download, one function for the card's button and the Details drawer's: it repeats the widget's own query on the server.
+ * `run` is guarded (a button that waits is aria-disabled, which keeps its focus, so its click still arrives); `error` is the last failure's text.
+ */
+export function useCsvExport(csv: CsvSource | undefined): { busy: boolean; error: string | null; run: () => Promise<void> } {
   const [busy, setBusy] = useState(false);
-  const [csvError, setCsvError] = useState<string | null>(null);
-  const exportCsv = async () => {
-    if (!csv || busy) return; // aria-disabled keeps the button focusable, so the click has to be guarded
+  const [error, setError] = useState<string | null>(null);
+  const run = async () => {
+    if (!csv || busy) return;
     setBusy(true);
-    setCsvError(null);
+    setError(null);
     try {
       await downloadCsv("/api/widget-data/csv", { method: "POST", body: { type: csv.type, config: csv.config, range: csv.range } });
     } catch (e) {
-      setCsvError(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
   };
+  return { busy, error, run };
+}
+
+/** The box around every widget: title, Details and CSV buttons, the warning chips, the footer line, and the loading and error states. */
+export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint = "", since = "", csv, details, type, footSpace = false, actions, dragHandle = false, children }: Props) {
+  const { busy, error: csvError, run: exportCsv } = useCsvExport(csv);
   return (
     <section className="widget-frame" aria-label={title}>
       <header className={dragHandle ? "widget-head widget-drag-handle" : "widget-head"}>
@@ -76,7 +85,7 @@ export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint
           {details && (
             <button
               type="button" className="icon-btn widget-details-btn" aria-label={`Details for ${title}`} aria-haspopup="dialog"
-              aria-disabled={loading ? true : undefined} onClick={() => { if (!loading) details(); }}
+              aria-disabled={loading ? true : undefined} onClick={(e) => { if (!loading) details(e.currentTarget); }}
             >
               <Icon name="info" />
             </button>

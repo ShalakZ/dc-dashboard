@@ -1,0 +1,337 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router";
+import { keys } from "../../api/queries";
+import type { Asset, WidgetConfig, WidgetData, WidgetType } from "../../api/types";
+import { downloadCsv } from "../../lib/download";
+import type { LiveValue } from "../../lib/stream";
+import { config, seriesData, seriesPoint, valueRow, valuesData } from "../../test/dashboardFixtures";
+import { LiveValuesContext } from "./LiveValuesContext";
+import { WidgetDetails, type WidgetDetailsProps } from "./WidgetDetails";
+
+const held = { ids: new Set<string>(["assets.view"]) };
+vi.mock("../../auth/AuthProvider", () => ({ useAuth: () => ({ can: (id: string) => held.ids.has(id) }) }));
+vi.mock("../../lib/download", () => ({ downloadCsv: vi.fn() }));
+
+const TZ = "Asia/Qatar";
+const NOW = Date.parse("2026-10-17T12:04:40+03:00"); // 12:04:40 in Qatar, 09:04:40 UTC
+const at = (seconds: number): string => new Date(NOW - seconds * 1000).toISOString();
+const LAST = (): WidgetConfig => config({ aggregation: "last" });
+const assetRecord = (id: number, name: string): Asset => ({ id, parent_id: null, name, kind: "panel", sort_order: 0 });
+
+interface Options { assets?: Asset[]; stream?: Map<number, LiveValue>; props?: Partial<WidgetDetailsProps> }
+/** The drawer for `data`, in the providers the dashboard gives it. The clock is fixed at NOW, only `Date` and the interval timer are faked. */
+function open(type: WidgetType, data: WidgetData, cfg: WidgetConfig, { assets, stream, props }: Options = {}) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  if (assets) client.setQueryData(keys.assets, assets);
+  const onClose = vi.fn();
+  const live = { values: stream ?? new Map<number, LiveValue>(), connected: stream !== undefined, register: () => {} };
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>
+      <MemoryRouter>
+        <LiveValuesContext.Provider value={live}>{children}</LiveValuesContext.Provider>
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+  const shown = render(
+    <WidgetDetails title="Hall" type={type} data={data} config={cfg} timezone={TZ} following={false} onClose={onClose} {...props} />,
+    { wrapper },
+  );
+  return { ...shown, onClose, dialog: () => screen.getByRole("dialog", { name: "Details: Hall" }) };
+}
+const sections = (dialog: HTMLElement) => within(dialog).getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+const cellsOf = (row: HTMLElement) => within(row).getAllByRole("cell").map((c) => c.textContent);
+
+beforeEach(() => {
+  held.ids = new Set(["assets.view"]);
+  vi.mocked(downloadCsv).mockReset();
+  vi.mocked(downloadCsv).mockResolvedValue(undefined);
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  vi.setSystemTime(NOW);
+});
+afterEach(() => { vi.useRealTimers(); });
+
+describe("WidgetDetails: the frame", () => {
+  it("is a dialog named 'Details: <title>' with the sections in order, and only the sections that apply", () => {
+    const { dialog } = open("stat", valuesData({ type: "stat", values: [valueRow({ ts: at(9) })] }), LAST());
+    expect(dialog()).toBeInTheDocument();
+    expect(sections(dialog())).toEqual(["What it shows", "Time window", "Freshness"]); // no markers in this answer, nothing per asset to add
+  });
+
+  it("closes through the drawer's own close button", async () => {
+    vi.useRealTimers();
+    const { dialog, onClose } = open("stat", valuesData({ type: "stat" }), config());
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("WidgetDetails: what it shows and the time window", () => {
+  it("names the type, the source with its unit, what one figure is, the assets, the window and what the figures are", () => {
+    const { dialog } = open("stat", valuesData({ type: "stat", values: [valueRow({ ts: at(9) })] }), LAST());
+    const d = dialog();
+    const row = (label: string) => within(d).getByText(label, { selector: "dt" }).parentElement as HTMLElement;
+    expect(row("Type")).toHaveTextContent("Stat");
+    expect(row("Source")).toHaveTextContent("active_power_kw (kW)");
+    expect(row("Figure")).toHaveTextContent("Latest reading");
+    expect(row("Assets")).toHaveTextContent("LV Panel 1");
+    expect(row("Window")).toHaveTextContent("2026-10-07 09:00 to 2026-10-08 09:00 (Asia/Qatar)");
+    expect(row("Range")).toHaveTextContent("Last 24 hours");
+    expect(row("Data")).toHaveTextContent("The latest reading of each asset");
+  });
+
+  it("links each asset to its page when the role may see assets, and writes plain names when it may not", () => {
+    const data = valuesData({ type: "table", values: [valueRow(), valueRow({ asset_id: 6, name: "LV Panel 2", point_id: 8 })] });
+    const first = open("table", data, config());
+    expect(within(first.dialog()).getByRole("link", { name: "LV Panel 1" })).toHaveAttribute("href", "/assets/5");
+    expect(within(first.dialog()).getByRole("link", { name: "LV Panel 2" })).toHaveAttribute("href", "/assets/6");
+    first.unmount();
+    held.ids = new Set();
+    const second = open("table", data, config());
+    expect(within(second.dialog()).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(second.dialog()).getByText("LV Panel 2", { selector: "li" })).toBeInTheDocument();
+  });
+
+  it("says how many assets were removed, and names the ones without the metric when the asset list is already cached", () => {
+    const data = valuesData({ type: "table", missing: [99], no_metric: [6, 7] });
+    const cached = open("table", data, config(), { assets: [assetRecord(6, "Chiller 1"), assetRecord(7, "Chiller 2")] });
+    const out = within(cached.dialog()).getByText("Left out", { selector: "dt" }).parentElement as HTMLElement;
+    expect(out).toHaveTextContent("1 asset removed");
+    expect(out).toHaveTextContent("Without this metric: Chiller 1, Chiller 2");
+    expect(within(out).getByRole("link", { name: "Chiller 1" })).toHaveAttribute("href", "/assets/6");
+  });
+
+  it("falls back to the count when the asset list is not cached (it is never fetched here) or lacks one of them", () => {
+    const data = valuesData({ type: "table", missing: [], no_metric: [6, 7] });
+    const none = open("table", data, config());
+    expect(within(none.dialog()).getByText("2 assets without this metric")).toBeInTheDocument();
+    none.unmount();
+    const partial = open("table", data, config(), { assets: [assetRecord(6, "Chiller 1")] });
+    expect(within(partial.dialog()).getByText("2 assets without this metric")).toBeInTheDocument();
+    expect(within(partial.dialog()).queryByText(/Chiller 1/)).not.toBeInTheDocument();
+  });
+
+  it("has no 'Left out' row when nothing was left out", () => {
+    const { dialog } = open("table", valuesData({ type: "table" }), config());
+    expect(within(dialog()).queryByText("Left out")).not.toBeInTheDocument();
+  });
+});
+
+describe("WidgetDetails: freshness", () => {
+  it("a live reading: the site clock and the age, counted up every second while the drawer is open", () => {
+    const { dialog } = open("stat", valuesData({ type: "stat", values: [valueRow({ ts: at(9) })] }), LAST());
+    expect(within(dialog()).getByText("Last reading 12:04:31 (9 s ago)")).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(5_000); });
+    expect(within(dialog()).getByText("Last reading 12:04:31 (14 s ago)")).toBeInTheDocument();
+  });
+
+  it("a stale reading carries the stale sentence", () => {
+    const { dialog } = open("stat", valuesData({ type: "stat", values: [valueRow({ ts: at(47 * 60), stale: true })] }), LAST());
+    expect(within(dialog()).getByText(
+      "Last reading 11:17:40 (47 min ago) Stale: older than three polling intervals of its meter (and at least a minute).",
+    )).toBeInTheDocument();
+  });
+
+  it("a stat that follows the stream shows the streamed reading, as the card does; one that does not shows the fetched one", () => {
+    const data = valuesData({ type: "stat", values: [valueRow({ point_id: 7, ts: at(60), stale: true })] });
+    const stream = new Map<number, LiveValue>([[7, { ts: at(6), value: 11, quality: 0 }]]);
+    const following = open("stat", data, LAST(), { stream, props: { following: true } });
+    expect(within(following.dialog()).getByText("Last reading 12:04:34 (6 s ago)")).toBeInTheDocument(); // fresh by definition: no stale sentence
+    expect(within(following.dialog()).queryByText(/Stale/)).not.toBeInTheDocument();
+    following.unmount();
+    const fetched = open("stat", data, LAST(), { stream, props: { following: false } });
+    expect(within(fetched.dialog()).getByText(/^Last reading 12:03:40 \(1 min ago\) Stale/)).toBeInTheDocument();
+  });
+
+  it("a finished range names the hour the last value belongs to: no seconds, no age, never stale", () => {
+    const data = valuesData({
+      type: "stat", range: { preset: "yesterday", start: "2026-10-16T00:00:00+03:00", end: "2026-10-17T00:00:00+03:00" },
+      values: [valueRow({ ts: "2026-10-16T23:00:00+03:00", stale: true })],
+    });
+    const { dialog } = open("stat", data, LAST());
+    expect(within(dialog()).getByText("Last value of the hour from 23:00 (hourly roll-up)")).toBeInTheDocument();
+    expect(dialog().textContent).not.toMatch(/ago|Stale|stale/);
+  });
+
+  it("a table has one line per row, from the fetched reading", () => {
+    const data = valuesData({
+      type: "table", values: [valueRow({ ts: at(9) }), valueRow({ asset_id: 6, name: "LV Panel 2", point_id: 8, ts: at(130) })],
+    });
+    const { dialog } = open("table", data, LAST());
+    const part = within(dialog()).getByRole("heading", { name: "Freshness" }).nextElementSibling as HTMLElement;
+    expect(within(part).getByText("LV Panel 1", { selector: "dt" }).nextElementSibling).toHaveTextContent("Last reading 12:04:31 (9 s ago)");
+    expect(within(part).getByText("LV Panel 2", { selector: "dt" }).nextElementSibling).toHaveTextContent("Last reading 12:02:30 (2 min ago)");
+  });
+
+  it("a reading with no time recorded says so", () => {
+    const { dialog } = open("stat", valuesData({ type: "stat", values: [valueRow({ ts: null, value: null, no_data: true })] }), LAST());
+    expect(within(dialog()).getByText("No reading time recorded")).toBeInTheDocument();
+  });
+
+  it.each<[string, WidgetType, WidgetConfig, WidgetData]>([
+    ["an average (not a reading)", "stat", config({ aggregation: "avg" }), valuesData({ type: "stat" })],
+    ["an energy total", "stat", config({ source: "energy", metric: null, aggregation: "sum" }), valuesData({ type: "stat", source: "energy", metric: null, unit: "kWh" })],
+    ["a bar chart", "bar", LAST(), valuesData({ type: "bar", values: [valueRow({ ts: at(9) })] })],
+    ["a time series", "timeseries", config(), seriesData()],
+  ])("has no Freshness section for %s", (_name, type, cfg, data) => {
+    const { dialog } = open(type, data, cfg);
+    expect(sections(dialog())).not.toContain("Freshness");
+  });
+});
+
+describe("WidgetDetails: what the markers mean", () => {
+  it("lists only the markers this answer uses, each with its meaning", () => {
+    const data = valuesData({ type: "table", values: [valueRow({ estimated: true }), valueRow({ asset_id: 6, name: "B", partial: true })] });
+    const { dialog } = open("table", data, config());
+    const part = within(dialog()).getByRole("heading", { name: "What the markers mean here" }).nextElementSibling as HTMLElement;
+    const items = within(part).getAllByRole("listitem").map((li) => li.textContent);
+    expect(items).toEqual([
+      "~ estimated from power, not measured",
+      "* partial: some energy in the period had no rate, so the cost is incomplete",
+    ]);
+  });
+
+  it("explains the dash of a cost with no rate", () => {
+    const data = valuesData({ type: "stat", source: "cost", metric: null, unit: "QAR", values: [valueRow({ value: null })] });
+    const { dialog } = open("stat", data, config({ source: "cost", metric: null, aggregation: "sum" }));
+    expect(within(dialog()).getByText("— no rate: no tariff applies to this figure")).toBeInTheDocument();
+  });
+});
+
+describe("WidgetDetails: per asset", () => {
+  it("shows the asset states in words under the name, and a value column for a bar per asset", () => {
+    const data = valuesData({
+      type: "bar", values: [valueRow({ value: 4 }), valueRow({ asset_id: 6, name: "LV Panel 2", value: 5.5, estimated: true, point_id: 8 })],
+    });
+    const { dialog } = open("bar", data, config());
+    const table = within(dialog()).getByRole("table");
+    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Asset", "Value (kW)"]);
+    const [first, second] = within(table).getAllByRole("row").slice(1);
+    expect(cellsOf(first)).toEqual(["LV Panel 1", "4.00"]);
+    expect(cellsOf(second)).toEqual(["LV Panel 2estimated", "~5.50"]);
+  });
+
+  it("has no table for a stat or gauge whose asset carries no state (the name is in 'What it shows')", () => {
+    const { dialog } = open("gauge", valuesData({ type: "gauge" }), config());
+    expect(within(dialog()).queryByRole("table")).not.toBeInTheDocument();
+    expect(sections(dialog())).not.toContain("Per asset");
+  });
+
+  it("a stale stat says so in Freshness and does not repeat it as a state (the streamed reading may have made it fresh)", () => {
+    const { dialog } = open("stat", valuesData({ type: "stat", values: [valueRow({ ts: at(600), stale: true })] }), LAST());
+    expect(within(dialog()).getByText(/Stale: older than three polling intervals/)).toBeInTheDocument();
+    expect(within(dialog()).queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("lists an estimated stat as a state, since only the markers section would say it otherwise", () => {
+    const { dialog } = open("stat", valuesData({ type: "stat", values: [valueRow({ ts: at(9), estimated: true })] }), LAST());
+    expect(within(within(dialog()).getByRole("table")).getAllByRole("row")[1]).toHaveTextContent("LV Panel 1estimated");
+  });
+});
+
+describe("WidgetDetails: the figures of a chart", () => {
+  const BUCKETS = [
+    seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 1, min: 0.5, max: 1.5 }),
+    seriesPoint({ ts: "2026-10-08T00:04:48+00:00", value: 2, min: 1, max: 3 }),
+    seriesPoint({ ts: "2026-10-08T00:09:36+00:00", value: 12.3, min: 10, max: 14, partial: true }),
+  ];
+
+  it("a metric time series: lowest, highest and when, and the last bucket's average; a partial bucket keeps its asterisk; no average over buckets", () => {
+    const data = seriesData({ series: [{ asset_id: 5, name: "LV Panel 1", estimated: false, partial: false, points: BUCKETS }] });
+    const { dialog } = open("timeseries", data, config());
+    const table = within(dialog()).getByRole("table");
+    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent))
+      .toEqual(["Asset", "Lowest", "Highest", "Highest in the bucket from", "Last bucket (average)"]);
+    const row = within(table).getAllByRole("row")[1];
+    expect(cellsOf(row)).toEqual(["LV Panel 1", "0.50 kW", "14.00* kW", "2026-10-08 03:09:36", "12.30* kW" + "from 2026-10-08 03:09:36"]);
+    expect(within(dialog()).getByText("Average of each bucket, with the lowest and highest as a band")).toBeInTheDocument();
+    expect(within(table).queryByRole("columnheader", { name: "Average" })).not.toBeInTheDocument();
+  });
+
+  it("an energy series: the total only when every bucket has a value, and never a word about an average", () => {
+    const point = (ts: string, value: number | null, no_data = false) => seriesPoint({ ts, value, no_data });
+    const series = (points: ReturnType<typeof point>[]) => seriesData({
+      type: "bar", source: "energy", metric: null, unit: "kWh", bucket: "hour", tier: null,
+      series: [{ asset_id: 5, name: "LV Panel 1", estimated: false, partial: false, points }],
+    });
+    const whole = open("bar", series([point("2026-10-08T00:00:00+00:00", 1.5), point("2026-10-08T01:00:00+00:00", 2.5)]), config({ source: "energy", metric: null, aggregation: "sum", bars: "time" }));
+    const table = within(whole.dialog()).getByRole("table");
+    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent))
+      .toEqual(["Asset", "Highest", "Highest in the bucket from", "Last bucket (total per hour)", "Total of the buckets shown"]);
+    expect(cellsOf(within(table).getAllByRole("row")[1])).toEqual([
+      "LV Panel 1", "2.50 kWh", "2026-10-08 04:00", "2.50 kWhfrom 2026-10-08 04:00", "4.00 kWh",
+    ]);
+    expect(whole.dialog().textContent).not.toMatch(/average/i);
+    whole.unmount();
+    const gap = open("bar", series([point("2026-10-08T00:00:00+00:00", 1.5), point("2026-10-08T01:00:00+00:00", null, true)]), config({ source: "energy", metric: null, aggregation: "sum", bars: "time" }));
+    const row = within(within(gap.dialog()).getByRole("table")).getAllByRole("row")[1];
+    expect(cellsOf(row)[4]).toBe("—"); // no total: a missing bucket makes it not exact
+    expect(within(gap.dialog()).getByText("A total is shown only when every bucket has a value.")).toBeInTheDocument();
+  });
+
+  it("a cost with an unpriced hour shows a dash and the words 'unpriced hours' for the highest, not a number", () => {
+    const data = seriesData({
+      type: "bar", source: "cost", metric: null, unit: "QAR", bucket: "hour", tier: null,
+      series: [{
+        asset_id: 5, name: "LV Panel 1", estimated: false, partial: false,
+        points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 3 }), seriesPoint({ ts: "2026-10-08T01:00:00+00:00", value: null })],
+      }],
+    });
+    const { dialog } = open("bar", data, config({ source: "cost", metric: null, aggregation: "sum", bars: "time" }));
+    const cells = cellsOf(within(within(dialog()).getByRole("table")).getAllByRole("row")[1]);
+    expect(cells[0]).toBe("LV Panel 1no rate");
+    expect(cells[1]).toBe("— unpriced hours");
+    expect(cells[2]).toBe("—");
+    expect(cells[1]).not.toMatch(/\d/);
+    expect(within(dialog()).getByText("— no rate: no tariff applies to this figure")).toBeInTheDocument();
+  });
+
+  it("a metric bar over time says what each bar is (here the highest per hour) in the last column", () => {
+    const data = seriesData({
+      type: "bar", bucket: "hour", tier: "1h",
+      series: [{ asset_id: 5, name: "LV Panel 1", estimated: false, partial: false, points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 9, min: 2, max: 9 })] }],
+    });
+    const { dialog } = open("bar", data, config({ aggregation: "max", bars: "time" }));
+    expect(within(within(dialog()).getByRole("table")).getByRole("columnheader", { name: "Last bucket (highest per hour)" })).toBeInTheDocument();
+    expect(within(dialog()).getByText("Highest per hour")).toBeInTheDocument();
+  });
+
+  it("says in a note what the figures are taken from", () => {
+    const { dialog } = open("timeseries", seriesData(), config());
+    expect(within(dialog()).getByText(/of the buckets shown/)).toBeInTheDocument();
+  });
+});
+
+describe("WidgetDetails: Download CSV", () => {
+  const csv = { type: "table" as const, config: config(), range: "24h" as const };
+
+  it("is the drawer footer's button, named exactly 'Download CSV', and repeats the widget's query", async () => {
+    vi.useRealTimers();
+    const { dialog } = open("table", valuesData({ type: "table" }), config(), { props: { csv } });
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Download CSV" }));
+    expect(downloadCsv).toHaveBeenCalledWith("/api/widget-data/csv", { method: "POST", body: { type: "table", config: config(), range: "24h" } });
+  });
+
+  it("is not offered when the widget has no CSV (the editor preview)", () => {
+    const { dialog } = open("table", valuesData({ type: "table" }), config());
+    expect(within(dialog()).queryByRole("button", { name: /CSV/ })).not.toBeInTheDocument();
+  });
+
+  it("says when the export failed, and waits (aria-disabled, not disabled) while it runs", async () => {
+    vi.useRealTimers();
+    let fail: (e: Error) => void = () => {};
+    vi.mocked(downloadCsv).mockReturnValue(new Promise<void>((_, reject) => { fail = reject; }));
+    const { dialog } = open("table", valuesData({ type: "table" }), config(), { props: { csv } });
+    const button = within(dialog()).getByRole("button", { name: "Download CSV" });
+    await userEvent.click(button);
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).not.toBeDisabled();
+    await userEvent.click(button);
+    expect(downloadCsv).toHaveBeenCalledTimes(1);
+    await act(async () => { fail(new Error("boom")); });
+    expect(within(dialog()).getByRole("alert")).toHaveTextContent("CSV export failed: boom");
+    expect(button).not.toHaveAttribute("aria-disabled");
+  });
+});
