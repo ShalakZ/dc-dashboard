@@ -91,3 +91,49 @@ describe("the Discovery icons (w12c)", () => {
     }
   });
 });
+
+// The two icons of the widget overhaul (w13): the Edit button of a card in the dashboard editor and the grip that marks its header as the grab area.
+// M9 of the plan review: the audit's "change" icon (evChange) is already a pencil; this one is drawn on its own, so the pair never looks like one drawing twice.
+const WIDGET: IconName[] = ["pencil", "grip"];
+
+describe("the widget icons (w13)", () => {
+  it("are both there and none is named like an asset kind", () => {
+    expect(WIDGET).toHaveLength(2);
+    for (const name of WIDGET) {
+      expect(Object.keys(ICONS), name).toContain(name);
+      expect(name.startsWith("kind"), name).toBe(false);
+    }
+  });
+
+  it.each(WIDGET)("%s is one decorative svg of the 24-unit box with at least one shape and no colour of its own", (name) => {
+    const { container } = render(<Icon name={name} />);
+    const svg = container.firstElementChild!;
+    expect(svg.tagName.toLowerCase()).toBe("svg");
+    expect(svg).toHaveClass("i");
+    expect(svg).toHaveAttribute("viewBox", "0 0 24 24");
+    expect(svg).toHaveAttribute("aria-hidden", "true");
+    expect(svg.querySelectorAll("path, circle, rect, ellipse").length).toBeGreaterThan(0);
+    for (const attr of ["fill", "stroke", "stroke-width", "style", "color"]) expect(svg.querySelector(`[${attr}]`), attr).toBeNull();
+  });
+
+  it("are drawn differently from each other and from the icons they sit next to (the audit pencil, the dots of a row menu, the list and grid icons)", () => {
+    const drawn = (name: IconName) => {
+      const { container, unmount } = render(<Icon name={name} />);
+      const html = container.querySelector("svg")!.innerHTML;
+      unmount();
+      return html;
+    };
+    const all = WIDGET.map(drawn);
+    expect(new Set(all).size).toBe(WIDGET.length);
+    for (const other of ["evChange", "more", "readings", "grid", "info", "download", "close", "trash", "settings", "collapse"] as const) {
+      expect(all, `not the same as ${other}`).not.toContain(drawn(other));
+    }
+  });
+
+  it("the grip is six dots (two columns of three), the pencil a body and a tip", () => {
+    const { container } = render(<Icon name="grip" />);
+    expect(container.querySelectorAll("circle")).toHaveLength(6);
+    const pencil = render(<Icon name="pencil" />);
+    expect(pencil.container.querySelectorAll("path").length).toBeGreaterThanOrEqual(2);
+  });
+});

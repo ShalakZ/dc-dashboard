@@ -2,7 +2,6 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AppShellSkeleton } from "./components/AppShellSkeleton";
-import { MUTED_FIGURE } from "./lib/widgetFormat";
 import { AA, contrast, customProperties, NON_TEXT, parseRules, stripComments, type Rule } from "./test/cssTools";
 
 // vitest is configured with `css: false`, which empties a CSS import, so the stylesheets are read as text.
@@ -50,14 +49,7 @@ describe("contrast of the muted text", () => {
     expect(contrast(ink, ground)).toBeGreaterThanOrEqual(AA);
   });
 
-  it("a dimmed stat figure reads at 4.5:1 on the white widget", () => {
-    expect(contrast(declared(".stat .big.muted", "color"), declared(".widget-frame", "background"))).toBeGreaterThanOrEqual(AA);
-  });
-
-  it("the gauge's dimmed figure is the stat's, so it reads at 4.5:1 on the white widget too", () => {
-    expect(MUTED_FIGURE).toBe(declared(".stat .big.muted", "color"));
-    expect(contrast(MUTED_FIGURE, declared(".widget-frame", "background"))).toBeGreaterThanOrEqual(AA);
-  });
+  // w13: the dimmed (stale) figure of a widget is --stale on the card, in every look: styles/widgets.css.test.ts measures it.
 
   it("the plain muted text does too", () => {
     expect(contrast(declared(".muted", "color"), declared("body", "background"))).toBeGreaterThanOrEqual(AA);
@@ -506,16 +498,16 @@ describe("the open row of the asset tree is told apart from a pick (W7s)", () =>
   });
 });
 
-describe("long asset names wrap, figures do not", () => {
-  /** The selector list of the rule that sets `overflow-wrap: anywhere` in the widget block. */
-  const wrapping = [...css.matchAll(/([^{}]+)\{([^{}]*overflow-wrap:\s*anywhere[^{}]*)\}/g)].map((m) => m[1].trim()).join(" | ");
-  it("wraps the asset name under a stat figure and the first column of a table widget", () => {
-    expect(wrapping).toContain(".stat > .muted:not(.big)");
-    expect(wrapping).toContain(".widget-body td:first-child");
+describe("the dashboard widgets are not in app.css (w13)", () => {
+  // The widgets' rules (the card, the five types, the editor preview, the grid library's chrome and the wrapping of a long asset name in a table)
+  // are styles/widgets.css, and their pins are styles/widgets.css.test.ts.
+  const widgetSelector = /\.(widget-|stat(?![\w-])|stat-|gauge|dash-grid|dash-cell|react-grid|react-resizable|chip-(long|short))/;
+  it("names no widget, stat, gauge or grid-library class in any selector", () => {
+    expect(rules.filter((r) => widgetSelector.test(r.selector)).map((r) => r.selector)).toEqual([]);
   });
-  it("does not wrap the dimmed stat figure or the other table cells", () => {
-    expect(wrapping).not.toMatch(/\.stat \.muted(?!:)/); // the old rule matched .big.muted too
-    expect(wrapping).not.toMatch(/\.widget-body td(?!:first-child)/); // and every cell, including the number column
+  it("has no `all: revert` and no light island: nothing resets an element back to the browser's default for the widgets' sake", () => {
+    expect(css).not.toMatch(/all:\s*revert/);
+    expect(css).not.toMatch(/:is\(\.widget-/);
   });
 });
 
@@ -670,41 +662,12 @@ describe("the design tokens (W6)", () => {
   });
 });
 
-describe("the layer and the frozen island", () => {
-  const W = ":is(.widget-frame, .widget-preview)";
-  // spec section 5 "F" plus the island that keeps the widgets looking as before: unlayered, after the layer block
-  const FROZEN = [
+describe("the layer and the one unlayered rule set", () => {
+  // The Billing muted cell: literals on purpose (app.css.test.ts reads them, themes.css overrides them in dark), unlayered and after the layer.
+  // w13: the widgets' island and frozen block are gone; their rules are styles/widgets.css, in the layer, on tokens.
+  const UNLAYERED = [
     "table.billing td.muted, table.billing td.muted .muted",
     "table.billing td.muted",
-    ".dash-grid",
-    ".dash-cell",
-    ".widget-frame",
-    ".widget-head",
-    ".widget-head h3",
-    ".widget-notes",
-    ".widget-body",
-    ".widget-body table",
-    ".stat .big",
-    ".stat .big small",
-    ".stat .big.muted",
-    ".stat > .muted:not(.big), .widget-body td:first-child",
-    ".gauge",
-    `${W} .chip`,
-    `${W} .chip-warn`,
-    ".dash-grid-edit",
-    ".dash-grid-edit .widget-drag-handle",
-    ".dash-grid-edit .react-grid-item > .react-resizable-handle",
-    ".dash-grid-edit .react-grid-item.react-grid-placeholder",
-    ".widget-actions",
-    ".widget-actions button",
-    ".widget-preview",
-    W,
-    `${W} table`,
-    `${W} th, ${W} td`,
-    `${W} td.muted`,
-    `${W} button`,
-    `${W} .widget-actions button`,
-    `${W} .chip::before`,
   ];
 
   it("the layered rules of app.css hold no raw colour: the tokens in :root are the only place a colour is written", () => {
@@ -719,7 +682,11 @@ describe("the layer and the frozen island", () => {
     expect(rules.some(inLayer)).toBe(true);
   });
 
-  it.each(FROZEN)("%s stays unlayered, after the layer, so no layer rule can outrank it", (selector) => {
+  it("holds no unlayered rule but the tokens and the Billing muted cell", () => {
+    expect(rules.filter((r) => !inLayer(r)).map((r) => r.selector)).toEqual([":root", ...UNLAYERED]);
+  });
+
+  it.each(UNLAYERED)("%s stays unlayered, after the layer, so no layer rule can outrank it", (selector) => {
     const found = rules.filter((r) => r.selector === selector);
     expect(found.length, `a rule for "${selector}"`).toBeGreaterThan(0);
     const lastLayered = Math.max(...rules.filter(inLayer).map((r) => r.order));
@@ -745,7 +712,7 @@ describe("the page style files (src/styles/*.css)", () => {
     );
   });
 
-  it.each(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css", "feedback-save.css", "feedback-toasts.css", "feedback-confirm.css", "role-prompt.css", "drawer.css", "icon-picker.css", "kinds-dialogs.css", "tree-move.css", "asset-move.css", "scans-drawer.css", "discovery-tidy.css", "bulk-assets.css", "scans-polish.css", "graph-nodes.css", "graph-tools.css", "graph-keys.css", "graph-source-card.css", "graph-value-tip.css"])(
+  it.each(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css", "feedback-save.css", "feedback-toasts.css", "feedback-confirm.css", "role-prompt.css", "drawer.css", "icon-picker.css", "kinds-dialogs.css", "tree-move.css", "asset-move.css", "scans-drawer.css", "discovery-tidy.css", "bulk-assets.css", "scans-polish.css", "graph-nodes.css", "graph-tools.css", "graph-keys.css", "graph-source-card.css", "graph-value-tip.css", "widgets.css", "widgets-details.css"])(
     "%s is one @layer w6 block with nothing outside it, no raw colour and no accent in a sidebar rule",
     (file) => {
       expect(existsSync(`${STYLES}/${file}`), `${STYLES}/${file} exists`).toBe(true);

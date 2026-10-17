@@ -1,0 +1,4 @@
+@layer w6 {
+  /* w13 Details panel (components/dashboard/WidgetDetails.tsx, Task 5b fills this in). Only wd-* classes belong here: the dashboard widgets' own rules are
+     widgets.css, and a class written bare in one page file may not be named in another (app.css.test.ts). Never name .kv: pages-admin.css writes it bare. */
+}

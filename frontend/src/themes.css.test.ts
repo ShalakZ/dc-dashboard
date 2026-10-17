@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { THEMES } from "./lib/appearance";
 import { AA, NON_TEXT, contrast, customProperties, parseRules, stripComments } from "./test/cssTools";
+import { cascade } from "./test/themeTools";
 
 // vitest runs from the frontend directory and reads the stylesheets as text (css: false).
 const app = stripComments(readFileSync("src/app.css", "utf8"));
@@ -32,22 +33,13 @@ const specificity = (selector: string): [number, number, number] => [
   (selector.match(/\.[\w-]+|\[[^\]]*\]|:[\w-]+/g) ?? []).length,
   0,
 ];
-const ISLAND = ":is(.widget-frame, .widget-preview)";
 const BILLING_INK = ':root[data-mode="dark"] table.billing td.muted, :root[data-mode="dark"] table.billing td.muted .muted';
 const BILLING_GROUND = ':root[data-mode="dark"] table.billing td.muted';
-const PLACEHOLDER = ':root[data-mode="dark"] .dash-grid-edit .react-grid-item.react-grid-placeholder';
 const AVATAR = ':root[data-mode="dark"] .prof-head .avatar';
-const CARD = ':root[data-mode="dark"] .widget-frame';
 const ATTRIBUTION = ".graph-canvas .react-flow__attribution a";
-
-/** The tokens the cascade gives an element under <html data-mode data-theme>: the base, the preset, the dark block (dark only), then the look's accent. */
-function cascade(themeId: string, mode: "light" | "dark") {
-  const map = new Map(base);
-  for (const [name, value] of customProperties(presetRule(themeId).body)) map.set(name, value);
-  if (mode === "dark") for (const [name, value] of customProperties(darkRule().body)) map.set(name, value);
-  for (const [name, value] of customProperties(comboRule(themeId, mode).body)) map.set(name, value);
-  return map;
-}
+// w13: the dark values of the widget tokens whose light value is not a colour literal (a var() alias or a number). The colour literals
+// (the series, the tooltip, the gauge track, the shadow) are in `colourTokens` already.
+const WIDGET_DARK_EXTRA = ["widget-bg", "widget-head-row", "chart-tip-border", "chart-band-opacity"];
 
 const combos = THEMES.flatMap((t) => (["light", "dark"] as const).map((mode) => ({ id: t.id, mode })));
 
@@ -246,9 +238,9 @@ describe("the accent blocks (one per theme and mode)", () => {
 });
 
 describe("the dark block", () => {
-  const DARK_SET = sorted(colourTokens.filter((name) => !/^(side-|top-)/.test(name) && name !== "tooltip-text" && !ACCENT_SET.includes(name)));
+  const DARK_SET = sorted([...colourTokens.filter((name) => !/^(side-|top-)/.test(name) && name !== "tooltip-text" && !ACCENT_SET.includes(name)), ...WIDGET_DARK_EXTRA]);
 
-  it("sets every colour token of app.css except the bars', the tooltip text and the accent (the accent blocks set that), and nothing else", () => {
+  it("sets every colour token of app.css except the bars', the tooltip text and the accent (the accent blocks set that), plus the four widget tokens whose light value is an alias or a number, and nothing else", () => {
     expect(sorted(customProperties(darkRule().body).keys())).toEqual(DARK_SET);
   });
 
@@ -289,29 +281,20 @@ describe("the dark block", () => {
   });
 });
 
-describe("the widget island", () => {
-  const dark = () => customProperties(darkRule().body);
-  // the dark block's content tokens plus the five accent tokens, which the look's accent block sets on <html> and the island must undo
-  const ISLAND_SET = () => sorted([...[...dark().keys()].filter((name) => !["backdrop", "shadow-dialog", "shadow-tip", "shadow-pop", "tooltip-bg"].includes(name)), ...ACCENT_SET]);
-
-  it("re-pins every content token the dark block sets and the five accent tokens, each to its light value in app.css, and asks for light controls", () => {
-    const island = only(ISLAND);
-    const pinned = customProperties(island.body);
-    expect(sorted(pinned.keys())).toEqual(ISLAND_SET());
-    for (const [name, value] of pinned) expect(value, `--${name}`).toBe(base.get(name));
-    expect(island.body).toMatch(/(?:^|[;\s])color-scheme:\s*light\s*;/);
+describe("no widget island (w13)", () => {
+  it("names no widget or grid-library class and no light colour scheme: the widgets follow the theme through the --widget-* and --chart-* tokens, and their library overrides live in styles/widgets.css", () => {
+    expect(css).not.toMatch(/\.widget-|\.react-grid|\.react-resizable|\.dash-grid|color-scheme:\s*light/);
   });
 
-  it("re-pins both skeleton tokens to their light values (a widget keeps a light card, and a skeleton inside it a light grey)", () => {
-    const pinned = customProperties(only(ISLAND).body);
-    for (const name of ["skeleton", "skeleton-shine"]) {
-      expect(pinned.get(name), `--${name}`).toMatch(HEX);
-      expect(pinned.get(name), `--${name}`).toBe(base.get(name));
-    }
-  });
-
-  it("comes after the dark block, so it wins on an element inside a widget", () => {
-    expect(only(ISLAND).order).toBeGreaterThan(darkRule().order);
+  it("the dark block gives the widget tokens their dark values (the card is the surface, no shadow, a darker head row, a lighter tooltip, a heavier band)", () => {
+    const dark = customProperties(darkRule().body);
+    expect(dark.get("widget-bg")).toBe("var(--surface)");
+    expect(dark.get("widget-shadow")).toBe("none");
+    expect(dark.get("widget-head-row")).toMatch(HEX);
+    expect(dark.get("chart-tip-bg")).toMatch(HEX);
+    expect(dark.get("chart-tip-border")).toMatch(HEX);
+    expect(Number(dark.get("chart-band-opacity"))).toBeGreaterThan(Number(base.get("chart-band-opacity")));
+    for (let i = 1; i <= 8; i++) expect(dark.get(`chart-${i}`), `--chart-${i}`).toMatch(HEX);
   });
 });
 
@@ -332,20 +315,7 @@ describe("the Billing muted cell", () => {
   });
 
   it("outranks app.css's rule for the cell (more specific, and later)", () => {
-    expect(only(BILLING_GROUND).order).toBeGreaterThan(only(ISLAND).order);
-  });
-});
-
-describe("the editor's drag placeholder", () => {
-  it("is white in dark (app.css freezes it black, 1.18:1 on the dark page), well apart from the page", () => {
-    const fill = /(?:^|;|\s)background:\s*([^;]+)/.exec(only(PLACEHOLDER).body)?.[1].trim();
-    expect(fill).toBe("#fff");
-    expect(contrast("#ffffff", customProperties(darkRule().body).get("bg")!)).toBeGreaterThanOrEqual(NON_TEXT);
-  });
-
-  it("outranks app.css's rule for it (more specific, and later)", () => {
-    expect(only(PLACEHOLDER).order).toBeGreaterThan(darkRule().order);
-    expect(only(PLACEHOLDER).order).toBeGreaterThan(only(ISLAND).order);
+    expect(only(BILLING_GROUND).order).toBeGreaterThan(darkRule().order);
   });
 });
 
@@ -356,19 +326,6 @@ describe("the avatar in the open profile panel", () => {
   });
 });
 
-describe("the widget cards in dark", () => {
-  it("lose the frozen black border (invisible on the dark page) and get rounded corners, without clipping the resize handles", () => {
-    const body = only(CARD).body;
-    expect(body).toMatch(/border-color:\s*transparent/);
-    expect(body).toMatch(/border-radius:\s*var\(--radius\)/);
-    expect(body).not.toMatch(/overflow/);
-  });
-
-  it("comes after the island and outranks app.css's .widget-frame (more specific, and later)", () => {
-    expect(only(CARD).order).toBeGreaterThan(only(ISLAND).order);
-  });
-});
-
 describe("the graph's credit link", () => {
   it("reads in --text-2 (React Flow's own #999 is 2.68:1 on the surface), set here because its stylesheet is unlayered and would beat a layered rule", () => {
     expect(only(ATTRIBUTION).body).toMatch(/color:\s*var\(--text-2\)/);
@@ -376,10 +333,10 @@ describe("the graph's credit link", () => {
 });
 
 describe("the file", () => {
-  it("is ordered: the four presets, then dark, the eight accent blocks, the avatar, the island, the cards, then Billing, then the placeholder", () => {
+  it("is ordered: the four presets, then dark, the eight accent blocks, the avatar, then Billing, then the credit link", () => {
     const order = [
-      ...THEMES.map((t) => presetRule(t.id).order), darkRule().order, ...combos.map(({ id, mode }) => comboRule(id, mode).order), only(AVATAR).order, only(ISLAND).order, only(CARD).order,
-      only(BILLING_INK).order, only(BILLING_GROUND).order, only(PLACEHOLDER).order, only(ATTRIBUTION).order,
+      ...THEMES.map((t) => presetRule(t.id).order), darkRule().order, ...combos.map(({ id, mode }) => comboRule(id, mode).order), only(AVATAR).order,
+      only(BILLING_INK).order, only(BILLING_GROUND).order, only(ATTRIBUTION).order,
     ];
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(rules).toHaveLength(order.length);

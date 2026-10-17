@@ -114,6 +114,10 @@ export const ICONS = {
   info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5.5M12 7.8h.01" /></>,
   alert: <><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5.5M12 16.2h.01" /></>,
   kindGeneric: <><path d="M12 3 4 7.5v9l8 4.5 8-4.5v-9L12 3Z" /><path d="m4 7.5 8 4.5 8-4.5M12 12v9" /></>,
+  // w13 widget overhaul: a pencil with its tip down at the left and a band across the cap (the Edit button of a card in the dashboard editor; the audit's own pencil, evChange,
+  // is drawn another way), and six dots in two columns (the grip that marks a card's header as the grab area in edit mode).
+  pencil: <><path d="M4 20l1.2-4.6L16.6 4a2.2 2.2 0 0 1 3.1 3.1L8.4 18.8 4 20Z" /><path d="m14.6 6 3.4 3.4" /></>,
+  grip: <><circle cx="9" cy="6" r="1.3" /><circle cx="15" cy="6" r="1.3" /><circle cx="9" cy="12" r="1.3" /><circle cx="15" cy="12" r="1.3" /><circle cx="9" cy="18" r="1.3" /><circle cx="15" cy="18" r="1.3" /></>,
   // w12c Discovery polish. The bar: a keyboard (four keys over a space bar), a circular arrow, two arrows pointing out of the corners, bars lined up on an edge
   // (Tidy layout), a 3 by 3 grid (Snap to grid) and two chain links:
   keyboard: <><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6.5 9.8h.01M10.2 9.8h.01M13.8 9.8h.01M17.5 9.8h.01" /><path d="M7.5 14.5h9" /></>,
