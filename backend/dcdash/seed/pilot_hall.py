@@ -24,6 +24,7 @@ rack shares its load about half and half between the feeds. Eight of the Hall 2 
 (so the engine has to estimate them), one Hall 1 Feed A counter has a gap in its samples and another one resets once.
 """
 import argparse
+import asyncio
 import math
 import random
 import re
@@ -323,6 +324,7 @@ PREFERRED_KINDS: dict[str, tuple[str, ...]] = {
     "panel": ("Panel",),
 }
 FALLBACK_KIND = "Other equipment"
+NOT_REGISTERED = "(not in the Asset kinds list)"  # what the dry run says of a role whose kind the registry does not hold
 ROLE_LABELS = {  # the plural (or not) the report prints for a role
     "site": "site", "hall": "halls", "pod": "pods", "row": "rows", "rack": "racks", "feed": "feeds", "electrical": "electrical",
     "panel": "panels",
@@ -428,8 +430,134 @@ def _batches(
         print(f"written {done} of {total_days} days", flush=True)
 
 
+def _by_role(layout: Layout) -> str:
+    by_role = Counter(node.role for node in layout.nodes)
+    return ", ".join(f"{ROLE_LABELS[role]} {by_role[role]}" for role in PREFERRED_KINDS)
+
+
+def _preferred_kinds() -> dict[str, KindChoice]:
+    """The kinds a run would use if the Asset kinds list were not read: every role's first preferred name."""
+    return choose_kinds({kind_key(names[0]) for names in PREFERRED_KINDS.values()})
+
+
+def _layout_lines(layout: Layout, kinds: dict[str, KindChoice], known: bool, step_seconds: int) -> list[str]:
+    """What the dry run says about the tree, whatever the range is. `known` is False when the Asset kinds list was not read."""
+    by_status = Counter(rack.status for rack in layout.racks)
+    by_kind = Counter(meter.kind for meter in layout.meters)
+    lines = [
+        f'source   "{SOURCE_NAME}" (simulator, DISABLED: nothing ever polls it)',
+        f"assets   {len(layout.nodes)} ({_by_role(layout)})",
+    ]
+    for role, choice in kinds.items():
+        line = f'kinds    {role} "{choice.name}"'
+        if known and not choice.registered:
+            line += f" {NOT_REGISTERED}"
+        elif choice.name != choice.preferred:
+            line += f' (preferred "{choice.preferred}")'
+        lines.append(line)
+    lines.append(
+        f"racks    {len(layout.racks)} ({by_status['live']} live, {by_status['idle']} idle, {by_status['single']} single-feed "
+        f"with Feed A only, {by_status['free']} free with no readings)"
+    )
+    lines.append(
+        f"points   {len(layout.meters)}, each mapped with an interval of {step_seconds} seconds: {by_kind['counter']} energy "
+        f"counters (kWh), {by_kind['power']} power-only feeds (kW), {by_kind['voltage']} panel voltages (V) and "
+        f"{by_kind['current']} panel currents (A)"
+    )
+    return lines
+
+
+def _plan_lines(layout: Layout, plan: history.Plan) -> list[str]:
+    """What the dry run says about the range and the series. The reading count is arithmetic: the series is never generated."""
+    tz = plan.tz
+    gap_instants = 0 if plan.gap is None else int((plan.gap[1] - plan.gap[0]) / plan.step)
+    lines = [
+        f"range    {history._local(plan.start, tz)} to {history._local(plan.end, tz)} in {tz}"
+        + ("" if tz == "UTC" else f" ({plan.start:%Y-%m-%d %H:%M} to {plan.end:%Y-%m-%d %H:%M} UTC)")
+        + f", one sample every {plan.step_seconds // 60} minutes"
+    ]
+    if plan.clamped:
+        lines.append(
+            f"clamped  the range would start at {history._local(plan.wanted_start, tz)} but the raw retention is "
+            f"{plan.raw_retention_days} days, so it starts no earlier than {plan.raw_retention_days - 1} days back"
+        )
+    lines.append(
+        f"readings {len(layout.meters) * plan.count - gap_instants} ({len(layout.meters)} points x {plan.count} samples"
+        + (f", minus {gap_instants} in the gap)" if gap_instants else ")")
+    )
+    power_only = [meter for meter in layout.meters if meter.kind == "power"]
+    if power_only:
+        hall_of = {feed: rack.hall for rack in layout.racks for feed in rack.feeds}
+        halls = ", ".join(f"Hall {hall}" for hall in sorted({hall_of[meter.node] for meter in power_only}))
+        lines.append(
+            f"power    {len(power_only)} feeds (all in {halls}) report kW instead of a kWh counter, so their energy is estimated "
+            "and the racks, halls, the Site and the totals above them show ~"
+        )
+    if plan.gap is None:
+        lines.append("gap      none (the range holds no complete day)")
+    else:
+        gap_meter = next(meter for meter in layout.meters if meter.gap)
+        lines.append(
+            f"gap      {path(layout, gap_meter.node)} has no samples from {history._local(plan.gap[0], tz)} "
+            f"to {history._local(plan.gap[1], tz)}"
+        )
+    reset_meter = next(meter for meter in layout.meters if meter.resets)
+    lines.append(
+        f"reset    the counter of {path(layout, reset_meter.node)} drops back to near zero at {history._local(plan.reset_at, tz)}"
+    )
+    return lines
+
+
 async def dry_run(args: argparse.Namespace) -> int:
-    print("Dry run: the pilot-hall dry run arrives with task 4b. Nothing written.")
+    """Print what a real run would make and whether it would be refused. Writes nothing and exits 0 whatever it finds."""
+    tz, retention = history._default_timezone(), history.FACTORY_STORAGE_SETTINGS.raw_retention_days
+    step_seconds = (args.interval_minutes or DEFAULT_INTERVAL_MINUTES) * 60
+    layout = build_layout(args.seed)
+    registered: set[str] | None = None
+    refusal = exc_name = None
+    pool = None
+    try:
+        pool = await asyncio.wait_for(create_pool(), 5)
+        tz, retention = await history.site_timezone(pool), await history.raw_retention_days(pool)
+        registered = await registered_kinds(pool)
+        async with pool.acquire() as conn:
+            refusal = await _refusal(conn)
+    except Exception as exc:  # no database here: the plan is still worth showing
+        exc_name, registered, refusal = type(exc).__name__, None, None
+        if pool is not None:
+            await pool.close()
+            pool = None
+    kinds = _preferred_kinds() if registered is None else choose_kinds(registered)
+    print("Dry run: the seeder would create the following. Nothing written.")
+    problem = None
+    try:
+        for line in _layout_lines(layout, kinds, registered is not None, step_seconds):
+            print(f"  would create  {line}")
+        plan = history.make_plan(history._now(), tz, args.days, args.seed, retention, step_seconds=step_seconds)
+        for line in _plan_lines(layout, plan):
+            print(f"  would create  {line}")
+        if pool is not None:
+            problem = await history.pending_drop(pool, plan)
+    except history.Refused as refused:
+        problem = str(refused)
+    finally:
+        if pool is not None:
+            await pool.close()
+    if exc_name is not None:
+        preferred = ", ".join(f"{role} {choice.name}" for role, choice in kinds.items())
+        print(
+            f"  (the database was not read: {exc_name}; kinds not read, the preferred kinds would be used: {preferred}; "
+            f"using the time zone {tz})"
+        )
+    if refusal is not None:
+        print(f"  A real run would be refused: {refusal}.")
+    if problem is not None:
+        print(f"  A real run would be refused: {problem}.")
+    print(f"To do it, run again with --yes and {history.SWITCH}=1 in the environment.")
+    print(
+        "Set a site rate in Tariffs to see costs. A run takes several minutes (the rollups are rebuilt over the whole range); "
+        "--days N or a larger --interval-minutes makes it faster."
+    )
     return 0
 
 
@@ -464,11 +592,10 @@ async def seed(args: argparse.Namespace) -> int:
                 raise
             print(f"Failed, and what it had made was removed: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 1
-        by_role = Counter(node.role for node in layout.nodes)
         print("Seeded pilot hall created.")
         print(f'  source    "{SOURCE_NAME}" id {created.source_id} (disabled)')
         print(f'  root      "{ROOT_NAME}" id {created.root_id}')
-        print(f"  assets    {len(layout.nodes)} (" + ", ".join(f"{ROLE_LABELS[role]} {by_role[role]}" for role in PREFERRED_KINDS) + ")")
+        print(f"  assets    {len(layout.nodes)} ({_by_role(layout)})")
         print(f"  points    {len(layout.meters)}")
         print(
             f"  range     {history._local(plan.start, tz)} to {history._local(plan.end, tz)} in {tz}"

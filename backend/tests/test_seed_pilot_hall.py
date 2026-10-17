@@ -12,13 +12,14 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from billing_helpers import set_zone
+from billing_helpers import add_tariff, set_zone
 from dcdash.api import billing
 from dcdash.connectors.simulator import SimulatorConfig
 from dcdash.core.asset_kinds import kind_key
 from dcdash.core.db import get_sessionmaker
 from dcdash.core.metrics import Metric
 from dcdash.seed import history, pilot_hall
+from helpers import insert_readings, make_asset, make_mapping, make_point, make_source, settle_rollups
 
 NOW = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
 ZONE = "Asia/Qatar"  # UTC+3, no daylight saving: a local day is a whole number of UTC hours
@@ -924,3 +925,269 @@ async def test_the_write_phase_reports_every_fifth_day(site, allowed, monkeypatc
         assert await seed_pilot(["--days", str(days), "--interval-minutes", "60"]) == 0
         lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("written ")]
         assert lines == [f"written 5 of {expected} days", f"written 10 of {expected} days"]
+
+
+# ---- the dry run, the kinds in the database, the refusals (task 4b) ---------------------------------------------------------
+
+WARNING = "(not in the Asset kinds list)"
+DRY = "  would create  "
+
+
+async def set_retention(db, days: int) -> None:  # as in test_seed_history.py
+    await db.execute(
+        "INSERT INTO settings (key, value) VALUES ('storage', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        {"raw_retention_days": days, "compress_after_days": 7, "rollup_1m_retention_days": 730, "disk_capacity_gb": 100,
+         "warn_threshold_pct": 80},
+    )
+
+
+async def dry_output(capsys, args: list[str] | None = None) -> str:
+    """What the dry run prints. It always exits 0, whatever it finds."""
+    capsys.readouterr()
+    assert await history.amain(["--layout", "pilot-hall", *(args or [])]) == 0
+    return capsys.readouterr().out
+
+
+async def test_no_arguments_prints_the_plan_and_writes_nothing(site, capsys):
+    before = {"counts": await counts(site), "settings": await dump(site, "settings", "key")}
+    out = await dry_output(capsys)
+    lines = out.splitlines()
+    assert lines[0] == "Dry run: the seeder would create the following. Nothing written."
+    assert all(line.startswith(DRY) for line in lines[1:-2])  # no note and no refusal here: only plan lines in between
+    assert lines[-2] == f"To do it, run again with --yes and {history.SWITCH}=1 in the environment."
+    assert lines[-1].startswith("Set a site rate in Tariffs to see costs") and "several minutes" in lines[-1]
+    assert "--days N" in lines[-1] and "--interval-minutes" in lines[-1]
+    assert "seeded-pilot-hall" in out and "Seeded pilot hall" in out and "Nothing written" in out and "Tariffs" in out
+    assert "clamped" in out  # the factory retention of 30 days cuts the default range back to 29 days
+    assert "would be refused" not in out and "not read" not in out
+    assert {"counts": await counts(site), "settings": await dump(site, "settings", "key")} == before
+
+
+async def test_the_dry_run_says_what_it_would_make(site, capsys):
+    layout = pilot_hall.build_layout()
+    plan = history.make_plan(NOW, ZONE, 3, raw_retention_days=30, step_seconds=HOUR)
+    assert plan.gap is not None
+    out = await dry_output(capsys, ["--days", "3", "--interval-minutes", "60"])
+    by_status = Counter(rack.status for rack in layout.racks)
+    gap_meter = next(meter for meter in layout.meters if meter.gap)
+    reset_meter = next(meter for meter in layout.meters if meter.resets)
+    power_only = [meter for meter in layout.meters if meter.kind == "power"]
+    expected = len(layout.meters) * plan.count - int((plan.gap[1] - plan.gap[0]) / plan.step)
+
+    assert f'{DRY}source   "seeded-pilot-hall" (simulator, DISABLED: nothing ever polls it)' in out
+    assert f"{DRY}assets   370 (site 1, halls 2, pods 4, rows 8, racks 117, feeds 229, electrical 1, panels 8)" in out
+    for role, names in pilot_hall.PREFERRED_KINDS.items():  # the test registry is empty: every role says so
+        assert f'{DRY}kinds    {role} "{names[0]}" {WARNING}' in out
+    assert f"{DRY}racks    117 ({by_status['live']} live, {by_status['idle']} idle, {by_status['single']} single-feed" in out
+    assert (by_status["live"], by_status["idle"], by_status["single"], by_status["free"]) == (100, 6, 5, 6)
+    assert f"{by_status['free']} free" in out
+    assert f"{DRY}points   233, each mapped with an interval of 3600 seconds: 209 energy counters" in out
+    assert "8 power-only feeds" in out and "8 panel voltages" in out and "8 panel currents" in out
+    assert (
+        f"{DRY}range    {history._local(plan.start, ZONE)} to {history._local(plan.end, ZONE)} in {ZONE} "
+        f"({plan.start:%Y-%m-%d %H:%M} to {plan.end:%Y-%m-%d %H:%M} UTC), one sample every 60 minutes"
+    ) in out
+    assert "clamped" not in out  # --days replaces the range: nothing is cut back
+    assert re.search(rf"{DRY}readings {expected} \(", out) and expected == 233 * 73 - 6
+    assert len(power_only) == 8 and all(meter.node.startswith("h2/") for meter in power_only)
+    assert f"{DRY}power    8 feeds (all in Hall 2) report kW instead of a kWh counter" in out
+    assert (
+        f"{DRY}gap      {pilot_hall.path(layout, gap_meter.node)} has no samples from {history._local(plan.gap[0], ZONE)} "
+        f"to {history._local(plan.gap[1], ZONE)}"
+    ) in out
+    assert (
+        f"{DRY}reset    the counter of {pilot_hall.path(layout, reset_meter.node)} drops back to near zero at "
+        f"{history._local(plan.reset_at, ZONE)}"
+    ) in out
+    assert "Hall 1 / " in pilot_hall.path(layout, gap_meter.node) and gap_meter.node != reset_meter.node
+
+
+@pytest.mark.parametrize(
+    "zone, args",
+    [
+        (ZONE, ["--days", "3"]),  # the default interval
+        (ZONE, ["--days", "3", "--interval-minutes", "15"]),
+        (ZONE, ["--days", "1", "--interval-minutes", "60"]),  # no complete day: no gap
+        ("Asia/Kolkata", ["--days", "3", "--interval-minutes", "60"]),  # the gap starts at 03:30 UTC, between the hour marks
+        ("Asia/Kolkata", ["--days", "3", "--interval-minutes", "30"]),
+    ],
+)
+async def test_the_dry_run_estimate_equals_the_real_count(site, capsys, zone, args):
+    await set_zone(site, zone)
+    interval = int(args[args.index("--interval-minutes") + 1]) if "--interval-minutes" in args else pilot_hall.DEFAULT_INTERVAL_MINUTES
+    plan = history.make_plan(NOW, zone, int(args[1]), raw_retention_days=30, step_seconds=interval * 60)
+    real = sum(len(values) for _ts, values in pilot_hall.samples(plan, pilot_hall.build_layout()))
+    out = await dry_output(capsys, args)
+    printed = re.search(rf"{DRY}readings (\d+) ", out)
+    assert printed is not None and int(printed.group(1)) == real
+    assert (plan.gap is None) == ("gap      none (the range holds no complete day)" in out)
+    assert real == 233 * plan.count - (0 if plan.gap is None else int((plan.gap[1] - plan.gap[0]) / plan.step))
+
+
+async def test_the_dry_run_works_without_a_database(monkeypatch, capsys):
+    async def no_database():
+        raise OSError("no database here")
+
+    monkeypatch.setattr(pilot_hall, "create_pool", no_database)
+    out = await dry_output(capsys, ["--days", "3", "--interval-minutes", "60"])
+    preferred = ", ".join(f"{role} {names[0]}" for role, names in pilot_hall.PREFERRED_KINDS.items())
+    assert (
+        f"  (the database was not read: OSError; kinds not read, the preferred kinds would be used: {preferred}; "
+        f"using the time zone {history._default_timezone()})"
+    ) in out
+    assert f'{DRY}assets   370 (' in out and f'{DRY}kinds    hall "Data hall"\n' in out  # the plan is still shown, kinds by preference
+    assert f"{DRY}points   233, " in out and f"{DRY}readings " in out
+    assert WARNING not in out and "would be refused" not in out  # nothing is claimed about the registry or about leftovers
+    assert out.splitlines()[-2] == f"To do it, run again with --yes and {history.SWITCH}=1 in the environment."
+
+
+async def test_kinds_come_from_the_registry(site, allowed, capsys):
+    assert await site.fetchval("SELECT count(*) FROM asset_kinds") == 0  # the test database starts with an empty registry
+
+    async def register(*names: str) -> None:
+        for name in names:
+            await site.execute("INSERT INTO asset_kinds (name, key, icon) VALUES ($1, $2, 'generic')", name, kind_key(name))
+
+    out = await dry_output(capsys, QUICK)  # nothing registered: every role falls back to its first preferred name and says so
+    assert out.count(WARNING) == 8
+    for role, names in pilot_hall.PREFERRED_KINDS.items():
+        assert f'{DRY}kinds    {role} "{names[0]}" {WARNING}' in out
+
+    await register("Site", "Room")  # site, hall (Room), pod, electrical are registered now; row, rack, feed and panel are not
+    out = await dry_output(capsys, QUICK)
+    assert out.count(WARNING) == 4
+    for role in ("row", "rack", "feed", "panel"):
+        assert f'{DRY}kinds    {role} "{pilot_hall.PREFERRED_KINDS[role][0]}" {WARNING}' in out
+    assert f'{DRY}kinds    hall "Room" (preferred "Data hall")\n' in out and f'{DRY}kinds    site "Site"\n' in out
+
+    await register("Row", "Rack", "Circuit", "Panel")
+    out = await dry_output(capsys, QUICK)
+    assert WARNING not in out and f'{DRY}kinds    hall "Room" (preferred "Data hall")\n' in out
+    assert f'{DRY}kinds    feed "Circuit"\n' in out
+
+    await register("Data hall")
+    out = await dry_output(capsys, QUICK)
+    assert WARNING not in out and f'{DRY}kinds    hall "Data hall"\n' in out and "(preferred" not in out
+    assert await site.fetchval("SELECT count(*) FROM asset_kinds") == 7  # a dry run registers nothing
+
+    assert await seed_pilot(QUICK) == 0  # a real run reads the same registry, and registers nothing either
+    report = capsys.readouterr().out
+    assert "is not in the Asset kinds list" not in report
+    assert await site.fetchval("SELECT count(*) FROM asset_kinds") == 7
+    wanted = {"site": "Site", "hall": "Data hall", "pod": "Room", "row": "Row", "rack": "Rack", "feed": "Circuit", "electrical": "Room", "panel": "Panel"}
+    layout = pilot_hall.build_layout()
+    rows = await asset_rows(site)
+    for node in layout.nodes:
+        assert rows[pilot_hall.path(layout, node.key)]["kind"] == wanted[node.role], node.key
+
+
+async def test_a_leftover_root_asset_refuses(site, allowed, capsys):
+    await make_asset(site, " seeded   PILOT hall ")  # the API treats this as the same name: it ignores case and spacing
+    before = await counts(site)
+    out = await dry_output(capsys, QUICK)
+    assert 'A real run would be refused: a top-level asset named "Seeded pilot hall" already exists' in out
+    assert "To do it, run again with --yes" in out  # the dry run still ends as always: it only warns
+    assert await seed_pilot(QUICK) == 1
+    err = capsys.readouterr().err
+    assert "Refused, nothing written" in err and 'a top-level asset named "Seeded pilot hall" already exists' in err
+    assert await counts(site) == before
+
+
+async def test_a_leftover_source_refuses(site, allowed, capsys):
+    await make_source(site, "seeded-pilot-hall")
+    before = await counts(site)
+    out = await dry_output(capsys, QUICK)
+    assert 'A real run would be refused: a source named "seeded-pilot-hall" already exists' in out and "To undo it" in out
+    assert await seed_pilot(QUICK) == 1
+    err = capsys.readouterr().err
+    assert "Refused, nothing written" in err and 'a source named "seeded-pilot-hall" already exists' in err
+    assert await counts(site) == before
+
+
+async def test_the_other_layouts_rows_do_not_make_the_dry_run_refuse(site, allowed, capsys):
+    assert await history.amain(["--yes", "--layout", "three-panels", "--days", "1"]) == 0
+    out = await dry_output(capsys, QUICK)
+    assert "would be refused" not in out and 'source   "seeded-pilot-hall"' in out
+
+
+async def test_the_range_clamp_and_the_pending_drop_check_apply(site, allowed, capsys):
+    # a retention too short for the previous month: the default range is refused (the dry run says so, and still exits 0) ...
+    await set_retention(site, 10)
+    before = await counts(site)
+    out = await dry_output(capsys, ["--interval-minutes", "60"])
+    assert "A real run would be refused" in out and "raw retention is 10 days" in out and f"{DRY}range" not in out
+    assert await seed_pilot(["--interval-minutes", "60"]) == 1
+    assert "raw retention is 10 days" in capsys.readouterr().err
+    assert await counts(site) == before
+    assert "would be refused" not in await dry_output(capsys, QUICK)  # ... but an explicit --days does not promise the previous month
+
+    # --days beyond the retention is cut back, and the dry run says so
+    await set_retention(site, 8)
+    out = await dry_output(capsys, ["--days", "60", "--interval-minutes", "60"])
+    assert "2026-10-08 15:00 to 2026-10-15 15:00" in out and "clamped" in out and "raw retention is 8 days" in out
+    assert "would be refused" not in out
+
+    # raw readings the retention dropped while their rollups remain: a refresh over the range would delete that history
+    await set_retention(site, 30)
+    source = await make_source(site, "Real source")
+    point = await make_point(site, source, "kW")
+    await insert_readings(site, point, datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc), 60, [float(i) for i in range(180)])
+    await settle_rollups(site)
+    await site.execute("SELECT drop_chunks('readings', older_than => TIMESTAMPTZ '2026-10-10')")  # what the retention policy does
+    assert await site.fetchval("SELECT count(*) FROM readings") == 0
+    rollups = {view: await dump(site, view, "point_id, bucket") for view in ("readings_1m", "readings_1h")}
+    assert len(rollups["readings_1m"]) == 180 and len(rollups["readings_1h"]) == 3
+    counts_before = await counts(site)
+
+    assert await seed_pilot(["--interval-minutes", "60"]) == 1
+    err = capsys.readouterr().err
+    assert "readings_1m" in err and "2026-10-01 00:00" in err and "nothing is written" in err
+    out = await dry_output(capsys, ["--interval-minutes", "60"])
+    assert "A real run would be refused: the 1-minute rollup (readings_1m)" in out and "2026-10-01 00:00" in out
+    assert await counts(site) == counts_before
+    for view, rows in rollups.items():  # the real history is untouched, row for row
+        assert await dump(site, view, "point_id, bucket") == rows, view
+
+
+async def test_rows_that_existed_before_are_unchanged(site, allowed):
+    source = await make_source(site, "Existing source", config={"host": "10.0.0.5"})
+    point = await make_point(site, source, "kW")
+    asset = await make_asset(site, "Existing asset")
+    await make_mapping(site, point, asset, "active_power_kw", 5)
+    await add_tariff(site, 0.10, "2026-01-01")
+    # real readings inside the range, with their rollups: the refresh the seeder runs over the range must leave them as they were
+    await insert_readings(site, point, datetime(2026, 10, 14, 6, 0, tzinfo=timezone.utc), 30, [float(i % 17) for i in range(2400)])
+    await settle_rollups(site)
+    tables = ("sources", "points", "assets", "mappings", "tariffs")
+    before = {table: await dump(site, table) for table in tables} | {"settings": await dump(site, "settings", "key")}
+    rollups = {view: await dump(site, view, "point_id, bucket") for view in ("readings_1m", "readings_1h")}
+    assert len(rollups["readings_1m"]) == 20 * 60 and len(rollups["readings_1h"]) == 20
+    assert await seed_pilot(TWO_DAYS) == 0
+    for table in tables:
+        old_ids = {row[0] for row in before[table]}
+        assert [row for row in await dump(site, table) if row[0] in old_ids] == before[table], table
+    assert await dump(site, "settings", "key") == before["settings"]
+    assert await site.fetchval("SELECT count(*) FROM readings WHERE point_id = $1", point) == 2400
+    for view, rows in rollups.items():
+        assert [row for row in await dump(site, view, "point_id, bucket") if row[0] == point] == rows, view
+
+
+async def test_a_range_without_a_complete_day_runs(site, allowed, capsys):
+    layout = pilot_hall.build_layout()
+    plan = history.make_plan(NOW, ZONE, 1, raw_retention_days=30, step_seconds=HOUR)
+    assert plan.gap is None and plan.count == 25
+    out = await dry_output(capsys, QUICK)
+    assert f"{DRY}gap      none (the range holds no complete day)" in out
+
+    assert await seed_pilot(QUICK) == 0
+    capsys.readouterr()
+    per_point = {row["point_id"]: row["n"] for row in await site.fetch("SELECT point_id, count(*) AS n FROM readings GROUP BY point_id")}
+    assert len(per_point) == len(layout.meters) and set(per_point.values()) == {plan.count}  # no meter lacks a sample
+
+
+async def test_a_site_zone_billing_cannot_use_prints_the_warning(site, allowed, capsys):
+    await set_zone(site, "Asia/Kolkata")  # UTC+5:30: Billing works in whole hours
+    assert await seed_pilot(QUICK) == 0
+    out = capsys.readouterr().out
+    assert "Billing cannot use this site time zone" in out and " in Asia/Kolkata" in out
+    assert out.splitlines()[0] == "Seeded pilot hall created."
