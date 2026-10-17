@@ -219,14 +219,14 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   named `Scan #N — done` with the scope line (`<scope>: simulator, ports 9000, 5020`) and a stats line that says `checks`, never `ports checked`;
   Escape, the x and a click outside close it and the focus goes back to that row's Details button; Recent scans reads `N source(s), M points` with the
   targets and ports under the scope name (a scan started from a scope with the mistyped port 4080 shows 4080). Every discovered node says
-  `Seen in scan #N`, a hand-added one `Added by hand`. Remove (one node) and Clear unmapped (the count and first names in the dialog) take away only
+  `Seen in scan #N`, a hand-added one `Added by hand`. Remove from Discovery… (in a source's menu) and Clear unmapped (in the `More Discovery actions` menu; the count and first names in the dialog) take away only
   discovered sources with nothing mapped, each with an audit row `Deleted source <name>`, a rescan brings them back, a source with a mapped point
   has no Remove and the API answers `skipped: mapped`, and the route answers 409 while a scan is running. A hand-added Modbus source added after
   a scan wins over the discovered one at the same address (`existing source`, the duplicate is not browsed). A role with only `discovery.view`
   sees no Remove, Clear unmapped or Create assets and gets 403; a role with `discovery.edit` but not `discovery.accept` can remove but not
-  create. Create assets on the collapsed source node opens one dialog with a row per group and creates one asset each under the chosen parent.
+  create. Create assets for N groups… in the menu of the collapsed source opens one dialog with a row per group and creates one asset each under the chosen parent.
   At 1440 and 1024 px neither Scans nor Discovery scrolls sideways and the drawer fits, and a fresh load of Discovery at 1024×640 opens on the first
-  sources (the first Create assets button is inside the canvas and the node text is at least 9 px at the opening zoom).
+  sources (the buttons of the first source are inside the canvas and the node text is at least 9 px at the opening zoom).
 - `w7s.spec.ts` (its own project, after `w7r`, at 1440×900 unless a case sets its own size) checks deleting several assets
   from the Assets Tree and telling the open asset from the picked ones. Each case builds its own small tree through the API, named `W7s <run> ...`
   (accounts and roles `w7s-`), and removes what it made. With two leaves picked and a third open, the open row is not on the tint and the picked
@@ -278,6 +278,22 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   without changing the zoom, and the focus is never on the page itself. In a graph of about 2,000 nodes (ten sources of four groups of
   49 points) closing and opening one group, and resting the pointer on a node, stay within three times the measured times (rerun once
   alone on a miss), and none of it prints a console error.
+- `w12c.spec.ts` (its own project, last in the list, after `w12b`, the tail of the chain; at 1440, 1024 and 800 px, with the sidebar
+  minimised and expanded) checks the Discovery visual polish. The bar above the canvas has its three groups (`View controls`,
+  `Canvas controls`, `Page controls`) and does not overflow at any of those sizes. On a narrower window it shows icons only, and at 800 px
+  every button of the bar, and the `Unmapped only` switch, still has its name, either in the bar or as an item of the `More Discovery
+  actions` menu, with each narrow item (Unmapped only, Tidy layout, Snap to grid) in exactly one of the two places. A role that holds
+  only `discovery.view` has no `More Discovery actions` button at 1440, and at 800 px its menu holds those narrow items. The Find card, which still opens
+  at the top right of the canvas, does not cover the Close button of the Source details panel at 1024×640 and 800×600. The keyboard
+  button opens the shortcuts list, and so does the `?` key on the canvas; Escape closes it and returns the focus to where it was, and
+  Tab from the open list never lands on the page itself. A source is a card with a one-line short name, its protocol and address, the
+  status in words, `N of N mapped`, **Details** and a `Source actions for <name>` menu that holds **Create assets for N groups…** and
+  **Remove from Discovery…**. Every kind of node carries its icon, and an asset given a chosen icon through the API shows that icon (the
+  case puts the asset back as it found it). Everything is also looked at in light and dark. The last-value card is checked with
+  answers made up in the page (`page.route`, a fresh reading, a stale one, a bad one and none): the text it shows, the word `stale`,
+  no card on an unmapped point, and the node's description (`aria-describedby`) back to what it was once the card has gone. One case
+  asks the real stack for `GET /api/mappings/{id}/latest` on a real mapping (200 for the administrator, 403 for a role that holds
+  only `discovery.view`) and checks that a role without `assets.view` makes no value request at all.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

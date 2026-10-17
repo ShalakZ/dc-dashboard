@@ -40,18 +40,26 @@ lacks says "No access".
   scan scopes and their results, names the ports it knows (`4840 (OPC UA)`) and warns, without blocking, about a port that looks like
   a typo of one; **Details** on a result opens that scan in a panel on the right, with the scope it covered
   (targets and ports), the figures in words and the findings, and Esc, the x or a click outside closes it, and **Scan again** on a
-  result previews and confirms a new scan of the same scope. Discovery shows what was
+  result previews and confirms a new scan of the same scope. Discovery (its title carries the Discovery icon, and one line under it
+  says `Dashed means discovered, solid means assets. Drag a group onto an asset to map it.`) shows what was
   found as a graph to map by drag and drop or with the buttons on its nodes, says when a scan last found each source, and lets an
-  admin remove discovered sources that have nothing mapped, one by one (the bin on the source) or all at once (**Clear unmapped**).
-  Dragging a node takes its open children along (hold Alt, Option on a Mac, to move it alone); a bar above the canvas gives a summary
-  line, **Collapse all**, **Expand all** (each with a small arrow beside it for just the nodes you selected, or one branch), **Tidy
-  layout**, which puts every node back in its default column for everyone, and an **Unmapped only** switch that hides what is already
-  mapped. An open group of more than 50 points shows 50 and a **Show 50 more** button at the end of its list; an asset with sub-assets
-  has a small arrow to fold them away. Arrow keys move between nodes and Enter opens or closes one. Nodes show
-  a status dot and the source's protocol, and resting the pointer on one lights its whole path; the view glides, a minimap sits at the
-  bottom right, **Snap to grid** (top right) lines nodes up on an 8 px grid with guides while you drag, Shift-drag selects several
-  nodes, right-click (or Shift+F10) opens a node's actions, and **Find** (or Ctrl+K on the canvas) jumps to any source, group, point or
-  asset. The `?` under the title lists the keys. A mapped point or group has a small `Mapping actions for <name>` button for **Unmap…** and
+  admin remove discovered sources that have nothing mapped, one by one (**Remove from Discovery…** in the source's `⋯` menu) or all at
+  once (**Clear unmapped** in the bar's **More Discovery actions** menu).
+  Dragging a node takes its open children along (hold Alt, Option on a Mac, to move it alone). One bar above the canvas holds the page's
+  controls: small counts first (sources, points, mapped, and one for sources that need credentials), then the **View controls**
+  (**Collapse all** and **Expand all**, each with a small arrow beside it for just the nodes you selected, or one branch, an **Unmapped
+  only** switch that hides what is already mapped, and **Tidy layout**, which puts every node back in its default column for everyone),
+  the **Canvas controls** (**Find**, or Ctrl+K on the canvas, jumps to any source, group, point or asset, and **Snap to grid** lines nodes
+  up on an 8 px grid with guides while you drag) and the **Page controls** (**Refresh**, the keyboard button that lists the keys, also
+  opened by `?` on the canvas, and **More Discovery actions**, which holds **Clear unmapped** for an admin). On a narrower window the bar
+  shows icons only, and on a still narrower one the less used controls move into the More menu. An open group of more than 50 points
+  shows 50 and a **Show 50 more** button at the end of its list; an asset with sub-assets has a small arrow to fold them away. Arrow keys
+  move between nodes and Enter opens or closes one. Every node starts with a small icon (a source shows its protocol, a point what it
+  measures, an asset its own icon), and a source is a card: its short name, the protocol and address, a status dot with the status in
+  words, `60 of 60 mapped` with a thin bar, **Details**, and when a scan last found it. Resting the pointer on a node lights its whole
+  path, and on a mapped point it also shows the point's last value in a small card (`12.40 kW, 3 s ago`) for a person who may view
+  assets; the view glides, a minimap sits at the bottom right, Shift-drag selects several
+  nodes, and right-click (or Shift+F10) opens a node's actions. A mapped point or group has a small `Mapping actions for <name>` button for **Unmap…** and
   **Move to another asset…**, an asset has a **+** that adds a sub-asset (and the menu's **New asset…** items open the same **New asset**
   form as the Assets Tree), several unmapped points of one source dropped on an asset map in one review, and the toast after mapping,
   unmapping or moving carries an **Undo** for 10 seconds. Changing

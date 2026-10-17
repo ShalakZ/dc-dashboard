@@ -61,7 +61,8 @@ assets from the tree's pick bar needs `assets.delete` as well ([Deleting several
 `assets.edit` also covers taking a mapping off an asset or moving it to another one, and the 10-second Undo of either and of a mapping made
 in Discovery: **Unmap…** and **Move to another asset…** on an asset's Metrics table, on a source's Points page and on the Discovery canvas
 ([Taking mappings off an asset or moving them](assets-and-kinds.md#taking-mappings-off-an-asset-or-moving-them)), and the routes under
-`/api/mappings`, `GET` included. On the Discovery canvas it is also the permission to make an asset with the New asset form (**New
+`/api/mappings`, `GET` included (the one exception is `GET /api/mappings/{id}/latest`, the last reading of a mapped point that
+Discovery shows in a small card when you rest the pointer on it: it needs only `assets.view`, like every other read of a value). On the Discovery canvas it is also the permission to make an asset with the New asset form (**New
 asset…**, **New sub-asset…**, the **+** on an asset node), which needs `assets.view` as well because it lists the assets. `discovery.accept` is
 what maps: **Map…**, the drop onto an asset, **Review mappings** and **Create assets…**. The two are separate: a role with
 `discovery.accept` but not `assets.edit` maps and sees the toast `Mapped 6 points to Room 1.` with no Undo, and a role with `assets.edit`
