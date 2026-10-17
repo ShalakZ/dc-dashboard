@@ -92,7 +92,7 @@ None should change. Must pass UNMODIFIED: all of `backend/tests/test_seed_histor
 ROOT_NAME = "Seeded pilot hall"; SOURCE_NAME = "seeded-pilot-hall"; ELECTRICAL_NAME = "Electrical"
 INTERVAL_CHOICES = history.INTERVAL_CHOICES; DEFAULT_INTERVAL_MINUTES = 60   # re-export; the default is set by the measurement of Task 5
 @dataclass(frozen=True) class Node: key: str; parent: str | None; name: str; role: str; sort_order: int = 0
-# role in ("site","hall","pod","row","rack","feed","electrical","panel"); key unique, e.g. "site", "h1", "h1/pa", "h1/pa/r1", "h1/r01", "h1/r01/a", "elec", "elec/p1a"
+# role in ("site","hall","pod","row","rack","feed","electrical","panel"); key unique, e.g. "site", "h1", "h1/pa", "h1/row1", "h1/r01", "h1/r01/a", "elec", "elec/p1a"
 @dataclass(frozen=True) class Rack: node: str; hall: int; status: str; kw: float; share_a: float; feeds: tuple[str, ...]
 # status in ("live","free","idle","single"); feeds = the keys of its Feed assets (2, or 1 for single)
 @dataclass(frozen=True) class Meter:
