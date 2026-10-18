@@ -22,15 +22,15 @@ function check(over: Partial<MonthCheck> = {}, groups: Partial<MonthCheck["group
 const head = (kind: "counter" | "power", i = 0, over: Partial<MonthCheckHead> = {}): MonthCheckHead => ({
   asset_id: 100 + i, path: `Hall 1 / Rack ${String(i + 1).padStart(2, "0")} / Feed A`, kind, point: "kWh total", source: "Hall PLC", interval_seconds: 900, ...over,
 });
-const estimated = (i: number): EstimatedItem => ({ ...head("power", i, { point: "kW", interval_seconds: 1800 }), hours_estimated: 720, hours_total: 720 });
+const estimated = (i: number): EstimatedItem => ({ ...head("power", i, { point: "kW", interval_seconds: 1800 }), hours_estimated: 720, hours_total: 720, negative_hours: 0, negative_kwh: 0 });
 const gap: GapsItem = {
   ...head("counter", 50), runs: 1, hours: 6, longest_hours: 6, longest_start: "2026-09-20T06:00:00Z", first_start: "2026-09-20T06:00:00Z", last_end: "2026-09-20T12:00:00Z",
-  leading_hours: 0, previous_reading: null, short_hours: 0, short_minutes: 0,
+  leading_hours: 0, hours_before_month: 0, previous_reading: null, short_hours: 0, short_minutes: 0,
 };
-const reset: ResetsItem = { ...head("counter", 60), resets: 1, dips: 0, falls: 0, events: [{ at: "2026-09-12T06:00:00Z", kind: "reset" }] };
+const reset: ResetsItem = { ...head("counter", 60), resets: 1, dips: 0, falls: 0, events: [{ at: "2026-09-12T06:00:00Z", kind: "reset", size: 65535 }] };
 const unmetered = (i: number, beside = false): UnmeteredItem => ({ asset_id: 900 + i, path: `Electrical / Panel ${i + 1}`, beside_measured: beside });
 const later = (i: number): LaterItem => ({ asset_id: 800 + i, path: `Hall 2 / Rack ${i + 1} / Feed B`, kind: "counter", first_reading: "2026-10-01T05:00:00Z" });
-const silent: SilentItem = { ...head("counter", 70), reason: "trailing", since: "2026-09-29T06:00:00Z", hours: 39, last_reading: "2026-09-29T03:00:00Z" };
+const silent: SilentItem = { ...head("counter", 70), reason: "trailing", since: "2026-09-29T06:00:00Z", hours: 39, last_reading: "2026-09-29T03:00:00Z", children: 0 };
 
 /** The pilot-hall September: 8 estimated feeds, one gap of six hours, one reset, 20 assets nothing measures. */
 const pilot = (): MonthCheck => check({ things: 10 }, {
@@ -73,7 +73,7 @@ describe("MonthCheckDrawer", () => {
       expect(item).toHaveTextContent("The energy in a gap is not lost");
       // the same sentences the words module makes: the drawer adds none of its own
       for (const line of itemLines("gaps", gap, ZONE, LIMITS).lines) expect(item).toHaveTextContent(line);
-      expect(within(groupOf("Counter went back or dipped 1")).getByText(/went back down 1 time \(2026-09-12 09:00\)/)).toBeInTheDocument();
+      expect(within(groupOf("Counter went back or dipped 1")).getByText(/went back down 1 time \(2026-09-12 09:00, by 65,535\)/)).toBeInTheDocument();
     });
 
     it("leaves the reads line out when the caller may not see point names", () => {
@@ -224,7 +224,7 @@ describe("MonthCheckDrawer", () => {
         silent: group([silent, { ...silent, asset_id: 71, kind: "power", reason: "never", since: null, last_reading: null }, { ...silent, asset_id: 72, reason: "none_in_month", since: null }]),
         gaps: group([gap, { ...gap, asset_id: 73, kind: "power", runs: 0, hours: 0, longest_hours: null, short_hours: 12, short_minutes: 150, leading_hours: 4, previous_reading: "2026-08-31T20:00:00Z" }]),
         estimated: group([estimated(0)]),
-        resets: group([{ ...reset, dips: 2, falls: 1, events: [{ at: "2026-09-12T06:00:00Z", kind: "reset" }, { at: "2026-09-13T06:00:00Z", kind: "dip" }, { at: "2026-09-14T06:00:00Z", kind: "fell" }] }]),
+        resets: group([{ ...reset, dips: 2, falls: 1, events: [{ at: "2026-09-12T06:00:00Z", kind: "reset", size: 65535 }, { at: "2026-09-13T06:00:00Z", kind: "dip", size: 12 }, { at: "2026-09-14T06:00:00Z", kind: "fell", size: 3 }] }]),
         started: group([{ ...head("counter", 80), first_reading: "2026-09-10T06:00:00Z", children: 0 }]),
         unpriced: group([{ ...head("counter", 81), kwh: 1234.56, hours: 5, days: 2, first_day: "2026-09-01", last_day: "2026-09-02" }]),
         flat: group([{ ...head("power", 82), runs: 2, longest_hours: 40, longest_start: "2026-09-05T06:00:00Z", first_start: "2026-09-05T06:00:00Z" }]),

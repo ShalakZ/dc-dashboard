@@ -9,10 +9,10 @@ interface Head { asset_id: number; path: string; kind: "counter" | "power"; poin
 interface Group<T> { total: number; items: T[] }
 interface GapItem extends Head {
   runs: number; hours: number; longest_hours: number | null; longest_start: string | null; first_start: string | null; last_end: string | null;
-  leading_hours: number; previous_reading: string | null; short_hours: number; short_minutes: number;
+  leading_hours: number; hours_before_month: number; previous_reading: string | null; short_hours: number; short_minutes: number;
 }
-interface EstimatedItem extends Head { hours_estimated: number; hours_total: number }
-interface ResetItem extends Head { resets: number; dips: number; falls: number; events: { at: string; kind: "reset" | "dip" | "fell" }[] }
+interface EstimatedItem extends Head { hours_estimated: number; hours_total: number; negative_hours: number; negative_kwh: number }
+interface ResetItem extends Head { resets: number; dips: number; falls: number; events: { at: string; kind: "reset" | "dip" | "fell"; size: number }[] }
 interface UnmeteredItem { asset_id: number; path: string; beside_measured: boolean }
 
 /** GET /api/billing/month-check (src/api/types.ts MonthCheck). The groups the cases do not fill are empty ones. */
@@ -39,14 +39,14 @@ const head = (kind: "counter" | "power", id: number, path: string, interval = ki
 });
 
 /** A feed that only reports power: its energy is worked out from average power for every hour of the month, so every hour is estimated. */
-const estimatedFeed = (i: number): EstimatedItem => ({ ...head("power", 100 + i, `${rack(i)} / Feed B`), hours_estimated: 720, hours_total: 720 });
+const estimatedFeed = (i: number): EstimatedItem => ({ ...head("power", 100 + i, `${rack(i)} / Feed B`), hours_estimated: 720, hours_total: 720, negative_hours: 0, negative_kwh: 0 });
 /** The one gap of the pilot hall's September: a counter silent from 09:00 to 15:00 on the 20th (06:00Z to 12:00Z). */
 const GAP: GapItem = {
   ...head("counter", 200, `${rack(20)} / Feed A`), runs: 1, hours: 6, longest_hours: 6, longest_start: "2026-09-20T06:00:00Z", first_start: "2026-09-20T06:00:00Z",
-  last_end: "2026-09-20T12:00:00Z", leading_hours: 0, previous_reading: null, short_hours: 0, short_minutes: 0,
+  last_end: "2026-09-20T12:00:00Z", leading_hours: 0, hours_before_month: 0, previous_reading: null, short_hours: 0, short_minutes: 0,
 };
 /** The one reset: a counter that went back to zero at 09:00 on the 12th. */
-const RESET: ResetItem = { ...head("counter", 201, `${rack(30)} / Feed A`), resets: 1, dips: 0, falls: 0, events: [{ at: "2026-09-12T06:00:00Z", kind: "reset" }] };
+const RESET: ResetItem = { ...head("counter", 201, `${rack(30)} / Feed A`), resets: 1, dips: 0, falls: 0, events: [{ at: "2026-09-12T06:00:00Z", kind: "reset", size: 1250 }] };
 /** 12 feeds of the free racks and the 8 panels: nothing measures them, and none sits beside a measured asset. */
 const UNMETERED: UnmeteredItem[] = [
   ...times(12, (i) => ({ asset_id: BASE_ID + 300 + i, path: `Site / Hall 2 / Pod B / Row 4 / Rack ${106 + Math.floor(i / 2)} / Feed ${i % 2 === 0 ? "A" : "B"}`, beside_measured: false })),

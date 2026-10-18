@@ -35,7 +35,12 @@ const num = (n: number) => n.toLocaleString("en-US");
 const noun = (n: number, one: string, many = `${one}s`) => `${num(n)} ${n === 1 ? one : many}`;
 const hoursText = (n: number) => noun(n, "hour");
 const timesText = (n: number) => noun(n, "time");
-const kwhText = (n: number) => `${n.toLocaleString("en-US", { maximumFractionDigits: 1 })} kWh`;
+/** `1,234.6`: a thousands separator and one decimal at most; a value that rounds to nothing reads `0`, never `-0`. */
+function amount(n: number): string {
+  const text = n.toLocaleString("en-US", { maximumFractionDigits: 1 });
+  return text === "-0" ? "0" : text;
+}
+const kwhText = (n: number) => `${amount(n)} kWh`;
 
 /** `2 hours 24 minutes`, `1 hour`, `59 minutes`. */
 function minutesText(total: number): string {
@@ -148,20 +153,35 @@ export function groupIntro(key: CheckGroupKey, check: MonthCheck): string {
   }
 }
 
-/** The times of one kind of counter event: the ones the server listed, then `and later ones` when it counted more than it listed. */
+/**
+ * The events of one kind of counter trouble: each with its time and how far the reading went down (`2026-09-25 03:00, by 65,535`), the ones the
+ * server listed, then `and later ones` when it counted more than it listed. Events are told apart by a semicolon (a size has commas of its own).
+ */
 function eventTimes(item: ResetsItem, kind: ResetKind, count: number, timezone: string): string {
-  const listed = item.events.filter((event) => event.kind === kind).map((event) => formatSiteDateHour(event.at, timezone));
+  const listed = item.events
+    .filter((event) => event.kind === kind)
+    .map((event) => {
+      const when = formatSiteDateHour(event.at, timezone);
+      return Number.isFinite(event.size) ? `${when}, by ${amount(event.size)}` : when;
+    });
   if (listed.length < count) listed.push(listed.length > 0 ? "and later ones" : "later ones");
-  return listed.join(", ");
+  return listed.join("; ");
+}
+
+/** An own meter that is silent bills 0 for those hours whatever the assets under it read, so their energy is missing from its figure. */
+function underIt(item: SilentItem): string[] {
+  return item.children > 0
+    ? [`It has ${noun(item.children, "asset")} under it; while its own meter has no readings their energy is not counted in its figure.`]
+    : [];
 }
 
 function silentLines(item: SilentItem, timezone: string): string[] {
   const counter = item.kind === "counter";
   const zero = counter ? "It counts as 0 kWh." : "Its energy counts as an estimated 0 kWh.";
-  if (item.reason === "never") return ["No reading has ever been recorded.", zero];
+  if (item.reason === "never") return ["No reading has ever been recorded.", zero, ...underIt(item)];
   if (item.reason === "none_in_month") {
     const last = item.last_reading ? ` (the last one before it was ${formatSiteDateHour(item.last_reading, timezone)})` : "";
-    return [`No readings in this month${last}.`, zero];
+    return [`No readings in this month${last}.`, zero, ...underIt(item)];
   }
   const since = item.since
     ? `No readings since ${formatSiteDateHour(item.since, timezone)} (${hoursText(item.hours)} at the end of what was looked at).`
@@ -169,7 +189,7 @@ function silentLines(item: SilentItem, timezone: string): string[] {
   const effect = counter
     ? "The energy it measures in that time is not lost: it is counted when readings come back, in a later month if they come back after this one ends."
     : "That time counts as 0 kWh.";
-  return [since, effect];
+  return [since, effect, ...underIt(item)];
 }
 
 function gapsLines(item: GapsItem, timezone: string): string[] {
@@ -186,15 +206,23 @@ function gapsLines(item: GapsItem, timezone: string): string[] {
       const ends = first !== null && last !== null ? ` The first starts ${first}, the last ends ${last}.` : "";
       lines.push(`${noun(item.runs, "gap")}: ${hoursText(item.hours)} without any reading in all.${longest}${ends}`);
     }
-    if (item.kind === "counter") {
-      lines.push("The energy in a gap is not lost: it is counted in the hour the readings come back, so the days around a gap can be off.");
-      if (item.leading_hours > 0 && item.previous_reading) {
-        lines.push(
-          `The gap starts the month: the first reading after it counts everything since ${at(item.previous_reading)}, including energy used before this month began.`,
-        );
-      }
-    } else {
-      lines.push("Time without a reading counts as 0 kWh, so this meter reads low by whatever it used in that time.");
+    lines.push(
+      item.kind === "counter"
+        ? "The energy in a gap is not lost: it is counted in the hour the readings come back, so the days around a gap can be off."
+        : "Time without a reading counts as 0 kWh, so this meter reads low by whatever it used in that time.",
+    );
+  }
+  // A counter bills everything since its last reading before the month into its first reading of the month, however old that is: a hole before the
+  // month moves energy into it. This is also the only line of a counter listed for that hole alone (`runs` is 0, never `0 gaps`).
+  const since = item.kind === "counter" ? at(item.previous_reading) : null;
+  if (since !== null) {
+    if (item.hours_before_month > 0) {
+      lines.push(
+        `The first reading of the month counts everything since ${since}, ${hoursText(item.hours_before_month)} before the month began ` +
+          "(the energy of that time is in this month, though some of it was used before it).",
+      );
+    } else if (item.leading_hours > 0) {
+      lines.push(`The gap starts the month: the first reading after it counts everything since ${since}, including energy used before this month began.`);
     }
   }
   if (item.short_minutes > 0) {
@@ -251,8 +279,15 @@ export function itemLines<K extends CheckGroupKey>(
     case "gaps":
       return { reads, lines: gapsLines(item as GapsItem, timezone) };
     case "estimated": {
-      const { hours_estimated, hours_total } = item as EstimatedItem;
-      return { reads, lines: [`Its energy is worked out from power readings in ${num(hours_estimated)} of its ${hoursText(hours_total)}.`] };
+      const { hours_estimated, hours_total, negative_hours, negative_kwh } = item as EstimatedItem;
+      const lines = [`Its energy is worked out from power readings in ${num(hours_estimated)} of its ${hoursText(hours_total)}.`];
+      if (negative_hours > 0) {
+        lines.push(
+          `${hoursText(negative_hours)} had a negative power reading (${kwhText(negative_kwh)} in all). ` +
+            "That lowers its figure and the figures above it; a meter fitted the wrong way round does this.",
+        );
+      }
+      return { reads, lines };
     }
     case "resets":
       return { reads, lines: resetsLines(item as ResetsItem, timezone) };

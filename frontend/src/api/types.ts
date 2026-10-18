@@ -354,26 +354,35 @@ export interface MonthCheckHead {
  * No readings at the end, in the whole month, or ever. `never`: the point has never recorded anything (`hours` = every hour looked at, `since` and
  * `last_reading` null). `none_in_month`: it has older readings but none in the month (`last_reading` = the last one before it, or null).
  * `trailing`: it stopped (`since` = the first hour with nothing after the last reading, `hours` = how long, `last_reading` = its last reading looked at).
+ * `children` = assets directly under it: while its own meter has no readings their energy is not counted in its figure.
  */
 export interface SilentItem extends MonthCheckHead {
-  reason: "never" | "none_in_month" | "trailing"; since: string | null; hours: number; last_reading: string | null;
+  reason: "never" | "none_in_month" | "trailing"; since: string | null; hours: number; last_reading: string | null; children: number;
 }
 /**
  * Whole hours with no reading (not counting the stretch at the end, that is `silent`). `runs` may be 0 for a power meter listed for the time missing
  * inside hours that do have readings (`short_hours` hours, `short_minutes` minutes in all; both 0 for a counter). `leading_hours` is the length of the
- * gap that starts the month and `previous_reading` the counter reading before the month that gap is measured from (null for a power meter).
+ * gap that starts the month and `previous_reading` the counter reading before the month that its first reading of the month is measured from (null
+ * for a power meter, or when the counter has none). `hours_before_month` = hours without a reading between `previous_reading` and the month start: a
+ * counter bills everything since that reading into its first reading of the month. `runs` may also be 0 for a counter listed only for that hole.
  */
 export interface GapsItem extends MonthCheckHead {
   runs: number; hours: number; longest_hours: number | null; longest_start: string | null; first_start: string | null; last_end: string | null;
-  leading_hours: number; previous_reading: string | null; short_hours: number; short_minutes: number;
+  leading_hours: number; hours_before_month: number; previous_reading: string | null; short_hours: number; short_minutes: number;
 }
-/** A power meter: its energy is worked out from average power in `hours_estimated` of its `hours_total` hours. */
-export interface EstimatedItem extends MonthCheckHead { hours_estimated: number; hours_total: number }
+/**
+ * A power meter: its energy is worked out from average power in `hours_estimated` of its `hours_total` hours. `negative_hours` = hours whose power
+ * reading was below 0 (a meter fitted the wrong way round), `negative_kwh` = their energy in all (0 or below); both 0 when there are none.
+ */
+export interface EstimatedItem extends MonthCheckHead { hours_estimated: number; hours_total: number; negative_hours: number; negative_kwh: number }
 /** The three kinds of counter trouble (`reset`: went back down; `dip`: dipped below an earlier reading and recovered; `fell`: went down inside an hour). */
 export type ResetKind = "reset" | "dip" | "fell";
-/** A counter that went back or dipped. `resets`, `dips` and `falls` are the full counts; `events` are the first five by time. */
+/**
+ * A counter that went back or dipped. `resets`, `dips` and `falls` are the full counts; `events` are the first five by time, each with its `size`:
+ * how far the reading went down, in the meter's own units (`previous - last` for a reset, `previous - min` for a dip, `max - last` for a fall).
+ */
 export interface ResetsItem extends MonthCheckHead {
-  resets: number; dips: number; falls: number; events: { at: string; kind: ResetKind }[];
+  resets: number; dips: number; falls: number; events: { at: string; kind: ResetKind; size: number }[];
 }
 /** A meter whose first reading came after the month began (and before what was looked at ended); `children` = assets directly under it. */
 export interface StartedItem extends MonthCheckHead { first_reading: string; children: number }
