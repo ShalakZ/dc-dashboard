@@ -442,6 +442,46 @@ describe("AssetTree opens folded when it is big (w17)", () => {
       for (const name of ["Site", "Room A", "Yard"]) expect(expanded(name)).toBe("true");
     });
 
+    describe("an empty fold in a tree that will be big", () => {
+      // Nothing is folded and nothing is remembered, yet the new child can turn the default on: the + writes "nothing folded" (the text none) first.
+      const flat = (n: number, extra: Asset[] = []) => buildTree([...range(1, n).map((i) => a(i, null, `Leaf ${i}`)), ...extra]);
+      const siteWith = (leaves: number, extra: Asset[] = []) => buildTree([a(1, null, "Site"), ...range(2, leaves + 1).map((i) => a(i, 1, `Leaf ${i}`)), ...extra]);
+
+      it("70 top-level leaves with nothing stored: the + remembers none, and the new child is not folded away when it arrives", async () => {
+        const view = render(ui({ nodes: flat(70), onAddChild }));
+        expect(localStorage.getItem(KEY)).toBeNull();
+        await userEvent.click(screen.getByRole("button", { name: "Add child of Leaf 5" }));
+        expect(onAddChild).toHaveBeenCalledWith(5);
+        expect(localStorage.getItem(KEY)).toBe("none");
+        view.rerender(ui({ nodes: flat(70, [a(300, 5, "Leaf 5 child")]), onAddChild })); // Leaf 5 is foldable now: a level-1 default would fold it
+        expect(screen.getByRole("link", { name: "Leaf 5 child" }).closest("[hidden]")).toBeNull();
+        expect(expanded("Leaf 5")).toBe("true");
+        expect(localStorage.getItem(KEY)).toBe("none");
+      });
+
+      it("without the + the same refetch folds that child, which is what the write guards against", () => {
+        const view = render(ui({ nodes: flat(70), onAddChild }));
+        view.rerender(ui({ nodes: flat(70, [a(300, 5, "Leaf 5 child")]), onAddChild }));
+        expect(screen.getByRole("link", { name: "Leaf 5 child", hidden: true }).closest("[hidden]")).not.toBeNull();
+      });
+
+      it("a tree of exactly 60 nodes (a Site and 59 leaves): the + on a leaf remembers none, and the child that makes it 61 is shown", async () => {
+        const view = render(ui({ nodes: siteWith(59), onAddChild }));
+        expect(shown("Leaf 2")).toBe(true);
+        await userEvent.click(screen.getByRole("button", { name: "Add child of Leaf 2" }));
+        expect(localStorage.getItem(KEY)).toBe("none");
+        view.rerender(ui({ nodes: siteWith(59, [a(300, 2, "Leaf 2 child")]), onAddChild })); // 61 nodes: the size default folds every Leaf that has a child
+        expect(screen.getByRole("link", { name: "Leaf 2 child" }).closest("[hidden]")).toBeNull();
+      });
+
+      it("a tree of 59 nodes stays small after the add (60), so the + stores nothing", async () => {
+        render(ui({ nodes: siteWith(58), onAddChild }));
+        await userEvent.click(screen.getByRole("button", { name: "Add child of Leaf 2" }));
+        expect(onAddChild).toHaveBeenCalledWith(2);
+        expect(localStorage.getItem(KEY)).toBeNull();
+      });
+    });
+
     it("a big tree whose remembered fold is the text none: the + changes nothing and writes nothing", async () => {
       localStorage.setItem(KEY, "none");
       const setItem = vi.spyOn(Storage.prototype, "setItem");

@@ -4,7 +4,7 @@ import { Icon } from "./Icon";
 import { Skeleton, SkeletonRegion, TreeSkeleton } from "./Skeleton";
 import { assetIcon } from "../lib/assetIcons";
 import { focusAfterDelete } from "../lib/assetsBulk";
-import { fixedLevelFold, flattenTree, foldModel } from "../lib/foldLevels";
+import { FOLD_ROW_LIMIT, fixedLevelFold, flattenTree, foldModel } from "../lib/foldLevels";
 import { pickLine, type PickEvent } from "../lib/moveText";
 import { readStored, writeStored } from "../lib/sidebarState";
 import { ancestorIds, type TreeNode } from "../lib/tree";
@@ -459,13 +459,16 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
   // A new Set each time, so that it counts as a change and is remembered (Expand all on a big tree is remembered as `none`).
   const collapseAll = () => changeFold(() => new Set(foldable));
   const expandAll = () => changeFold(() => new Set());
-  // The new child must not appear inside a folded branch. While anything is folded this writes the fold (a new Set each time): it opens the branch
-  // if it is folded, and if it is not, the fold of this moment becomes the remembered one. Otherwise a leaf would turn foldable with its child, and a
-  // default of "level 2" would fold it, child and all, once the refetch lands. An empty fold has nothing to protect, so it is left alone and a small
-  // tree (or one opened fully by Expand all) remembers nothing new.
+  // The new child must not appear inside a folded branch. This writes the fold (a new Set each time): it opens the branch if it is folded, and if it
+  // is not, the fold of this moment becomes the remembered one. Otherwise a leaf would turn foldable with its child, and a default of "level 2"
+  // would fold it, child and all, once the refetch lands. An empty fold is left alone, and so remembers nothing new, only when there is nothing to
+  // protect: a fold that is already remembered (Expand all's `none`), or a tree that is still a small one (fewer than 60 nodes) with the child.
+  // Any other empty fold (a flat tree of more than 60 nodes, or exactly 60) is written, as `none`: the child may switch the size default on.
+  const keepEmptyRef = useRef(true);
+  keepEmptyRef.current = stored !== null || model.total < FOLD_ROW_LIMIT; // during render, like `defaultRef`: the click reads what was drawn
   const addChild = useCallback((id: number) => {
     changeFold((prev) => {
-      if (prev.size === 0) return prev;
+      if (prev.size === 0 && keepEmptyRef.current) return prev;
       const next = new Set(prev);
       next.delete(id);
       return next;
