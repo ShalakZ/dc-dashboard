@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w17 (2026-10-18, <merge>)
+## w17 (2026-10-18, d68bf39)
 
 w17 makes Billing usable with a real data centre, front end only: no migration, no new permission, no API change. **Billing:** a row
 with assets below it has a small arrow that folds them (a folded row keeps its own rate, month total and day figures, which already
