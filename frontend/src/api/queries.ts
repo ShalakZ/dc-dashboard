@@ -4,7 +4,7 @@ import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { upperFirst } from "../lib/upperFirst";
 import { ApiError, api } from "./client";
 import type {
-  Asset, AssetImpact, AssetKind, AssetKindIn, AssetKindPatch, StarterPackResult, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingReopened, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
+  Asset, AssetImpact, AssetKind, AssetKindIn, AssetKindPatch, StarterPackResult, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingReopened, BillingSettings, Connector, MonthCheck, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
   FleetSummary, GeneralSettings, GraphModel, Metric, MoveBody, MovePreview, MoveResult, PermissionRow, PointRow, RangePreset, RemoveSourcesResult, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, SourceImpact, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
@@ -43,7 +43,12 @@ export const keys = {
   fleet: ["fleet-summary"] as const,
   billing: ["billing"] as const,
   billingCosts: (month: string | null) => ["billing", "costs", month] as const,
+  /** Prefix of every billing costs query (one per month): what a close or reopen reads again, and waits for. */
+  billingCostsAll: ["billing", "costs"] as const,
   billingMonths: ["billing", "months"] as const,
+  billingMonthCheck: (month: string | null) => ["billing", "month-check", month] as const,
+  /** Prefix of every month check query: a close or reopen refreshes these in the background, without waiting for them. */
+  billingMonthCheckAll: ["billing", "month-check"] as const,
   dashboardList: ["dashboards", "list"] as const,
   defaultDashboard: ["dashboards", "default"] as const,
   dashboard: (id: number) => ["dashboards", "detail", id] as const,
@@ -561,16 +566,36 @@ export const useBillingCosts = (month: string | null) =>
   });
 
 /**
+ * What the month check reports for a month: every meter of the site, so it is a big read, and a month's check changes when its readings, tree,
+ * meters or rates change, never by itself within minutes. Hence `staleTime` of five minutes and NO `refetchInterval` (unlike the costs, which the
+ * page re-reads every minute). Every billing write still reaches it through the `["billing"]` prefix of its key, and a navigation back to the page
+ * after five minutes reads it again. The Check month button's count and the drawer read the same cache entry, so opening the drawer costs nothing.
+ * Idle while `month` is null (the site timezone has not loaded yet).
+ */
+export const useBillingMonthCheck = (month: string | null) =>
+  useQuery({
+    queryKey: keys.billingMonthCheck(month),
+    enabled: month !== null,
+    staleTime: 5 * 60_000,
+    queryFn: () => api.get<MonthCheck>(`/api/billing/month-check?${new URLSearchParams({ month: month! })}`),
+  });
+
+/**
  * Closing or reopening a month moves what Billing shows for it (the costs, and the months list whose first month now counts the closed ones) and
  * writes an audit row. `onSettled`, not `onSuccess`: a refused request (409 already closed, not closed) means the page on screen is out of date.
- * The returned promise lets `mutateAsync` resolve once the month has been read again, so a caller that closes its dialog then finds the page in
- * its new state. Not `COST_DEPENDENT`: widgets read live figures, which a close does not change.
+ * The returned promise lets `mutateAsync` resolve once the month's costs, the months list and the audit log have been read again, so a caller that
+ * closes its dialog then finds the page in its new state. It does NOT wait for the month check: that is a big read the dialog has no use for, and a
+ * slow or stuck one would keep the dialog open on a month that is already closed. The check is refreshed in the background (`void`), and its count
+ * on the page moves when the answer arrives. Not `COST_DEPENDENT`: widgets read live figures, which a close does not change.
  */
 function useBillingCloseMutation<Result>(action: "close" | "reopen") {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: ({ month, note }: { month: string; note: string }) => api.post<Result>(`/api/billing/months/${month}/${action}`, { note }),
-    onSettled: () => invalidate(keys.billing, keys.auditAll),
+    onSettled: () => {
+      void invalidate(keys.billingMonthCheckAll);
+      return invalidate(keys.billingCostsAll, keys.billingMonths, keys.auditAll);
+    },
   });
 }
 

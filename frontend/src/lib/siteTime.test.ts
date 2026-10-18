@@ -1,4 +1,4 @@
-import { addDays, formatSiteClock, formatSiteDateTime, formatSiteDay, formatSiteHourMinute, formatSiteTick, isSiteDay, siteDay, siteMonth } from "./siteTime";
+import { addDays, formatSiteClock, formatSiteDateHour, formatSiteDateTime, formatSiteDay, formatSiteHourMinute, formatSiteTick, isSiteDay, siteDay, siteMonth } from "./siteTime";
 
 describe("formatSiteDateTime", () => {
   // Every case names its zone, so the result never depends on the machine running the tests.
@@ -17,6 +17,25 @@ describe("formatSiteDateTime", () => {
   it("returns the input unchanged when it cannot format it", () => {
     expect(formatSiteDateTime("not a date", "UTC")).toBe("not a date");
     expect(formatSiteDateTime("2026-10-07T10:00:00Z", "Mars/Olympus")).toBe("2026-10-07T10:00:00Z");
+  });
+});
+
+describe("formatSiteDateHour", () => {
+  it.each([
+    ["2026-09-20T06:00:00Z", "Asia/Qatar", "2026-09-20 09:00"], // UTC+3, no clock change
+    ["2026-09-19T21:00:00Z", "Asia/Qatar", "2026-09-20 00:00"], // midnight reads 00, never 24
+    ["2026-03-29T00:00:00Z", "Europe/Amsterdam", "2026-03-29 01:00"], // CET, one hour before the clock change
+    ["2026-03-29T01:00:00Z", "Europe/Amsterdam", "2026-03-29 03:00"], // CEST: 02:00 does not exist that day
+    ["2026-10-25T00:00:00Z", "Europe/Amsterdam", "2026-10-25 02:00"], // CEST
+    ["2026-10-25T01:00:00Z", "Europe/Amsterdam", "2026-10-25 02:00"], // CET: 02:00 happens twice on a 25-hour day
+    ["2026-09-20T06:30:00Z", "Asia/Qatar", "2026-09-20 09:30"], // minutes are kept, seconds are never shown
+  ])("%s in %s reads %s", (iso, zone, expected) => {
+    expect(formatSiteDateHour(iso, zone)).toBe(expected);
+  });
+
+  it("returns the input unchanged when it cannot format it", () => {
+    expect(formatSiteDateHour("not a date", "UTC")).toBe("not a date");
+    expect(formatSiteDateHour("2026-09-20T06:00:00Z", "Mars/Olympus")).toBe("2026-09-20T06:00:00Z");
   });
 });
 
