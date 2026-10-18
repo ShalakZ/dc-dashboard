@@ -1,7 +1,7 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiError } from "../api/client";
-import type { BillingClosed, BillingCosts, BillingLive, CostFigure, User } from "../api/types";
+import type { BillingAssetRow, BillingClosed, BillingCosts, BillingLive, CostFigure, User } from "../api/types";
 import { ESTIMATED_TIP, PARTIAL_TIP } from "../components/Figure";
 import { downloadCsv } from "../lib/download";
 import { mockFetch, type Routes } from "../test/fetchMock";
@@ -962,6 +962,431 @@ describe("BillingPage closed months and the Close and Reopen controls", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       expect(screen.getByText("September 2026")).toBeInTheDocument();
       expect(opener).toHaveFocus();
+    });
+  });
+});
+
+describe("BillingPage folding and filtering", () => {
+  const KEY = "dcdash.billingFolded";
+  /** 70 rows in tree order, depth 3: Site > 4 halls > 4 racks each > 3 feeds each, and a second root, Spare. Every cost is priced (no banner). */
+  const big = (): BillingCosts => {
+    const assets: BillingAssetRow[] = [];
+    const add = (parent: number | null, name: string): number => {
+      const id = assets.length + 1;
+      assets.push({
+        asset_id: id, parent_id: parent, name, path: name, rate_per_kwh: 0.12,
+        days: [fig(id, id * 0.12), fig(id + 1, (id + 1) * 0.12), fig(id + 2, (id + 2) * 0.12)],
+        total: fig(id * 3 + 3, (id * 3 + 3) * 0.12),
+      });
+      return id;
+    };
+    const site = add(null, "Site");
+    for (let h = 1; h <= 4; h++) {
+      const hall = add(site, `Hall ${h}`);
+      for (let r = 1; r <= 4; r++) {
+        const rack = add(hall, `Rack ${h}.${r}`);
+        for (let f = 1; f <= 3; f++) add(rack, `Feed ${h}.${r}.${f}`);
+      }
+    }
+    add(null, "Spare");
+    return { ...costs, assets };
+  };
+  /** The names on the screen, in order. */
+  const rowNames = () => Array.from(document.querySelectorAll("tbody th[scope='row'] .bill-label")).map((el) => el.textContent);
+  const line = () => document.querySelector(".tools-count")!.textContent;
+  const filterBox = () => screen.getByRole("searchbox", { name: "Filter assets" });
+  const levels = () => screen.getByRole("combobox", { name: "Show levels" });
+  const collapseAll = () => screen.getByRole("button", { name: "Collapse all" });
+  const expandAll = () => screen.getByRole("button", { name: "Expand all" });
+  const twisty = (name: string, below: number, open = true) =>
+    screen.getByRole("button", { name: `${open ? "Collapse" : "Expand"} ${name}, ${below} ${below === 1 ? "row" : "rows"} below` });
+  const showBig = async (stored?: string) => {
+    if (stored !== undefined) localStorage.setItem(KEY, stored);
+    open("viewer", { body: big() });
+    await screen.findByRole("rowheader", { name: "Site" });
+  };
+
+  describe("the first look", () => {
+    it("opens a long month folded to the deepest level that keeps 60 rows or fewer, and a visit writes nothing", async () => {
+      await showBig();
+      expect(big().assets).toHaveLength(70);
+      expect(rowNames()).toHaveLength(22);
+      expect(rowNames().slice(0, 3)).toEqual(["Site", "Hall 1", "Rack 1.1"]);
+      expect(rowNames().at(-1)).toBe("Spare");
+      expect(line()).toBe("Showing 22 of 70 rows");
+      expect(levels()).toHaveValue("3");
+      expect(screen.queryByRole("rowheader", { name: "Feed 1.1.1" })).not.toBeInTheDocument();
+      expect(twisty("Rack 1.1", 3, false)).toHaveAttribute("aria-expanded", "false");
+      expect(localStorage.getItem(KEY)).toBeNull();
+    });
+
+    it("opens a short month with every row, and writes nothing either", async () => {
+      open();
+      await screen.findByRole("rowheader", { name: "Site" });
+      expect(rowNames()).toEqual(["Site", "MV2", "LV Panel 1", "Spare", "Annex"]);
+      expect(line()).toBe("All 5 rows shown");
+      expect(levels()).toHaveValue("all");
+      expect(Array.from(levels().querySelectorAll("option")).map((o) => o.textContent)).toEqual(["1", "2", "All"]);
+      expect(localStorage.getItem(KEY)).toBeNull();
+    });
+
+    it("keeps the row header's name the asset's name, with the twisty inside it", async () => {
+      open();
+      const header = await screen.findByRole("rowheader", { name: "Site" });
+      expect(within(header).getByRole("button", { name: "Collapse Site, 3 rows below" })).toBeInTheDocument();
+      expect(header).toHaveAttribute("title", "Site");
+      expect(header.style.paddingLeft).toBe("8px");
+      expect(screen.getByRole("rowheader", { name: "LV Panel 1" }).style.paddingLeft).toBe("40px");
+    });
+
+    it("gives a twisty only to a row that has rows below it", async () => {
+      open();
+      await screen.findByRole("rowheader", { name: "Site" });
+      expect(Array.from(document.querySelectorAll("tbody button.twisty")).map((b) => b.getAttribute("aria-label")))
+        .toEqual(["Collapse Site, 3 rows below", "Collapse MV2, 1 row below"]);
+      expect(within(screen.getByRole("rowheader", { name: "Annex" })).queryByRole("button")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("a twisty", () => {
+    it("folds its branch, keeps the focus on the same button and leaves the parent's figures as they were", async () => {
+      open();
+      await screen.findByRole("rowheader", { name: "Site" });
+      const before = cellsOf("Site");
+      const button = twisty("Site", 3);
+      expect(button).toHaveAttribute("aria-expanded", "true");
+      await userEvent.click(button);
+      expect(twisty("Site", 3, false)).toBe(button);
+      expect(button).toHaveAttribute("aria-expanded", "false");
+      expect(document.activeElement).toBe(button);
+      expect(rowNames()).toEqual(["Site", "Annex"]);
+      expect(screen.queryByRole("rowheader", { name: "MV2" })).not.toBeInTheDocument(); // removed, not hidden
+      expect(document.querySelectorAll("tbody tr")).toHaveLength(2);
+      expect(cellsOf("Site")).toEqual(before);
+      expect(line()).toBe("Showing 2 of 5 rows");
+      await userEvent.click(button);
+      expect(twisty("Site", 3)).toBe(button);
+      expect(document.activeElement).toBe(button);
+      expect(rowNames()).toHaveLength(5);
+      expect(line()).toBe("All 5 rows shown");
+    });
+
+    it("answers Enter and Space, and the focus stays", async () => {
+      open();
+      await screen.findByRole("rowheader", { name: "Site" });
+      const button = twisty("MV2", 1);
+      button.focus();
+      await userEvent.keyboard("{Enter}");
+      expect(button).toHaveAttribute("aria-expanded", "false");
+      expect(button).toHaveFocus();
+      expect(rowNames()).toEqual(["Site", "MV2", "Spare", "Annex"]);
+      await userEvent.keyboard(" ");
+      expect(button).toHaveAttribute("aria-expanded", "true");
+      expect(button).toHaveFocus();
+      expect(rowNames()).toHaveLength(5);
+    });
+
+    it("the fold of one branch leaves the figures of every row on screen alone (a month of 70 rows)", async () => {
+      await showBig();
+      const before = ["Site", "Hall 2", "Spare"].map(cellsOf);
+      await userEvent.click(twisty("Hall 2", 16));
+      expect(["Site", "Hall 2", "Spare"].map(cellsOf)).toEqual(before);
+      expect(rowNames()).toHaveLength(18);
+      expect(line()).toBe("Showing 18 of 70 rows");
+    });
+  });
+
+  describe("Collapse all, Expand all and Show levels", () => {
+    it("Collapse all shows the top level, Expand all shows everything, and the select follows", async () => {
+      await showBig();
+      await userEvent.click(collapseAll());
+      expect(rowNames()).toEqual(["Site", "Spare"]);
+      expect(line()).toBe("Showing 2 of 70 rows");
+      expect(levels()).toHaveValue("1");
+      expect(JSON.parse(localStorage.getItem(KEY)!)).toHaveLength(21); // Site, 4 halls, 16 racks
+      await userEvent.click(expandAll());
+      expect(rowNames()).toHaveLength(70);
+      expect(line()).toBe("All 70 rows shown");
+      expect(levels()).toHaveValue("all");
+      expect(localStorage.getItem(KEY)).toBe("none");
+    });
+
+    it("Show levels folds to that level, and a manual change after it reads Custom until a level is chosen again", async () => {
+      await showBig();
+      expect(Array.from(levels().querySelectorAll("option")).map((o) => o.textContent)).toEqual(["1", "2", "3", "All"]);
+      await userEvent.selectOptions(levels(), "2");
+      expect(rowNames()).toEqual(["Site", "Hall 1", "Hall 2", "Hall 3", "Hall 4", "Spare"]);
+      expect(levels()).toHaveValue("2");
+      expect(within(levels()).queryByRole("option", { name: "Custom" })).not.toBeInTheDocument();
+      await userEvent.click(twisty("Hall 1", 16, false));
+      expect(rowNames()).toHaveLength(10); // Hall 1 opens one level: its four racks, still folded
+      expect(levels()).toHaveValue("custom");
+      expect(within(levels()).getByRole("option", { name: "Custom" })).toBeDisabled();
+      await userEvent.selectOptions(levels(), "All");
+      expect(rowNames()).toHaveLength(70);
+      expect(levels()).toHaveValue("all");
+      expect(within(levels()).queryByRole("option", { name: "Custom" })).not.toBeInTheDocument();
+      await userEvent.selectOptions(levels(), "3");
+      expect(rowNames()).toHaveLength(22);
+      expect(levels()).toHaveValue("3");
+    });
+  });
+
+  describe("the filter", () => {
+    it("shows the matching rows with the rows above them, says how many match, and has no twisty to tab to", async () => {
+      await showBig();
+      await userEvent.type(filterBox(), "rack 3.");
+      await waitFor(() => expect(line()).toBe("4 of 70 rows match"));
+      expect(rowNames()).toEqual(["Site", "Hall 3", "Rack 3.1", "Rack 3.2", "Rack 3.3", "Rack 3.4"]);
+      expect(screen.getByText("Site")).toHaveClass("bill-label", "is-context");
+      expect(screen.getByText("Hall 3")).toHaveClass("is-context");
+      expect(screen.getByText("Rack 3.1")).not.toHaveClass("is-context");
+      expect(document.querySelectorAll("tbody button.twisty")).toHaveLength(0);
+      const site = screen.getByRole("rowheader", { name: "Site" });
+      expect(site.querySelector(".bill-caret")).toHaveAttribute("aria-hidden", "true");
+      expect(screen.getByRole("rowheader", { name: "Rack 3.1" }).querySelector(".bill-caret")).toBeNull();
+    });
+
+    it("turns Collapse all, Expand all and Show levels off while there is text, and back on after", async () => {
+      await showBig();
+      await userEvent.type(filterBox(), "hall");
+      expect(collapseAll()).toBeDisabled();
+      expect(expandAll()).toBeDisabled();
+      expect(levels()).toBeDisabled();
+      await userEvent.clear(filterBox());
+      expect(collapseAll()).toBeEnabled();
+      expect(expandAll()).toBeEnabled();
+      expect(levels()).toBeEnabled();
+    });
+
+    it("Escape clears the text and the focus stays in the box", async () => {
+      await showBig();
+      await userEvent.type(filterBox(), "hall");
+      await waitFor(() => expect(line()).toBe("4 of 70 rows match"));
+      await userEvent.keyboard("{Escape}");
+      expect(filterBox()).toHaveValue("");
+      expect(filterBox()).toHaveFocus();
+      await waitFor(() => expect(line()).toBe("Showing 22 of 70 rows"));
+      expect(rowNames()).toHaveLength(22);
+    });
+
+    it("Clear filter appears only with text, clears it and puts the focus in the box", async () => {
+      await showBig();
+      expect(screen.queryByRole("button", { name: "Clear filter" })).not.toBeInTheDocument();
+      await userEvent.type(filterBox(), "hall");
+      await userEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+      expect(filterBox()).toHaveValue("");
+      expect(filterBox()).toHaveFocus();
+      expect(screen.queryByRole("button", { name: "Clear filter" })).not.toBeInTheDocument();
+      await waitFor(() => expect(rowNames()).toHaveLength(22));
+    });
+
+    it("a filter that matches nothing shows one row that says so, under the header", async () => {
+      await showBig();
+      await userEvent.type(filterBox(), "xyz");
+      expect(await screen.findByText('No assets match "xyz".')).toBeInTheDocument();
+      expect(line()).toBe("No rows match");
+      expect(screen.queryAllByRole("rowheader")).toHaveLength(0);
+      const body = document.querySelectorAll("tbody tr");
+      expect(body).toHaveLength(1);
+      const cell = body[0].querySelector("td")!;
+      expect(body[0].querySelectorAll("td")).toHaveLength(1);
+      expect(cell.colSpan).toBe(6); // Asset, Rate, Month total and the three days
+      expect(cell.querySelector(".bill-nomatch")).toHaveTextContent('No assets match "xyz".');
+      expect(screen.getByRole("columnheader", { name: "Month total" })).toBeInTheDocument();
+    });
+
+    it("finds a row inside a branch that was folded, and the fold is back after the text is cleared", async () => {
+      await showBig();
+      await userEvent.type(filterBox(), "Feed 1.1.1");
+      await waitFor(() => expect(line()).toBe("1 of 70 rows match"));
+      expect(rowNames()).toEqual(["Site", "Hall 1", "Rack 1.1", "Feed 1.1.1"]);
+      await userEvent.clear(filterBox());
+      await waitFor(() => expect(rowNames()).toHaveLength(22));
+      expect(twisty("Rack 1.1", 3, false)).toBeInTheDocument();
+      expect(screen.queryByRole("rowheader", { name: "Feed 1.1.1" })).not.toBeInTheDocument();
+      expect(localStorage.getItem(KEY)).toBeNull(); // filtering is not remembered and does not touch the fold
+    });
+
+    it("matches the name only, never the path, and ignores case", async () => {
+      const month = big();
+      month.assets = month.assets.map((a) => (a.name === "Spare" ? { ...a, path: "Site / Hall 1 / Spare" } : a));
+      mockFetch(routes("viewer", { body: month }, "Asia/Qatar", { body: { first_month: null } }));
+      renderWithProviders(<BillingPage />, { route: "/billing", path: "/billing" });
+      await screen.findByRole("rowheader", { name: "Site" });
+      await userEvent.type(filterBox(), "hall 1 /");
+      expect(await screen.findByText('No assets match "hall 1 /".')).toBeInTheDocument();
+      await userEvent.clear(filterBox());
+      await userEvent.type(filterBox(), "SPARE");
+      await waitFor(() => expect(rowNames()).toEqual(["Spare"]));
+    });
+
+    it("sets the scroll box back to the top when the text changes, and not when a branch folds", async () => {
+      await showBig();
+      const box = document.querySelector<HTMLElement>(".table-scroll")!;
+      Object.defineProperty(box, "scrollTop", { value: 300, writable: true, configurable: true });
+      await userEvent.click(twisty("Hall 1", 16));
+      expect(box.scrollTop).toBe(300);
+      await userEvent.type(filterBox(), "r");
+      await waitFor(() => expect(box.scrollTop).toBe(0));
+    });
+  });
+
+  describe("the remembered fold", () => {
+    it("is written under dcdash.billingFolded after a click and read again on the next visit", async () => {
+      open();
+      await screen.findByRole("rowheader", { name: "Site" });
+      await userEvent.click(twisty("Site", 3));
+      expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual([1]);
+      cleanup();
+      open();
+      expect(await screen.findByRole("button", { name: "Expand Site, 3 rows below" })).toBeInTheDocument();
+      expect(rowNames()).toEqual(["Site", "Annex"]);
+    });
+
+    it("a stored fold beats the size default, and ids that are not in the month are ignored", async () => {
+      await showBig("[2, 9999]");
+      expect(rowNames()).toHaveLength(54); // only Hall 1 is folded: 70 - 16
+      expect(line()).toBe("Showing 54 of 70 rows");
+      expect(levels()).toHaveValue("custom");
+    });
+
+    it("a stored 'none' opens a long month fully", async () => {
+      await showBig("none");
+      expect(rowNames()).toHaveLength(70);
+      expect(line()).toBe("All 70 rows shown");
+      expect(levels()).toHaveValue("all");
+    });
+
+    it("a stored [] (what the Assets Tree used to write on every visit) is the same as nothing: the size default", async () => {
+      await showBig("[]");
+      expect(rowNames()).toHaveLength(22);
+      expect(line()).toBe("Showing 22 of 70 rows");
+    });
+
+    it("a stored value that is junk is the same as nothing", async () => {
+      await showBig("{not json");
+      expect(rowNames()).toHaveLength(22);
+    });
+
+    it("a month change keeps the fold and the text of the filter, and the bar comes back with them", async () => {
+      open("viewer", { body: big() });
+      await screen.findByRole("rowheader", { name: "Site" });
+      await userEvent.click(collapseAll());
+      await userEvent.type(filterBox(), "Hall 2");
+      await waitFor(() => expect(line()).toBe("1 of 70 rows match"));
+      const held = holdFetch((_method, path) => path === "/api/billing/costs");
+      await userEvent.click(screen.getByRole("button", { name: "Previous month" }));
+      expect(await screen.findByText("September 2026")).toBeInTheDocument();
+      expect(screen.getByText("Loading billing")).toBeInTheDocument();
+      held.release();
+      await screen.findByRole("rowheader", { name: "Hall 2" });
+      expect(filterBox()).toHaveValue("Hall 2");
+      expect(rowNames()).toEqual(["Site", "Hall 2"]);
+      await userEvent.clear(filterBox());
+      await waitFor(() => expect(rowNames()).toEqual(["Site", "Spare"]));
+      expect(line()).toBe("Showing 2 of 70 rows");
+    });
+  });
+
+  describe("the bar's room", () => {
+    it("is held by an inert copy while the costs load, outside the skeleton, and the real bar replaces it", async () => {
+      const held = open("viewer", { body: big() }, "Asia/Qatar", { body: { first_month: null } }, (_method, path) => path === "/api/billing/costs");
+      expect(await screen.findByText("October 2026")).toBeInTheDocument();
+      const idle = document.querySelector(".billing-tools")!;
+      expect(idle).toHaveClass("is-idle");
+      expect(idle).toHaveAttribute("inert");
+      expect(idle).toHaveAttribute("aria-hidden", "true");
+      expect(screen.queryByRole("button", { name: "Collapse all" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+      expect(screen.getByText("Loading billing").parentElement!.querySelector(".billing-tools")).toBeNull();
+      held.release();
+      expect(await screen.findByRole("button", { name: "Collapse all" })).toBeInTheDocument();
+      expect(document.querySelectorAll(".billing-tools")).toHaveLength(1);
+      expect(document.querySelector(".billing-tools.is-idle")).toBeNull();
+      expect(document.querySelector(".billing-tools")).not.toHaveAttribute("inert");
+    });
+
+    it("is held while the site is unknown too, and it is gone when the site cannot be read", async () => {
+      const held = open("viewer", { body: big() }, "Asia/Qatar", { body: { first_month: null } }, (_method, path) => path === "/api/site");
+      await waitFor(() => expect(document.querySelector(".billing-tools.is-idle")).not.toBeNull());
+      held.release();
+      expect(await screen.findByRole("button", { name: "Collapse all" })).toBeInTheDocument();
+      cleanup();
+      mockFetch({ ...routes("viewer", { body: costs }, "Asia/Qatar", { body: { first_month: null } }), "GET /api/site": { status: 500, body: { detail: "no site" } } });
+      renderWithProviders(<BillingPage />, { route: "/billing", path: "/billing" });
+      expect(await screen.findByText("no site")).toBeInTheDocument();
+      expect(document.querySelector(".billing-tools")).toBeNull();
+    });
+
+    it("is held while the costs fail to load, under the error", async () => {
+      open("viewer", { status: 500, body: { detail: "costs are down" } });
+      expect(await screen.findByRole("alert")).toHaveTextContent("costs are down");
+      expect(document.querySelector(".billing-tools.is-idle")).not.toBeNull();
+      expect(screen.queryByRole("button", { name: "Collapse all" })).not.toBeInTheDocument();
+    });
+
+    it("is held, inert, above the empty states", async () => {
+      open("viewer", { body: { ...costs, assets: [] } });
+      const empty = (await screen.findByText("No assets yet.")).closest(".empty")!;
+      const idle = document.querySelector(".billing-tools.is-idle")!;
+      expect(idle).not.toBeNull();
+      expect(idle.compareDocumentPosition(empty) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+      cleanup();
+      const none = costs.assets.map((a) => ({ ...a, days: a.days.map(() => null), total: null }));
+      open("viewer", { body: { ...costs, assets: none } });
+      const quiet = (await screen.findByText("No energy data for this month.")).closest(".empty")!;
+      expect(document.querySelectorAll(".billing-tools.is-idle")).toHaveLength(1);
+      expect(document.querySelector(".billing-tools")!.compareDocumentPosition(quiet) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+  });
+
+  describe("the rest of the page", () => {
+    it("exports the same file whatever is folded or filtered", async () => {
+      await showBig();
+      await userEvent.click(collapseAll());
+      await userEvent.type(filterBox(), "Hall");
+      await userEvent.click(await screen.findByRole("button", { name: "Download CSV" }));
+      expect(downloadCsv).toHaveBeenCalledTimes(1);
+      expect(downloadCsv).toHaveBeenCalledWith("/api/billing/costs.csv?month=2026-10");
+    });
+
+    it("keeps the missing-rate banner above the bar and the page's one primary button", async () => {
+      open("admin");
+      await screen.findByRole("rowheader", { name: "Annex" });
+      const banner = screen.getByRole("status");
+      const bar = document.querySelector(".billing-tools")!;
+      expect(banner.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(bar.compareDocumentPosition(document.querySelector(".table-scroll")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(document.querySelectorAll(".primary")).toHaveLength(1);
+      expect(screen.getAllByRole("status")).toHaveLength(1); // the rows line is a polite live region of its own, not a status
+      expect(document.querySelector(".tools-count")).toHaveAttribute("aria-live", "polite");
+      expect(document.querySelector(".tools-count")).not.toHaveAttribute("role");
+    });
+
+    it("tabs through the bar in its order: filter, Collapse all, Expand all, Show levels, the tip; with text: filter, Clear filter, the tip", async () => {
+      await showBig();
+      filterBox().focus();
+      const seen: Element[] = [];
+      for (let i = 0; i < 4; i++) {
+        await userEvent.tab();
+        seen.push(document.activeElement!);
+      }
+      const tip = screen.getByRole("button", { name: "What does this mean?" });
+      expect(seen).toEqual([collapseAll(), expandAll(), levels(), tip]);
+      await userEvent.type(filterBox(), "rack");
+      expect(filterBox()).toHaveFocus();
+      await userEvent.tab();
+      expect(screen.getByRole("button", { name: "Clear filter" })).toHaveFocus();
+      await userEvent.tab();
+      expect(tip).toHaveFocus(); // the three disabled controls are skipped
+    });
+
+    it("explains the folded totals in the tip's bubble", async () => {
+      await showBig();
+      await userEvent.click(screen.getByRole("button", { name: "What does this mean?" }));
+      expect(screen.getByRole("note")).toHaveTextContent("A folded row still shows its own totals, which already include everything below it.");
     });
   });
 });

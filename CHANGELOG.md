@@ -15,6 +15,20 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w17 (2026-10-18, <merge>)
+
+w17 makes Billing usable with a real data centre, front end only: no migration, no new permission, no API change. **Billing:** a row
+with assets below it has a small arrow that folds them (a folded row keeps its own rate, month total and day figures, which already
+include everything below it); **Collapse all**, **Expand all** and **Show levels** fold many rows at once; a filter box (**Filter by asset name**) shows the
+rows whose name contains your text, with their parents ("12 of 370 rows match"); and the header with the day numbers stays at the top
+while the rows scroll, as the first column stays while the days scroll sideways. A month with more than 60 rows opens folded to the
+deepest level that keeps 60 rows or fewer (24 rows for the 370-asset demo hall). The fold is remembered in this browser for this site
+address, not per month or account; the filter is not. **Assets Tree:** a tree of more than 60 assets opens folded to its second level when
+nothing is remembered, and the selected asset is scrolled into view; a browser holding the empty fold the tree used to write on every
+visit reads it as "nothing remembered", so a big tree opens folded there too (Expand all is remembered). **Not changed:** every figure,
+marker, rate and total, the CSV (every asset and every day, whatever is folded), closed months and the API. Nothing to do when you
+upgrade; the code to go back to is `8d3ef40`.
+
 ## w14 (2026-10-18, 73d0469)
 
 w14 is a polish wave after w12c and w13, front end only: no migration, no new permission, no new widget type, and no figure, unit,

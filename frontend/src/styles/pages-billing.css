@@ -36,8 +36,28 @@
   .month-dialog .month-go[aria-disabled="true"], .month-dialog .month-go[aria-disabled="true"]:hover { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); cursor: not-allowed; }
   .month-dialog .month-cancel[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
 
-  /* The day table scrolls sideways inside main (.table-scroll on the wrap), never the page. The caption is the how-to-read line;
-     the sticky first column and its header corner stay while the days scroll under them. The loading skeleton's caption is the same box. */
+  /* The day table scrolls inside its own box (.table-scroll on the wrap), never the page sideways. The box is as tall as the window leaves it
+     (--billing-chrome is what sits above it: the top bar, the page header, the month bar, the controls bar and the caption; a closed month's banner
+     and the missing-rate banner each add theirs), so the header stays in view while the rows scroll. The legend and the page's bottom room below it
+     are reached by a small scroll of the page. On a window shorter than 560px the box has no limit and the page scrolls instead.
+     The four values were measured on a wide page (the bars on one line each): the box then ends 8px inside the window. A narrower page wraps the month bar
+     or the controls bar and the box ends lower; the 20rem floor can do the same on a window about 600px tall. */
+  .billing-page { --billing-chrome: 16.3rem; }
+  .billing-page:has(.closed-box) { --billing-chrome: 23rem; }
+  .billing-page:has(.banner-warn) { --billing-chrome: 20.1rem; }
+  .billing-page:has(.closed-box):has(.banner-warn) { --billing-chrome: 26.8rem; }
+  .billing-page .table-wrap.table-scroll { max-height: max(20rem, calc(100dvh - var(--billing-chrome))); overflow: auto; scroll-padding-top: 2.75rem; } /* the padding keeps a Tab-focused twisty from hiding under the header */
+  @media (max-height: 559.98px) {
+    .billing-page .table-wrap.table-scroll { max-height: none; }
+  }
+  /* A classic scrollbar always has its track on Billing, so folding or filtering never shifts the page sideways, and nothing blank shows beside the top bar
+     (a reserved gutter would leave a notch there when the page does not scroll). An overlay scrollbar is unaffected. */
+  html:has(.billing-page) { overflow-y: scroll; }
+  /* The inert copy of the controls bar holds the bar's room while the costs load: the same box, nothing drawn. */
+  .billing-page .billing-tools.is-idle { visibility: hidden; }
+
+  /* The day table. The caption is the how-to-read line; the header row stays at the top of the box, the first column at its left, and the corner above
+     both (corner 4, header 2, row header 1), each on an opaque ground (th: --surface, a row header: --bg) so no row shows through. The loading skeleton's caption is the same box. */
   table.billing caption, .sk-table caption { caption-side: top; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: var(--fs-xs); text-align: left; }
   table.billing :is(th, td) { padding-inline: 10px; }
   table.billing td { padding-block: 7px; line-height: 1.3; }
@@ -45,9 +65,34 @@
   table.billing td > div:last-child { font-size: var(--fs-xs); }
   table.billing :is(th, td):nth-child(3) { border-right: 1px solid var(--border-strong); }
   table.billing td:nth-child(3) { font-weight: 600; }
-  table.billing thead th:first-child { position: sticky; left: 0; z-index: 2; padding-left: 8px; border-right: 1px solid var(--border); }
+  table.billing thead th { position: sticky; top: 0; z-index: 2; }
+  table.billing thead th:first-child { position: sticky; top: 0; left: 0; z-index: 4; padding-left: 8px; border-right: 1px solid var(--border); }
   table.billing tbody th[scope="row"] { z-index: 1; min-width: 150px; max-width: 260px; overflow: hidden; border-right: 1px solid var(--border); text-overflow: ellipsis; } /* the title carries the full path */
   table.billing tbody tr:hover > th[scope="row"] { background: var(--row-hover); }
+
+  /* The name cell (W17): the twisty (or a spacer of its width) and the name in one flex box inside the row header, which keeps the indent and the clip.
+     The name is what shrinks and gets the ellipsis; its title (the row header's) carries the full path. A row shown only because something under it
+     matches the filter reads quieter than the matches themselves. */
+  .billing-page .bill-name { display: flex; align-items: center; gap: 2px; }
+  .billing-page .bill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .billing-page .bill-label.is-context { color: var(--text-2); }
+  .billing-page .bill-caret { display: grid; place-items: center; color: var(--text-2); } /* the arrow of a row while a filter is on: nothing to press, so no button box */
+  .billing-page .bill-caret svg.i { width: 16px; height: 16px; }
+  /* A filter that matches nothing: one row, and its words stay at the left edge of the box when the days are scrolled sideways. */
+  .billing-page td:has(> .bill-nomatch) { padding: 0; }
+  .billing-page .bill-nomatch { position: sticky; left: 0; display: inline-block; max-width: min(60ch, 70vw); padding: 14px 10px; color: var(--text-2); white-space: normal; overflow-wrap: anywhere; } /* a long filter wraps: the message never widens the table */
+
+  /* The controls bar over the table (W17): one row that may wrap, 38px tall like the other controls. The inert copy that holds its room while the costs
+     load is this same box. The rows line has a room of its own, so its words never move the controls. */
+  .billing-page .billing-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 38px; margin: 0 0 12px; }
+  .billing-page .tools-filter { position: relative; flex: 1 1 14rem; min-width: 10rem; max-width: 22rem; }
+  .billing-page .tools-filter input[type="search"] { width: 100%; padding-right: 38px; text-overflow: ellipsis; }
+  .billing-page .tools-filter input[type="search"]::-webkit-search-cancel-button { display: none; } /* Chromium's own cross: Clear filter is the one, like the quick find's Escape */
+  .billing-page .tools-clear { position: absolute; top: 50%; right: 5px; transform: translateY(-50%); }
+  .billing-page .tools-levels { display: flex; align-items: center; gap: 8px; }
+  .billing-page .tools-levels label { font-size: var(--fs-sm); font-weight: 600; }
+  .billing-page .tools-levels select { width: 8.5rem; } /* fixed: the word Custom never changes it */
+  .billing-page .tools-count { min-width: 28ch; margin-left: auto; font-size: var(--fs-sm); color: var(--text-2); text-align: right; white-space: nowrap; }
 
   /* The key under the table: one wrapping row, each mark in a small tile */
   .billing-page ul.legend { gap: 6px 22px; margin: 14px 0 0; font-size: var(--fs-xs); }

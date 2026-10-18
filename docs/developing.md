@@ -121,8 +121,9 @@ work laptop run `scripts\update.ps1` first so the code is current, then type the
   there, with the day columns on the right (the Billing CSV has one row per asset and day at every level, so do not add up its kWh
   column). In the Assets Tree a Feed page has a Trend that opens on `active_power_kw` (the daily curve; pick `energy_kwh` for the
   rising counter) and has a 7d range; a hall, row or rack page shows Live power, Energy today and Cost today, because it adds up the
-  feeds below it, but no Trend of its own. The tree opens fully expanded (370 assets): use Collapse all in its header, the filter, or
-  Ctrl+K. The data ends at the moment the command ran, so "Energy today", the 1h, 6h and 24h trends and the live chip only show
+  feeds below it, but no Trend of its own. In a browser that remembers no fold, the tree (370 assets) opens folded to its second level
+  (the Site, the halls and Electrical) and Billing to level 4 (24 rows); Expand all, the filter or Ctrl+K reach the rest. The data
+  ends at the moment the command ran, so "Energy today", the 1h, 6h and 24h trends and the live chip only show
   something in the hours after the run: run it shortly before a demo.
 - **Live power.** A parent adds up the live power of the feeds below it: the Site reads about 600 to 700 kW depending on the hour of
   the day, and each rack a few kW. Between one hour and an hour and a half after the run (three sample spacings counted from the last

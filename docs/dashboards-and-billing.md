@@ -131,6 +131,43 @@ then the month total and the rate in effect.
 
 The asset page shows today's cost next to today's energy.
 
+### Big months
+
+A data centre has hundreds of assets, so Billing lets you fold the rows, filter them and keep the day numbers in sight. None of it
+changes a figure, a marker, a rate, a total or the CSV.
+
+- **Fold.** A row with assets below it has a small arrow in its name cell; the arrow's name is, for example, "Collapse Hall 1, 181 rows
+  below" (or "Expand Hall 1, 181 rows below" when the row is folded; 181 is the demo hall's Hall 1). A folded row still shows its own rate, month total and day figures,
+  which already include everything below it, so folding hides detail and never a total. **Collapse all** folds everything into the top
+  row, **Expand all** opens everything, and **Show levels** (1 up to the deepest level, then All) shows that many levels: level 1 is the top
+  row alone, level 2 adds the rows directly below it, and so on. It reads "Custom" while the fold you made matches no level. The `?` beside
+  it says the same thing about totals.
+- **How many rows are on screen.** A line at the right of the controls says "All 370 rows shown", or "Showing 24 of 370 rows" while
+  something is folded, or "12 of 370 rows match" while you filter ("No rows match" when nothing does).
+- **The filter box (Filter by asset name).** Type part of an asset name: the table shows every row whose name contains it (capital letters do not matter; only
+  the name is searched, not the path), each with the rows above it so the indent still reads as a tree. Rows below a match that do not
+  match themselves are left out. The filter ignores the fold, and when you clear it (the **Clear filter** button in the box, or Escape
+  while you are in it) the fold you had comes back. Collapse all, Expand all and Show levels are greyed out while the box has text. The
+  filter is not remembered.
+- **Opening folded.** A month with more than 60 rows opens folded to the deepest level that keeps 60 rows or fewer; with the demo hall of
+  370 assets that is level 4, 24 rows. A month with 60 rows or fewer opens fully open, as before.
+- **What is remembered.** The first time you fold or unfold something, the fold is remembered in this browser, for this site address (it
+  is not per month, so paging to another month keeps it, and not per account). Just visiting remembers nothing, so the size rule above
+  keeps applying until you change something; from then on every month opens the way you left it. Expand all is remembered as "nothing
+  folded" (the stored text is `none`): every month then opens fully open. The fold is not shared between browsers or with other people.
+- **A header that stays.** The table scrolls inside its own box, so the header row with the day numbers stays at the top while the rows
+  scroll, and the first column (the asset names) stays while the days scroll sideways. On a window less than 560 px high the whole page
+  scrolls instead.
+- **Keyboard.** Tab goes to the filter, then Clear filter (only while there is text), Collapse all, Expand all, Show levels and its `?`,
+  then to the arrow of each row that has rows below it (rows without any have none; while you filter the rows have no arrows); Enter or
+  Space folds or unfolds, and the focus stays on that arrow. Escape in the filter clears it.
+- **A closed month** folds and filters the same way; the stored figures are never touched.
+- **The CSV** always has every asset and every day, whatever is folded or filtered.
+
+Try it with the demo hall ([The pilot hall](developing.md#the-pilot-hall-a-demo-tree-with-racks)): open Billing and choose Show levels 5
+(the 141 rows down to the racks); scroll down and watch the day numbers stay at the top. Then type Rack 01 in the filter box (Filter by asset name): the racks
+with that name show, each under its hall, pod and row. Press Escape and the level you chose is back.
+
 ## Closing a month
 
 Until a month is closed it is recalculated on every request from today's tree, mappings and rates, so moving an asset or editing a

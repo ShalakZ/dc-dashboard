@@ -277,5 +277,16 @@ export default defineConfig({
       dependencies: ["w13"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // WRITES NOTHING and needs nothing from the stack, like w14: every Billing case answers GET /api/billing/costs, /api/billing/months and /api/billing/costs.csv (and the Assets Tree cases
+    // GET /api/assets) through page.route from a generated pilot-hall month of 370 rows (e2e/billingModel.ts, ids from 7,000 up), and any other write the page tries is refused and fails the
+    // case. Its cases set the admin's look (light navy-gold, dark desert-gold) through PUT /api/me/preferences before a page opens, and afterAll puts it back to light navy-gold, so nothing
+    // after it needs to know. Each case that needs a window size sets it itself (1440 x 900, 1024 x 768, 800 x 600). It signs in a second time on the other name of the stack (localhost against
+    // 127.0.0.1) for the remembered-fold case, which the stack's web answers on any host.
+    {
+      name: "w17",
+      testMatch: "w17.spec.ts",
+      dependencies: ["w14"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

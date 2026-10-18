@@ -9,7 +9,7 @@ spec guards, and the two scratch-stack self-tests. The unit tests are on [Develo
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Thirty-seven specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Forty specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`E2E_BASE_URL` changes it). `frontend/e2e/playwright.config.ts` makes each spec its own project and runs them one at a time in the
 order below, each depending on the one before; all but `journey` use a 1600×1000 window unless a spec sets its own sizes. Its
 `global-setup.ts` waits up to 120 s for the stack and refuses a database that already has users.
@@ -310,7 +310,7 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   what the answer proves (freshness, window with the zone, marker meanings, lowest and highest from the data, a total only when it is exact,
   never an average over buckets). The editor's preview is the dashboard card, edit mode has no Details or CSV button, and in dark the drop
   placeholder and the resize handles show against the card.
-- `w14.spec.ts` (its own project, last in the list, after `w13`, the tail of the chain) checks the six small fixes of the polish wave. It
+- `w14.spec.ts` (its own project, after `w13`, the tail of the chain until `w17`) checks the six small fixes of the polish wave. It
   writes next to nothing: the dashboard showcase of `e2e/w13Showcase.ts` is saved once and answered in the page, Discovery is answered from a
   generated graph (`e2e/graphModel.ts`, with source names of 12, 30 and 70 characters), and the one case that writes makes a role and an
   account (names start `w14-`) and removes both. The bar chart "Energy per asset" renders at 1024, 1440 and 1920 px in light and dark with
@@ -321,6 +321,12 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   `Last bucket (average)`, `Highest` says `bucket from <time>`, the panel is 560 px wide with no sideways scroll, and a no-rate widget has
   the link `Set a rate in Tariffs` for the administrator (reachable by keyboard) and none for a role without `tariffs.view`. At 800 and
   1024 px, with the sidebar open and minimised, four pages do not scroll sideways.
+- `w17.spec.ts` (its own project, last in the list, after `w14`, the tail of the chain) checks Billing at scale. It writes nothing and needs
+  nothing from the stack: `GET /api/billing/costs` (and the month list and the asset list) are answered in the page by `page.route` from a
+  generated month of hundreds of assets (`e2e/billingModel.ts`), so the same rows come back on every run. It checks the fold (the arrow of
+  a row, Collapse all, Expand all, Show levels, a month of more than 60 rows opening folded), the filter (matches with their parents,
+  the "N of M rows match" line, Escape), the day-number header that stays while the rows scroll, the Assets Tree opening folded to its
+  second level when it is big, and that the figures and the CSV do not change.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

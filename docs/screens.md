@@ -10,7 +10,9 @@ lacks says "No access".
 
 - **Assets Tree** (everyone): needs `assets.view`. Your asset hierarchy on the left and, beside it, the fleet summary (the
   Assets, Live power, Energy today and Cost today tiles) or the asset you opened, with its live values and charts. The trail above
-  an open asset (`Assets Tree / MV2 / Room 1 / LVP02`) shows each asset's own icon beside its name, the same icon as in the tree. Adding and
+  an open asset (`Assets Tree / MV2 / Room 1 / LVP02`) shows each asset's own icon beside its name, the same icon as in the tree. A tree of
+  more than 60 assets opens folded to its second level when nothing is remembered in this browser (Expand all, the filter or Ctrl+K
+  reach the rest), and the tree scrolls the selected asset into view. Adding and
   editing assets and mapping points needs `assets.edit` (also needed to pick several assets and move them), deleting
   `assets.delete`. With `assets.edit` each row of an open asset's **Metrics** table has a menu (`Actions for <metric>`) with **Unmap…** and
   **Move to another asset…**, which ask first and offer an Undo for 10 seconds. See [Assets and kinds](assets-and-kinds.md).
@@ -23,7 +25,13 @@ lacks says "No access".
   An admin (`dashboards.default`) can mark one as the default, and the sidebar entry and the
   first page after signing in then open it. See [Dashboards and billing](dashboards-and-billing.md).
 - **Billing** (everyone): needs `billing.view`. Energy and cost per asset per day and per month, picked with the Year and Month
-  selects, with a CSV export (`billing.export`). An admin (`billing.close`) can **Close month…** on a finished month with data, which
+  selects, with a CSV export (`billing.export`). A parent row has a small arrow that folds the rows below it (a folded row keeps its own
+  totals, which already include everything below it); **Collapse all**, **Expand all** and **Show levels** fold many at once, and a
+  filter box (**Filter by asset name**) shows the rows whose name contains your text with their parents ("12 of 370 rows match"). The day-number header
+  stays at the top while the rows scroll and the first column stays while the days scroll sideways. A month with more than 60 rows
+  opens folded to the deepest level that keeps 60 rows or fewer; the fold is remembered in this browser for this site address (not per
+  month and not per account), the filter is not, and the CSV always has every asset and every day. See
+  [Big months](dashboards-and-billing.md#big-months). An admin (`billing.close`) can **Close month…** on a finished month with data, which
   freezes its figures and CSV as they stand: the month then carries a **Closed** chip and a banner, "Closed by <name> on <date>", with
   the note given; a quiet line, "Today's tree and rates would give ..." (or "... give the same figures."), says how today's tree and rates
   compare; and **Reopen month…** (a reason of at least 5 characters; download the CSV first, the app does not show the closed figures

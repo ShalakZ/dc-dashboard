@@ -4,11 +4,12 @@ import { Icon } from "./Icon";
 import { Skeleton, SkeletonRegion, TreeSkeleton } from "./Skeleton";
 import { assetIcon } from "../lib/assetIcons";
 import { focusAfterDelete } from "../lib/assetsBulk";
+import { FOLD_ROW_LIMIT, fixedLevelFold, flattenTree, foldModel } from "../lib/foldLevels";
 import { pickLine, type PickEvent } from "../lib/moveText";
 import { readStored, writeStored } from "../lib/sidebarState";
 import { ancestorIds, type TreeNode } from "../lib/tree";
 import { createTreeDnd } from "../lib/treeDnd";
-import { foldableIds, readFolded, saveFolded } from "../lib/treeFold";
+import { foldableIds, readFoldedOrNull, saveFolded } from "../lib/treeFold";
 import type { DropTarget } from "../lib/treeMove";
 import { createPickStore, visibleOrder, type PickStore } from "../lib/treeSelect";
 import { TREE_MIN, TREE_STEP, TREE_STEP_BIG, clampTreeWidth, clearTreeWidth, readTreeWidth, saveTreeWidth, treeMax } from "../lib/treeWidth";
@@ -19,6 +20,8 @@ export type { DropTarget };
 const KEY = "dcdash.assetTree";
 type ColumnState = "expanded" | "minimized";
 const DEFAULT_WIDTH = 280; // --tree-w, for a column with no layout to measure (jsdom)
+/** Above FOLD_ROW_LIMIT (60) nodes, with nothing remembered, the tree opens folded to this level: level 2 shows the top level and the one below it. */
+const TREE_DEFAULT_LEVEL = 2;
 
 // Inline SVG, 24-unit viewBox, drawn with the 1.7 stroke of `svg.i`; decoration only (the button's own label is its name).
 function Svg({ children }: { children: ReactNode }) {
@@ -383,7 +386,8 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
 }) {
   const [state, setState] = useState<ColumnState>(() => (readStored(KEY) === "minimized" ? "minimized" : "expanded"));
   const [filter, setFilter] = useState("");
-  const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(readFolded);
+  // What the person left folded: null = nothing remembered (a first visit, the `[]` older versions wrote), so the tree's own default applies and is not written.
+  const [stored, setStored] = useState<ReadonlySet<number> | null>(readFoldedOrNull);
   const minimized = state === "minimized";
   const column = useRef<HTMLElement>(null);
   const width = useTreeWidth(column);
@@ -393,26 +397,47 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
   // The way to the selection as text, so that a new `nodes` array with the same path is not a change.
   const pathKey = useMemo(() => (selectedId === null ? "" : ancestorIds(nodes, selectedId).join(",")), [nodes, selectedId]);
 
+  // The fold of a big tree with nothing remembered. Keyed on the shape (the count and each foldable id at its depth), so a refetch that gives
+  // `nodes` a new identity keeps the same Set and no row re-renders for it.
+  const model = useMemo(() => foldModel(flattenTree(nodes)), [nodes]);
+  const defaultKey = useMemo(() => `${model.total}|${model.foldable.map((id) => `${id}@${model.depth.get(id)}`).join(",")}`, [model]);
+  const defaultFold = useMemo(() => fixedLevelFold(model, TREE_DEFAULT_LEVEL), [defaultKey]); // eslint-disable-line react-hooks/exhaustive-deps -- `defaultKey` is what `model` says
+  const defaultRef = useRef(defaultFold);
+  defaultRef.current = defaultFold; // during render, like `latest.current` below: an effect would leave the first frame of a big tree expanded
+  // Remembered if there is one, else the default: every read below is the same either way, and a big tree never draws expanded for a frame.
+  const collapsed: ReadonlySet<number> = stored ?? defaultFold;
+  // The one way the fold changes. An update that returns what it was given changes nothing and keeps "nothing remembered".
+  const changeFold = useCallback((update: (prev: ReadonlySet<number>) => ReadonlySet<number>) => setStored((cur) => {
+    const base = cur ?? defaultRef.current;
+    const next = update(base);
+    return next === base ? cur : next;
+  }), []);
+  // The row of the open asset waits here to be scrolled into view once it is on screen (see the effect after the picks).
+  const pendingReveal = useRef<number | null>(null);
+
   // Forget folds of nodes that are gone or have lost their children (such a node starts open when it gains one). Not while the list is loading.
   useEffect(() => {
     if (nodes.length === 0) return;
-    setCollapsed((prev) => {
+    changeFold((prev) => {
       const kept = [...prev].filter((id) => foldable.has(id));
       return kept.length === prev.size ? prev : new Set(kept);
     });
-  }, [nodes, foldable]);
-  useEffect(() => { saveFolded(collapsed); }, [collapsed]);
+  }, [nodes, foldable, changeFold]);
+  // Only what was changed is written: a visit that changes nothing remembers nothing.
+  useEffect(() => { if (stored !== null) saveFolded(stored); }, [stored]);
   // Keyed on the selection and its path, not on `nodes` or `collapsed`: a create, rename or delete anywhere gives `nodes` a new identity,
-  // which must not re-open what Collapse all just folded. A new selection or a reparent still unfolds the way to it.
+  // which must not re-open what Collapse all just folded. A new selection or a reparent still unfolds the way to it. Opening an asset in a
+  // big tree therefore remembers the unfolded way (as every tree did before the default existed).
   useEffect(() => {
+    pendingReveal.current = selectedId;
     const path = pathKey ? pathKey.split(",").map(Number) : [];
-    setCollapsed((prev) => {
+    changeFold((prev) => {
       if (!path.some((id) => prev.has(id))) return prev;
       const next = new Set(prev);
       path.forEach((id) => next.delete(id));
       return next;
     });
-  }, [selectedId, pathKey]);
+  }, [selectedId, pathKey, changeFold]);
 
   const toggleColumn = () => {
     const next: ColumnState = minimized ? "expanded" : "minimized";
@@ -420,23 +445,36 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
     writeStored(KEY, next);
   };
   // Stable, so that `view` (and with it every memoised row) changes only when the fold, the filter or the open asset does.
-  const toggleBranch = useCallback((id: number) => setCollapsed((prev) => {
+  const toggleBranch = useCallback((id: number) => changeFold((prev) => {
     const next = new Set(prev);
     if (!next.delete(id)) next.add(id);
     return next;
-  }), []);
-  const unfold = useCallback((ids: readonly number[]) => setCollapsed((prev) => {
+  }), [changeFold]);
+  const unfold = useCallback((ids: readonly number[]) => changeFold((prev) => {
     if (!ids.some((id) => prev.has(id))) return prev;
     const next = new Set(prev);
     ids.forEach((id) => next.delete(id));
     return next;
-  }), []);
-  const collapseAll = () => setCollapsed(new Set(foldable));
-  const expandAll = () => setCollapsed(new Set());
+  }), [changeFold]);
+  // A new Set each time, so that it counts as a change and is remembered (Expand all on a big tree is remembered as `none`).
+  const collapseAll = () => changeFold(() => new Set(foldable));
+  const expandAll = () => changeFold(() => new Set());
+  // The new child must not appear inside a folded branch. This writes the fold (a new Set each time): it opens the branch if it is folded, and if it
+  // is not, the fold of this moment becomes the remembered one. Otherwise a leaf would turn foldable with its child, and a default of "level 2"
+  // would fold it, child and all, once the refetch lands. An empty fold is left alone, and so remembers nothing new, only when there is nothing to
+  // protect: a fold that is already remembered (Expand all's `none`), or a tree that is still a small one (fewer than 60 nodes) with the child.
+  // Any other empty fold (a flat tree of more than 60 nodes, or exactly 60) is written, as `none`: the child may switch the size default on.
+  const keepEmptyRef = useRef(true);
+  keepEmptyRef.current = stored !== null || model.total < FOLD_ROW_LIMIT; // during render, like `defaultRef`: the click reads what was drawn
   const addChild = useCallback((id: number) => {
-    unfold([id]);
-    onAddChild?.(id); // the new child must not appear inside a folded branch
-  }, [unfold, onAddChild]);
+    changeFold((prev) => {
+      if (prev.size === 0 && keepEmptyRef.current) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    onAddChild?.(id);
+  }, [changeFold, onAddChild]);
 
   // ---- W7p: picking, dragging, Move to... ----
   const movable = move !== undefined;
@@ -618,6 +656,31 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
     if (focusLink(pending.id)) done();
   }, [movedSignal, nodes, byId, collapsed, visible, minimized, settledTick, store, unfold, focusLink, announce, unpickMoved]);
   useEffect(() => () => { if (reveal.current) clearTimeout(reveal.current.timer); }, []);
+
+  // Scroll the open asset into view (w17): once, after a new selection, when its row is on screen but outside the scroll box. No dependency
+  // list, because the row can appear after any commit (the way unfolds, the list lands, the column opens); the guards come first and are cheap.
+  useEffect(() => {
+    const id = pendingReveal.current;
+    if (id === null || loading || minimized) return; // the mark waits
+    if (id !== selectedId) { pendingReveal.current = null; return; }
+    if (nodes.length > 0 && !byId.has(id)) { pendingReveal.current = null; return; } // not in the tree
+    const row = column.current?.querySelector<HTMLElement>(".node.is-selected");
+    if (!row) {
+      if (needle) pendingReveal.current = null; // the filter hides it: no scroll later, when the filter is cleared
+      return; // else the list may still be on its way
+    }
+    if (row.closest("[hidden]")) return; // the way to it is still folded
+    pendingReveal.current = null;
+    const box = column.current?.querySelector<HTMLElement>(".tree-scroll");
+    if (!box) return;
+    // Not scrollIntoView: it would scroll the page as well. A layout with no sizes (jsdom) gives zero rects, so nothing moves there.
+    // A row wholly outside the box is centred in it; a row cut by an edge moves only by the part that is out, so the one the person just clicked stays under the pointer.
+    const b = box.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    if (r.bottom <= b.top || r.top >= b.bottom) box.scrollTop += (r.top + r.height / 2) - (b.top + b.height / 2);
+    else if (r.top < b.top) box.scrollTop -= b.top - r.top;
+    else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom;
+  });
 
   const noFold = visible !== null || foldable.size === 0; // a filter has its own view of the tree
   const toggleName = minimized ? "Expand asset tree" : "Minimize asset tree";
