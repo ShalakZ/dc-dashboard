@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w16 (2026-10-18, MERGE)
+## w16 (2026-10-18, 088aa67)
 
 w16 adds a second layout to the development history seeder: `python -m dcdash.seed.history --layout pilot-hall` makes a made-up data
 centre for demos and tests, with a month of readings, on a development or scratch stack. It is the Site "Seeded pilot hall" with two
