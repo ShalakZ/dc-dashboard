@@ -1,17 +1,17 @@
 import type { EChartsOption } from "echarts";
 import ReactECharts from "echarts-for-react";
-import { memo } from "react";
+import { memo, useLayoutEffect, useState } from "react";
 import type { WidgetData } from "../../../api/types";
 import { chartDescription } from "../../../lib/widgetDetails";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
 import { chartLabels, figureText, hasNoReading, labelBucket, NO_DATA, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
+import { AXIS_CHARS, barAxisLayout, DEFAULT_CHART_WIDTH, LABEL_LINE_PX, steppedWidth } from "./barAxis";
 import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, type ChartTheme } from "./chartTheme";
 import { useLegendSelection } from "./legendSelection";
 
 const DASH = "—";
-/** Characters a legend entry or a category label shows; the full name is in the tooltip and in the legend's own tooltip (S7-3). */
+/** Characters a legend entry shows; the full name is in the tooltip and in the legend's own tooltip (S7-3). The axis labels are laid out by barAxis.ts. */
 const LEGEND_CHARS = 24;
-const AXIS_CHARS = 18;
 
 /**
  * A bar chart of one value per asset has ONE series, so a null bar has no shape to put a label on. Each slot with no figure
@@ -71,13 +71,17 @@ function tooltipFor(cells: readonly (readonly (TipCell | null)[])[], headers: re
   };
 }
 
-export function barOption(data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART): EChartsOption {
+/**
+ * `chartWidth` is the width of the chart's box in px (BarWidget measures it); the value-mode category axis is laid out for it (barAxis.ts): the
+ * names wrap inside their slots, or turn by 40 degrees when the slots are too narrow to hold a wrapped name.
+ */
+export function barOption(data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART, chartWidth: number = DEFAULT_CHART_WIDTH): EChartsOption {
   const unit = unitSuffix(data.unit);
   const base = chartBase(theme);
   const axis = axisParts(theme);
   if (data.mode === "values") {
     const labels = chartLabels(data.values);
-    const axisShort = shortLabels(labels, AXIS_CHARS);
+    const layout = barAxisLayout(labels, chartWidth);
     // A metric that recorded nothing is "no data", with no dash mark: the dash means a missing rate and nothing else. A cost
     // without a rate keeps its dash whether or not anything was recorded, like the stat, the table and Billing.
     const noReading = (v: WidgetData["values"][number]) => hasNoReading(v.value, v.no_data, data.source);
@@ -88,11 +92,19 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
     return {
       ...base,
       tooltip: { ...base.tooltip, formatter: tooltipFor([cells], labels, false, theme) },
-      grid: { left: 60, right: 20, top: 30, bottom: 40 },
-      // interval 0: every name is drawn (hideOverlap may still drop some of a crowded axis; the tooltip has the full name)
+      // Wrapped: every name is drawn in its own slot, in as many lines as the layout found (grid.bottom is their room); the width and the
+      // truncation only catch a line that is wider than the estimate. Rotated (a crowded axis): hideOverlap may still drop some names (the
+      // tooltip and the Details panel have every one), and containLabel keeps the first rotated name from being cut at the left edge. With
+      // containLabel the names and the y numbers sit INSIDE the rectangle that left and bottom describe, so those two are plain margins there.
+      grid: { left: layout.left, right: 20, top: 30, bottom: layout.bottom, ...(layout.mode === "rotate" ? { containLabel: true } : {}) },
       xAxis: {
         type: "category", data: labels, ...axis,
-        axisLabel: { ...axis.axisLabel, interval: 0, hideOverlap: true, formatter: (v: string) => axisShort.get(String(v)) ?? shortLabel(String(v), AXIS_CHARS) },
+        axisLabel: {
+          ...axis.axisLabel, interval: 0, formatter: (v: string) => layout.labels.get(String(v)) ?? shortLabel(String(v), AXIS_CHARS),
+          ...(layout.mode === "wrap"
+            ? { width: layout.slot - 4, overflow: "truncate", ellipsis: "…", lineHeight: LABEL_LINE_PX }
+            : { rotate: 40, hideOverlap: true }),
+        },
       },
       yAxis: { type: "value", name: data.unit ?? undefined, ...axis },
       series: [{
@@ -143,6 +155,18 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
 export const BarWidget = memo(function BarWidget({ data, timezone }: { data: WidgetData; timezone: string }) {
   const legend = useLegendSelection();
   const theme = useChartTheme();
+  // The width of the chart's box, in steps of 8 px, for the axis layout. The box is held in state (a callback ref) so that the observer follows it
+  // when the data arrives after an empty first render. A box with no width (jsdom, a server render) or no ResizeObserver leaves the default 480 px.
+  const [box, setBox] = useState<HTMLDivElement | null>(null);
+  const [chartWidth, setChartWidth] = useState(DEFAULT_CHART_WIDTH);
+  useLayoutEffect(() => {
+    if (!box || typeof ResizeObserver !== "function") return undefined;
+    const measure = () => setChartWidth(steppedWidth(box.clientWidth));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [box]);
   // Nothing to draw: no assets, or (metric) every asset recorded nothing, which would be empty axes without even a dash.
   const empty = data.mode === "values"
     ? data.values.every((v) => hasNoReading(v.value, v.no_data, data.source))
@@ -150,9 +174,9 @@ export const BarWidget = memo(function BarWidget({ data, timezone }: { data: Wid
   if (empty) return <p className="widget-empty">No data in this range.</p>;
   // The canvas is a picture: the box around it is the chart's text alternative (the figures themselves are in the Details panel).
   return (
-    <div className="widget-chart" role="img" aria-label={chartDescription("bar", data)}>
+    <div ref={setBox} className="widget-chart" role="img" aria-label={chartDescription("bar", data)}>
       <ReactECharts
-        option={legend.apply(barOption(data, timezone, theme), data.mode === "series" ? data.series.map((s) => s.asset_id) : [])} onEvents={legend.onEvents}
+        option={legend.apply(barOption(data, timezone, theme, chartWidth), data.mode === "series" ? data.series.map((s) => s.asset_id) : [])} onEvents={legend.onEvents}
         style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge
       />
     </div>

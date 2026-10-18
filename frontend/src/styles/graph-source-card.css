@@ -1,22 +1,26 @@
 @layer w6 {
-  /* w12c: the Discovery source card (nodes.tsx, SourceNode). Measured in Chromium at the node's 220px width (offsetHeight of .gnode, light and dark, with a fallback font wider than Segoe UI): a one-line name 114px without a last-seen line and 132px with one;
-     "needs credentials" 132; a name too long for the line (ellipsis, still one line) 132; 0 points 132; discovered and manual 132; with neither Details nor a last-seen line 92. The tallest is 132, never over
-     the 136 of SOURCE_H, which this card does not change.
-     Tokens only; every class here is gsrc-* (plus the menu button's own class as the SECOND part of a selector), so no other page file names them. */
+  /* w12c, w14: the Discovery source card (nodes.tsx, SourceNode). Tokens only; every class here is gsrc-* (plus the menu button's own class as the SECOND part of a selector), so no other page file names them.
+     W14 (P2): the name had ONE line of about 126px between the fold, the tile and the Source actions button, so "Modbus DCDash simulator" printed as "Modbus DCDash ...". It may now take TWO lines
+     (18px each, a clamp), and the card pays for the second line by narrowing the node's own padding (6px to 4px, graph-nodes.css) and dropping the 2px gaps between the lines.
+     Measured in Chromium before the change (the node's 220px width, dark, discovery-shots.mjs): the title 126px wide, every card 132px tall, "Modbus DCDash simulator" and a 95-character name clipped.
+     The empty track of the mapped bar was --border (1.26:1 on the card in the light looks, 1.36 in the dark ones) and could not be seen; it is --border-strong now: 1.50:1 in the light looks and 1.73:1
+     in the dark ones over the card's --bg (graph-nodes.css.test.ts measures all eight looks; the floor there is 1.5:1). */
 
-  /* The six lines, each a fixed height (the text is set to the same line-height), two px apart, inside the node's own 6px 8px padding and 1px border (app.css):
-       head 20 (the fold, the icon tile, the one-line title, the Source actions button)
+  /* The six lines. Every one but the head has a fixed height (the text is set to the same line-height), with no gap between them, inside the node's 4px 8px padding (graph-nodes.css) and 1px border (app.css):
+       head 20 to 36 (the fold, the icon tile, the title of up to two 18px lines, the Source actions button; the three small parts stand at the FIRST line)
        protocol line 16, status line 16, mapped line 20 (words 14 + gap 2 + bar 4), Details 20, last seen 16
-     = 108 + 5 gaps of 2 + 12 padding + 2 border = 132px, inside the 136 that SOURCE_H keeps for a source (graph-nodes.css.test.ts adds it up). A card with no Details and no last-seen line is
-     shorter; nothing here ever makes it taller, so a text that changes (a status, "9 min ago" -> "10 min ago") moves nothing. */
-  .gsrc-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+     = 36 + 16 + 16 + 20 + 20 + 16 = 124 + 8 padding + 2 border = 134px for the tallest card, inside the 136 that SOURCE_H keeps for a source (graph-nodes.css.test.ts adds it up; a gap of 1px would reach
+     139). A card whose name fits one line is 16px shorter; a card with no Details and no last-seen line is shorter still; nothing here ever makes it taller than 134, and a text that changes (a status,
+     "9 min ago" -> "10 min ago") moves nothing. Only a rename changes the head, and the layout keeps the room for the tallest. */
+  .gsrc-body { display: flex; flex-direction: column; gap: 0; min-width: 0; }
 
-  .gsrc-head { display: flex; align-items: center; gap: 4px; height: 20px; min-width: 0; }
+  .gsrc-head { display: flex; align-items: flex-start; gap: 4px; min-height: 20px; min-width: 0; }
   /* The protocol icon as a small tile (a plain rectangle with the small radius). Two classes beat the base .gicon (one class: 16px, muted) of graph-nodes.css whatever the file order. */
   .gsrc-head .gsrc-tile { display: grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text); }
   .gsrc-tile svg.i { width: 14px; height: 14px; }
-  /* ONE line that gives way first (min-width 0): the whole name is in the title attribute and in every accessible name. app.css's `.gnode .node-title` (overflow-wrap anywhere) is the same specificity and loads first. */
-  .gsrc-head .gsrc-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; }
+  /* Up to TWO lines, then the browser's own ellipsis (a clamp): the title gives way first (min-width 0), the whole name is in the title attribute, in the panel's heading and in every accessible name.
+     app.css's `.gnode .node-title` (overflow-wrap anywhere, so an address without spaces breaks too) is the same specificity and loads first. */
+  .gsrc-head .gsrc-title { flex: 1 1 0; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 18px; }
   /* The Source actions button stands in the line (the point and group cards place theirs at the corner); 20px like those, the icon 14px. Beats app.css's .icon-btn (28px) and `.gnode button` (padding 0 6px). */
   .gsrc-head .gnode-menu-btn { flex: none; width: 20px; height: 20px; padding: 0; }
   .gsrc-head .gnode-menu-btn svg.i { width: 14px; height: 14px; }
@@ -30,7 +34,7 @@
   /* "60 of 60 mapped" in words, with a 4px bar under them: the words are the signal, the bar (aria-hidden) is a picture of the same share. */
   .gsrc-mapped { height: 20px; }
   .gsrc-words { height: 14px; line-height: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .gsrc-bar { height: 4px; margin-top: 2px; overflow: hidden; background: var(--border); }
+  .gsrc-bar { height: 4px; margin-top: 2px; overflow: hidden; background: var(--border-strong); }
   .gsrc-fill { display: block; height: 100%; background: var(--accent); }
 
   .gsrc-actions { display: flex; align-items: center; height: 20px; }

@@ -298,7 +298,7 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   puts the focus back on the node. A separate case, also with made-up answers, checks that a role without `assets.view` makes no value
   request at all and shows no card. One case asks the real stack for `GET /api/mappings/{id}/latest` on a real mapping (200 for the
   administrator, 404 for an unknown one, 401 signed out and 403 for a role that holds only `discovery.view`).
-- `w13.spec.ts` (its own project, last in the list, after `w12c`, the tail of the chain; at 1440, 1024 and 1920 px) checks the dashboard
+- `w13.spec.ts` (its own project, after `w12c`; at 1440, 1024 and 1920 px) checks the dashboard
   widgets. It writes next to nothing: one dashboard (`w13 <run>`, 15 widgets of `e2e/w13Showcase.ts`) is saved through the API and every
   `POST /api/widget-data` is answered in the page from that showcase (the same config gets the same answer), so estimated, partial, no-rate,
   stale, no-data and removed-asset states are always there; the dashboard is removed afterwards and the admin goes back to Light and Navy and
@@ -310,6 +310,17 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   what the answer proves (freshness, window with the zone, marker meanings, lowest and highest from the data, a total only when it is exact,
   never an average over buckets). The editor's preview is the dashboard card, edit mode has no Details or CSV button, and in dark the drop
   placeholder and the resize handles show against the card.
+- `w14.spec.ts` (its own project, last in the list, after `w13`, the tail of the chain) checks the six small fixes of the polish wave. It
+  writes next to nothing: the dashboard showcase of `e2e/w13Showcase.ts` is saved once and answered in the page, Discovery is answered from a
+  generated graph (`e2e/graphModel.ts`, with source names of 12, 30 and 70 characters), and the one case that writes makes a role and an
+  account (names start `w14-`) and removes both. The bar chart "Energy per asset" renders at 1024, 1440 and 1920 px in light and dark with
+  no sideways scroll (the label geometry is proven by `barAxis.ssr.test.ts`, which draws the real chart). On Discovery no source card is
+  taller than 136 px or meets another, the 70-character name is cut on the card to two lines and the source panel opened with Tab and Enter
+  names it whole; at a 1148 px bar the counts keep their words (and a set with a credentials chip keeps all four chips), and Snap to grid
+  switched on differs from a control that only has the keyboard focus. In Details the table has the headings `Asset`, `Lowest`, `Highest` and
+  `Last bucket (average)`, `Highest` says `bucket from <time>`, the panel is 560 px wide with no sideways scroll, and a no-rate widget has
+  the link `Set a rate in Tariffs` for the administrator (reachable by keyboard) and none for a role without `tariffs.view`. At 800 and
+  1024 px, with the sidebar open and minimised, four pages do not scroll sideways.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

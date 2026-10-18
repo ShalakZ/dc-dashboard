@@ -15,6 +15,23 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w14 (2026-10-18, MERGE)
+
+w14 is a polish wave after w12c and w13, front end only: no migration, no new permission, no new widget type, and no figure, unit,
+rounding or claim of a widget has changed. **Bar charts:** on a bar chart of one figure per asset every asset's name now stands under its
+bar, wrapped over up to three lines when the card is wide enough (and turned at an angle when it is not), instead of running into its
+neighbour or going missing; the asset that has no data keeps its label and an empty slot. **Discovery:** a source card shows its name on
+up to two lines (it was cut after about 14 letters), the empty progress track of `0 of 60 mapped` is visible in the dark looks, and the
+bar above the canvas keeps the words of its counts (`4 sources`, `180 points`, `62 mapped`) on a 1440 px window with the sidebar open,
+while the Snap to grid, Find and Tidy layout buttons turn into icons first; **Snap to grid** switched on is a tinted button with a line
+along its foot, no longer the same blue outline as the keyboard focus ring. **Details:** the figures table has three plain columns
+(`Lowest`, `Highest`, `Last bucket`), `Highest` says `bucket from <time>` under its value (the time is the start of a bucket, not the
+moment of the peak), the panel is 560 px wide, and next to a "no rate" line a person who may open Tariffs gets the link **Set a rate in
+Tariffs**. **Top bar:** at an 800 px window with the sidebar open the page no longer scrolls sideways by 18 px (the find field is allowed
+to shrink). Nothing to do when you upgrade (no migration, no new setting); the code to go back to is `c0e355d`. Checked by the full
+frontend suite (242 files, 8,538 tests), the type checks and the build, and the isolated Playwright run on a build of the merged code
+(367 passed, 0 failed, with the new `w14` project of 22 cases).
+
 ## w16 (2026-10-18, 088aa67)
 
 w16 adds a second layout to the development history seeder: `python -m dcdash.seed.history --layout pilot-hall` makes a made-up data

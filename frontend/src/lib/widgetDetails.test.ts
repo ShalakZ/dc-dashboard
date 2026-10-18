@@ -1,7 +1,7 @@
 import type { WidgetConfig, WidgetData, WidgetPoint, WidgetSeries } from "../api/types";
 import { config, seriesData, seriesPoint, valueRow, valuesData } from "../test/dashboardFixtures";
 import {
-  aggregationWords, assetRows, bucketStartText, chartDescription, figuresText, freshnessLine, isLatestReading, markerMeanings,
+  aggregationWords, assetRows, bucketStartText, chartDescription, figuresText, freshnessLine, hasNoRate, isLatestReading, markerMeanings,
   noMetricIds, preciseAge, rangeWords, removedCount, seriesSummary, sourceWords, windowText,
 } from "./widgetDetails";
 import { figureText } from "./widgetFormat";
@@ -232,6 +232,36 @@ describe("markerMeanings", () => {
   });
 });
 
+describe("hasNoRate", () => {
+  const dash = "— no rate: no tariff applies to this figure";
+  const cost = (over: Partial<WidgetData>): WidgetData => ({ ...valuesData({ source: "cost", metric: null, unit: "QAR" }), ...over });
+  const costSeries = (points: WidgetPoint[]): WidgetData => energySeries("hour", points, {}, { source: "cost", unit: "QAR" });
+
+  it("is true for a cost row with no value, and for a cost bucket that was recorded but has no rate", () => {
+    expect(hasNoRate(cost({ values: [valueRow({ value: null })] }))).toBe(true);
+    expect(hasNoRate(costSeries([seriesPoint({ ts: at(7200), value: 3 }), seriesPoint({ ts: at(3600), value: null })]))).toBe(true);
+  });
+  it("is false for a cost with a figure everywhere, and for a silent bucket (a gap is not a missing rate)", () => {
+    expect(hasNoRate(cost({ values: [valueRow({ value: 12 })] }))).toBe(false);
+    expect(hasNoRate(costSeries([seriesPoint({ ts: at(7200), value: 3 }), seriesPoint({ ts: at(3600), value: null, no_data: true })]))).toBe(false);
+  });
+  it("is false for a response without any marker, and for a metric or energy figure that is merely empty", () => {
+    expect(hasNoRate(valuesData())).toBe(false);
+    expect(hasNoRate(timeseries())).toBe(false);
+    expect(hasNoRate(valuesData({ values: [valueRow({ value: null, no_data: true })] }))).toBe(false);
+    expect(hasNoRate(valuesData({ source: "energy", metric: null, unit: "kWh", values: [valueRow({ value: null })] }))).toBe(false);
+  });
+  it("is true exactly when markerMeanings says the dash, over a spread of answers", () => {
+    const answers: WidgetData[] = [
+      valuesData(), timeseries(), cost({ values: [valueRow({ value: 12 })] }), cost({ values: [valueRow({ value: null })] }),
+      cost({ values: [valueRow({ estimated: true, partial: true }), valueRow({ asset_id: 6, value: null, no_data: true })] }),
+      valuesData({ values: [valueRow({ estimated: true })] }), energySeries("hour", []),
+      costSeries([seriesPoint({ ts: at(3600), value: null })]), costSeries([seriesPoint({ ts: at(3600), value: null, no_data: true })]),
+    ];
+    for (const data of answers) expect(hasNoRate(data)).toBe(markerMeanings(data).includes(dash));
+  });
+});
+
 describe("assetRows, removedCount and noMetricIds", () => {
   it("lists the assets of a values response with their states in words", () => {
     const data = valuesData({
@@ -328,11 +358,11 @@ describe("seriesSummary: a metric series", () => {
     const summary = seriesSummary(data, cfg())!;
     expect(summary.rows[0].total).toBeNull();
     expect(Object.keys(summary.rows[0]).join(" ")).not.toMatch(/avg|average|mean/i);
-    expect(summary.columns.map((c) => c.key)).toEqual(["lowest", "highest", "highestFrom", "last"]);
+    expect(summary.columns.map((c) => c.key)).toEqual(["lowest", "highest", "last"]);
   });
   it("names its columns, the last one by what its figure is (an average for a time series)", () => {
     expect(seriesSummary(data, cfg())!.columns.map((c) => c.heading))
-      .toEqual(["Lowest", "Highest", "Highest in the bucket from", "Last bucket (average)"]);
+      .toEqual(["Lowest", "Highest", "Last bucket (average)"]);
   });
   it("on a tie the earlier bucket is the one named", () => {
     const tie = timeseries({ series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: pts({ h: 1, value: 5, min: 4, max: 9 }, { h: 2, value: 5, min: 4, max: 9 }) }] });
@@ -363,7 +393,7 @@ describe("seriesSummary: a metric series", () => {
     expect(summary.rows[0].lowest!.value).toBe(10);
     expect(summary.rows[0].highest!.value).toBe(25);
     expect(summary.rows[0].last!.value).toBe(20);
-    expect(summary.columns[3].heading).toBe("Last bucket (highest per hour)");
+    expect(summary.columns[2].heading).toBe("Last bucket (highest per hour)");
   });
   it("one row per asset, with unique names", () => {
     const two = timeseries({
@@ -386,9 +416,9 @@ describe("seriesSummary: energy and cost", () => {
     expect(row.highestFrom).toBe("2026-10-17T02:00:00+03:00");
     expect(row.last!.value).toBe(7.25);
     expect(row.lowest).toBeNull();
-    expect(seriesSummary(data, energy)!.columns.map((c) => c.key)).toEqual(["highest", "highestFrom", "last", "total"]);
+    expect(seriesSummary(data, energy)!.columns.map((c) => c.key)).toEqual(["highest", "last", "total"]);
     expect(seriesSummary(data, energy)!.columns.map((c) => c.heading))
-      .toEqual(["Highest", "Highest in the bucket from", "Last bucket (total per hour)", "Total of the buckets shown"]);
+      .toEqual(["Highest", "Last bucket (total per hour)", "Total of the buckets shown"]);
   });
   it("has no total when a bucket recorded nothing", () => {
     const data = energySeries("hour", pts({ h: 1, value: 10 }, { h: 2, value: null, no_data: true }, { h: 3, value: 7 }));
@@ -422,7 +452,7 @@ describe("seriesSummary: energy and cost", () => {
   });
   it("a day series says per day", () => {
     const data = energySeries("day", pts({ h: 1, value: 10 }));
-    expect(seriesSummary(data, energy)!.columns[2].heading).toBe("Last bucket (total per day)");
+    expect(seriesSummary(data, energy)!.columns[1].heading).toBe("Last bucket (total per day)");
   });
   it("is null for a values response", () => {
     expect(seriesSummary(valuesData(), cfg())).toBeNull();

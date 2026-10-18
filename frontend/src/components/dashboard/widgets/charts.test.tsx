@@ -3,6 +3,7 @@ import type { WidgetData } from "../../../api/types";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
 import { escapeHtml, shortLabel } from "../../../lib/widgetFormat";
 import { seriesData, seriesPoint, valueRow, valuesData } from "../../../test/dashboardFixtures";
+import { barAxisLayout, DEFAULT_CHART_WIDTH, GRID_SIDES_PX, LABEL_LINE_PX } from "./barAxis";
 import { BarWidget, barOption } from "./BarWidget";
 import { LIGHT_CHART, type ChartTheme } from "./chartTheme";
 import { bucketMs, markIsolated, timeSeriesOption, tooltipFormatter, TimeSeriesWidget, withGaps } from "./TimeSeriesWidget";
@@ -29,10 +30,14 @@ const asOption = (option: unknown) => option as Opt<LineSeries>;
 const asBar = (option: unknown) => option as Opt<BarSeries>;
 const barSeries = (option: unknown) => asBar(option).series;
 const TZ = "Asia/Qatar";
+/** The names of the w13 showcase (e2e/w13Showcase.ts SIX). */
+const SIX = ["Rack A01", "Rack A02", "UPS-1 output", "CRAH-3 supply fan", "Chiller plant 2 condenser loop", "PDU B07"];
 /** What the legend and the category axis of an option are asked to draw (S7-3). */
 interface LegendOpt { show: boolean; type: string; formatter: (name: string) => string; tooltip: { show: boolean } }
 const legendOf = (option: unknown) => (option as { legend: LegendOpt }).legend;
-const axisLabelOf = (option: unknown) => (option as { xAxis: { axisLabel: { interval: number; formatter: (value: string) => string } } }).xAxis.axisLabel;
+interface AxisLabelOpt { interval: number; hideOverlap?: boolean; rotate?: number; width?: number; overflow?: string; ellipsis?: string; lineHeight?: number; formatter: (value: string) => string }
+interface AxisOpt { xAxis: { axisLabel: AxisLabelOpt }; grid: { left: number; bottom: number; containLabel?: boolean } }
+const axisLabelOf = (option: unknown) => (option as AxisOpt).xAxis.axisLabel;
 /** A tooltip as the viewer reads it: the tags taken away, the name, the value and the state of each row one after the other. */
 const tipText = (html: string) => html.replace(/<\/(span|div)>/g, " ").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
 const LONG = "Main-Switchboard-Feeder-Room-East-Hall-3"; // 40 characters
@@ -408,13 +413,15 @@ describe("bar", () => {
   const hourly = (series: WidgetData["series"], over: Partial<WidgetData> = {}) =>
     seriesData({ type: "bar", source: "energy", metric: null, unit: "kWh", bucket: "hour", tier: null, series, ...over });
 
-  it("shortens long asset names on the category axis, with every label drawn and the full name in the tooltip (S7-3)", () => {
+  it("wraps long asset names on the category axis, with every label drawn and the full name in the tooltip (S7-3, w14 P1)", () => {
     const name = "Main <Switchboard> Feeder 01 Room East Hall"; // 43 characters, and a name that must be escaped
     const option = barOption(byAsset([valueRow({ name, value: 3 }), valueRow({ asset_id: 6, name: "Hall A", value: 4 })]), TZ);
     const axis = axisLabelOf(option);
     expect(axis.interval).toBe(0);
-    expect(axis.formatter(name).length).toBeLessThan(name.length);
-    expect(Array.from(axis.formatter(name))).toHaveLength(18);
+    const wrapped = axis.formatter(name);
+    expect(wrapped).toContain("\n"); // wrapped into lines, not cut
+    expect(wrapped.split("\n").length).toBeLessThanOrEqual(3);
+    expect(wrapped.replace(/\n/g, " ")).toBe(name); // nothing of the name is lost: the breaks fall between words
     expect(axis.formatter("Hall A")).toBe("Hall A");
     expect(asBar(option).xAxis.data).toEqual([name, "Hall A"]); // the data keeps the full names
     const header = asBar(option).tooltip.formatter([{ name, dataIndex: 0, seriesIndex: 0, marker: "" }]);
@@ -422,12 +429,91 @@ describe("bar", () => {
     expect(header).not.toContain("<Switchboard>");
   });
 
-  it("keeps the full label on the axis for two names that would shorten to the same text", () => {
-    const a = "Main-Switchboard-Feeder-01-Room-East";
-    const b = "Main-Switchboard-Feeder-02-Room-East";
-    const axis = axisLabelOf(barOption(byAsset([valueRow({ name: a }), valueRow({ asset_id: 6, name: b })]), TZ));
-    expect(axis.formatter(a)).toBe(a);
-    expect(axis.formatter(b)).toBe(b);
+  it("keeps two names that would wrap to the same text apart, each with its whole text, over one more line", () => {
+    const a = "Main feeder room A01 east hall";
+    const b = "Main feeder room A02 east hall";
+    const others = ["H1", "H2", "H3", "H4"].map((name, i) => valueRow({ asset_id: 10 + i, name }));
+    const axis = axisLabelOf(barOption(byAsset([valueRow({ name: a }), valueRow({ asset_id: 6, name: b }), ...others]), TZ));
+    expect(axis.formatter(a)).not.toBe(axis.formatter(b));
+    expect(axis.formatter(a).split("\n").length).toBeLessThanOrEqual(4);
+    expect(axis.formatter(a)).toContain("A01");
+    expect(axis.formatter(b)).toContain("A02");
+  });
+
+  it("draws the six assets of the showcase, one of them with no data, each in its own slot with its label", () => {
+    const six = byAsset(SIX.map((name, i) => valueRow({
+      asset_id: 20 + i, name, point_id: null,
+      ...(i === 4 ? { value: null, no_data: true } : { value: 20 + i * 11.5 }),
+      ...(i === 1 ? { estimated: true } : {}),
+    })), { source: "metric", metric: "active_power_kw", unit: "kW" });
+    const option = asBar(barOption(six, TZ));
+    expect(option.xAxis.data).toHaveLength(6);
+    expect(option.series[0].data[4]).toBeNull(); // the slot stays, empty, and keeps its label
+    const axis = axisLabelOf(option);
+    const layout = barAxisLayout(option.xAxis.data!, DEFAULT_CHART_WIDTH);
+    expect(layout.mode).toBe("wrap");
+    for (const label of option.xAxis.data!) {
+      expect(axis.formatter(label)).toBe(layout.labels.get(label));
+      expect(axis.formatter(label).trim()).not.toBe("");
+    }
+    expect(axis.formatter(option.xAxis.data![4])).toContain("Chiller"); // the no-data asset keeps its (wrapped) name
+    expect(axis.formatter(option.xAxis.data![1])).toMatch(/~$/); // the estimated one keeps its marker
+  });
+
+  it("follows the layout in the value-mode axis: wrapped, every label drawn, truncating only as a net, the room under the plot from the lines", () => {
+    const six = byAsset(SIX.map((name, i) => valueRow({ asset_id: 20 + i, name, value: 10 + i })));
+    const option = barOption(six, TZ) as unknown as AxisOpt;
+    const layout = barAxisLayout(SIX.map((name) => name), DEFAULT_CHART_WIDTH);
+    const axis = option.xAxis.axisLabel;
+    expect(layout.mode).toBe("wrap");
+    expect(axis.interval).toBe(0);
+    expect(axis.hideOverlap).toBeUndefined(); // wrapped names never overlap, so nothing is hidden
+    expect(axis.rotate).toBeUndefined();
+    expect(axis.width).toBeCloseTo((DEFAULT_CHART_WIDTH - GRID_SIDES_PX) / 6 - 4, 5);
+    expect(axis.overflow).toBe("truncate");
+    expect(axis.ellipsis).toBe("…");
+    expect(axis.lineHeight).toBe(LABEL_LINE_PX);
+    expect(option.grid.bottom).toBe(layout.bottom);
+    expect(option.grid.left).toBe(60); // wrapped: the slots are counted from this edge, and no containLabel (the room under the plot is the lines')
+    expect(option.grid.containLabel).toBeUndefined();
+  });
+
+  it("rotates the labels of a crowded axis, and then lets the chart hide the ones that overlap and contain the rotated text", () => {
+    const names = Array.from({ length: 20 }, (_, i) => `Distribution panel number ${i + 1}`);
+    const option = barOption(byAsset(names.map((name, i) => valueRow({ asset_id: 30 + i, name }))), TZ) as unknown as AxisOpt;
+    const axis = option.xAxis.axisLabel;
+    expect(axis.interval).toBe(0);
+    expect(axis.rotate).toBe(40);
+    expect(axis.hideOverlap).toBe(true);
+    expect(axis.width).toBeUndefined();
+    expect(axis.overflow).toBeUndefined();
+    // containLabel fits the turned names INSIDE the rectangle that left/bottom describe, so those are only margins (a big bottom would count the
+    // names' room twice and leave a third of the card blank, review finding 1).
+    expect(option.grid.containLabel).toBe(true);
+    expect(option.grid.bottom).toBe(8);
+    expect(option.grid.left).toBe(barAxisLayout(names, DEFAULT_CHART_WIDTH).left); // 12 for a short first name, more for a long one (see rotatedLeft)
+    expect(option.grid.left).toBeLessThanOrEqual(Math.floor(DEFAULT_CHART_WIDTH * 0.4));
+    expect(Array.from(axis.formatter(names[0])).length).toBeLessThanOrEqual(18); // the shortened form of the rotated mode
+  });
+
+  it("lays the axis out for the chart width it is given: the same six names wrap in a wider card and rotate in a narrow one", () => {
+    const six = byAsset(SIX.map((name, i) => valueRow({ asset_id: 20 + i, name, value: 10 + i })));
+    const wide = barOption(six, TZ, LIGHT_CHART, 880) as unknown as AxisOpt;
+    const narrow = barOption(six, TZ, LIGHT_CHART, 330) as unknown as AxisOpt;
+    expect(wide.xAxis.axisLabel.width).toBeCloseTo((880 - GRID_SIDES_PX) / 6 - 4, 5);
+    expect(wide.xAxis.axisLabel.rotate).toBeUndefined();
+    expect(narrow.xAxis.axisLabel.rotate).toBe(40);
+    expect(wide.grid.bottom).toBeLessThanOrEqual(barAxisLayout(SIX, 480).bottom);
+  });
+
+  it("leaves the time-bucket mode alone: its axis shows times, with no wrapping, and its grid is not the label grid", () => {
+    const data = seriesData({ type: "bar", source: "energy", metric: null, unit: "kWh", bucket: "hour", tier: null, series: [
+      { asset_id: 5, name: LONG, estimated: false, partial: false, points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 1 })] },
+    ] });
+    const option = barOption(data, TZ, LIGHT_CHART, 330) as unknown as AxisOpt;
+    expect(option.xAxis.axisLabel.formatter).toBeUndefined();
+    expect(option.xAxis.axisLabel.rotate).toBeUndefined();
+    expect(option.grid.bottom).toBe(30);
   });
 
   it("shortens the legend of the bar chart per time bucket to 24 characters, with the full name as the series name", () => {
@@ -505,6 +591,65 @@ describe("bar", () => {
     const silent = hourly([{ asset_id: 5, name: "A", estimated: false, partial: false, points: [point("2026-10-08T00:00:00+00:00", { no_data: true })] }]);
     render(<BarWidget data={silent} timezone={TZ} />);
     expect(screen.getByText("No data in this range.")).toBeInTheDocument();
+  });
+
+  describe("the chart width the axis is laid out for (w14 P1)", () => {
+    const SIX_ROWS = valuesData({ type: "bar", source: "energy", metric: null, unit: "kWh", values: SIX.map((name, i) => valueRow({ asset_id: 20 + i, name, value: 10 + i })) });
+    const drawn = () => JSON.parse(screen.getByTestId("chart").textContent ?? "{}") as { xAxis: { axisLabel: { width?: number; rotate?: number } } };
+    const slotWidth = (chartWidth: number) => (chartWidth - GRID_SIDES_PX) / 6 - 4;
+    let boxWidth = 0;
+    let fire: (() => void)[] = [];
+    const original = globalThis.ResizeObserver;
+    class Watcher {
+      constructor(private readonly callback: ResizeObserverCallback) { fire.push(() => this.callback([], this as unknown as ResizeObserver)); }
+      observe() {}
+      unobserve() {}
+      disconnect() { fire = []; }
+    }
+    beforeEach(() => {
+      boxWidth = 0;
+      fire = [];
+      vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(() => boxWidth);
+      vi.stubGlobal("ResizeObserver", Watcher);
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.stubGlobal("ResizeObserver", original);
+    });
+
+    it("keeps the default 480 px when the box has no width yet (jsdom, a server render)", () => {
+      render(<BarWidget data={SIX_ROWS} timezone={TZ} />);
+      expect(drawn().xAxis.axisLabel.width).toBeCloseTo(slotWidth(DEFAULT_CHART_WIDTH), 5);
+    });
+
+    it("measures the chart box in steps of 8 px, and lays the axis out again when the box is resized", () => {
+      boxWidth = 885;
+      render(<BarWidget data={SIX_ROWS} timezone={TZ} />);
+      expect(drawn().xAxis.axisLabel.width).toBeCloseTo(slotWidth(880), 5); // 885 rounded down to 880
+      expect(drawn().xAxis.axisLabel.rotate).toBeUndefined();
+      boxWidth = 883; // a few pixels either way is the same step: nothing is laid out again
+      act(() => fire.forEach((f) => f()));
+      expect(drawn().xAxis.axisLabel.width).toBeCloseTo(slotWidth(880), 5);
+      boxWidth = 330; // the card was made narrow: six names no longer fit side by side
+      act(() => fire.forEach((f) => f()));
+      expect(drawn().xAxis.axisLabel.rotate).toBe(40);
+    });
+
+    it("follows the chart box when the data arrives after the first render (the box did not exist for an empty chart)", () => {
+      boxWidth = 880;
+      const nothing = valuesData({ type: "bar", source: "energy", metric: null, unit: "kWh", values: [] });
+      const { rerender } = render(<BarWidget data={nothing} timezone={TZ} />);
+      expect(screen.queryByTestId("chart")).not.toBeInTheDocument();
+      rerender(<BarWidget data={SIX_ROWS} timezone={TZ} />);
+      expect(drawn().xAxis.axisLabel.width).toBeCloseTo(slotWidth(880), 5);
+    });
+
+    it("draws with the default width when the browser has no ResizeObserver", () => {
+      vi.stubGlobal("ResizeObserver", undefined);
+      boxWidth = 880;
+      render(<BarWidget data={SIX_ROWS} timezone={TZ} />);
+      expect(drawn().xAxis.axisLabel.width).toBeCloseTo(slotWidth(DEFAULT_CHART_WIDTH), 5);
+    });
   });
 });
 

@@ -266,5 +266,16 @@ export default defineConfig({
       dependencies: ["w12c"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // Writes next to nothing and needs no readings from the stack, like w13 and w12c: beforeAll saves ONE dashboard (`w14 <run>`, the 15 widgets of e2e/w13Showcase.ts) and the dashboard cases answer
+    // POST /api/widget-data through page.route; the Discovery cases answer GET /api/discovery/graph (and the layout's PUT and DELETE) from a generated model (e2e/graphModel.ts), and any other write
+    // the page tries is refused and fails the case. Its cases set the admin's look (light navy-gold, dark desert-gold) through PUT /api/me/preferences before they open the page, and afterAll deletes
+    // the dashboard and puts the look back to light navy-gold. The ONE case that makes anything on the stack besides the dashboard is the Tariffs link of P5: it makes a role and an account (names
+    // start `w14-`) to see Details without tariffs.view, and removes both again (beforeAll and afterAll sweep what a failed run left, users first). Each case that needs a window size sets it itself.
+    {
+      name: "w14",
+      testMatch: "w14.spec.ts",
+      dependencies: ["w13"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

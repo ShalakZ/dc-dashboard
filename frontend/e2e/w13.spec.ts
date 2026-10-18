@@ -772,11 +772,13 @@ test.describe("Details", () => {
     await expect(field(dialog, "Figure")).toHaveText("Total");
     await expect(field(dialog, "Data")).toHaveText("One figure per asset over the whole window");
     await expect(field(dialog, "Left out")).toContainText("1 asset removed");
+    // w14 (P5): the no-rate line is followed, inside the same item, by the link to Tariffs for a role that may open that page (the administrator does).
     await expect(dialog.locator(".wd-markers li"), "one sentence for each marker the answer uses, in this order").toHaveText([
       "~ estimated from power, not measured",
       "* partial: some energy in the period had no rate, so the cost is incomplete",
-      "— no rate: no tariff applies to this figure",
+      "— no rate: no tariff applies to this figure Set a rate in Tariffs",
     ]);
+    await expect(dialog.locator(".wd-markers li").nth(2).getByRole("link", { name: "Set a rate in Tariffs", exact: true }), "the link stands inside the no-rate item").toHaveCount(1);
     const rows = dialog.locator(".wd-table tbody tr");
     await expect(rows).toHaveCount(6);
     // The figures are on the card; the table names each asset's state in words.
@@ -806,7 +808,8 @@ test.describe("Details", () => {
       await expect(field(dialog, "Figure")).toHaveText("Average of each bucket, with the lowest and highest as a band");
       await expect(field(dialog, "Data"), "the tier is named, a bucket width never is").toHaveText("Averages of the stored readings (the 1-minute roll-up)");
       const table = dialog.locator(".wd-table");
-      await expect(table.getByRole("columnheader")).toHaveText(["Asset", "Lowest", "Highest", "Highest in the bucket from", "Last bucket (average)"]);
+      // w14 (P4): the column "Highest in the bucket from" is gone; the Highest cell carries the figure and, under it, "bucket from <time>" (the start of that bucket, never the moment of the peak).
+      await expect(table.getByRole("columnheader")).toHaveText(["Asset", "Lowest", "Highest", "Last bucket (average)"]);
       await expect(table.getByRole("columnheader", { name: /^(average|mean|avg)/i }), "no column is an average over buckets").toHaveCount(0);
       const data = answerOf("Power by rack");
       for (const series of data.series) {
@@ -814,7 +817,8 @@ test.describe("Details", () => {
         const highest = Math.max(...series.points.flatMap((p) => (p.max === null ? [] : [p.max])));
         const row = table.locator("tbody tr").filter({ hasText: series.name });
         await expect(row.locator("td").nth(1), `${series.name}: the lowest bucket minimum`).toHaveText(unit("", lowest, " kW"));
-        await expect(row.locator("td").nth(2), `${series.name}: the highest bucket maximum`).toHaveText(unit("", highest, " kW"));
+        await expect(row.locator("td").nth(2).locator(".wd-fig").first(), `${series.name}: the highest bucket maximum`).toHaveText(unit("", highest, " kW"));
+        await expect(row.locator("td").nth(2).locator("small.wd-sub"), `${series.name}: and which bucket it is`).toHaveText(/^bucket from \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
       }
       await expect(dialog.locator(".wd-note").first()).toContainText("Figures are of the buckets shown in the chart.");
       await page.keyboard.press("Escape");

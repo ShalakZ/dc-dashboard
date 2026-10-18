@@ -189,10 +189,12 @@ data-retrieval requests the connectors already use, nothing else.
    unmapped (N)** (see **Removing leftovers**) for a role that has `discovery.edit`; it is greyed out and says `Nothing to clear` when no
    source can go.
 
-   **A narrower window.** The bar keeps to one row. When the window is narrower, first the counts lose their words and keep
-   the icon and the number (hover for the words), then the controls lose their words and keep their icons; every button keeps its name
-   for a screen reader and for the tooltip. A count that still does not fit is left out whole rather than cut in half (the sentence a
-   screen reader hears is unaffected). On a still narrower window **Unmapped only**, **Tidy layout** and **Snap to grid** leave the bar
+   **A narrower window.** The bar keeps to one row. When the window is narrower the controls lose their words one at a time and keep
+   their icons (**Snap to grid** first, then **Find**, **Tidy layout**, **Unmapped only**, and last **Collapse all** and **Expand all**), while the
+   counts keep their words (`4 sources`, `180 points`, `62 mapped`) for as long as they fit, and then keep the icon and the number (hover for
+   the words). A set that has a `needs credentials` count, or a count of 1,000 or more, is wider and loses its words earlier, so that no
+   count is ever dropped for the sake of a word. Every button keeps its name for a screen reader and for the tooltip. A count that still
+   does not fit is left out whole rather than cut in half (the sentence a screen reader hears is unaffected). On a still narrower window **Unmapped only**, **Tidy layout** and **Snap to grid** leave the bar
    and appear in the **More Discovery actions** menu instead, as `Turn on Unmapped only` (or `Turn off ...`), `Tidy layout` and `Turn on Snap
    to grid` (or `Turn off ...`), so each is in exactly one place. A role that may not clear unmapped sources has nothing else in that menu, so
    it gets the More button only on a window that narrow.
@@ -255,11 +257,12 @@ data-retrieval requests the connectors already use, nothing else.
    **The source card.** A source is a card of six lines, each of a fixed height, so a word that changes (a status, `9 min ago`) moves
    nothing, and the card fits the room a source has always had, so no default place moved. From the top:
 
-   1. A small arrow to open or close the source, the protocol icon, the source's **short name** on one line, and, when it has
+   1. A small arrow to open or close the source, the protocol icon, the source's **short name** on up to two lines, and, when it has
       something to offer, a `⋯` button named `Source actions for <name>`. The short name is the name without the address a scan adds to it
       (`OPC UA server`, not `OPC UA server at 172.20.0.2:4840`; `Modbus Schneider PM5560` for `Modbus Schneider PM5560 at
       10.0.0.5:502`). A name you typed yourself is shown whole, and so is any name that does not end with the source's own address. The full
-      name is the tooltip and is what a screen reader reads and what the buttons are named after.
+      name is the tooltip and is what a screen reader reads and what the buttons are named after. A name that needs more than two lines ends
+      with an ellipsis on the card; **Details** (Tab to it, Enter) opens the source panel, whose heading is the whole name.
    2. The protocol and where the source listens, for example `OPC UA · 172.20.0.2:4840` (just the protocol when no address is known).
    3. A small dot, the status in words, and the origin: `online · discovered`, or `online · manual` for a source you added by hand. The
       status words are `online`, `offline`, `needs credentials` (in bolder type),
@@ -289,7 +292,7 @@ data-retrieval requests the connectors already use, nothing else.
    **Snap to grid and guides.** A node you drag snaps to an 8 px grid, and the default place of every node lies on that grid, so
    nudging one group does not leave it a few pixels off its untouched neighbours (assets nested under an asset stand 224 px per level
    further right, 4 px more than before, for the same reason). The **Snap to grid** button in the bar's Canvas controls (beside
-   Find; on a narrow window it is an item of **More Discovery actions**) turns this off and on (pressed means on); it starts on and the choice is remembered in this browser. While you drag, thin accent-coloured
+   Find; on a narrow window it is an item of **More Discovery actions**) turns this off and on (pressed means on: a tinted button with a line along its foot, which is not the focus ring, the outline that appears around a control reached by keyboard); it starts on and the choice is remembered in this browser. While you drag, thin accent-coloured
    guide lines appear when the node's left edge, centre or right edge, or its top, middle or bottom, lines up to the pixel with
    a nearby node's (the 200 nearest are compared). The guides only show; they never pull the node, so it is dropped exactly where
    you let go. With snap on, equal edges are common; with snap off a guide shows only on an exact match, which is rare by hand.

@@ -16,9 +16,14 @@
   .wd-list > li { min-width: 0; overflow-wrap: anywhere; }
   /* The marker meanings stand in the same box as a definition list, so the panel reads as one family. */
   .wd-markers { padding: 10px 16px; border: 1px solid var(--border); border-radius: var(--radius); }
+  /* The "Set a rate in Tariffs" link sits inside a sentence of an li, where app.css underlines nothing (it underlines p a): without this it differs
+     from its sentence by colour alone, which the dark looks do not carry (WCAG 1.4.1). No colour here: the link keeps the app's. */
+  .wd-markers a { text-decoration: underline; }
 
-  /* Per asset: the app's table at the scan drawer's size. It scrolls sideways inside its box when a chart's five columns do not fit the
-     drawer; the Asset column keeps a readable width and the figures never break between the number and its unit. */
+  /* Per asset: the app's table at the scan drawer's size. A chart's table has at most four columns (Asset, Lowest, Highest, Last bucket; or
+     Asset, Highest, Last bucket, Total) and fits the 560px wide drawer without a scroll (looked at 1440, 1024 and 800). The box still scrolls
+     sideways inside itself as a net for a window too narrow for that. The Asset column keeps a readable width; a figure and a time never break
+     inside (.wd-fig is nowrap), only the words around them may (.wd-sub). */
   .wd-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
   .wd-table { margin: 0; font-size: var(--fs-sm); }
   .wd-table :is(th, td) { padding: 8px; }

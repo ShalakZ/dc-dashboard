@@ -4,14 +4,15 @@ import { Link } from "react-router";
 import { keys } from "../../api/queries";
 import type { Asset, WidgetConfig, WidgetData, WidgetType } from "../../api/types";
 import { useAuth } from "../../auth/AuthProvider";
+import { meets } from "../../auth/need";
 import { useNow } from "../../hooks/useNow";
 import { TYPE_LABELS } from "../../lib/dashboardEdit";
 import { liveOrFetched } from "../../lib/live";
 import {
-  aggregationWords, assetRows, bucketStartText, figuresText, freshnessLine, isLatestReading, markerMeanings, noMetricIds, rangeWords,
-  removedCount, seriesSummary, sourceWords, windowText, type AssetRow, type DetailFigure, type SeriesSummaryRow, type SummaryKey,
+  aggregationWords, assetRows, bucketStartText, figuresText, freshnessLine, hasNoRate, isLatestReading, markerMeanings, noMetricIds,
+  rangeWords, removedCount, seriesSummary, sourceWords, windowText, type AssetRow, type DetailFigure, type SeriesSummaryRow, type SummaryKey,
 } from "../../lib/widgetDetails";
-import { figureOrNoData, figureText, noMetricText, removedText, unitSuffix } from "../../lib/widgetFormat";
+import { figureOrNoData, figureText, flagsOf, noMetricText, removedText, unitSuffix } from "../../lib/widgetFormat";
 import { Drawer } from "../Drawer";
 import { Icon } from "../Icon";
 import { PAGE_NEED } from "../navItems";
@@ -64,8 +65,14 @@ function SummaryCell({ column, row, states, data, timezone }: {
 }) {
   switch (column) {
     case "lowest": return <Figure figure={row.lowest} unit={data.unit} />;
-    case "highest": return row.highest || !states.includes("no rate") ? <Figure figure={row.highest} unit={data.unit} /> : <>{`${DASH} unpriced hours`}</>;
-    case "highestFrom": return <>{row.highestFrom ? bucketStartText(row.highestFrom, timezone, data) : DASH}</>;
+    case "highest":
+      if (!row.highest && states.includes("no rate")) return <>{`${DASH} unpriced hours`}</>;
+      return (
+        <>
+          <Figure figure={row.highest} unit={data.unit} />
+          {row.highest && row.highestFrom && <small className="wd-sub">bucket from <span className="wd-fig">{bucketStartText(row.highestFrom, timezone, data)}</span></small>}
+        </>
+      );
     case "total": return <Figure figure={row.total} unit={data.unit} />;
     case "last":
       return (
@@ -95,6 +102,10 @@ export function WidgetDetails({ title, type, data, config, timezone, following, 
   const rows: AssetRow[] = assetRows(data).map((row) => ({ ...row, states: fresh ? row.states.filter((s) => s !== "stale") : row.states })); // "stale" is the Freshness section's
   const summary = seriesSummary(data, config);
   const meanings = markerMeanings(data);
+  // The "no rate" line sits after the "~" and "*" lines (the fixed order of `markerMeanings`); it offers the page that fixes it
+  // to a role that may open that page (the sidebar's own check), never to one that would be refused.
+  const flags = flagsOf(data);
+  const tariffsAt = hasNoRate(data) && meets(PAGE_NEED.tariffs, can) ? Number(flags.estimated) + Number(flags.partial) : -1;
 
   // Names for the assets without the metric come from the list the page already holds; this panel never asks the server for it
   // (a role without assets.view would be refused).
@@ -111,6 +122,7 @@ export function WidgetDetails({ title, type, data, config, timezone, following, 
   return (
     <Drawer
       title={`Details: ${title}`}
+      wide
       onClose={onClose}
       returnFocus={returnFocus}
       footer={csv && (
@@ -184,7 +196,12 @@ export function WidgetDetails({ title, type, data, config, timezone, following, 
           <>
             <h3 className="wd-heading">What the markers mean here</h3>
             <ul className="wd-list wd-markers">
-              {meanings.map((text) => <li key={text}>{text}</li>)}
+              {meanings.map((text, i) => (
+                <li key={text}>
+                  {text}
+                  {i === tariffsAt && <>{" "}<Link to="/tariffs">Set a rate in Tariffs</Link></>}
+                </li>
+              ))}
             </ul>
           </>
         )}
