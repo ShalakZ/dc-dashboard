@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w20 (2026-10-18, MERGE_PENDING)
+## w20 (2026-10-18, 310db08)
 
 w20 puts the Billing month controls and table controls on one row, front end only: no migration, no new permission, no API change. On a page
 about 1,600 px wide or more (a 1,920 px screen at 100 percent scaling with the sidebar open, about 1,700 px with it minimised) Previous month,
