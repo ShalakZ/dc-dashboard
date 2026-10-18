@@ -16,6 +16,7 @@ from bisect import bisect_left
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
+from types import MappingProxyType
 from typing import Any
 
 from dcdash.core.energy import MINUTE_COVERAGE_MAX_INTERVAL, HourRow, Meter, counter_hours, power_hours
@@ -28,13 +29,13 @@ MAX_TOLERATED_HOURS = 24  # a slow counter's normal empty hours are tolerated up
 CAP = 50  # items per group in the answer (the group's `total` is the true count)
 EVENT_LIMIT = 5  # reset events listed per meter
 
-LIMITS: dict[str, Any] = {
+LIMITS: Mapping[str, Any] = MappingProxyType({  # read-only: an answer takes `dict(LIMITS)`, a caller cannot change the module's
     "flat_hours": FLAT_HOURS,
     "short_minutes": SHORT_MINUTES,
     "short_share": SHORT_SHARE,
     "max_tolerated_hours": MAX_TOLERATED_HOURS,
     "cap": CAP,
-}
+})
 
 HOUR = timedelta(hours=1)
 THINGS = ("silent", "gaps", "estimated", "resets", "started", "unpriced", "flat")  # the groups that count as things to check
@@ -55,10 +56,15 @@ class Silent:
     since: datetime | None
     hours: int
     last_reading: datetime | None
+    children: int = 0  # assets under it: an own meter that is silent bills 0 for those hours whatever its children read
 
 
 @dataclass(frozen=True)
 class Gaps:
+    """`runs`, `hours`, `longest_*`, `first_start` and `last_end` describe the month only (a counter listed only for the hole
+    before the month has none). `leading_hours` is the missing run that begins at the first expected hour, tolerated or not;
+    `hours_before_month` the hours without a row between a counter's reading before the month and the month."""
+
     runs: int
     hours: int
     longest_hours: int | None
@@ -66,6 +72,7 @@ class Gaps:
     first_start: datetime | None
     last_end: datetime | None
     leading_hours: int
+    hours_before_month: int
     previous_reading: datetime | None
     short_hours: int
     short_minutes: int
@@ -75,6 +82,8 @@ class Gaps:
 class Estimated:
     hours_estimated: int
     hours_total: int
+    negative_hours: int = 0  # hours whose (scaled) energy is below zero, e.g. a current transformer fitted the wrong way round
+    negative_kwh: float = 0.0  # their sum, at most 0
 
 
 @dataclass(frozen=True)
@@ -82,7 +91,7 @@ class Resets:
     resets: int
     dips: int
     falls: int
-    events: tuple[tuple[datetime, str], ...]
+    events: tuple[tuple[datetime, str, float], ...]  # (hour, kind, size of the fall in the meter's own units)
 
 
 @dataclass(frozen=True)
@@ -139,13 +148,16 @@ def _iso_or_none(value: datetime | None) -> str | None:
     return None if value is None else _iso(value)
 
 
+def _ceil_hour(value: datetime) -> datetime:
+    """The first whole UTC hour at or after `value`."""
+    bucket = _utc(value).replace(minute=0, second=0, microsecond=0)
+    return bucket if bucket >= value else bucket + HOUR
+
+
 def expected_hours(first_bucket: datetime | None, start: datetime, stop: datetime) -> list[datetime]:
     """The UTC hour starts in [max(first_bucket, start), stop): the hours a meter should have a row for. A point that never
     recorded anything (`first_bucket` None) is expected over the whole range; one that first read at or after `stop` has none."""
-    begin = start if first_bucket is None else max(first_bucket, start)
-    bucket = _utc(begin).replace(minute=0, second=0, microsecond=0)
-    if bucket < begin:
-        bucket += HOUR
+    bucket = _ceil_hour(start if first_bucket is None else max(first_bucket, start))
     hours: list[datetime] = []
     while bucket < stop:
         hours.append(bucket)
@@ -206,14 +218,35 @@ def _missing_runs(hours: Sequence[datetime], present: set[datetime]) -> list[tup
     return runs
 
 
+def _hours_before_month(hours: Sequence[datetime], all_hours: Sequence[datetime], meter: Meter, before: HourRow | None) -> int:
+    """The hours without a row between a counter's reading before the month and the month. The engine measures the first row of
+    the month from that reading however old it is, so all of them are billed into the first row. Only a counter whose first
+    expected hour is the first hour of the range has them (one that began later is measured from its own first reading)."""
+    if not meter.counter or before is None or not hours or not all_hours or hours[0] != all_hours[0]:
+        return 0
+    return max(0, int((hours[0] - before.bucket) / HOUR) - 1)
+
+
 def _gaps(
-    hours: Sequence[datetime], runs: list[tuple[int, int]], meter: Meter, before: HourRow | None, rows: Sequence[HourRow]
+    hours: Sequence[datetime],
+    runs: list[tuple[int, int]],
+    meter: Meter,
+    before: HourRow | None,
+    rows: Sequence[HourRow],
+    *,
+    leading: int,
+    hours_before: int,
+    tolerated: int,
 ) -> Gaps | None:
+    """`runs` are the missing runs longer than the tolerance (interior, or leading); `leading` is the missing run that begins at
+    the first expected hour whether or not it is tolerated; `hours_before` the hours without a row before the month (see
+    `_hours_before_month`). The item exists for a run, for short time worth listing, or when `hours_before + leading` is more than
+    the meter's tolerance: that hole is billed into the first row of the month."""
     longest = max(runs, key=lambda run: run[1]) if runs else None  # the earliest of equally long runs
     short_hours, short_minutes = _short_time(rows, meter, len(hours)) if not meter.counter else (0, 0)
-    if not runs and not short_hours:
+    hole_before = hours_before + leading > tolerated
+    if not runs and not short_hours and not hole_before:
         return None
-    leading = runs[0][1] if runs and runs[0][0] == 0 else 0
     return Gaps(
         runs=len(runs),
         hours=sum(length for _, length in runs),
@@ -222,7 +255,8 @@ def _gaps(
         first_start=None if not runs else hours[runs[0][0]],
         last_end=None if not runs else hours[runs[-1][0] + runs[-1][1] - 1] + HOUR,
         leading_hours=leading,
-        previous_reading=before.bucket if (meter.counter and leading and before is not None) else None,
+        hours_before_month=hours_before,
+        previous_reading=before.bucket if (meter.counter and before is not None and (leading or hole_before)) else None,
         short_hours=short_hours,
         short_minutes=short_minutes,
     )
@@ -231,10 +265,13 @@ def _gaps(
 def _short_time(rows: Sequence[HourRow], meter: Meter, expected: int) -> tuple[int, int]:
     """Hours of a power-only meter that HAVE a row but are covered less than fully by the engine's own coverage rule, and the
     minutes that adds up to, both 0 unless the total reaches max(SHORT_MINUTES, SHORT_SHARE of the expected minutes) so the
-    ordinary drift of a poll loop does not list every meter. A row without samples adds nothing in the engine: fully short."""
+    ordinary drift of a poll loop does not list every meter. A row without samples is no row for the engine: it is a missing hour
+    (see `check_meter`), so it adds no short time here."""
     short_hours, missing = 0, 0.0
     for row in rows:
-        coverage = 0.0 if row.n <= 0 else row_coverage(row, meter.interval_seconds)
+        if row.n <= 0:
+            continue
+        coverage = row_coverage(row, meter.interval_seconds)
         if coverage < 1.0:
             short_hours += 1
             missing += (1.0 - coverage) * 60
@@ -244,11 +281,25 @@ def _short_time(rows: Sequence[HourRow], meter: Meter, expected: int) -> tuple[i
     return 0, 0
 
 
+def _fall_size(kind: str, row: HourRow, previous: float | None) -> float:
+    """How far a reading went down, in the meter's own units: a reset from the previous last value to this hour's last, a dip from
+    the previous last value to this hour's lowest sample, a fall from this hour's highest sample to its last. The first two only
+    exist when there is a previous value."""
+    if kind == "fell" or previous is None:
+        return row.max_value - row.last_value
+    return previous - (row.last_value if kind == "reset" else row.min_value)
+
+
 def _resets(rows: Sequence[HourRow], baseline_last: float | None) -> Resets | None:
-    events = [(row.bucket, kind) for row, kind in zip(rows, classify_counter_rows(rows, baseline_last)) if kind]
+    events: list[tuple[datetime, str, float]] = []
+    previous = baseline_last
+    for row, kind in zip(rows, classify_counter_rows(rows, baseline_last)):
+        if kind:
+            events.append((row.bucket, kind, _fall_size(kind, row, previous)))
+        previous = row.last_value
     if not events:
         return None
-    kinds = [kind for _, kind in events]
+    kinds = [kind for _, kind, _ in events]
     return Resets(kinds.count("reset"), kinds.count("dip"), kinds.count("fell"), tuple(events[:EVENT_LIMIT]))
 
 
@@ -268,35 +319,46 @@ def _flat_flags(rows: Sequence[HourRow], meter: Meter, baseline_last: float | No
     return flags
 
 
-def _flat_runs(rows: Sequence[HourRow], flags: Sequence[bool], counter: bool) -> list[tuple[datetime, int]]:
-    """(first bucket, clock hours) of every run of consecutive flat ROWS. A missing hour between two rows does not end a run: the
-    value before and after the hole is the same, so the hole holds no energy either. The length runs from the first row's bucket
-    to the end of the last row's hour."""
+def _flat_runs(
+    rows: Sequence[HourRow], flags: Sequence[bool], counter: bool, before_bucket: datetime | None, first_hour: datetime
+) -> list[tuple[datetime, int]]:
+    """(start, clock hours) of every run of consecutive flat ROWS. A missing hour between two rows does not end a run: the value
+    before and after the hole is the same, so the hole holds no energy either. The run ends with the last flat row's hour. A
+    power-only run starts at its first flat row's bucket. A COUNTER's value was already standing still from the end of the
+    previous row's hour (the row before the run, or the reading before the month for the first row), so it starts there, but not
+    before the month (`first_hour`); with nothing before it, at its own bucket."""
     runs: list[tuple[datetime, int]] = []
+    begin: datetime | None = None
     first: HourRow | None = None
     last: HourRow | None = None
 
     def close() -> None:
-        if first is not None and last is not None:
-            runs.append((first.bucket, int((last.bucket - first.bucket) / HOUR) + 1))
+        if begin is not None and last is not None:
+            runs.append((begin, int((last.bucket - begin) / HOUR) + 1))
 
+    previous_bucket = before_bucket
     for row, flat in zip(rows, flags):
         if row.n <= 0 and not counter:
             continue  # the engine skips it; it neither continues nor ends a run
         if not flat:
             close()
-            first = last = None
+            begin = first = last = None
         elif first is None or (not counter and row.min_value != first.min_value):
             close()
             first = last = row
+            begin = row.bucket if (not counter or previous_bucket is None) else max(first_hour, previous_bucket + HOUR)
         else:
             last = row
+        previous_bucket = row.bucket
     close()
     return runs
 
 
-def _flat(rows: Sequence[HourRow], meter: Meter, baseline_last: float | None) -> Flat | None:
-    counted = [run for run in _flat_runs(rows, _flat_flags(rows, meter, baseline_last), meter.counter) if run[1] >= FLAT_HOURS]
+def _flat(rows: Sequence[HourRow], meter: Meter, before: HourRow | None, start: datetime) -> Flat | None:
+    baseline_last = None if before is None else before.last_value
+    flags = _flat_flags(rows, meter, baseline_last)
+    before_bucket = None if before is None else before.bucket
+    counted = [run for run in _flat_runs(rows, flags, meter.counter, before_bucket, _ceil_hour(start)) if run[1] >= FLAT_HOURS]
     if not counted:
         return None
     longest = max(counted, key=lambda run: run[1])  # the earliest of equally long runs
@@ -354,24 +416,34 @@ def check_meter(
     before = inp.before
     baseline = None if before is None else before.last_value
     silent = gaps = resets = None
-    present = {row.bucket for row in rows}
+    children = len(tree.children(inp.asset_id))
+    # A power-only row without samples is no row for the engine (`power_hours` skips it): its hour is a missing hour.
+    live = [row for row in rows if meter.counter or row.n > 0]
+    present = {row.bucket for row in live}
     tolerance = tolerated_hours(meter)
     if not rows:
         if first is None:
-            silent = Silent("never", None, len(hours), None)
+            silent = Silent("never", None, len(hours), None, children)
         else:
-            silent = Silent("none_in_month", None, len(hours), None if before is None else before.bucket)
+            silent = Silent("none_in_month", None, len(hours), None if before is None else before.bucket, children)
     else:
         runs = _missing_runs(hours, present)
         trailing = runs.pop() if runs and runs[-1][0] + runs[-1][1] == len(hours) else None
         if trailing is not None and trailing[1] > tolerance:
-            silent = Silent("trailing", hours[trailing[0]], trailing[1], rows[-1].bucket)
-        gaps = _gaps(hours, [run for run in runs if run[1] > tolerance], meter, before, rows)
+            silent = Silent("trailing", hours[trailing[0]], trailing[1], live[-1].bucket if live else None, children)
+        leading = runs[0][1] if runs and runs[0][0] == 0 else 0  # the run that begins at the first expected hour, tolerated or not
+        gaps = _gaps(
+            hours, [run for run in runs if run[1] > tolerance], meter, before, live,
+            leading=leading, hours_before=_hours_before_month(hours, all_hours, meter, before), tolerated=tolerance,
+        )
         if meter.counter:
             resets = _resets(rows, baseline)
     estimated = None
     if not meter.counter:
-        estimated = Estimated(sum(1 for row in rows if row.n > 0), len(hours))
+        negative = [
+            energy for raw in power_hours(rows, meter.interval_seconds).values() if (energy := raw * meter.scale) < 0
+        ]
+        estimated = Estimated(len(live), len(hours), len(negative), sum(negative, 0.0))
     started = None
     if first is not None and start < first < stop:
         started = Started(first, len(tree.children(inp.asset_id)))
@@ -383,7 +455,7 @@ def check_meter(
         resets=resets,
         started=started,
         unpriced=_unpriced(rows, meter, baseline, inp.asset_id, rate_for, zone) if rows else None,
-        flat=_flat(rows, meter, baseline) if rows else None,
+        flat=_flat(rows, meter, before, start) if rows else None,
     )
 
 
@@ -455,27 +527,29 @@ def build_report(
             groups["silent"].append((
                 (s.reason != "never", -s.hours, *tail),
                 {**head, "reason": s.reason, "since": _iso_or_none(s.since), "hours": s.hours,
-                 "last_reading": _iso_or_none(s.last_reading)},
+                 "last_reading": _iso_or_none(s.last_reading), "children": s.children},
             ))
         if (g := check.gaps) is not None:
             groups["gaps"].append((
-                (-g.hours, *tail),
+                # worst first: the time missing (a minute of short time counts as a minute), then the hole before the month
+                (-(g.hours * 60 + g.short_minutes), -(g.hours_before_month + g.leading_hours), *tail),
                 {**head, "runs": g.runs, "hours": g.hours, "longest_hours": g.longest_hours,
                  "longest_start": _iso_or_none(g.longest_start), "first_start": _iso_or_none(g.first_start),
                  "last_end": _iso_or_none(g.last_end), "leading_hours": g.leading_hours,
-                 "previous_reading": _iso_or_none(g.previous_reading), "short_hours": g.short_hours,
-                 "short_minutes": g.short_minutes},
+                 "hours_before_month": g.hours_before_month, "previous_reading": _iso_or_none(g.previous_reading),
+                 "short_hours": g.short_hours, "short_minutes": g.short_minutes},
             ))
         if (e := check.estimated) is not None:
             groups["estimated"].append((
                 (-e.hours_estimated, *tail),
-                {**head, "hours_estimated": e.hours_estimated, "hours_total": e.hours_total},
+                {**head, "hours_estimated": e.hours_estimated, "hours_total": e.hours_total,
+                 "negative_hours": e.negative_hours, "negative_kwh": e.negative_kwh},
             ))
         if (r := check.resets) is not None:
             groups["resets"].append((
-                (-(r.resets + r.dips + r.falls), *tail),
+                (-r.resets, -(r.dips + r.falls), *tail),  # a real reset makes an hour approximate; a dip or a fell changes nothing
                 {**head, "resets": r.resets, "dips": r.dips, "falls": r.falls,
-                 "events": [{"at": _iso(at), "kind": kind} for at, kind in r.events]},
+                 "events": [{"at": _iso(at), "kind": kind, "size": size} for at, kind, size in r.events]},
             ))
         if (st := check.started) is not None:
             groups["started"].append((

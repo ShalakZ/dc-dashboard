@@ -141,6 +141,14 @@ def test_the_limits_are_built_from_the_constants():
     assert (FLAT_HOURS, SHORT_MINUTES, SHORT_SHARE, MAX_TOLERATED_HOURS, CAP, EVENT_LIMIT) == (24, 60, 0.01, 24, 50, 5)
 
 
+def test_the_limits_cannot_be_changed_by_a_caller():
+    with pytest.raises(TypeError):
+        LIMITS["cap"] = 1  # type: ignore[index]
+    answer = dict(LIMITS)
+    answer["cap"] = 1  # a caller's copy is its own
+    assert LIMITS["cap"] == 50 and dict(LIMITS)["cap"] == 50
+
+
 def test_expected_hours_for_a_point_that_never_recorded_is_the_whole_range():
     hours = expected_hours(None, START, STOP)
     assert len(hours) == 720 and hours[0] == START and hours[-1] == STOP - HOUR
@@ -297,6 +305,7 @@ def test_an_interior_gap_of_a_counter():
     assert gap["longest_start"] == gap["first_start"] == iso(at(10, 6))
     assert gap["last_end"] == iso(at(10, 12))
     assert (gap["leading_hours"], gap["previous_reading"], gap["short_hours"], gap["short_minutes"]) == (0, None, 0, 0)
+    assert gap["hours_before_month"] == 0
     absent(report, "silent")
     assert report["things"] == 1
 
@@ -320,6 +329,72 @@ def test_a_leading_gap_of_a_counter_names_the_reading_before_the_month():
     gap = find(run([mi(rising([h for h in MONTH if h >= at(3)]), before=before)]), "gaps")
     assert (gap["runs"], gap["hours"], gap["leading_hours"]) == (1, 48, 48)
     assert gap["previous_reading"] == iso(before.bucket) and gap["first_start"] == iso(START)
+    assert gap["hours_before_month"] == 1  # the baseline is two hours before the month: one empty hour sits between
+
+
+def test_a_counter_silent_for_a_month_before_the_month_is_listed_for_the_hole_before_it():
+    # The reviewer's input: nothing read since 1 August, then a row for every hour of September. The engine bills the whole
+    # hole into the first hour of September, so the month must not read "nothing to check".
+    before = crow(at(1, 0, 8), 50.0)
+    report = run([mi(rising(MONTH, base=5000.0), before=before)])
+    gap = find(report, "gaps")
+    assert report["things"] == 1
+    assert gap["hours_before_month"] == 31 * 24 - 1 and gap["previous_reading"] == iso(before.bucket)
+    assert (gap["runs"], gap["hours"], gap["leading_hours"]) == (0, 0, 0)  # the month itself has no hole
+    assert (gap["longest_hours"], gap["longest_start"], gap["first_start"], gap["last_end"]) == (None, None, None, None)
+    assert (gap["short_hours"], gap["short_minutes"]) == (0, 0)
+
+
+def test_a_tolerated_empty_first_hour_still_lists_a_large_hole_before_the_month():
+    # The reviewer's second input: a 3600 s counter (tolerance 1) whose baseline is ten hours before the month and whose first
+    # hour is empty: nine hours before the month plus one inside it, all billed into the first row.
+    before = crow(START - 10 * HOUR, 90.0)
+    report = run([mi(rising(MONTH[1:], base=100.0), interval=3600, before=before)])
+    gap = find(report, "gaps")
+    assert report["things"] == 1
+    assert (gap["hours_before_month"], gap["leading_hours"], gap["previous_reading"]) == (9, 1, iso(before.bucket))
+    assert (gap["runs"], gap["hours"], gap["longest_hours"], gap["first_start"]) == (0, 0, None, None)  # the 1 hour is tolerated
+
+
+def test_a_baseline_from_the_previous_hour_leaves_nothing_before_the_month():
+    for interval in (900, 3600, 7200):
+        report = run([mi(rising(MONTH, base=100.0), interval=interval, before=crow(START - HOUR, 99.0))])
+        clear(report)
+
+
+@pytest.mark.parametrize(
+    "missing_first, listed",
+    [(0, False), (1, False), (2, True)],  # a 7200 s counter tolerates 2 in a row; one empty hour already sits before the month
+)
+def test_the_hole_before_the_month_and_the_leading_run_are_added_against_the_tolerance(missing_first, listed):
+    before = crow(START - 2 * HOUR, 99.0)  # one hour with no row between it and the month
+    report = run([mi(rising(MONTH[missing_first:], base=100.0), interval=7200, before=before)])
+    if listed:
+        gap = find(report, "gaps")
+        assert (gap["hours_before_month"], gap["leading_hours"], gap["runs"], gap["previous_reading"]) == (
+            1, missing_first, 0, iso(before.bucket),
+        )
+    else:
+        clear(report)
+
+
+def test_the_hole_before_the_month_is_not_counted_for_a_power_only_meter_or_a_meter_that_began_later():
+    assert count(run([pmi([prow(h) for h in MONTH], before=prow(START - 10 * HOUR))]), "gaps") == 0
+    started = run([mi(rising(MONTH[100:]), before=None)])
+    assert count(started, "gaps") == 0 and count(started, "started") == 1
+    power = find(run([pmi([prow(h) for h in MONTH[3:]], before=prow(START - 10 * HOUR))]), "gaps")
+    assert (power["hours_before_month"], power["leading_hours"], power["previous_reading"]) == (0, 3, None)
+
+
+def test_a_gap_item_lists_the_hole_before_the_month_in_its_ranking():
+    interior = set(span(at(10, 6), at(10, 7)))
+    rows = rising([h for h in MONTH if h not in interior])
+    tree = tree_of((1, None, "A"), (2, None, "B"))
+    report = run(
+        [mi(rows, asset=1, before=crow(START - HOUR, 99.0)), mi(rows, asset=2, before=crow(START - 10 * HOUR, 99.0))], tree
+    )
+    # same one hour inside the month: the meter with the older baseline comes first although its path is later
+    assert [(i["asset_id"], i["hours_before_month"]) for i in items(report, "gaps")] == [(2, 9), (1, 0)]
 
 
 def test_a_leading_gap_has_no_previous_reading_without_a_row_before_or_for_a_power_only_meter():
@@ -491,8 +566,67 @@ def test_rows_without_samples_are_not_counted_as_estimated_hours():
     ]
     estimated = find(run([pmi(rows)]), "estimated")
     assert estimated["hours_estimated"] == 710
-    gap = find(run([pmi(rows)]), "gaps")  # the engine adds nothing for them: ten hours not covered at all
-    assert (gap["runs"], gap["short_hours"], gap["short_minutes"]) == (0, 10, 600)
+    gap = find(run([pmi(rows)]), "gaps")  # the engine skips them: they are ten missing hours, with no short time of their own
+    assert (gap["runs"], gap["hours"], gap["longest_hours"], gap["longest_start"]) == (1, 10, 10, iso(MONTH[10]))
+    assert (gap["short_hours"], gap["short_minutes"]) == (0, 0)
+
+
+def test_a_power_only_row_without_samples_is_a_missing_hour_with_no_tolerance_and_adds_no_short_minutes():
+    for interval in (1800, 3600, 7200):
+        rows = [prow(h) for h in MONTH]
+        rows[300] = HourRow(MONTH[300], 0.0, 0.0, 0.0, 0, 0.0, 0)
+        gap = find(run([pmi(rows, interval=interval)]), "gaps")
+        assert (gap["runs"], gap["hours"], gap["first_start"], gap["last_end"]) == (1, 1, iso(MONTH[300]), iso(MONTH[301]))
+        assert (gap["short_hours"], gap["short_minutes"]) == (0, 0)
+
+
+def test_power_only_rows_without_samples_at_the_end_are_silence_since_the_last_row_with_samples():
+    rows = [prow(h) for h in MONTH[:-3]] + [HourRow(h, 0.0, 0.0, 0.0, 0, 0.0, 0) for h in MONTH[-3:]]
+    report = run([pmi(rows)])
+    silent = find(report, "silent")
+    assert (silent["reason"], silent["since"], silent["hours"]) == ("trailing", iso(MONTH[-3]), 3)
+    assert silent["last_reading"] == iso(MONTH[-4])
+    absent(report, "gaps")
+
+
+def _negative_row(bucket: datetime) -> HourRow:
+    return HourRow(bucket, -5.5, -4.5, -10.0, 2, -5.0, 60)  # every hour reads between -5.5 and -4.5 kW
+
+
+def test_a_power_only_meter_with_negative_power_says_how_many_hours_and_how_much_energy():
+    # The reviewer's input: a current transformer fitted the wrong way round lowers the bill of the asset and of its parents.
+    estimated = find(run([pmi([_negative_row(h) for h in MONTH])]), "estimated")
+    assert (estimated["hours_estimated"], estimated["hours_total"]) == (720, 720)
+    assert (estimated["negative_hours"], estimated["negative_kwh"]) == (720, -3600.0)
+    scaled = find(run([pmi([_negative_row(h) for h in MONTH], scale=2.0)]), "estimated")
+    assert (scaled["negative_hours"], scaled["negative_kwh"]) == (720, -7200.0)  # the energy is the scaled one
+
+
+def test_only_the_hours_below_zero_are_negative_and_the_sum_is_theirs_alone():
+    rows = [prow(h, kw=4.0) for h in MONTH]
+    for i in (10, 11, 500):
+        rows[i] = _negative_row(MONTH[i])
+    rows[20] = frozen(MONTH[20], 0.0)  # exactly zero is not below zero
+    estimated = find(run([pmi(rows)]), "estimated")
+    assert (estimated["negative_hours"], estimated["negative_kwh"]) == (3, -15.0)
+
+
+def test_a_negative_scale_turns_positive_power_into_negative_energy_and_is_counted():
+    estimated = find(run([pmi([prow(h, kw=2.0) for h in MONTH], scale=-1.0)]), "estimated")
+    assert (estimated["negative_hours"], estimated["negative_kwh"]) == (720, -1440.0)
+
+
+def test_a_power_only_meter_without_negative_power_reports_none():
+    for inputs in ([pmi([prow(h) for h in MONTH])], [pmi([], first=None)]):
+        estimated = find(run(inputs), "estimated")
+        assert (estimated["negative_hours"], estimated["negative_kwh"]) == (0, 0)
+
+
+def test_the_negative_hours_use_only_the_rows_that_the_engine_reads():
+    rows = [prow(h) for h in MONTH]
+    rows[5] = HourRow(MONTH[5], -9.0, -9.0, -9.0, 0, -9.0, 60)  # n = 0: the engine skips it
+    estimated = find(run([pmi(rows)]), "estimated")
+    assert (estimated["negative_hours"], estimated["negative_kwh"]) == (0, 0)
 
 
 # ---- resets -----------------------------------------------------------------------------------
@@ -509,10 +643,31 @@ def test_a_reset_dip_and_fell_are_counted_with_their_hours():
     item = find(run([mi(rows)]), "resets")
     assert (item["resets"], item["dips"], item["falls"]) == (1, 1, 1)
     assert item["events"] == [
-        {"at": iso(MONTH[100]), "kind": "reset"},
-        {"at": iso(MONTH[300]), "kind": "dip"},
-        {"at": iso(MONTH[400]), "kind": "fell"},
+        {"at": iso(MONTH[100]), "kind": "reset", "size": 196.0},  # it was 199, the hour ended at 3
+        {"at": iso(MONTH[300]), "kind": "dip", "size": 399.0},  # it was 399, a sample read 0
+        {"at": iso(MONTH[400]), "kind": "fell", "size": 50.0},  # the highest sample of the hour was 50 above its last
     ]
+
+
+def test_a_torn_read_that_falls_back_the_next_hour_names_the_size_of_the_fall():
+    # The reviewer's input: one hour ends 65,536 above the rest of the sequence (a torn 16-bit read), the next hour is normal.
+    values = [100.0 + i for i in range(720)]
+    values[200] += 65536.0
+    item = find(run([mi(values_to_rows(MONTH, values))]), "resets")
+    assert (item["resets"], item["dips"], item["falls"]) == (1, 0, 0)
+    assert item["events"][0]["at"] == iso(MONTH[201]) and item["events"][0]["kind"] == "reset"
+    assert item["events"][0]["size"] == pytest.approx(65535.0)
+
+
+def test_the_size_of_each_kind_of_event_is_in_the_meters_own_units():
+    before = crow(at(31, 23, 8), 500.0)
+    rows = [crow(START, 20.0)] + rising(MONTH[1:], base=21.0)  # 500 -> 20: reset of 480
+    rows[10] = crow(MONTH[10], rows[10].last_value, low=2.0)  # previous is 29, the dip goes to 2
+    rows[20] = crow(MONTH[20], rows[20].last_value, high=rows[20].last_value + 7.5)
+    events = find(run([mi(rows, before=before)]), "resets")["events"]
+    assert [(e["kind"], e["size"]) for e in events] == [("reset", 480.0), ("dip", 27.0), ("fell", 7.5)]
+    first = find(run([mi([crow(START, 100.0, high=140.0), *rising(MONTH[1:], 101.0)])]), "resets")["events"]
+    assert first == [{"at": iso(START), "kind": "fell", "size": 40.0}]  # no previous reading: only a fall inside the hour
 
 
 def test_the_first_row_is_judged_against_the_reading_before_the_month():
@@ -662,6 +817,56 @@ def test_a_row_with_energy_ends_a_flat_run_and_a_new_one_starts_after_it():
     values = [500.0] * 30 + [501.0] * 30 + [502.0 + k for k in range(660)]
     flat = find(run([mi(values_to_rows(MONTH, values))]), "flat")
     assert (flat["runs"], flat["longest_hours"], flat["first_start"]) == (2, 30, iso(START))
+
+
+def _stuck_7200(flat_rows: int):
+    """A 7200 s counter, a row every second hour: rising for ten rows (the last, row 9, at MONTH[18]), then `flat_rows` rows at the
+    same value (the last at MONTH[2 * (9 + flat_rows)]), then rising again."""
+    buckets = MONTH[::2]
+    values = [100.0 + i for i in range(10)] + [109.0] * flat_rows + [110.0 + k for k in range(len(buckets) - 10 - flat_rows)]
+    return mi(values_to_rows(buckets, values), interval=7200)
+
+
+def test_a_slow_counter_that_stood_still_for_exactly_24_clock_hours_is_listed_with_24():
+    # The value stood still from the end of row 9's hour (MONTH[19]) to the end of the last flat row's hour (MONTH[42]).
+    report = run([_stuck_7200(12)])
+    flat = find(report, "flat")
+    assert (flat["runs"], flat["longest_hours"], flat["longest_start"], flat["first_start"]) == (
+        1, 24, iso(MONTH[19]), iso(MONTH[19]),
+    )
+    assert report["things"] == 1  # an empty hour in between is normal at this rate
+
+
+def test_a_slow_counter_that_stood_still_for_22_clock_hours_is_not_listed():
+    report = run([_stuck_7200(11)])
+    clear(report)
+
+
+def test_a_daily_counter_that_stood_still_for_a_day_stands_still_for_24_clock_hours():
+    # One flat row, 24 hours after the previous row: the hour of the previous row is over, so the run is the 24 hours that follow.
+    buckets = MONTH[::24]  # 30 rows
+    values = [100.0 + i for i in range(10)] + [109.0] + [110.0 + k for k in range(len(buckets) - 11)]
+    report = run([mi(values_to_rows(buckets, values), interval=86400)])
+    flat = find(report, "flat")
+    assert (flat["runs"], flat["longest_hours"], flat["longest_start"]) == (1, 24, iso(MONTH[24 * 9 + 1]))
+    assert report["things"] == 1
+    moving = run([mi(rising(buckets), interval=86400)])
+    clear(moving)  # the first row has no row before it: its own hour is 1 hour, not 24
+
+
+def test_a_flat_counter_run_never_starts_before_the_month():
+    before = crow(START - 100 * HOUR, 500.0)
+    rows = [crow(h, 500.0) for h in MONTH[:30]] + rising(MONTH[30:], base=501.0)
+    flat = find(run([mi(rows, before=before)]), "flat")
+    assert (flat["longest_start"], flat["longest_hours"]) == (iso(START), 30)
+
+
+def test_a_power_only_flat_run_starts_at_its_first_flat_row():
+    rows = [prow(h, kw=2.0 + i) for i, h in enumerate(MONTH[:10])] + [frozen(h, 3.2) for h in MONTH[10:40]] + [
+        prow(h, kw=9.0 + i) for i, h in enumerate(MONTH[40:])
+    ]
+    flat = find(run([pmi(rows)]), "flat")
+    assert (flat["runs"], flat["longest_hours"], flat["longest_start"]) == (1, 30, iso(MONTH[10]))
 
 
 def test_a_missing_hour_between_two_equal_rows_does_not_end_a_flat_run():
@@ -873,6 +1078,70 @@ def test_the_other_groups_rank_the_worst_first():
     assert [i["asset_id"] for i in items(run(flats, tree), "flat")] == [3, 2, 4]
 
 
+def test_a_power_only_meter_listed_for_its_short_time_beats_one_hour_gaps_under_the_cap():
+    tree = flat_tree(51)  # ids 2..52
+    one_hour = rising([h for h in MONTH if h != at(5)])
+    inputs = [mi(one_hour, asset=a) for a in range(2, 52)]
+    short = [prow(h, n=100, minutes=45 if i < 60 else 60) for i, h in enumerate(MONTH)]  # 15 minutes short for 60 hours
+    inputs.append(pmi(short, asset=52, interval=30))
+    report = run(inputs, tree)
+    assert count(report, "gaps") == 51 and len(items(report, "gaps")) == 50
+    first = items(report, "gaps")[0]
+    assert (first["asset_id"], first["hours"], first["short_minutes"]) == (52, 0, 900)  # 900 minutes outrank 60
+
+
+def test_gaps_with_the_same_time_missing_rank_the_larger_hole_before_the_month_first_and_then_by_path():
+    tree = tree_of((1, None, "A"), (2, None, "B"), (3, None, "C"))
+    rows = rising([h for h in MONTH if h != at(5)])
+    inputs = [
+        mi(rows, asset=1, before=crow(START - HOUR, 99.0)),
+        mi(rows, asset=2, before=crow(START - 30 * HOUR, 99.0)),
+        mi(rows, asset=3, before=crow(START - HOUR, 99.0)),
+    ]
+    assert [i["asset_id"] for i in items(run(inputs, tree), "gaps")] == [2, 1, 3]
+
+
+def test_one_real_reset_outranks_five_dips_under_the_cap():
+    tree = flat_tree(51)  # ids 2..52
+
+    def dipping():
+        rows = rising(MONTH)
+        for i in (10, 20, 30, 40, 50):
+            rows[i] = crow(MONTH[i], rows[i].last_value, low=rows[i - 1].last_value - 5)
+        return rows
+
+    inputs = [mi(dipping(), asset=a) for a in range(2, 52)]
+    inputs.append(mi(values_to_rows(MONTH, [100.0 + i for i in range(300)] + [5.0 + i for i in range(420)]), asset=52))
+    report = run(inputs, tree)
+    assert count(report, "resets") == 51 and len(items(report, "resets")) == 50
+    first = items(report, "resets")[0]
+    assert (first["asset_id"], first["resets"], first["dips"]) == (52, 1, 0)
+
+
+def test_resets_with_the_same_count_rank_the_one_with_more_dips_and_falls_first():
+    tree = tree_of((1, None, "A"), (2, None, "B"))
+    plain = values_to_rows(MONTH, [100.0 + i for i in range(300)] + [5.0 + i for i in range(420)])
+    busy = list(plain)
+    for i in (10, 20):
+        busy[i] = crow(MONTH[i], busy[i].last_value, low=busy[i - 1].last_value - 5)
+    busy[30] = crow(MONTH[30], busy[30].last_value, high=busy[30].last_value + 9)
+    report = run([mi(plain, asset=1), mi(busy, asset=2)], tree)
+    assert [(i["asset_id"], i["resets"], i["dips"] + i["falls"]) for i in items(report, "resets")] == [(2, 1, 3), (1, 1, 0)]
+
+
+def test_a_silent_meter_says_how_many_assets_sit_under_it():
+    tree = tree_of((1, None, "Site"), (2, 1, "Hall"), (3, 2, "A"), (4, 2, "B"), (5, 1, "Leaf"), (6, 1, "Row"), (7, 6, "R1"))
+    inputs = [
+        mi([], asset=2, first=None),  # never read: two assets under it
+        mi(rising(span(START, at(20))), asset=6),  # trailing: one asset under it
+        pmi([], asset=5, before=prow(at(20, 0, 8))),  # nothing in the month: a leaf
+    ]
+    report = run(inputs, tree)
+    assert [(find(report, "silent", a)["reason"], find(report, "silent", a)["children"]) for a in (2, 6, 5)] == [
+        ("never", 2), ("trailing", 1), ("none_in_month", 0),
+    ]
+
+
 def test_things_is_the_sum_of_the_seven_groups_and_never_counts_unmetered_or_later():
     tree = tree_of((1, None, "Site"), (2, 1, "Hall"), (3, 2, "A"), (4, 2, "B"), (5, 2, "C"), (6, 2, "D"))
     hole = set(span(at(10), at(10, 3)))
@@ -915,12 +1184,12 @@ def test_the_report_has_the_shape_of_the_contract():
     for group in NINE:
         assert set(report["groups"][group]) == {"total", "items"} and count(report, group) == len(items(report, group)) > 0
     head = {"asset_id", "path", "kind", "point", "source", "interval_seconds"}
-    assert set(items(report, "silent")[0]) == head | {"reason", "since", "hours", "last_reading"}
+    assert set(items(report, "silent")[0]) == head | {"reason", "since", "hours", "last_reading", "children"}
     assert set(items(report, "gaps")[0]) == head | {
-        "runs", "hours", "longest_hours", "longest_start", "first_start", "last_end", "leading_hours", "previous_reading",
-        "short_hours", "short_minutes",
+        "runs", "hours", "longest_hours", "longest_start", "first_start", "last_end", "leading_hours", "hours_before_month",
+        "previous_reading", "short_hours", "short_minutes",
     }
-    assert set(items(report, "estimated")[0]) == head | {"hours_estimated", "hours_total"}
+    assert set(items(report, "estimated")[0]) == head | {"hours_estimated", "hours_total", "negative_hours", "negative_kwh"}
     assert set(items(report, "resets")[0]) == head | {"resets", "dips", "falls", "events"}
     assert set(items(report, "started")[0]) == head | {"first_reading", "children"}
     assert set(items(report, "unpriced")[0]) == head | {"kwh", "hours", "days", "first_day", "last_day"}
@@ -1045,6 +1314,24 @@ def _case_leading_gap_with_a_baseline_from_the_previous_month():
     return [mi(rising(MONTH[100:]), before=crow(at(25, 0, 8), 40.0))], "gaps", None
 
 
+def _case_silent_for_a_month_before_the_month_then_a_row_every_hour():
+    return [mi(rising(MONTH, base=5000.0), before=crow(at(1, 0, 8), 50.0))], "gaps", None
+
+
+def _case_a_tolerated_empty_first_hour_after_a_baseline_ten_hours_old():
+    return [mi(rising(MONTH[1:], base=100.0), interval=3600, before=crow(START - 10 * HOUR, 90.0))], "gaps", None
+
+
+def _case_negative_power():
+    return [pmi([HourRow(h, -5.5, -4.5, -10.0, 2, -5.0, 60) for h in MONTH])], "estimated", None
+
+
+def _case_torn_read_that_falls_back_the_next_hour():
+    values = [100.0 + i for i in range(720)]
+    values[200] += 65536.0
+    return [mi(values_to_rows(MONTH, values))], "resets", None
+
+
 def _case_started_mid_month():
     return [mi(rising(MONTH[100:]))], "started", None
 
@@ -1057,6 +1344,9 @@ CASES = [
     _case_silent_counter, _case_trailing_gap, _case_gap_to_month_end_power, _case_gap_in_the_middle, _case_reset, _case_dip,
     _case_fell, _case_flat_900, _case_flat_3600, _case_flat_7200, _case_frozen_power, _case_no_rate, _case_power_part_hours,
     _case_never, _case_leading_gap_with_a_baseline_from_the_previous_month, _case_started_mid_month, _case_power_only,
+    _case_silent_for_a_month_before_the_month_then_a_row_every_hour,
+    _case_a_tolerated_empty_first_hour_after_a_baseline_ten_hours_old, _case_negative_power,
+    _case_torn_read_that_falls_back_the_next_hour,
 ]
 
 
