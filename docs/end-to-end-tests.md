@@ -327,6 +327,15 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   a row, Collapse all, Expand all, Show levels, a month of more than 60 rows opening folded), the filter (matches with their parents,
   the "N of M rows match" line, Escape), the day-number header that stays while the rows scroll, the Assets Tree opening folded to its
   second level when it is big, and that the figures and the CSV do not change.
+- `w18.spec.ts` (its own project, last in the list, after `w17`, the tail of the chain) is the guard for control heights. It measures the
+  real pages: on every page of the app, two controls with a visible edge (a border, a fill or an inset ring) on one line must be the same
+  height within 1 px (a short allow-list in the file says why table-cell controls, `?` tips, tree twisties and chips in running text are
+  exempt), the top-bar Live chip equals the Find field and the asset header's "live" chip equals the Edit button at 1920, 1440, 1024 and
+  800 px, light and dark, and a case that puts three old heights back checks that the checker reports them. It also checks the note box
+  of the Close month and Reopen month dialogs (four to twelve lines, never above 40 percent of the window, scrolls inside, nothing moves
+  while typing, both buttons reachable at 800 x 600) and that the removal confirmations show the new note paragraph only when the
+  removal has mappings. It makes what it needs (an asset with a mapped point, a dashboard) and removes it again; Billing is answered by
+  `page.route` from `e2e/billingModel.ts`, so it writes nothing else.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

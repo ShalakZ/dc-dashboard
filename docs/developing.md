@@ -150,6 +150,13 @@ work laptop run `scripts\update.ps1` first so the code is current, then type the
   entry at the top); `README.md` stays a short front door. `docs/superpowers/` holds plans, specs and the backlog: history, not
   user documentation.
 - `scripts/*.ps1` are ASCII with CRLF line ends (`.gitattributes`) and must run on Windows PowerShell 5.1; everything else is LF.
+- Control heights are tokens (`frontend/src/app.css`, the `:root` block): `--ctl-h` 34 px for every control with a visible edge (buttons,
+  inputs, selects, the Find field, the top-bar chip, filter chips, and a status chip that sits in a row of controls), `--ctl-h-sm` 30 px
+  for the borderless text buttons (`.quiet`, `.danger-quiet`), `--ctl-h-xs` 28 px for icon buttons, and `--chip-h` 22 px for a status
+  chip in a line of text or a table cell. A loading skeleton draws a control at `CTL_H` (`components/Skeleton.tsx`, equal to `--ctl-h`,
+  checked by a test). Do not write a literal height on a control: `frontend/e2e/w18.spec.ts` measures the real pages and fails when two
+  controls with a visible edge on one line differ by more than 1 px (its allow-list says why each exception is deliberate), and a
+  dialog's note box (`.dialog textarea`) is four to twelve lines tall (at most 40 percent of the window).
 - No tracked file may be larger than 2 MB (`backend/tests/test_repo_hygiene.py` checks the working tree and the local commits).
 - External images are pinned by digest (see [Upgrading images](upgrading.md#upgrading-images)).
 

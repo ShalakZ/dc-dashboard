@@ -37,6 +37,11 @@ saved values) and, for a confirmed save, `confirmed_loss`.
   projected days-until-full figure. Free disk space is not visible from the API container, so disk
   capacity is a setting: set it to the size of the volume holding the database. The page also edits
   raw retention, compression delay, 1-minute rollup retention and the warning threshold.
+- **Removing assets or sources does not remove their readings.** Under the disk-capacity note the page says: *They leave when
+  retention drops them (see the limits below), except the hourly summaries, which stay. Shorten the retention to free space sooner;
+  saving a shorter retention asks first.* (The readings table has no link to assets or points, so a removal never touches it; the
+  confirmation of a removal that takes mappings says the same, see [Dashboards and billing](dashboards-and-billing.md).) That is why
+  the database does not shrink when you remove assets.
 - **Permissions.** `storage.view` opens the page; `storage.edit` turns on Save, Set as default and the Resets (without it the form
   is read-only).
 - **Limits on the values.** Raw retention is at least 8 days (one more than the 7-day rollup refresh window), at most 3650, and at
