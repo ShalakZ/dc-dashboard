@@ -1,21 +1,20 @@
-import { readStored, writeStored } from "./sidebarState";
+import { readFoldMemory, writeFoldMemory } from "./foldMemory";
 import type { TreeNode } from "./tree";
 
-const KEY = "dcdash.assetTreeFolded";
-const MAX = 5000; // more than this is not something this app wrote
+export const TREE_FOLD_KEY = "dcdash.assetTreeFolded";
+const KEY = TREE_FOLD_KEY;
 
-/** The ids of the folded branches the user left last time. Anything that is not a list of at most 5000 numbers is ignored; non-integer entries are dropped. */
+/** The ids of the folded branches the user left last time (empty when nothing is remembered). See `readFoldMemory` for what is ignored. */
 export function readFolded(): Set<number> {
-  const raw = readStored(KEY);
-  if (raw === null) return new Set();
-  let value: unknown;
-  try { value = JSON.parse(raw); } catch { return new Set(); }
-  if (!Array.isArray(value) || value.length > MAX) return new Set();
-  return new Set(value.filter((id): id is number => Number.isInteger(id)));
+  return readFoldMemory(KEY) ?? new Set();
 }
 
+/** The same, but `null` when nothing is remembered (a first visit, or the empty `[]` that older versions wrote on every visit) and an empty set after an explicit Expand all. */
+export const readFoldedOrNull = (): Set<number> | null => readFoldMemory(KEY);
+
+/** Remembers the folded ids: at most 5000, sorted, each once; an empty set is remembered as `none` (see `writeFoldMemory`). */
 export function saveFolded(ids: Iterable<number>): void {
-  writeStored(KEY, JSON.stringify([...new Set(ids)].sort((x, y) => x - y).slice(0, MAX)));
+  writeFoldMemory(KEY, ids);
 }
 
 /** The ids of the nodes that have at least one child: the ones that can be folded. */
