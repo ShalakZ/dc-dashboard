@@ -574,7 +574,9 @@ test("4. while the answer is held the drawer shows its skeleton, and nothing in 
   await expect(dialog).toBeVisible();
   await expect(page.locator('.drawer [role="status"].sk-region'), "the drawer shows its one skeleton region").toHaveCount(1);
   await expect(page.locator(".drawer .sk-region")).toContainText("Loading the month check");
-  await expect(headline(page)).toHaveCount(0);
+  // (the skeleton draws its headline line with the headline's own class, so the words are what must be absent)
+  await expect(dialog).not.toContainText("things to check");
+  await expect(dialog).not.toContainText("Nothing to check");
   await expect(page.locator(".drawer .error")).toHaveCount(0);
 
   release();

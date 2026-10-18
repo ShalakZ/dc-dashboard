@@ -34,10 +34,12 @@ describe("the month check stylesheet (w21)", () => {
     expect(text).not.toMatch(/!important/);
   });
 
-  it("the count is a slot of a fixed width (3ch holds 99+) that stays when it is empty, a small rounded rectangle and not a pill", () => {
+  it("the count is a slot of a FIXED width (2.75em holds 99+ in its own font: a minimum would let 99+ widen the button) that stays when it is empty, a small rounded rectangle and not a pill", () => {
     const slot = rule(".check-count");
     expect(slot).toMatch(/display:\s*inline-block/);
-    expect(slot).toMatch(/min-width:\s*3ch/);
+    expect(slot).toMatch(/box-sizing:\s*border-box/);
+    expect(slot).toMatch(/(^|[;\s])width:\s*2\.75em/);
+    expect(slot).not.toMatch(/min-width/);
     expect(slot).toMatch(/text-align:\s*center/);
     expect(slot).toMatch(/border-radius:\s*var\(--radius-sm\)/);
     expect(slot).toMatch(/font-variant-numeric:\s*tabular-nums/);
