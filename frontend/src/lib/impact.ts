@@ -37,6 +37,18 @@ export const assetLoss = (i: AssetImpact) =>
 export const sourceLoss = (i: SourceImpact) =>
   `${counted(i.points, "mapped point")} and ${counted(i.mappings, "mapping")} will be deleted; the past energy and cost figures that depend on them ${HISTORY}`;
 
+// W18: what the loss sentences above do not say. A month that is not closed is worked out from today's tree, so it loses the figures; closing a finished
+// month first freezes its bill; and the readings themselves stay stored (`readings.point_id` has no foreign key, and only retention removes them: the raw
+// and 1-minute ones later, the hourly summaries never). A paragraph of its own, drawn only when the delete has mappings, that is, energy figures.
+const KEEP_TAIL = "To keep a finished month's bill, close that month before you delete. The readings stay stored: retention removes the raw and 1-minute ones later, and the hourly summaries stay.";
+export const ASSET_KEEP_NOTE = `Billing for every month that is not closed is worked out from today's assets, so those months lose these figures. ${KEEP_TAIL}`;
+export const SOURCE_KEEP_NOTE = `Billing for every month that is not closed is worked out from today's mappings, so those months lose the figures of these points. ${KEEP_TAIL}`;
+
+/** The note for deleting assets with these counts, or null when no mapping goes (a branch of empty assets, a tariff only: no readings to explain). */
+export const assetNote = (i: AssetImpact): string | null => (i.mappings > 0 ? ASSET_KEEP_NOTE : null);
+/** The note for deleting a source with these counts, or null when nothing is mapped (the preview counts only mapped points, so this is `points > 0` too). */
+export const sourceNote = (i: SourceImpact): string | null => (i.mappings > 0 ? SOURCE_KEEP_NOTE : null);
+
 /** PUT /api/settings/storage wants confirmation: the server's description of what saving would delete and whether anything is
  * deleted now (false = the limit is only shorter), otherwise null. */
 export const storageLoss = (error: unknown): { detail: string; deletesNow: boolean } | null => {

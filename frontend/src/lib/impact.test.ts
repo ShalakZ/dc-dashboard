@@ -1,5 +1,5 @@
 import { ApiError } from "../api/client";
-import { assetDeletePath, assetImpact, assetLoss, sourceDeletePath, sourceImpact, sourceLoss, storageLoss } from "./impact";
+import { ASSET_KEEP_NOTE, SOURCE_KEEP_NOTE, assetDeletePath, assetImpact, assetLoss, assetNote, sourceDeletePath, sourceImpact, sourceLoss, sourceNote, storageLoss } from "./impact";
 
 const conflict = (body: unknown) => new ApiError(409, "needs confirmation", body);
 
@@ -39,6 +39,28 @@ describe("loss texts", () => {
   it("uses the singular for one", () => {
     expect(assetLoss({ assets: 1, mappings: 1, tariffs: 1 })).toContain("1 asset, 1 mapping and 1 tariff will be deleted");
     expect(sourceLoss({ points: 1, mappings: 1 })).toContain("1 mapped point and 1 mapping will be deleted");
+  });
+});
+
+// W18 R4: what the loss sentence does not say. A month that is not closed follows today's tree, closing first keeps its bill, and the readings stay
+// stored. It is a text of its own (the loss sentences above are unchanged) and it is only for a delete that has mappings, that is, energy figures.
+describe("keep notes", () => {
+  it("say that months which are not closed lose the figures, that closing first keeps them, and that the readings stay", () => {
+    expect(ASSET_KEEP_NOTE).toBe(
+      "Billing for every month that is not closed is worked out from today's assets, so those months lose these figures. To keep a finished month's bill, close that month before you delete. The readings stay stored: retention removes the raw and 1-minute ones later, and the hourly summaries stay.",
+    );
+    expect(SOURCE_KEEP_NOTE).toBe(
+      "Billing for every month that is not closed is worked out from today's mappings, so those months lose the figures of these points. To keep a finished month's bill, close that month before you delete. The readings stay stored: retention removes the raw and 1-minute ones later, and the hourly summaries stay.",
+    );
+  });
+  it("assetNote is the asset note when there are mappings, and null when there are none (a branch of empty assets, a tariff only)", () => {
+    expect(assetNote({ assets: 1, mappings: 2, tariffs: 0 })).toBe(ASSET_KEEP_NOTE);
+    expect(assetNote({ assets: 4, mappings: 0, tariffs: 0 })).toBeNull();
+    expect(assetNote({ assets: 1, mappings: 0, tariffs: 2 })).toBeNull();
+  });
+  it("sourceNote is the source note when there are mappings, and null when there are none", () => {
+    expect(sourceNote({ points: 3, mappings: 3 })).toBe(SOURCE_KEEP_NOTE);
+    expect(sourceNote({ points: 0, mappings: 0 })).toBeNull();
   });
 });
 

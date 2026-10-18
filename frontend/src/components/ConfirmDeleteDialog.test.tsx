@@ -207,6 +207,41 @@ describe("ConfirmDeleteDialog", () => {
     });
   });
 
+  // W18 R4: a second paragraph of its own under the message, in the same polite region (so it is part of what the dialog is described by), not drawn
+  // while the numbers load and not drawn when empty.
+  describe("a note under the message", () => {
+    const props = { title: 'Delete "Site"?', message: "4 assets will be deleted.", onConfirm: async () => {}, onCancel: () => {} };
+
+    it("is its own paragraph inside the region the dialog is described by, after the message, with no role of its own", () => {
+      render(<ConfirmDeleteDialog {...props} note="Close the month first." />);
+      const dialog = screen.getByRole("dialog", { name: 'Delete "Site"?' });
+      const described = document.getElementById(dialog.getAttribute("aria-describedby")!)!;
+      const note = screen.getByText("Close the month first.");
+      expect(note.tagName).toBe("P");
+      expect(note).toHaveClass("confirm-note");
+      expect(described).toContainElement(note);
+      expect(described).toHaveAttribute("aria-live", "polite");
+      expect(note).not.toHaveAttribute("role");
+      expect(described.querySelectorAll("[aria-live], [role]")).toHaveLength(0); // still one live region
+      const paragraphs = Array.from(described.querySelectorAll("p"));
+      expect(paragraphs.map((p) => p.textContent)).toEqual(["4 assets will be deleted.", "Close the month first."]); // the message is untouched
+    });
+
+    it("is not drawn while the numbers load", () => {
+      render(<ConfirmDeleteDialog {...props} message="" note="Close the month first." loading />);
+      expect(screen.queryByText("Close the month first.")).not.toBeInTheDocument();
+      expect(screen.getByText("Checking what this deletes…")).toBeInTheDocument();
+    });
+
+    it("is not drawn when it is empty or absent", () => {
+      const { rerender } = render(<ConfirmDeleteDialog {...props} note="" />);
+      expect(document.querySelector(".confirm-note")).toBeNull();
+      rerender(<ConfirmDeleteDialog {...props} />);
+      expect(document.querySelector(".confirm-note")).toBeNull();
+      expect(screen.getByRole("dialog")).toHaveTextContent("4 assets will be deleted.");
+    });
+  });
+
   describe("when the preview could not be loaded (loadError)", () => {
     it("shows the error, keeps the confirm button disabled, and Cancel still closes", async () => {
       const onCancel = vi.fn();

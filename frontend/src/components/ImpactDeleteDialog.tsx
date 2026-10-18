@@ -10,6 +10,8 @@ interface Props<I> {
   load: () => Promise<I>;
   /** The sentence for a delete that takes more than the row itself (assetLoss, sourceLoss). */
   loss: (impact: I) => string;
+  /** A paragraph of its own under the loss sentence (assetNote, sourceNote), or null for none. Shown only for a delete that takes more than the row. */
+  note?: (impact: I) => string | null;
   /** Only the row itself goes. */
   isPlain: (impact: I) => boolean;
   /** What a plain delete says (everything that is lost is the row itself). */
@@ -26,7 +28,7 @@ interface Props<I> {
  * with it; nothing can be confirmed before the answer is in, or when it could not be had. The confirmed request carries the counts the
  * person read, so a child added meanwhile is refused by the server instead of deleted unseen, and the dialog then shows the new numbers.
  */
-export function ImpactDeleteDialog<I extends object>({ title, queryKey, load, loss, isPlain, plainMessage, grown, onConfirm, onCancel }: Props<I>) {
+export function ImpactDeleteDialog<I extends object>({ title, queryKey, load, loss, note, isPlain, plainMessage, grown, onConfirm, onCancel }: Props<I>) {
   // Fresh at every open and kept to itself: no cache between two openings, no retry (a failure is shown), and no refetch under the
   // person's eyes when the window regains focus (the numbers they read are the ones the delete is checked against).
   const preview = useQuery({ queryKey, queryFn: load, gcTime: 0, staleTime: 0, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false });
@@ -51,6 +53,7 @@ export function ImpactDeleteDialog<I extends object>({ title, queryKey, load, lo
     <ConfirmDeleteDialog
       title={title}
       message={seen === null ? "" : plain ? plainMessage : loss(seen)}
+      note={seen === null || plain ? undefined : note?.(seen) ?? undefined}
       // "Anyway" is for a delete that takes more than the row; until that is known (or if it never is) the button reads plain Delete, so it does not
       // change width, and does not alarm on a leaf, when the answer arrives.
       confirmLabel={seen === null || plain ? "Delete" : "Delete anyway"}

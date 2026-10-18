@@ -5,7 +5,7 @@ import { useState } from "react";
 import { ApiError } from "../api/client";
 import { loadAssetImpact } from "../api/queries";
 import type { AssetImpact } from "../api/types";
-import { assetImpact, assetLoss } from "../lib/impact";
+import { ASSET_KEEP_NOTE, assetImpact, assetLoss, assetNote } from "../lib/impact";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { ImpactDeleteDialog } from "./ImpactDeleteDialog";
@@ -23,6 +23,7 @@ function dialogFor(onConfirm: (seen: AssetImpact) => Promise<unknown>, onCancel:
       queryKey={["impact", "asset", 5]}
       load={() => loadAssetImpact(5)}
       loss={assetLoss}
+      note={assetNote}
       isPlain={(i) => i.assets === 1 && i.mappings === 0 && i.tariffs === 0}
       plainMessage="This can't be undone."
       grown={assetImpact}
@@ -80,6 +81,78 @@ describe("ImpactDeleteDialog", () => {
     expect(await within(dialog()).findByText(BRANCH_TEXT)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete anyway" })).toBeEnabled();
     expect(screen.queryByText("This can't be undone.")).not.toBeInTheDocument();
+  });
+
+  // W18 R4: the note (what removing does to months that are not closed, and to the stored readings) is a paragraph of its own under the loss sentence.
+  describe("the note about billing and readings", () => {
+    const noteIn = () => within(dialog()).queryByText(ASSET_KEEP_NOTE);
+
+    it("a branch with mappings shows the loss sentence and, as its own paragraph after it, the note", async () => {
+      mockFetch(impactRoute(branch));
+      open();
+      const loss = await within(dialog()).findByText(BRANCH_TEXT);
+      const note = noteIn()!;
+      expect(note).toBeInTheDocument();
+      expect(note.tagName).toBe("P");
+      expect(note).not.toBe(loss);
+      expect(loss.nextElementSibling).toBe(note);
+    });
+
+    it("is not drawn while the numbers load", async () => {
+      mockFetch(impactRoute(branch));
+      const held = holdFetch((method, path) => method === "GET" && path === "/api/assets/5/impact");
+      open();
+      expect(dialog()).toHaveTextContent("Checking what this deletes…");
+      expect(noteIn()).toBeNull();
+      await act(async () => held.release());
+      expect(await within(dialog()).findByText(ASSET_KEEP_NOTE)).toBeInTheDocument();
+    });
+
+    it("a branch of assets with no mapping shows the loss sentence and no note (no energy data to lose)", async () => {
+      mockFetch(impactRoute({ assets: 4, mappings: 0, tariffs: 0 }));
+      open();
+      expect(await within(dialog()).findByText(/4 assets, 0 mappings and 0 tariffs will be deleted/)).toBeInTheDocument();
+      expect(noteIn()).toBeNull();
+    });
+
+    it("a leaf shows the plain sentence and no note", async () => {
+      mockFetch(impactRoute(leaf));
+      open();
+      expect(await screen.findByText("This can't be undone.")).toBeInTheDocument();
+      expect(noteIn()).toBeNull();
+    });
+
+    it("after the server's refusal brings new counts with mappings, the note shows", async () => {
+      mockFetch(impactRoute(leaf));
+      const onConfirm = vi.fn<(seen: AssetImpact) => Promise<unknown>>().mockRejectedValueOnce(new ApiError(409, "More than you were shown would be deleted now", { detail: "x", ...branch }));
+      open(onConfirm);
+      expect(await screen.findByText("This can't be undone.")).toBeInTheDocument();
+      expect(noteIn()).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+      expect(await within(dialog()).findByText(BRANCH_TEXT)).toBeInTheDocument();
+      expect(noteIn()).toBeInTheDocument();
+    });
+
+    it("is for the opener to ask for: a dialog without a note prop never draws one", async () => {
+      mockFetch(impactRoute(branch));
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <ImpactDeleteDialog<AssetImpact>
+            title='Delete "Room A"?'
+            queryKey={["impact", "asset", 5]}
+            load={() => loadAssetImpact(5)}
+            loss={assetLoss}
+            isPlain={(i) => i.assets === 1 && i.mappings === 0 && i.tariffs === 0}
+            plainMessage="This can't be undone."
+            grown={assetImpact}
+            onConfirm={async () => undefined}
+            onCancel={() => undefined}
+          />
+        </QueryClientProvider>,
+      );
+      expect(await within(dialog()).findByText(BRANCH_TEXT)).toBeInTheDocument();
+      expect(document.querySelector(".confirm-note")).toBeNull();
+    });
   });
 
   it("each count on its own makes it a branch (one mapping, or one tariff, is not a leaf)", async () => {

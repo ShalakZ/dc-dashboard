@@ -11,6 +11,7 @@ import { renderWithProviders } from "../test/render";
 import { spyToasts } from "../test/toasts";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
+import { SOURCE_KEEP_NOTE } from "../lib/impact";
 import type { PermissionId } from "../lib/permissions";
 import { SourcesPage } from "./SourcesPage";
 
@@ -506,6 +507,26 @@ describe("SourcesPage", () => {
       const dialog = await dialogOf();
       expect(await within(dialog).findByText(MAPPED_TEXT)).toBeInTheDocument();
       expect(within(dialog).getByRole("button", { name: "Delete anyway" })).toBeInTheDocument();
+    });
+
+    // W18 R4: the words about months that are not closed and the stored readings, as a paragraph of their own, only when points are mapped.
+    it("says, in a paragraph of its own, what happens to months that are not closed and to the readings, when points of it are mapped", async () => {
+      setup(mapped);
+      await click("Delete sim");
+      const dialog = await dialogOf();
+      const loss = await within(dialog).findByText(MAPPED_TEXT);
+      const note = within(dialog).getByText(SOURCE_KEEP_NOTE);
+      expect(note.tagName).toBe("P");
+      expect(loss.nextElementSibling).toBe(note);
+    });
+
+    it("has no such paragraph for a source with nothing mapped", async () => {
+      setup(none);
+      await click("Delete sim");
+      const dialog = await dialogOf();
+      expect(await within(dialog).findByText(PLAIN_TEXT)).toBeInTheDocument();
+      expect(within(dialog).queryByText(SOURCE_KEEP_NOTE)).not.toBeInTheDocument();
+      expect(dialog.querySelector(".confirm-note")).toBeNull();
     });
 
     it.each([["Cancel", async () => userEvent.click(screen.getByRole("button", { name: "Cancel" }))], ["Escape", async () => userEvent.keyboard("{Escape}")]])(
