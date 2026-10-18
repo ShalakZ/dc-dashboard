@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w14 (2026-10-18, MERGE)
+## w14 (2026-10-18, 73d0469)
 
 w14 is a polish wave after w12c and w13, front end only: no migration, no new permission, no new widget type, and no figure, unit,
 rounding or claim of a widget has changed. **Bar charts:** on a bar chart of one figure per asset every asset's name now stands under its
