@@ -15,6 +15,22 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w18 (2026-10-18, MERGE_PENDING)
+
+w18 makes the controls consistent and says plainly what removing assets does, front end only: no migration, no new permission, no API change.
+**One height for every control:** buttons, fields, selects, filter chips, the top bar's Find field and its Live chip are all 34 px tall (the
+Live chip was 28 px, the asset page's "live" chip 22 px, and the fields and selects on Billing, Audit, Dashboards and Diagnostics were 38 px
+beside 34 px buttons); the asset page's chip and Billing's Closed chip are as tall as the buttons beside them. Borderless text buttons stay
+30 px and icon buttons 28 px. The loading skeletons draw the same heights, so a form does not move when it loads. **The note box** of Close month
+and Reopen month (and the Targets box of a scan scope) is at least four lines tall and at most twelve lines or 40 percent of the window,
+whichever is less: you can drag it between those limits, and a longer note scrolls inside it. **Removing assets or a source:** when the removal
+takes mappings, its confirmation adds a paragraph of its own: a month that is not closed follows today's assets (or mappings) and loses those
+figures, so close a finished month first to keep its bill; after an asset is removed its points and readings stay, so mapping the same points to an
+asset again brings the figures back, while removing a source deletes its points too. The Storage page says that removing assets or sources
+never removes readings, that retention trims them, and that the hourly summaries stay. **Not changed:** every figure, rate, marker, CSV and
+closed month, and the readings themselves (only retention removes them). A new end-to-end spec, `w18.spec.ts`, measures the real pages, so a
+control that is 4 px off fails a test. Nothing to do when you upgrade; the code to go back to is `71be4c9`.
+
 ## w17 (2026-10-18, d68bf39)
 
 w17 makes Billing usable with a real data centre, front end only: no migration, no new permission, no API change. **Billing:** a row
