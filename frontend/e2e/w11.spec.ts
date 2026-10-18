@@ -354,6 +354,7 @@ const heading1 = (page: Page, name: string) => page.getByRole("heading", { level
 const closeButton = (page: Page) => page.getByRole("button", { name: CLOSE_BUTTON, exact: true });
 const reopenButton = (page: Page) => page.getByRole("button", { name: REOPEN_BUTTON, exact: true });
 const downloadButton = (page: Page) => page.getByRole("button", { name: "Download CSV", exact: true });
+const checkMonthButton = (page: Page) => page.getByRole("button", { name: "Check month", exact: true }); // w21: between Close/Reopen month and Download CSV
 const chip = (page: Page) => page.locator(".billing-page .closed-chip");
 const closedBox = (page: Page) => page.locator(".billing-page .closed-box");
 const byLine = (page: Page) => closedBox(page).locator(".closed-line:not(.closed-note)");
@@ -863,6 +864,7 @@ test.describe("W11: close month", () => {
         const problems = await layoutProblems(page, [
           ["the title", heading1(page, "Billing")],
           ["Reopen month...", reopenButton(page)],
+          ["Check month", checkMonthButton(page)],
           ["Download CSV", downloadButton(page)],
           ["the month bar", page.locator(".billing-page .billing-bar")],
           ["the banner", closedBox(page).locator(".banner")],
@@ -905,6 +907,7 @@ test.describe("W11: close month", () => {
         const problems = await layoutProblems(page, [
           ["the title", heading1(page, "Billing")],
           ["Close month...", closeButton(page)],
+          ["Check month", checkMonthButton(page)],
           ["Download CSV", downloadButton(page)],
           ["the month bar", page.locator(".billing-page .billing-bar")],
           ["the controls bar", page.locator(".billing-page .billing-tools")],

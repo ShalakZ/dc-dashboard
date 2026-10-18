@@ -123,7 +123,7 @@ const VIEWER_TIER: Probe[] = [
   post("/api/widget-data"), post("/api/widget-data/csv"),
 ];
 
-const BILLING: Probe[] = [get("/api/billing/costs"), get("/api/billing/months"), get("/api/billing/costs.csv")];
+const BILLING: Probe[] = [get("/api/billing/costs"), get("/api/billing/months"), get("/api/billing/costs.csv"), get("/api/billing/month-check")]; // w21: the month check is billing.view too
 
 /** The routes that manage roles: no custom role can ever reach them. */
 const ROLES_WRITE: Probe[] = [
@@ -366,7 +366,7 @@ test.describe("W9a: roles and permissions", () => {
     test.setTimeout(180_000);
     await as(browser, VIEWER, async (api) => {
       expect(await notRefused(api, [...ADMIN_TIER, ...OPERATOR_TIER]), "routes a Viewer must be refused").toEqual([]);
-      expect(await wronglyRefused(api, [get("/api/assets"), get("/api/dashboards"), get("/api/billing/months"), ...SIGNED_IN]),
+      expect(await wronglyRefused(api, [get("/api/assets"), get("/api/dashboards"), get("/api/billing/months"), get("/api/billing/month-check"), ...SIGNED_IN]),
         "routes a Viewer may call").toEqual([]);
       // Setup is over: a signed-in account is told so as well (nothing is created).
       const again = await api.post("/api/setup", { data: { username: "w9a-setup", password: "w9a-setup-pass" } });

@@ -90,3 +90,56 @@ export function checkAnswer(name: CheckName, month?: string): ApiMonthCheck {
     }, { estimated: group(times(8, estimatedFeed).map((feed) => ({ ...feed, hours_estimated: 421, hours_total: 421 }))), unmetered: group(UNMETERED) });
   return month === undefined ? answer : { ...answer, month };
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// What the page says for an answer. The words are written here again (src/lib/monthCheck.ts) so the spec reads the page against the JSON, never against the app's own code;
+// the real-stack case computes its expectations from the API's JSON with these.
+
+/** What a case asks the month-check route for: a fixture by name, or a 500 ("fail"). */
+export type CheckChoice = CheckName | "fail";
+/** The `detail` of the 500 a "fail" answer carries (the drawer shows it as its error line). */
+export const FAIL_DETAIL = "w21: the month check failed";
+
+/** The seven groups that are counted in the number at the top, in the order the drawer lists them. */
+export const COUNTED_GROUPS = ["silent", "gaps", "estimated", "resets", "started", "unpriced", "flat"] as const;
+export type CountedGroup = (typeof COUNTED_GROUPS)[number];
+/** The title of each counted group (src/lib/monthCheck.ts TITLES). */
+export const GROUP_TITLES: Record<CountedGroup, string> = {
+  silent: "Meters with no readings",
+  gaps: "Gaps in the readings",
+  estimated: "Estimated from power",
+  resets: "Counter went back or dipped",
+  started: "Started part way through the month",
+  unpriced: "Energy with no rate",
+  flat: "Readings that did not change",
+};
+
+/** The estimate rule, ONE sentence (src/lib/monthCheck.ts ESTIMATE_RULE). */
+export const ESTIMATE_RULE =
+  "An hour is marked estimated when the asset has no energy (kWh) counter, so its energy is worked out from average power (kW) readings; anything that adds up estimated hours is marked estimated too.";
+
+const num = (n: number) => n.toLocaleString("en-US");
+/** True when the check read nothing: the month has not begun, its first hour is not over, or no meter recorded in it. */
+export const lookedAtNothing = (a: ApiMonthCheck): boolean => a.state === "not_begun" || a.hours === 0 || a.meters === 0;
+
+/** The line at the top of the drawer. */
+export function headlineFor(a: ApiMonthCheck): string {
+  if (a.things > 0) return `${num(a.things)} ${a.things === 1 ? "thing" : "things"} to check`;
+  return lookedAtNothing(a) ? "Nothing to look at yet" : "Nothing to check";
+}
+
+/** The count drawn on the Check month button: empty when nothing was looked at, `0`, the number, or `99+`. */
+export function slotFor(a: ApiMonthCheck): string {
+  if (a.things > 0) return a.things > 99 ? "99+" : String(a.things);
+  return lookedAtNothing(a) ? "" : "0";
+}
+
+/** The sentence a screen reader gets for the button's count (`null`: the answer has not arrived or failed). */
+export function describedFor(a: ApiMonthCheck | null): string {
+  if (a === null) return "not read yet";
+  if (a.things > 0) return `${num(a.things)} ${a.things === 1 ? "thing" : "things"} to check`;
+  return lookedAtNothing(a) ? "nothing to look at yet" : "nothing to check";
+}
+
+/** The one extra line of the Close month dialog, worded at the click (`null`: still reading, or the read failed). */
+export const closeLineFor = (a: ApiMonthCheck | null): string => `Month check: ${describedFor(a)} (see Check month on the page).`;

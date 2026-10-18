@@ -312,5 +312,17 @@ export default defineConfig({
       dependencies: ["w18"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
     },
+    // The Billing month check (Check month, its count and drawer, the line in the Close month dialog). Its cases A answer GET /api/billing/month-check from fixtures (e2e/monthCheckModel.ts) and
+    // /api/billing/costs and /months from e2e/billingModel.ts through page.route, WRITE NOTHING (any other write the page tries is refused with a 500 and fails the case) and need nothing from the
+    // stack beyond the sign-in, the site's time zone and the look preference: they set the admin's look (light navy-gold, dark desert-gold) through PUT /api/me/preferences before a page opens, and
+    // afterAll puts it back to light navy-gold. Each case that needs a window size sets it itself (1440 x 900, 1024 x 640, 800 x 600). The ONE case B reads the real endpoint on the scratch stack:
+    // it runs only when COMPOSE_PROJECT_NAME starts with `dcdash_e2e_` (like w11), seeds the three-panel history inside the stack in beforeAll, and removes the "Seeded demo" subtree and the
+    // source `seeded-history` through the API in afterAll.
+    {
+      name: "w21",
+      testMatch: "w21.spec.ts",
+      dependencies: ["w20"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
+    },
   ],
 });
