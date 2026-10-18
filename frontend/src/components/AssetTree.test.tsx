@@ -85,7 +85,7 @@ describe("AssetTree fold state", () => {
     expect(expanded("Yard")).toBe("false");
     expect(expanded("Site")).toBe("true");
     await userEvent.click(twisty("Yard"));
-    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual([]);
+    expect(localStorage.getItem(KEY)).toBe("none"); // an explicit "nothing folded" is the text none, never []
   });
 
   it("both buttons wait while the filter has text and are back when it is cleared", async () => {
@@ -208,7 +208,7 @@ describe("AssetTree fold state", () => {
       expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual([2]);
       view.rerender(ui({ nodes: buildTree(flat.filter((x) => x.id !== 3)) })); // Panel 1 deleted: Room A is a leaf
       expect(screen.queryByRole("button", { name: "Children of Room A" })).not.toBeInTheDocument();
-      expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual([]);
+      expect(localStorage.getItem(KEY)).toBe("none");
       view.rerender(ui()); // Room A gets a child again
       expect(expanded("Room A")).toBe("true");
       expect(link("Panel 1")).toBeInTheDocument();
@@ -246,6 +246,264 @@ describe("AssetTree fold state", () => {
       await userEvent.click(twisty("Yard"));
       expect(expanded("Yard")).toBe("false");
     });
+  });
+});
+
+// w17: a big tree opens folded. Root > 3 Halls > 7 Rows each > 2 Racks each = 1 + 3 + 21 + 42 = 67 nodes, above the 60 rows a tree opens whole.
+// Level 2 shows the Root and its Halls; every Hall and Row is folded, the Root is open.
+const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+const rowId = (hall: number, j: number) => 10 + (hall - 1) * 7 + j; // 10..30
+const rackId = (hall: number, j: number, k: number) => 100 + ((hall - 1) * 7 + j) * 2 + k; // 100..141
+const bigAssets = (): Asset[] => {
+  const out: Asset[] = [a(1, null, "Root")];
+  for (let h = 1; h <= 3; h++) {
+    out.push(a(h + 1, 1, `Hall ${h}`));
+    for (let j = 0; j < 7; j++) {
+      out.push(a(rowId(h, j), h + 1, `Row ${h}.${j}`));
+      for (let k = 0; k < 2; k++) out.push(a(rackId(h, j, k), rowId(h, j), `Rack ${h}.${j}.${k}`));
+    }
+  }
+  return out;
+};
+const bigNodes = () => buildTree(bigAssets());
+const DEFAULT_FOLDED = [2, 3, 4, ...range(10, 30)]; // every Hall and Row
+const ALL_FOLDABLE = [1, ...DEFAULT_FOLDED];
+const shown = (name: string) => screen.queryByRole("link", { name }) !== null;
+const savedFold = () => JSON.parse(localStorage.getItem(KEY)!) as number[];
+const expectLevel2 = () => {
+  expect(shown("Root")).toBe(true);
+  for (const hall of [1, 2, 3]) expect(shown(`Hall ${hall}`)).toBe(true);
+  expect(shown("Row 1.0")).toBe(false);
+  expect(shown("Rack 1.0.0")).toBe(false);
+  expect(expanded("Root")).toBe("true");
+  expect(expanded("Hall 1")).toBe("false");
+  expect(expanded("Row 1.0")).toBe("false");
+};
+
+describe("AssetTree opens folded when it is big (w17)", () => {
+  it("a tree of more than 60 nodes with nothing remembered opens at level 2 and a visit writes nothing", () => {
+    expect(bigAssets()).toHaveLength(67);
+    render(ui({ nodes: bigNodes() }));
+    expectLevel2();
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("the [] that the old code wrote on every visit means nothing remembered: level 2", () => {
+    localStorage.setItem(KEY, "[]");
+    render(ui({ nodes: bigNodes() }));
+    expectLevel2();
+    expect(localStorage.getItem(KEY)).toBe("[]"); // not touched by a visit that changes nothing
+  });
+
+  it("the text none (an explicit Expand all) opens it fully", () => {
+    localStorage.setItem(KEY, "none");
+    render(ui({ nodes: bigNodes() }));
+    expect(shown("Rack 3.6.1")).toBe(true);
+    for (const twistyButton of document.querySelectorAll("button.twisty")) expect(twistyButton).toHaveAttribute("aria-expanded", "true");
+    expect(localStorage.getItem(KEY)).toBe("none");
+  });
+
+  it("a remembered list folds exactly those branches", () => {
+    localStorage.setItem(KEY, "[2,3]");
+    render(ui({ nodes: bigNodes() }));
+    expect(expanded("Root")).toBe("true");
+    expect(expanded("Hall 1")).toBe("false");
+    expect(expanded("Hall 2")).toBe("false");
+    expect(expanded("Hall 3")).toBe("true");
+    expect(expanded("Row 3.0")).toBe("true"); // the default does not apply once something is remembered
+    expect(shown("Rack 3.0.0")).toBe(true);
+    expect(shown("Row 1.0")).toBe(false);
+    expect(savedFold()).toEqual([2, 3]);
+  });
+
+  it("a 6-node tree opens fully and a visit writes nothing", () => {
+    render(ui());
+    for (const name of ["Site", "Room A", "Yard"]) expect(expanded(name)).toBe("true");
+    expect(link("Panel 1")).toBeInTheDocument();
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("a tree of exactly 60 nodes opens whole", () => {
+    const sixty = bigAssets().slice(0, 60);
+    render(ui({ nodes: buildTree(sixty) }));
+    expect(expanded("Root")).toBe("true");
+    expect(expanded("Hall 1")).toBe("true");
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("Collapse all stores every foldable id", async () => {
+    render(ui({ nodes: bigNodes() }));
+    await userEvent.click(collapseAll());
+    expect(savedFold()).toEqual(ALL_FOLDABLE);
+    expect(shown("Root")).toBe(true);
+    expect(shown("Hall 1")).toBe(false);
+    expect(expanded("Root")).toBe("false");
+  });
+
+  it("Expand all stores the text none and shows everything, and a remount keeps it", async () => {
+    const first = render(ui({ nodes: bigNodes() }));
+    await userEvent.click(expandAll());
+    expect(localStorage.getItem(KEY)).toBe("none");
+    expect(shown("Rack 3.6.1")).toBe(true);
+    first.unmount();
+    render(ui({ nodes: bigNodes() }));
+    expect(shown("Rack 3.6.1")).toBe(true);
+    expect(expanded("Row 2.2")).toBe("true");
+  });
+
+  it("Collapse all and Expand all work from the default state, one after the other", async () => {
+    render(ui({ nodes: bigNodes() }));
+    expect(collapseAll()).toBeEnabled();
+    expect(expandAll()).toBeEnabled();
+    await userEvent.click(collapseAll());
+    expect(shown("Hall 1")).toBe(false);
+    await userEvent.click(expandAll());
+    expect(shown("Hall 1")).toBe(true);
+    expect(shown("Rack 2.3.1")).toBe(true);
+  });
+
+  it("a twisty click on the default state stores the default set plus that change", async () => {
+    const first = render(ui({ nodes: bigNodes() }));
+    await userEvent.click(twisty("Root")); // folds the Root as well
+    expect(savedFold()).toEqual(ALL_FOLDABLE);
+    first.unmount();
+    localStorage.clear();
+    render(ui({ nodes: bigNodes() }));
+    await userEvent.click(twisty("Hall 1")); // opens a folded Hall: its Rows show, their Racks stay folded
+    expect(savedFold()).toEqual(DEFAULT_FOLDED.filter((id) => id !== 2));
+    expect(shown("Row 1.0")).toBe(true);
+    expect(shown("Rack 1.0.0")).toBe(false);
+    expect(expanded("Hall 2")).toBe("false");
+  });
+
+  it("an asset inside the folded part opens only its own way, and that state is remembered", () => {
+    render(ui({ nodes: bigNodes(), selectedId: rackId(2, 3, 1) }));
+    expect(shown("Rack 2.3.1")).toBe(true);
+    expect(expanded("Root")).toBe("true");
+    expect(expanded("Hall 2")).toBe("true");
+    expect(expanded("Row 2.3")).toBe("true");
+    expect(expanded("Hall 1")).toBe("false"); // the rest stays at the default
+    expect(expanded("Hall 3")).toBe("false");
+    expect(expanded("Row 2.4")).toBe("false");
+    expect(shown("Rack 2.4.0")).toBe(false);
+    expect(savedFold()).toEqual(DEFAULT_FOLDED.filter((id) => id !== 3 && id !== rowId(2, 3)));
+  });
+
+  it("a new nodes array of the same shape keeps the default (nothing is folded or opened by a refetch)", async () => {
+    const view = render(ui({ nodes: bigNodes() }));
+    view.rerender(ui({ nodes: bigNodes() }));
+    expectLevel2();
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("a big tree that arrives after an empty list opens at level 2 in its first frame", () => {
+    const view = render(ui({ nodes: [] }));
+    view.rerender(ui({ nodes: bigNodes() }));
+    expectLevel2();
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+});
+
+describe("AssetTree scrolls the open asset into view (w17)", () => {
+  const rect = (top: number, bottom: number) => ({ top, bottom, height: bottom - top, left: 0, right: 200, width: 200, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+  /** The scroll box and the open row, as a layout would report them. `seen` gets one entry per measure of the open row: was its way still hidden? */
+  const mockRects = (box: [number, number], row: [number, number]) => {
+    const seen: boolean[] = [];
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.classList.contains("tree-scroll")) return rect(...box);
+      if (this.matches(".node.is-selected")) {
+        seen.push(this.closest("[hidden]") !== null);
+        return rect(...row);
+      }
+      return rect(0, 0);
+    });
+    return seen;
+  };
+  const scrollBox = () => document.querySelector<HTMLElement>(".tree-scroll")!;
+  const deep = rackId(2, 3, 1);
+
+  it("a row below the box is centred in it, measured only once its way is open", () => {
+    const seen = mockRects([100, 400], [700, 730]);
+    render(ui({ nodes: bigNodes(), selectedId: deep }));
+    expect(scrollBox().scrollTop).toBe(715 - 250); // the row's centre minus the box's centre
+    expect(seen).toEqual([false]); // never measured while it sat inside a folded branch
+  });
+
+  it("a row inside the box leaves the scroll alone", () => {
+    const seen = mockRects([100, 400], [150, 180]);
+    render(ui({ nodes: bigNodes(), selectedId: deep }));
+    expect(scrollBox().scrollTop).toBe(0);
+    expect(seen).toEqual([false]);
+  });
+
+  it("a layout with no sizes (no rects) changes nothing", () => {
+    render(ui({ nodes: bigNodes(), selectedId: deep }));
+    expect(scrollBox().scrollTop).toBe(0);
+  });
+
+  it("it happens once: a later render does not pull the row back after the person scrolled", () => {
+    mockRects([100, 400], [700, 730]);
+    const view = render(ui({ nodes: bigNodes(), selectedId: deep }));
+    scrollBox().scrollTop = 7;
+    view.rerender(ui({ nodes: bigNodes(), selectedId: deep }));
+    expect(scrollBox().scrollTop).toBe(7);
+  });
+
+  it("a new selection scrolls again", () => {
+    mockRects([100, 400], [700, 730]);
+    const view = render(ui({ nodes: bigNodes(), selectedId: deep }));
+    scrollBox().scrollTop = 0;
+    view.rerender(ui({ nodes: bigNodes(), selectedId: rackId(3, 6, 1) }));
+    expect(scrollBox().scrollTop).toBe(465);
+  });
+
+  it("the mark waits for the list: a selection while the tree loads scrolls once the rows are there", () => {
+    const seen = mockRects([100, 400], [700, 730]);
+    const view = render(ui({ nodes: [], loading: true, selectedId: deep }));
+    expect(seen).toEqual([]);
+    view.rerender(ui({ nodes: bigNodes(), selectedId: deep }));
+    expect(scrollBox().scrollTop).toBe(465);
+    expect(seen).toEqual([false]);
+  });
+
+  it("an id that is not in the tree scrolls nothing and the mark is dropped", () => {
+    const seen = mockRects([100, 400], [700, 730]);
+    const view = render(ui({ nodes: bigNodes(), selectedId: 9999 }));
+    expect(scrollBox().scrollTop).toBe(0);
+    expect(seen).toEqual([]);
+    view.rerender(ui({ nodes: bigNodes(), selectedId: 9999 }));
+    expect(seen).toEqual([]);
+  });
+
+  it("while the filter hides the row nothing scrolls, and clearing the filter later does not scroll either", async () => {
+    const seen = mockRects([100, 400], [700, 730]);
+    const view = render(ui({ nodes: bigNodes(), selectedId: null }));
+    const filter = screen.getByLabelText("Filter assets");
+    await userEvent.type(filter, "Hall 3"); // shows Root > Hall 3 only
+    view.rerender(ui({ nodes: bigNodes(), selectedId: deep })); // Rack 2.3.1 is not in that
+    expect(shown("Rack 2.3.1")).toBe(false);
+    expect(scrollBox().scrollTop).toBe(0);
+    await userEvent.clear(filter);
+    expect(shown("Rack 2.3.1")).toBe(true); // the row is back, on screen
+    expect(scrollBox().scrollTop).toBe(0); // and the dropped mark does not pull it into view
+    expect(seen).toEqual([]);
+  });
+
+  it("a filter that shows the row still scrolls to it", async () => {
+    mockRects([100, 400], [700, 730]);
+    const view = render(ui({ nodes: bigNodes(), selectedId: null }));
+    await userEvent.type(screen.getByLabelText("Filter assets"), "Rack 2.3.1");
+    view.rerender(ui({ nodes: bigNodes(), selectedId: deep }));
+    expect(scrollBox().scrollTop).toBe(465);
+  });
+
+  it("a minimized column scrolls nothing and keeps the mark for when it is opened", async () => {
+    localStorage.setItem("dcdash.assetTree", "minimized");
+    const seen = mockRects([100, 400], [700, 730]);
+    render(ui({ nodes: bigNodes(), selectedId: deep }));
+    expect(seen).toEqual([]);
+    await userEvent.click(screen.getByRole("button", { name: "Expand asset tree" }));
+    expect(scrollBox().scrollTop).toBe(465);
   });
 });
 
