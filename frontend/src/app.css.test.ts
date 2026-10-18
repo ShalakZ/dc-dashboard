@@ -297,6 +297,24 @@ describe("the shell (W6 sidebar)", () => {
         expect(narrow.find((r) => r.selector === "#root")?.body).toMatch(/--find-w:\s*220px/);
         expect(narrow.find((r) => r.selector.includes(".qf kbd"))?.body).toMatch(/display:\s*none/);
       });
+
+      // w14 P6. At 800px with the sidebar open the bar's content box is 520px (564 less two 22px gutters) and its fixed-size children
+      // (the find at 220, the chip, the clock, the profile, five 16px gaps and two separators) add up to 560: the profile button ended
+      // at 818px and the whole page scrolled sideways by 18px. Every other child is as wide as its content and cannot give, so the find
+      // gives: it keeps --find-w as its wanted width, may shrink, and stops at --find-min.
+      it("may shrink in the bar's row, down to a floor, so a narrow window with the sidebar open does not scroll sideways (w14 P6)", () => {
+        const body = bodyOf(".qf");
+        expect(body).toMatch(/flex:\s*0 1 auto/);
+        expect(body).toMatch(/width:\s*var\(--find-w\)/);
+        expect(body).toMatch(/min-width:\s*var\(--find-min\)/);
+        const min = Number(/^(\d+)px$/.exec(tokens.get("find-min") ?? "")?.[1]);
+        expect(min, "--find-min in :root, in px").toBeGreaterThan(0);
+        expect(min).toBeLessThan(220); // below the narrow window's wanted width, or there would be no room to give
+        // the placeholder ("Find an asset or page", about 135px at 13px) still fits beside the icon and the right padding: 34 + 135 + 10 + 2
+        expect(min).toBeGreaterThanOrEqual(120);
+        // a placeholder that no longer fits ends in an ellipsis, not in half a letter
+        expect(bodyOf('.qf input[type="search"]')).toMatch(/text-overflow:\s*ellipsis/);
+      });
     });
   });
 });

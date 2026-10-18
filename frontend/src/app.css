@@ -35,7 +35,7 @@
   --shadow-dialog: 0 18px 50px rgba(10, 16, 28, 0.28); --shadow-tip: 0 4px 14px rgba(10, 16, 28, 0.25); --shadow-pop: 0 10px 30px rgba(10, 16, 28, 0.18);
   --motion: 150ms ease;
   --side-w-open: 236px; --side-w-closed: 64px; --tree-w: 280px; --tree-w-closed: 44px; /* the tree is 280px in a narrow window too: at 248px its five header controls cut the title "Assets Tree" */
-  --find-w: 300px;                                        /* the quick find in the top bar, 220px below 1180px */
+  --find-w: 300px; --find-min: 120px;                     /* the quick find in the top bar: 300px wanted (220px below 1180px), never less than 120px (it gives room to the chip, the clock and the profile) */
   --btn-h: 34px;                                          /* the height of every button: Add asset, Edit and the labelled Delete in a page header are one family (W7o) */
   --toast-clear: 96px;                                    /* room under a page, so the end of a list scrolls clear of a settled toast (two lines: 62px plus its 16px margin) */
   /* w13 dashboard widgets (styles/widgets.css; the dark values are themes.css's, the presets change none of them). Every widget colour, size and corner is one
@@ -197,10 +197,10 @@
   /* The quick find: a field on the chip's lighter navy (its focus ring is the bar's, --side-accent) and a white popup under it (which
      takes the content's ring, above). The field's selector outranks the base input rule, which comes later in the file. The shortcut
      hint sets its font back: the browser's own kbd font is monospace. */
-  .qf { position: relative; flex: none; width: var(--find-w); max-width: 100%; }
+  .qf { position: relative; flex: 0 1 auto; width: var(--find-w); min-width: var(--find-min); max-width: 100%; } /* the one child of the bar that gives way when the row is too wide (800px with the sidebar open); the chip, the clock and the profile are as wide as their content */
   .qf-field { position: relative; display: flex; align-items: center; }
   .qf-field > svg.i { position: absolute; left: 10px; width: 16px; height: 16px; color: var(--top-find-ph); pointer-events: none; }
-  .qf input[type="search"] { width: 100%; min-height: 0; height: 34px; padding: 0 64px 0 34px; border: 1px solid var(--top-find-border); border-radius: var(--radius); background: var(--top-find-bg); color: var(--top-find-text); font-size: var(--fs-sm); }
+  .qf input[type="search"] { width: 100%; min-height: 0; height: 34px; padding: 0 64px 0 34px; text-overflow: ellipsis; border: 1px solid var(--top-find-border); border-radius: var(--radius); background: var(--top-find-bg); color: var(--top-find-text); font-size: var(--fs-sm); }
   .qf input[type="search"]::placeholder { color: var(--top-find-ph); opacity: 1; }
   .qf input[type="search"]:focus-visible { outline-offset: 1px; }
   .qf input[type="search"]::-webkit-search-cancel-button { display: none; } /* Chromium's blue clear cross is unreadable on the navy; Escape clears */
