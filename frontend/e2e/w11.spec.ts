@@ -867,6 +867,7 @@ test.describe("W11: close month", () => {
           ["the month bar", page.locator(".billing-page .billing-bar")],
           ["the banner", closedBox(page).locator(".banner")],
           ["the line about today", deltaLine(page)],
+          ["the controls bar", page.locator(".billing-page .billing-tools")],
           ["the table", page.locator(".billing-page .table-wrap")],
         ]);
         expect(problems, `the layout at ${at}`).toEqual([]);
@@ -906,6 +907,7 @@ test.describe("W11: close month", () => {
           ["Close month...", closeButton(page)],
           ["Download CSV", downloadButton(page)],
           ["the month bar", page.locator(".billing-page .billing-bar")],
+          ["the controls bar", page.locator(".billing-page .billing-tools")],
           ["the table", page.locator(".billing-page .table-wrap")],
         ]);
         expect(problems, `the open month's layout at ${at}`).toEqual([]);
