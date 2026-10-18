@@ -19,7 +19,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 w17 makes Billing usable with a real data centre, front end only: no migration, no new permission, no API change. **Billing:** a row
 with assets below it has a small arrow that folds them (a folded row keeps its own rate, month total and day figures, which already
-include everything below it); **Collapse all**, **Expand all** and **Show levels** fold many rows at once; a **Filter assets** box shows the
+include everything below it); **Collapse all**, **Expand all** and **Show levels** fold many rows at once; a filter box (**Filter by asset name**) shows the
 rows whose name contains your text, with their parents ("12 of 370 rows match"); and the header with the day numbers stays at the top
 while the rows scroll, as the first column stays while the days scroll sideways. A month with more than 60 rows opens folded to the
 deepest level that keeps 60 rows or fewer (24 rows for the 370-asset demo hall). The fold is remembered in this browser for this site
