@@ -36,7 +36,7 @@ const SIX = ["Rack A01", "Rack A02", "UPS-1 output", "CRAH-3 supply fan", "Chill
 interface LegendOpt { show: boolean; type: string; formatter: (name: string) => string; tooltip: { show: boolean } }
 const legendOf = (option: unknown) => (option as { legend: LegendOpt }).legend;
 interface AxisLabelOpt { interval: number; hideOverlap?: boolean; rotate?: number; width?: number; overflow?: string; ellipsis?: string; lineHeight?: number; formatter: (value: string) => string }
-interface AxisOpt { xAxis: { axisLabel: AxisLabelOpt }; grid: { bottom: number; containLabel?: boolean } }
+interface AxisOpt { xAxis: { axisLabel: AxisLabelOpt }; grid: { left: number; bottom: number; containLabel?: boolean } }
 const axisLabelOf = (option: unknown) => (option as AxisOpt).xAxis.axisLabel;
 /** A tooltip as the viewer reads it: the tags taken away, the name, the value and the state of each row one after the other. */
 const tipText = (html: string) => html.replace(/<\/(span|div)>/g, " ").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
@@ -474,6 +474,7 @@ describe("bar", () => {
     expect(axis.ellipsis).toBe("…");
     expect(axis.lineHeight).toBe(LABEL_LINE_PX);
     expect(option.grid.bottom).toBe(layout.bottom);
+    expect(option.grid.left).toBe(60); // wrapped: the slots are counted from this edge, and no containLabel (the room under the plot is the lines')
     expect(option.grid.containLabel).toBeUndefined();
   });
 
@@ -486,8 +487,12 @@ describe("bar", () => {
     expect(axis.hideOverlap).toBe(true);
     expect(axis.width).toBeUndefined();
     expect(axis.overflow).toBeUndefined();
+    // containLabel fits the turned names INSIDE the rectangle that left/bottom describe, so those are only margins (a big bottom would count the
+    // names' room twice and leave a third of the card blank, review finding 1).
     expect(option.grid.containLabel).toBe(true);
-    expect(option.grid.bottom).toBe(84);
+    expect(option.grid.bottom).toBe(8);
+    expect(option.grid.left).toBe(barAxisLayout(names, DEFAULT_CHART_WIDTH).left); // 12 for a short first name, more for a long one (see rotatedLeft)
+    expect(option.grid.left).toBeLessThanOrEqual(Math.floor(DEFAULT_CHART_WIDTH * 0.4));
     expect(Array.from(axis.formatter(names[0])).length).toBeLessThanOrEqual(18); // the shortened form of the rotated mode
   });
 

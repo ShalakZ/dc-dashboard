@@ -450,6 +450,13 @@ describe("styles/widgets-details.css", () => {
     }
     expect(detailsCss).not.toMatch(/\.kv(?![\w-])/);
   });
+
+  it("underlines a link inside the marker meanings, with no colour of its own: in running text a link differs by more than its colour (WCAG 1.4.1; app.css underlines only p a, and this one sits in an li)", () => {
+    const found = parseRules(detailsCss).filter((r) => r.selector === ".wd-markers a");
+    expect(found).toHaveLength(1);
+    expect(found[0].body).toMatch(/text-decoration:\s*underline/);
+    expect(found[0].body).not.toMatch(/(?<![-\w])color\s*:/);
+  });
 });
 
 describe("the files that load the stylesheet", () => {

@@ -63,18 +63,28 @@ function overlap(p: Point[], q: Point[]): boolean {
   return true;
 }
 
-function draw(names: readonly string[], width: number, flags: { estimated?: number[]; silent?: number[] } = {}) {
+/**
+ * The plot as drawn: the bars' baseline (every bar's path starts at it) and the top of the grid (the highest tick of the y axis, whose numbers are
+ * anchored at their end and not turned). The height between them is what the chart shows its values in.
+ */
+function plotOf(svg: string) {
+  const baselines = [...svg.matchAll(/<path d="M[\d.]+ ([\d.]+)l[^"]*"[^>]*ecmeta_series_index/g)].map((m) => Number(m[1]));
+  const ticks = pieces(svg).filter((p) => p.text !== "kWh" && p.anchor === "end" && !p.transform.startsWith("matrix")).map((p) => p.matrix[5]);
+  return { baseline: Math.max(...baselines), top: Math.min(...ticks), bars: baselines.length };
+}
+
+function draw(names: readonly string[], width: number, flags: { estimated?: number[]; silent?: number[]; small?: boolean } = {}, height = HEIGHT) {
   const rows = names.map((name, i) => valueRow({
     asset_id: 20 + i, name, point_id: null, estimated: flags.estimated?.includes(i) ?? false,
-    ...(flags.silent?.includes(i) ? { value: null, no_data: true } : { value: 10 + i * 3 }),
+    ...(flags.silent?.includes(i) ? { value: null, no_data: true } : { value: flags.small ? 1 + (i % 5) : 10 + i * 3 }), // small: an axis of one-digit numbers
   }));
   const data = valuesData({ type: "bar", source: "metric", metric: "active_power_kw", unit: "kWh", values: rows });
   const labels = chartLabels(rows);
-  const chart = echarts.init(null, undefined, { renderer: "svg", ssr: true, width, height: HEIGHT });
+  const chart = echarts.init(null, undefined, { renderer: "svg", ssr: true, width, height });
   chart.setOption(barOption(data, "Asia/Qatar", undefined, width));
   const svg = chart.renderToSVGString();
   chart.dispose();
-  return { labels, drawn: labelsOf(svg), layout: barAxisLayout(labels, width) };
+  return { labels, drawn: labelsOf(svg), layout: barAxisLayout(labels, width), plot: plotOf(svg) };
 }
 
 // The names of the w13 showcase: one has no data, one carries the "~" suffix. And the shouting kind, which is the widest text there is.
@@ -108,6 +118,55 @@ describe.each<[string, readonly string[], { estimated?: number[]; silent?: numbe
     });
   },
 );
+
+// Review finding 1: a turned axis used containLabel AND a big grid.bottom (and left), so the room of the names was counted twice and the plot kept a
+// third of a narrow card. The real library draws the bars here, so what is measured is what a card shows.
+describe("the plot of a bar chart with a turned axis (the normal mode of a narrow card)", () => {
+  const TWENTY = Array.from({ length: 20 }, (_, i) => `Distribution panel number ${i + 1}`);
+
+  // The first name is the one that can stick out at the left: a long one, a shouting one and one of the widest letters are the worst cases.
+  const SHOUTING = ["MV2-R2-LV-PANEL-02 EAST", "CRAH-3 SUPPLY FAN", "PDU B07", "DB-1", "DB-2", "DB-3", "DB-4"];
+  const WIDEST = ["WWWWWWWWWWWW", ...SIX];
+  const CASES: [string, number, number, readonly string[]][] = [
+    ["six names", 266, 266, SIX], ["six names", 341, 266, SIX], ["six names", 341, 300, SIX], ["twenty names", 480, 300, TWENTY], ["twenty names", 880, 300, TWENTY],
+    ["shouting names", 330, 300, SHOUTING], ["shouting names", 400, 300, SHOUTING],
+  ];
+
+  /** Every corner of every turned name is inside the picture: nothing is cut at the left edge, the right or the bottom. */
+  function expectInside(drawn: ReturnType<typeof draw>["drawn"], width: number, height: number) {
+    expect(drawn.length).toBeGreaterThanOrEqual(1);
+    for (const label of drawn) {
+      for (const corner of label.boxes.flat()) {
+        expect(corner[0], `${label.lines.join(" ")} on the left`).toBeGreaterThanOrEqual(0);
+        expect(corner[0]).toBeLessThanOrEqual(width);
+        expect(corner[1]).toBeGreaterThanOrEqual(0);
+        expect(corner[1], `${label.lines.join(" ")} at the bottom`).toBeLessThanOrEqual(height);
+      }
+    }
+  }
+
+  it.each(CASES)("%s in a chart of %i x %i px keep at least half of the height for the plot, and no turned name leaves the picture", (_, width, height, names) => {
+    const { drawn, layout, plot } = draw(names, width, {}, height);
+    expect(layout.mode).toBe("rotate");
+    expect(plot.bars, "every bar is drawn").toBe(names.length);
+    expect(plot.baseline - plot.top).toBeGreaterThanOrEqual(height / 2);
+    expectInside(drawn, width, height);
+  });
+
+  // The y axis's numbers take room left of the plot too, and the least of it is one digit: the margin must hold the first name on that axis as well.
+  it.each([[480, 300, TWENTY], [341, 266, SIX], [330, 300, SHOUTING]] as const)("a chart of %i x %i px whose y axis has one-digit numbers does not cut its first name", (width, height, names) => {
+    const { drawn, layout } = draw(names, width, { small: true }, height);
+    expect(layout.mode).toBe("rotate");
+    expectInside(drawn, width, height);
+  });
+
+  // Eighteen of the widest letter turned are 130 px tall by themselves, which no card of this height can also give half to: only the edges are claimed.
+  it.each([[300, 266], [341, 300]])("a first name of the widest letters in a chart of %i x %i px is not cut either", (width, height) => {
+    const { drawn, layout } = draw(WIDEST, width, {}, height);
+    expect(layout.mode).toBe("rotate");
+    expectInside(drawn, width, height);
+  });
+});
 
 describe("the axis when two names wrap to the same text", () => {
   const COLLIDING = ["Main feeder room A01 east hall", "Main feeder room A02 east hall", "H1", "H2", "H3", "H4"];

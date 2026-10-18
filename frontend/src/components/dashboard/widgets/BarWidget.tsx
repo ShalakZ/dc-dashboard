@@ -94,8 +94,9 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
       tooltip: { ...base.tooltip, formatter: tooltipFor([cells], labels, false, theme) },
       // Wrapped: every name is drawn in its own slot, in as many lines as the layout found (grid.bottom is their room); the width and the
       // truncation only catch a line that is wider than the estimate. Rotated (a crowded axis): hideOverlap may still drop some names (the
-      // tooltip and the Details panel have every one), and containLabel keeps the first rotated name from being cut at the left edge.
-      grid: { left: 60, right: 20, top: 30, bottom: layout.bottom, ...(layout.mode === "rotate" ? { containLabel: true } : {}) },
+      // tooltip and the Details panel have every one), and containLabel keeps the first rotated name from being cut at the left edge. With
+      // containLabel the names and the y numbers sit INSIDE the rectangle that left and bottom describe, so those two are plain margins there.
+      grid: { left: layout.left, right: 20, top: 30, bottom: layout.bottom, ...(layout.mode === "rotate" ? { containLabel: true } : {}) },
       xAxis: {
         type: "category", data: labels, ...axis,
         axisLabel: {

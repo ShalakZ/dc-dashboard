@@ -17,35 +17,57 @@ export const GRID_SIDES_PX = 80;
 export const DEFAULT_CHART_WIDTH = 480;
 /** Room kept between a line of text and the edge of its slot: 4 px each side. */
 export const SLOT_GAP_PX = 8;
-/** `grid.bottom` of a rotated axis: room for an 18-character label turned by 40 degrees. */
-export const ROTATED_BOTTOM_PX = 84;
+/**
+ * `grid.bottom` and `grid.left` of a rotated axis. They are only margins: the grid uses `containLabel` there, which fits the turned names (and the y
+ * axis's numbers) INSIDE the rectangle these two describe, so a big value would count their room twice (the plot kept a third of a narrow card).
+ */
+export const ROTATED_BOTTOM_PX = 8;
+export const ROTATED_LEFT_PX = 12;
+/** `grid.left` of a wrapped axis (no containLabel there: the slots are counted from this edge, GRID_SIDES_PX is this plus the 20 on the right). */
+export const WRAPPED_LEFT_PX = 60;
 /** The tick and the margin under the plot, before the first line of text. */
 const BOTTOM_BASE_PX = 16;
 /** The last line must keep at least this much for the name when the suffix shares it; below it the suffix takes a line of its own. */
 const MIN_TAIL_PX = 30;
 const STEP_PX = 8;
 
-const NARROW = new Set(Array.from("iljtf.,:;'|!"));
-const WIDE = new Set(Array.from("mwMW%GOQ"));
-const LOWER = /^[a-z]$/;
+/**
+ * The width of each character of a label at 12 px, in the class its width falls in, as the browser draws it (canvas measureText with "12px sans-serif",
+ * the font ECharts labels use; Arial's widths, measured in Chromium). A class holds the widest of its members, rounded up to 0.01 px.
+ * Calibrated for w14 F1: the old classes (capitals, digits and every mark 8.6 px, then 5 percent) made "CRAH-3" 54 px wide where it is 44.
+ */
+const CLASS_PX: ReadonlyArray<readonly [string, number]> = [
+  ["ijl'", 2.67],
+  [" !|.,:;/\\[]ftI", 3.34],
+  ["()-r`{}", 4.01],
+  ['*"', 4.67],
+  ["ckvxyszJ^", 6.0],
+  ["0123456789abdeghnopquL#?_$", 6.68],
+  ["+<=>~", 7.01],
+  ["FTZ", 7.33],
+  ["ABEKPSVXY&", 8.01],
+  ["CDHNRUw", 8.67],
+  ["GOQ", 9.34],
+  ["Mm", 10.0],
+  ["%", 10.67],
+  ["W", 11.33],
+  ["@", 12.19],
+];
+const CHAR_PX = new Map(CLASS_PX.flatMap(([chars, px]) => Array.from(chars, (char) => [char, px] as const)));
+/** A character no class knows (another script, an emoji, an accent): counted wide. A line too narrow for it is cut by the chart's own truncation. */
+const OTHER_PX = 8.6;
+/** The small margin over the sum: kerning and rounding differences between the platforms' text engines. */
+const MARGIN = 1.03;
 
 /**
- * An estimate of the width of `text` at 12 px, per character class, deliberately WIDER than any common system font so that a line the
- * estimate lets through never reaches the neighbouring slot: upper case, digits and the marks `#()~*` 8.6 px, lower case 7 px, narrow
- * letters and punctuation 3.8 px, wide letters (m w M W % and the round capitals G O Q, which the library's own width table puts above 9 px) 11 px, @ 12 px,
- * a space 3.6 px, anything else 8.6 px, then 5 percent on the sum.
+ * An estimate of the width of `text` at 12 px: the sum of CLASS_PX over its characters, plus 3 percent. It is never below the real width of any
+ * text made of the known characters (barAxis.test.ts compares it with the measured widths), and is within a few percent above it, so a name that fits
+ * its slot is not broken or cut for nothing.
  */
 export function textPx(text: string): number {
   let sum = 0;
-  for (const char of text) {
-    if (char === " ") sum += 3.6;
-    else if (char === "@") sum += 12;
-    else if (WIDE.has(char)) sum += 11;
-    else if (NARROW.has(char)) sum += 3.8;
-    else if (LOWER.test(char)) sum += 7;
-    else sum += 8.6;
-  }
-  return sum * 1.05;
+  for (const char of text) sum += CHAR_PX.get(char) ?? OTHER_PX;
+  return sum * MARGIN;
 }
 
 /** The identifying tail `chartLabels` appends (" (#12)", then " ~", then " *"); the same pattern `shortLabel` keeps whole (lib/widgetFormat.ts). */
@@ -63,6 +85,17 @@ interface Row { text: string; end: number }
 const PIECES = /[^-_/]+[-_/]*|[-_/]+/g;
 
 /**
+ * A word's pieces with a last piece of one or two characters joined to the piece before it, when the two fit a line together: "CRAH-" and "3"
+ * stay "CRAH-3", so a line that ends in a hyphen never leaves a lone "3" behind (it would be drawn as "CRAH-" over "3"); the pair moves to the next
+ * line whole. A pair wider than a line keeps its break after the hyphen.
+ */
+function withTail(pieces: string[], linePx: number): string[] {
+  if (pieces.length < 2 || Array.from(pieces[pieces.length - 1]).length > 2) return pieces;
+  const joined = `${pieces[pieces.length - 2]}${pieces[pieces.length - 1]}`;
+  return textPx(joined) <= linePx ? [...pieces.slice(0, -2), joined] : pieces;
+}
+
+/**
  * The body in rows no wider than `linePx`: words stay whole where they fit, a word is broken after a hyphen, underscore or slash when it
  * does not, and a piece still wider than a row is cut by characters.
  */
@@ -77,7 +110,7 @@ function wrapBody(body: string, linePx: number): Row[] {
   for (const found of body.matchAll(/\S+/g)) {
     let glue = " "; // the first piece of a word is set off from the row's text by a space, the others join it
     let at = found.index;
-    for (const piece of found[0].match(PIECES) ?? [found[0]]) {
+    for (const piece of withTail(found[0].match(PIECES) ?? [found[0]], linePx)) {
       const pieceEnd = at + piece.length;
       at = pieceEnd;
       if (text && textPx(`${text}${glue}${piece}`) <= linePx) {
@@ -153,8 +186,27 @@ export interface AxisLayout {
   lines: number;
   /** The text of each label as the axis draws it; a wrapped label has its lines joined with a newline. */
   labels: Map<string, string>;
-  /** `grid.bottom`: the room under the plot for the labels. */
+  /** `grid.bottom`: the room under the plot for the labels (wrapped), or the margin under the turned names (rotated, which uses containLabel). */
   bottom: number;
+  /** `grid.left`: WRAPPED_LEFT_PX, or ROTATED_LEFT_PX when rotated (containLabel counts the y axis's numbers). */
+  left: number;
+}
+
+/** What the y axis's numbers take left of the plot at the least: one digit (7 px) and the 8 px margin the chart library keeps before the plot. */
+const Y_NUMBERS_PX = 15;
+const COS_TURN = Math.cos((40 * Math.PI) / 180);
+const SIN_TURN = Math.sin((40 * Math.PI) / 180);
+
+/**
+ * `grid.left` of a rotated axis. containLabel (echarts 5.6, Grid.js) takes the HEIGHT of the turned names off the bottom and the WIDTH of the y numbers
+ * off the left, and nothing else: the first name is drawn ending at its tick, reaching back to the lower left by its width * cos(40 degrees) plus half
+ * of its height * sin(40 degrees), and that is cut at the picture's edge unless the margin, the y numbers and the first slot's half hold it.
+ * So the margin is what is missing of that reach, plus 4 px (a third of a slot counts, not half: the plot narrows as the margin grows), never
+ * below ROTATED_LEFT_PX and never above two fifths of the chart (a name that wide is cut rather than leave no plot).
+ */
+function rotatedLeft(first: string, slot: number, chartWidth: number): number {
+  const reach = textPx(first) * COS_TURN + (LABEL_LINE_PX / 2) * SIN_TURN;
+  return Math.max(ROTATED_LEFT_PX, Math.min(Math.floor(chartWidth * 0.4), Math.ceil(reach - Y_NUMBERS_PX - slot / 3) + 4));
 }
 
 /**
@@ -164,7 +216,10 @@ export interface AxisLayout {
  */
 export function barAxisLayout(labels: readonly string[], chartWidth: number): AxisLayout {
   const slot = (chartWidth - GRID_SIDES_PX) / Math.max(labels.length, 1);
-  const rotated = (): AxisLayout => ({ mode: "rotate", slot, lines: 1, labels: shortLabels(labels, AXIS_CHARS), bottom: ROTATED_BOTTOM_PX });
+  const rotated = (): AxisLayout => {
+    const short = shortLabels(labels, AXIS_CHARS);
+    return { mode: "rotate", slot, lines: 1, labels: short, bottom: ROTATED_BOTTOM_PX, left: rotatedLeft(short.get(labels[0] ?? "") ?? "", slot, chartWidth) };
+  };
   if (!(slot >= MIN_SLOT_PX)) return rotated();
   const linePx = slot - SLOT_GAP_PX;
   const names = [...new Set(labels)];
@@ -176,7 +231,7 @@ export function barAxisLayout(labels: readonly string[], chartWidth: number): Ax
   if (new Set(texts).size < texts.length) return rotated();
   const lines = Math.max(1, ...[...wrapped.values()].map((rows) => rows.length));
   return {
-    mode: "wrap", slot, lines, bottom: BOTTOM_BASE_PX + lines * LABEL_LINE_PX,
+    mode: "wrap", slot, lines, bottom: BOTTOM_BASE_PX + lines * LABEL_LINE_PX, left: WRAPPED_LEFT_PX,
     labels: new Map([...wrapped].map(([name, rows]) => [name, rows.join("\n")] as const)),
   };
 }
