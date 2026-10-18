@@ -33,161 +33,119 @@ filter, remembered fold, CSV and closed month is unchanged.
 
 ## w18 (2026-10-18, e1be322)
 
-w18 makes the controls consistent and says plainly what removing assets does, front end only: no migration, no new permission, no API change.
-**One height for every control:** buttons, fields, selects, filter chips, the top bar's Find field and its Live chip are all 34 px tall (the
-Live chip was 28 px, the asset page's "live" chip 22 px, and the fields and selects on Billing, Audit, Dashboards and Diagnostics were 38 px
-beside 34 px buttons); the asset page's chip and Billing's Closed chip are as tall as the buttons beside them. Borderless text buttons stay
-30 px and icon buttons 28 px. The loading skeletons draw the same heights, so a form does not move when it loads. **The note box** of Close month
-and Reopen month (and the Targets box of a scan scope) is at least four lines tall and at most twelve lines or 40 percent of the window,
-whichever is less: you can drag it between those limits, and a longer note scrolls inside it. **Removing assets or a source:** when the removal
-takes mappings, its confirmation adds a paragraph of its own: a month that is not closed follows today's assets (or mappings) and loses those
-figures, so close a finished month first to keep its bill; after an asset is removed its points and readings stay, so mapping the same points to an
-asset again brings the figures back, while removing a source deletes its points too. The Storage page says that removing assets or sources
-never removes readings, that retention trims them, and that the hourly summaries stay. **Not changed:** every figure, rate, marker, CSV and
-closed month, and the readings themselves (only retention removes them). A new end-to-end spec, `w18.spec.ts`, measures the real pages, so a
-control that is 4 px off fails a test. Nothing to do when you upgrade; the code to go back to is `71be4c9`.
+w18 makes the controls consistent and says plainly what removing assets does, front end only: no migration, no new permission, no API
+change. **One height for every control:** buttons, fields, selects, filter chips, the top bar's Find field and its Live chip are all 34
+px tall (borderless text buttons stay 30 px and icon buttons 28 px), and the loading skeletons draw the same heights. **The note box** of
+Close month and Reopen month (and the Targets box of a scan scope) is at least four lines tall and at most twelve lines or 40 percent of
+the window; a longer note scrolls inside it. **Removing assets or a source:** when the removal takes mappings, the confirmation says that
+a month that is not closed follows today's assets and loses those figures, so close a finished month first to keep its bill; after an
+asset is removed its points and readings stay, so mapping the same points to an asset again brings the figures back, while removing a
+source takes its points too. The Storage page says that removing assets or sources never removes readings, that retention trims them, and
+that the hourly summaries stay. **Not changed:** every figure, rate, marker, CSV and closed month, and the readings themselves. A new
+end-to-end spec, `w18.spec.ts`, measures the real pages, so a control that is 4 px off fails a test. Nothing to do when you upgrade; the
+code to go back to is `71be4c9`.
 
 ## w17 (2026-10-18, d68bf39)
 
-w17 makes Billing usable with a real data centre, front end only: no migration, no new permission, no API change. **Billing:** a row
-with assets below it has a small arrow that folds them (a folded row keeps its own rate, month total and day figures, which already
-include everything below it); **Collapse all**, **Expand all** and **Show levels** fold many rows at once; a filter box (**Filter by asset name**) shows the
-rows whose name contains your text, with their parents ("12 of 370 rows match"); and the header with the day numbers stays at the top
-while the rows scroll, as the first column stays while the days scroll sideways. A month with more than 60 rows opens folded to the
-deepest level that keeps 60 rows or fewer (24 rows for the 370-asset demo hall). The fold is remembered in this browser for this site
-address, not per month or account; the filter is not. **Assets Tree:** a tree of more than 60 assets opens folded to its second level when
-nothing is remembered, and the selected asset is scrolled into view; a browser holding the empty fold the tree used to write on every
-visit reads it as "nothing remembered", so a big tree opens folded there too (Expand all is remembered). **Not changed:** every figure,
+w17 makes Billing usable with a real data centre, front end only: no migration, no new permission, no API change. **Billing:** a row with
+assets below it has an arrow that folds them (a folded row keeps its own rate, month total and day figures, which already include
+everything below it); **Collapse all**, **Expand all** and **Show levels** fold many rows at once; a filter box (**Filter by asset
+name**) shows the matching rows with their parents ("12 of 370 rows match"); and the header with the day numbers stays at the top while
+the rows scroll. A month with more than 60 rows opens folded to the deepest level that keeps 60 rows or fewer. The fold is remembered in
+this browser for this site address, not per month or account; the filter is not. **Assets Tree:** a tree of more than 60 assets opens
+folded to its second level when nothing is remembered, and the selected asset is scrolled into view. **Not changed:** every figure,
 marker, rate and total, the CSV (every asset and every day, whatever is folded), closed months and the API. Nothing to do when you
 upgrade; the code to go back to is `8d3ef40`.
 
 ## w14 (2026-10-18, 73d0469)
 
 w14 is a polish wave after w12c and w13, front end only: no migration, no new permission, no new widget type, and no figure, unit,
-rounding or claim of a widget has changed. **Bar charts:** on a bar chart of one figure per asset every asset's name now stands under its
-bar, wrapped over up to three lines when the card is wide enough (and turned at an angle when it is not), instead of running into its
-neighbour or going missing; the asset that has no data keeps its label and an empty slot. **Discovery:** a source card shows its name on
-up to two lines (it was cut after about 14 letters), the empty progress track of `0 of 60 mapped` is visible in the dark looks, and the
-bar above the canvas keeps the words of its counts (`4 sources`, `180 points`, `62 mapped`) on a 1440 px window with the sidebar open,
-while the Snap to grid, Find and Tidy layout buttons turn into icons first; **Snap to grid** switched on is a tinted button with a line
-along its foot, no longer the same blue outline as the keyboard focus ring. **Details:** the figures table has three plain columns
-(`Lowest`, `Highest`, `Last bucket`), `Highest` says `bucket from <time>` under its value (the time is the start of a bucket, not the
-moment of the peak), the panel is 560 px wide, and next to a "no rate" line a person who may open Tariffs gets the link **Set a rate in
-Tariffs**. **Top bar:** at an 800 px window with the sidebar open the page no longer scrolls sideways by 18 px (the find field is allowed
-to shrink). Nothing to do when you upgrade (no migration, no new setting); the code to go back to is `c0e355d`. Checked by the full
-frontend suite (242 files, 8,538 tests), the type checks and the build, and the isolated Playwright run on a build of the merged code
-(367 passed, 0 failed, with the new `w14` project of 22 cases).
+rounding or claim of a widget has changed. **Bar charts:** every asset's name now stands under its bar, wrapped over up to three lines
+when the card is wide enough (turned at an angle when it is not); the asset with no data keeps its label and an empty slot.
+**Discovery:** a source card shows its name on up to two lines, the empty progress track of `0 of 60 mapped` is visible in the dark
+looks, the bar above the canvas keeps the words of its counts on a 1440 px window with the sidebar open (the Snap to grid, Find and Tidy
+layout buttons turn into icons first), and **Snap to grid** switched on is a tinted button with a line along its foot. **Details:** the
+figures table has three plain columns (`Lowest`, `Highest`, `Last bucket`), `Highest` says `bucket from <time>` (the start of a bucket,
+not the moment of the peak), the panel is 560 px wide, and next to a "no rate" line a person who may open Tariffs gets **Set a rate in
+Tariffs**. **Top bar:** at an 800 px window with the sidebar open the page no longer scrolls sideways. Nothing to do when you upgrade;
+the code to go back to is `c0e355d`.
 
 ## w16 (2026-10-18, 088aa67)
 
 w16 adds a second layout to the development history seeder: `python -m dcdash.seed.history --layout pilot-hall` makes a made-up data
 centre for demos and tests, with a month of readings, on a development or scratch stack. It is the Site "Seeded pilot hall" with two
 halls, four pods, eight rows and 117 racks, each rack with a Feed A and a Feed B (370 assets, 442 points), and an "Electrical" group with
-eight panels. A feed has an energy counter and a power point that read the same load, which follows the hour of the day and differs by a
-few per cent from one day to the next; 100 racks are live, 6 idle, 5 have one feed, 6 are free (the feeds exist, nothing is metered);
-eight Hall 2 feeds report power only, so their energy is an estimate (`~`) and Hall 1 is exact; one feed has a 6-hour gap and one counter
-resets once. The panels carry voltage and current only, never energy, because a parent without a meter adds up every child and a kWh
-meter on a panel beside the halls would count the same energy twice at the Site and in Billing. Every name is generic; there are no
-tenants. It uses only asset kinds that exist (a fresh install has "Room" for halls and pods; the Asset kinds page's "Add all 39
-data-centre kinds" gives "Data hall"), and the dry run and the report say which kind each level got. It is as guarded as the first layout:
-nothing is written without `--yes` and `DCDASH_ALLOW_SEED_HISTORY=1`, no audit row, tariff, dashboard, setting or kind is written, a
-second run is refused, the raw-retention clamp and the pending-drop check are the same, and a run that fails or is stopped removes what
-it made. `--interval-minutes` (5, 10, 15, 30, 60; default 30) sets the spacing of the samples and `--days N` the range. Measured on a
-development PC: about 615,000 readings and a minute and a half for the default range (29 days, the default 30-day raw retention), about
-1,000,000 readings and a little over two minutes for a whole previous month (raw retention 60 days). Billing for the previous month, the
-Assets Tree, a rack's Feed page and its 7d trend then have data to show; the commands for Linux and for Windows PowerShell, how to see
-past data and how to remove the seed are in [Developing](docs/developing.md#the-pilot-hall-a-demo-tree-with-racks). The default layout
-(three panels) and its figures are unchanged. No migration, no API or screen change, no new permission; nothing to do on upgrade.
+eight panels. A feed has an energy counter and a power point; 100 racks are live, 6 idle, 5 have one feed, 6 are free (nothing is
+metered); eight Hall 2 feeds report power only, so their energy is an estimate (`~`) and Hall 1 is exact; one feed has a 6-hour gap and
+one counter resets once. The panels carry voltage and current only, never energy, because a kWh meter on a panel beside the halls would
+count the same energy twice at the Site and in Billing. Every name is generic; there are no tenants. It is as guarded as the first
+layout: nothing is written without `--yes` and `DCDASH_ALLOW_SEED_HISTORY=1`, no audit row, tariff, dashboard, setting or kind is
+written, a second run is refused, and a run that fails or is stopped removes what it made. `--interval-minutes` (5, 10, 15, 30, 60;
+default 30) sets the spacing of the samples and `--days N` the range; the default range is about 615,000 readings and a minute and a
+half, a whole previous month about 1,000,000 readings and a little over two minutes (raw retention 60 days). The commands for Linux and
+Windows PowerShell, how to see past data and how to remove the seed are in
+[Developing](docs/developing.md#the-pilot-hall-a-demo-tree-with-racks). The default layout and its figures are unchanged. No migration,
+no API or screen change, no new permission; nothing to do on upgrade.
 
 ## w13 (2026-10-17, 4202012)
 
-w13 (the dashboard widget overhaul) changes how the dashboard widgets look and what they tell you; no figure, unit or rounding a widget
-shows has changed. The widgets follow the theme: a card in the app's own colours (light, dark and the four theme colours; the white card
-on a dark page is gone), with a 36 px header, small icon buttons (**Details** and **CSV**), and one footer line that holds "since 10:46"
-and the marker hint (`~ estimated`, `* partial`, `— no rate`) for every widget type. A cost with no rate now says `— no rate` under a stat
-and a table as well, not only under a chart. A card narrower than 200 px (a two-column stat or gauge on a small window) moves its CSV
-button into **Details**. The charts use one palette of eight colours measured for contrast in light and in dark (a chart with one series
-uses the theme colour; series 6 to 8 are dashed and 9 and later dotted), with the axes, grid, legend and tooltip in the theme's colours;
-they repaint after a Mode or Theme colour switch without a reload, and a tooltip line carries the state in words (estimated, partial, no
-rate) beside the markers. The gauge is a half-circle arc with the scale ends, the figure, its unit and the asset name under it, so
-nothing overlaps at the smallest size (two columns by two rows); a screen reader hears a meter. **Details** opens a right-hand panel
-for the widget: what it shows (type, source with its unit, what the figure is, the assets with links to their pages), the time window
-with the site time zone, how fresh a latest reading is (for a finished range the hour the last value belongs to, never a made-up second),
-what each marker means for this widget, the state of each asset, and for a chart a small table (lowest, highest and the bucket it fell
-in, the last bucket, and a total only when it is exact). It never shows an average over buckets, and never a bucket width for a metric
-time series, because the server does not send one. Small bugs are fixed: switching an asset off in a chart legend now removes its
-min-max band too; the remembered legend choice is kept when an asset gains or loses a `~` or `*`; the grouped bar's no-rate dash sits in
-its own asset's slot; a chart has a text alternative and a widget's title is a level 2 heading; the gauge no longer overlaps at two rows;
-a card shows a skeleton instead of "loading…". The editor's preview is the same card as the dashboard's, and edit mode has a grip, a
-pencil and a bin icon, with the resize handles and the drop placeholder visible in dark. No migration, no backend change, no new
-permission, saved dashboards and widgets keep working unchanged. To tweak the look, the tokens are `--widget-pad`, `--widget-head-h`,
-`--widget-row-h`, `--widget-radius`, `--widget-shadow`, `--widget-figure` (card density and corners), `--chart-1` to `--chart-8`,
-`--chart-band-opacity`, `--chart-grid`, `--chart-tip-bg` (the palette) and `--gauge-width`, `--gauge-track`, `--gauge-fill` (the gauge);
-the gauge's arc shape (a half circle) is a code constant. The usual steps of [Upgrading and going back](docs/upgrading.md) are all it
-needs; the code to go back to is `b4f295f`. See [Dashboards and billing](docs/dashboards-and-billing.md), [Screens](docs/screens.md) and
-[End-to-end tests](docs/end-to-end-tests.md).
+w13 (the dashboard widget overhaul) changes how the widgets look and what they tell you; no figure, unit or rounding has changed. The
+widgets follow the theme (light, dark and the four theme colours; the white card on a dark page is gone), with a 36 px header, small
+**Details** and **CSV** buttons and one footer line that holds "since 10:46" and the marker hint (`~ estimated`, `* partial`, `— no
+rate`) for every widget type; a cost with no rate now says `— no rate` under a stat and a table too. The charts use one palette of
+eight colours measured for contrast in light and dark (series 6 to 8 are dashed, 9 and later dotted) with the axes, grid, legend and
+tooltip in the theme's colours, repainting after a Mode or Theme switch without a reload. The gauge is a half-circle arc that no longer
+overlaps at the smallest size. **Details** opens a right-hand panel: what the widget shows (type, source and unit, the assets with
+links), the time window with the site time zone, how fresh the latest reading is, what each marker means, the state of each asset and,
+for a chart, a small table (lowest, highest and its bucket, the last bucket, a total only when it is exact); it never shows an average
+over buckets. Small bugs are fixed (a legend switch now removes its min-max band, the legend choice survives a `~` or `*`, a chart has a
+text alternative, a card shows a skeleton while loading). No migration, no backend change, no new permission; saved dashboards keep
+working. To tweak the look, the tokens are `--widget-pad`, `--widget-head-h`, `--widget-row-h`, `--widget-radius`, `--widget-shadow`,
+`--widget-figure` (density and corners), `--chart-1` to `--chart-8`, `--chart-band-opacity`, `--chart-grid`, `--chart-tip-bg` (the
+palette) and `--gauge-width`, `--gauge-track`, `--gauge-fill` (the gauge); the gauge's half-circle shape is a code constant. The usual
+steps of [Upgrading and going back](docs/upgrading.md) are all it needs; the code to go back to is `b4f295f`. See [Dashboards and
+billing](docs/dashboards-and-billing.md), [Screens](docs/screens.md) and [End-to-end tests](docs/end-to-end-tests.md).
 
 ## w12c (2026-10-17, 2572801)
 
-w12c (Discovery visual polish) tidies the look of Discovery without changing what it does. The bar above the canvas is one regrouped bar:
-on the left four small counts with icons (sources, points, mapped, and **needs credentials** when a source does), then **Collapse all** and
-**Expand all** with their menus, **Unmapped only**, **Tidy layout**, then **Find** and **Snap to grid**, then three icon buttons: **Refresh**,
-**Keyboard shortcuts and controls** and a **More** menu that holds **Clear unmapped (N)**. On a narrower window the words leave the buttons
-one at a time (the icons stay, with tooltips and names for a screen reader), and on a still narrower one **Unmapped only**, **Tidy layout**
-and **Snap to grid** move into the **More** menu; the **Find** card still opens at the top right of the canvas. The `?` hint beside the title
-is gone: the keyboard button (or the `?` key while the canvas has the focus) opens a small bubble that lists the real controls in groups
-with key caps. A source's card is calmer: the protocol icon, a short name (the host and port move to a grey line under it), a status dot
-with its word, a bar and the words `60 of 60 mapped`, **Details** as the one visible button, and a **Source actions** `...` button that
-opens the same menu as a right-click, where **Create assets for N groups...** and **Remove from Discovery...** now are. Every node has an
-icon: an asset shows the icon the Assets Tree shows for it, a group, a point (by its metric: power, energy, voltage, current, other) and a
-source (by protocol: OPC UA, Modbus, simulator). The page title has its icon like the other pages, and the **Find** results show the same
-icons. Resting the pointer on a **mapped** point (or focusing it by keyboard) shows its last value, for example `51.43 A, 3 s ago`, with
-the word `stale` when the reading is older than its interval allows, `No value ... bad reading` when the poll failed, and `No reading yet`
-when there is none; a person who may not view assets sees no card and nothing is asked of the server. Behind it: `GET /api/discovery/graph`
-now gives each asset its `icon` and `kind_icon`, and a new read `GET /api/mappings/{id}/latest` (needs `assets.view`) gives the value, unit,
-time, quality, age and `stale` of one mapping. No migration, no new permission, nothing new in the Audit log. The usual steps of
-[Upgrading and going back](docs/upgrading.md) are all it needs; the code to go back to is `bd96e05`. See
-[Discovery](docs/sources-and-discovery.md), [Screens](docs/screens.md) and [End-to-end tests](docs/end-to-end-tests.md).
+w12c (Discovery visual polish) tidies the look of Discovery without changing what it does. The bar above the canvas is regrouped: counts
+with icons (sources, points, mapped, **needs credentials**), **Collapse all** and **Expand all**, **Unmapped only**, **Tidy layout**,
+**Find**, **Snap to grid**, and the icon buttons **Refresh**, **Keyboard shortcuts and controls** (a bubble of the real controls, also
+the `?` key) and a **More** menu that holds **Clear unmapped (N)**; on a narrower window the words leave the buttons one at a time and
+the rarer ones move into **More**. A source card is calmer (protocol icon, a short name, a status dot with its word, a progress bar with
+`60 of 60 mapped`, **Details**, and a **Source actions** `...` button that opens the right-click menu). Every node has an icon, and
+resting the pointer on a **mapped** point shows its last value (`51.43 A, 3 s ago`, with `stale`, `bad reading` or `No reading yet` when
+that applies); a person who may not view assets sees no card. Behind it: `GET /api/discovery/graph` now gives each asset its `icon` and
+`kind_icon`, and a new read `GET /api/mappings/{id}/latest` (needs `assets.view`) gives one mapping's value, unit, time, quality, age and
+`stale`. No migration, no new permission. The usual steps of [Upgrading and going back](docs/upgrading.md) are all it needs; the code to
+go back to is `bd96e05`. See [Discovery](docs/sources-and-discovery.md), [Screens](docs/screens.md) and [End-to-end
+tests](docs/end-to-end-tests.md).
 
 ## w12b (2026-10-16, 0909a1e)
 
-w12b (Discovery speed and navigation) makes the Discovery canvas quick on big graphs and adds the tools for working through them. It was
-measured first: the slow drag over about 100 to 150 points came from the dashed lines between a group and its points, which are tens of
-thousands of pixels long, so a group that draws more than 150 points now draws them solid (nothing else about them changes), and hovering
-or opening a group in a graph of about 2,000 nodes redraws only the nodes that changed. New in the bar above the canvas: a small arrow
-beside **Collapse all** and beside **Expand all** opens a menu to close or open only the **selection** (the sources, groups and assets
-you selected) or one **branch** (them and everything under them), the right-click menus of nodes, selections and empty canvas offer the
-same, and a message says how many opened or closed; an **Unmapped only** switch hides every point that is already mapped, the groups and
-sources with nothing left to map, and the lines to assets, and the summary then reads `Showing 42 of 60 points, 3 sources, 18 mapped`
-(remembered in your browser; **Find** still reaches a hidden node and turns the switch off for it). An open group of more than 50 points
-draws 50, with a **Show 50 more (70 left)** button at the end of the list; a point that is not drawn yet keeps its line to its asset, so
-no mapping disappears. An asset with sub-assets has a small arrow to fold them away (a folded asset shows how many points are mapped inside it;
-remembered in your browser; adding a sub-asset under a folded asset unfolds it). The arrow keys move between nodes (Up and Down between neighbours, Right to the first child, Left to the
-parent), Enter opens or closes a source, a group or an asset, the Menu key opens the actions, and every node has a name for a screen
-reader such as `LVP01, group of 6 points, 6 mapped, open`. Expand all still never draws more than 600 new nodes in one go. One thing
-to know: rows close up when you filter, fold or close, and a node you pinned by hand with an Alt-drag keeps its place, so closed-up rows can
-lie over it; **Tidy layout** puts everything back. No migration, no new permission, front end only, and nothing new in the Audit log.
-The usual steps of [Upgrading and going back](docs/upgrading.md) are all it needs; the code to go back to is `2d1493c`. See
-[Discovery](docs/sources-and-discovery.md) and, for the speed script, [End-to-end tests](docs/end-to-end-tests.md).
+w12b (Discovery speed and navigation) makes the Discovery canvas quick on big graphs. The slow drag came from the dashed lines between a
+group and its points, so a group that draws more than 150 points now draws them solid, and hovering or opening a group in a graph of
+about 2,000 nodes redraws only what changed. New: a menu beside **Collapse all** and **Expand all** to close or open only the
+**selection** or one **branch**; an **Unmapped only** switch (remembered in your browser; **Find** still reaches a hidden node); **Show
+50 more** at the end of a group of more than 50 points (a point not drawn yet keeps its line to its asset, so no mapping disappears); a
+fold arrow on an asset with sub-assets; and arrow-key navigation with a screen-reader name on every node (Enter opens or closes, the Menu
+key opens the actions). Expand all never draws more than 600 new nodes at once. Closed-up rows can lie over a node you pinned by hand
+with an Alt-drag; **Tidy layout** puts everything back. No migration, no new permission, front end only. The usual steps of [Upgrading
+and going back](docs/upgrading.md) are all it needs; the code to go back to is `2d1493c`. See [Discovery](docs/sources-and-discovery.md)
+and [End-to-end tests](docs/end-to-end-tests.md).
 
 ## W12a (2026-10-16, merge commit 4e14905)
 
-W12a (mapping actions) lets you take a mapping off an asset, or move it to another asset, from the places you see it, with one
-confirmation and an Undo. In **Discovery**, a mapped point or group has a small **Mapping actions** button (the same menu as a
-right-click, or Shift+F10 on the node) with **Unmap…** and **Move to another asset…** (for a group: **Unmap this group…** and
-**Move this group's mappings…**); an asset's right-click menu has **Unmap everything from <source>…**. On the **asset page** every metric
-row has an actions menu with the same two items, and on the **Points page** **Unmap…** now asks first. Each one says what it does to
-billing (months that are still open are recalculated, closed months keep their billed figures), works one mapping at a time, stops at
-the first failure and tells you which went, and shows an **Undo** for 10 seconds (also **Ctrl+Z**); Undo puts back exactly the scale,
-interval and unit that were removed. Mapping in Discovery now gets an Undo too (**Mapped 6 points to Room 1.**), a note when the
-target is a room, building, site or row ("meters usually belong to a Panel or Rack"; it never blocks), and the Review can take several
-points dropped on an asset at once. **New asset…** in Discovery opens the same form as the Assets page (kind, icon, parent); for a
-group the Review opens on the new asset next. A small **+** on an asset node (hover, focus or select it; click, press Enter, or drag
-the line to empty canvas) adds a sub-asset. Unmap, move, Undo, New asset and the **+** need Edit assets; mapping still needs Accept
-scan results. No migration, no new permission; one new read, `GET /api/mappings/{id}` (Edit assets), and the Audit entry for a deleted
-mapping now also holds its scale, interval and unit. The usual steps of [Upgrading and going back](docs/upgrading.md) are all it
-needs; the code to go back to is `09ed32a`. See [Discovery](docs/sources-and-discovery.md) and
-[Taking mappings off an asset or moving them](docs/assets-and-kinds.md).
+W12a (mapping actions) lets you take a mapping off an asset, or move it to another asset, with one confirmation and a 10-second **Undo**
+(also **Ctrl+Z**). In **Discovery**, a mapped point or group has a **Mapping actions** button (the same menu as a right-click) with
+**Unmap…** and **Move to another asset…**; the **asset page**'s metric rows have the same two items, and **Unmap…** on the **Points
+page** now asks first. Each says what it does to billing (open months are recalculated, closed months keep their billed figures). Mapping
+in Discovery gets an Undo too, a soft note when the target is a room, building, site or row, and the Review takes several dropped points
+at once; **New asset…** opens the real asset form, and a **+** on an asset node adds a sub-asset. These need Edit assets (mapping still
+needs Accept scan results). No migration, no new permission; one new read, `GET /api/mappings/{id}` (Edit assets), and the Audit entry
+for a removed mapping now also holds its scale, interval and unit. The usual steps of [Upgrading and going back](docs/upgrading.md) are
+all it needs; the code to go back to is `09ed32a`. See [Discovery](docs/sources-and-discovery.md) and [Taking mappings off an asset or
+moving them](docs/assets-and-kinds.md).
 
 ## W11 (2026-10-15, merge commit dee0ce8)
 
