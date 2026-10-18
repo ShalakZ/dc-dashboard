@@ -26,10 +26,10 @@ const notDrawn = (el: HTMLElement | null) => el !== null && getComputedStyle(el)
  * The bar above the Discovery canvas, left to right: chips (what the graph holds), View controls (Collapse all, Expand all, each with a chevron
  * menu for the selection and the branch, the Unmapped only switch, Tidy layout), Canvas controls (Find, Snap to grid) and Page controls
  * (Refresh, the shortcuts bubble the page hands in, and an overflow menu). It is 36px tall in every state and its width tiers are CSS
- * container queries (discovery-tidy.css): chips shrink to icon and number first, then the controls lose their words ONE AT A TIME (Snap to grid,
- * Find, Tidy layout, Unmapped only, then Collapse all and Expand all together; each word has its own `gbar-lbl-*` class, and the word stays in the
- * accessibility tree, visually hidden, with the control's `title`), and below that Unmapped only, Tidy layout and Snap to grid leave the bar and
- * are offered in the overflow menu.
+ * container queries (discovery-tidy.css): the wide chips (a credentials chip, or a four-digit count: the row has `gbar-chips-wide`) shrink to icon and
+ * number first, then the controls lose their words ONE AT A TIME (Snap to grid, Find, Tidy layout, Unmapped only, then Collapse all and Expand all
+ * together; each word has its own `gbar-lbl-*` class, and the word stays in the accessibility tree, visually hidden, with the control's `title`), then
+ * the normal chips shrink too, and below that Unmapped only, Tidy layout and Snap to grid leave the bar and are offered in the overflow menu.
  *
  * The one announcer of the area is the summary sentence (visually hidden, `aria-live`); the chips are decoration. A button with nothing to do
  * keeps its place and says so (`aria-disabled` and a click guard, never `disabled`: it may hold the focus the click gave it).
@@ -101,12 +101,16 @@ export function GraphBar({
   };
 
   const pointsNum = unmappedOnly ? `${counts.unmapped} of ${counts.points}` : String(counts.points);
+  // The chips come in two families for the stylesheet's width tiers: "wide" when the credentials chip is drawn or a count has four digits (those need the
+  // room, so their words go early); everything else keeps its words until the bar is nearly out of room. Read from the counts, never from the "N of M"
+  // text, so turning Unmapped only on or off never moves the tier.
+  const wide = counts.needing > 0 || counts.sources >= 1000 || counts.points >= 1000 || counts.mapped >= 1000;
 
   return (
     <div className="graph-bar" onKeyDown={onKeyDown}>
       {/* The one announcer of this area: React leaves the text alone when the numbers do not change, so it speaks only when they do. */}
       <p className="graph-summary" aria-live="polite" aria-atomic="true" title={summary}>{summary}</p>
-      <div className="gbar-chips">
+      <div className={wide ? "gbar-chips gbar-chips-wide" : "gbar-chips"}>
         <Chip icon="sources" num={String(counts.sources)} word={plural(counts.sources, "source", "sources")} />
         <Chip icon="readings" num={pointsNum} word={plural(counts.points, "point", "points")} />
         <Chip icon="link" num={String(counts.mapped)} word="mapped" />

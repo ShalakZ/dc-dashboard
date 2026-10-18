@@ -9,7 +9,7 @@
   /* The one live sentence is read, not drawn: the chips show the same numbers. Visually hidden with the clip pattern (never display: none: that would drop it from the accessibility tree and silence it). */
   .graph-summary { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-  /* The chips take the free room (flex 1 1 0, min-width 0) and the controls keep their widths, so a chip that appears (needs credentials) moves nothing at its right. A chip is icon, number and words; its words go first. */
+  /* The chips take the free room (flex 1 1 0, min-width 0) and the controls keep their widths, so a chip that appears (needs credentials) moves nothing at its right. A chip is icon, number and words; its words go when the bar is short of room (the wide chips first, the normal chips last). */
   .gbar-chips { flex: 1 1 0; min-width: 0; display: flex; flex-wrap: wrap; align-content: flex-start; align-items: center; gap: 0 14px; height: 20px; overflow: hidden; } /* one row of whole chips: a chip that does not fit is not drawn, never cut in half */
   .gbar-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; color: var(--text-2); font-size: var(--fs-sm); white-space: nowrap; }
   .gbar-chip svg.i { width: 16px; height: 16px; }
@@ -22,6 +22,11 @@
   /* Waiting buttons use aria-disabled, never disabled (they may hold the focus the click gave them): the looks of button:disabled, with the base hover wash taken back by naming the base colour. */
   .graph-bar button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
   .graph-bar button[aria-disabled="true"]:hover { background: var(--bg); }
+
+  /* W14: an ON control (Snap to grid is the bar's one aria-pressed button) must not read as the keyboard focus. The base look (app.css, button[aria-pressed="true"]) is an accent border, and the focus ring is an
+     accent-coloured 2px OUTSIDE outline, so a pressed button that held the focus looked like one thicker ring. Here the border stays neutral, the fill is the accent tint, and the state is a 2px accent line INSIDE the
+     foot of the button; the ring keeps the outside, so ON, ON with focus, OFF with focus and OFF all differ. Beats the base by specificity (a class more), never by !important. */
+  .graph-bar button[aria-pressed="true"] { border-color: var(--border-strong); background: var(--accent-tint); color: var(--accent-ink); box-shadow: inset 0 -2px 0 var(--accent); }
 
   /* W12b: the chevron beside Collapse all and Expand all (a menu for the selection and the branch) is drawn as the other half of a split button: 28px wide, joined to its button by taking back the 8px gap
      and 1px of border, the corners between them square. */
@@ -37,9 +42,10 @@
   .graph-bar .gbar-overflow[aria-expanded="true"] { background: var(--accent-tint); color: var(--accent); }
   .graph-bar .gbar-overflow-narrow { display: none; }
 
-  /* The width tiers, measured (Chromium on Linux, 2026-10-17, GraphBar's own markup with the built stylesheet in a wrapper 1920 down to 560px wide; the fallback sans for "Segoe UI" is wider than Segoe UI,
-     so the thresholds err on the safe side). The words of the controls leave ONE CONTROL AT A TIME as the bar narrows, so the bar keeps as many words as it has room for. "Worst" is 12 sources, 1,240
-     points with the filter on and 2 sources needing credentials: four chips with four-digit counts; "typical" is 3 sources, 120 points, 6 mapped.
+  /* The width tiers, measured (Chromium on Linux, 2026-10-18, GraphBar's own markup with the built stylesheet in a wrapper 1920 down to 560px wide, every 4px, both roles; the fallback sans for "Segoe UI" is wider
+     than Segoe UI, so the thresholds err on the safe side). The words of the controls leave ONE CONTROL AT A TIME as the bar narrows, so the bar keeps as many words as it has room for. The chips come in two
+     families: normal (the row has no extra class; the widest is 999 sources, 999 of 999 points with the filter on, 999 mapped) and wide (GraphBar adds gbar-chips-wide when a credentials chip is drawn or a
+     count has four digits). "Worst" is the wide family at its widest: 12 sources, 1,240 points with the filter on, 612 mapped and 2 sources needing credentials, four chips. "Typical" is 3 sources, 120 points, 6 mapped.
        controls (px)                                              admin   reader (no overflow button)
          every word in the bar                                      961     925
          Snap to grid as an icon                                    864     828
@@ -48,44 +54,55 @@
          + Unmapped only as an icon                                 621     585
          + Collapse all and Expand all as icons (all icons)         442     406
          all icons, three controls in the overflow menu             315     315   (the reader gets the overflow button here)
-       chips (px)                                                 typical    worst
-         with their words                                           295       539
-         as icon and number                                         136       267
-       the bar needs controls + 8 gap + chips, so with the worst chips as icon and number (267 + 8 = 275 beside the controls):
-         every word                                                1236   (the chips keep their words only while 961 + 8 + 539 = 1508 fit)
-         Snap to grid as an icon                                   1139
-         + Find as an icon                                         1094
-         + Tidy layout as an icon                                  1004
-         + Unmapped only as an icon                                 896
-         + Collapse all and Expand all as icons                     717
-     Each threshold is the need of the state it leaves, rounded up, so a chip is never dropped while a control could have dropped a word instead (the chips lose their words first, at 1520; then
-     Snap to grid at 1240, Find at 1140, Tidy layout at 1100, Unmapped only at 1010, Collapse all and Expand all together at 900; then Unmapped only, Tidy layout and Snap to grid go to the overflow
-     menu at 720). Sweep at 1920 1500 1400 1300 1200 1148 1100 1000 920 900 800 720 700 600: the bar is 36px tall at every width, its scrollWidth equals its clientWidth (nothing clips), nothing wraps
-     and the chips are whole (the worst case under about 590 inside the narrowest tier loses its last chip, never half of one). */
-  /* Tier 1: the chips keep their icon and number, their words go (the full words are in each chip's title and in the summary sentence). The chips are decoration (aria-hidden), so display: none is right here. */
+       chips (px)                                                 typical   widest normal   worst
+         with their words                                           295        381            539
+         as icon and number                                         136        223            267
+     The bar needs controls + 8 gap + chips. The control tiers and the normal chips' words are derived from the widest NORMAL set WITH its words (381), so any normal set keeps its words for as long as that
+     set would fit (a typical bar has room to spare); the worst chips lose their words at their own, earlier, tier; and the overflow tier is derived from the worst chips as icon and number (267), because a
+     chip is never dropped whole while a word could go:
+         worst chips with words and every control word                961 + 8 + 539 = 1508   -> the wide chips lose their words at 1520
+         widest normal chips with words and every control word        961 + 8 + 381 = 1350   -> Snap to grid loses its word at 1360
+         + Snap to grid as an icon                                    864 + 8 + 381 = 1253   -> Find at 1260
+         + Find as an icon                                            819 + 8 + 381 = 1208   -> Tidy layout at 1210
+         + Tidy layout as an icon                                     729 + 8 + 381 = 1118   -> Unmapped only at 1120
+         + Unmapped only as an icon                                   621 + 8 + 381 = 1010   -> Collapse all and Expand all together at 1010
+         all icons, the normal chips with their words                 442 + 8 + 381 =  831   -> the normal chips lose their words at 840
+         all icons, the worst chips as icon and number                442 + 8 + 267 =  717   -> Unmapped only, Tidy layout and Snap to grid go to the overflow menu at 720
+     Each threshold is the need of the state it leaves, rounded up to a multiple of 10. What the owner sees, measured (a bar is the window minus the sidebar and the page's padding):
+         bar 1148 (a 1440px window, the sidebar open)   the counts keep their words (a worst set shows icon and number); Snap to grid, Find and Tidy layout are icons; Unmapped only and
+                                                         Collapse all and Expand all keep their words (controls 729, normal chips 381, the bar has 1148)
+         bar 744 (a 1024px window, the sidebar open)    every control is an icon and the counts are icon and number (controls 442, normal chips 223, worst 267; the three narrow controls are still in the bar)
+     Sweep at every 4px from 1920 to 560, six sets (typical, widest normal and worst, each with the filter on and off) and both roles: the bar is 36px tall at every width, its scrollWidth equals its
+     clientWidth (nothing clips), nothing wraps, no chip is cut in half, and no chip is dropped whole while a word could go (the worst set at 580 or less, inside the narrowest tier, loses its last chip, never half of one). */
+  /* Tier 1: the WIDE chips (GraphBar adds gbar-chips-wide when a credentials chip is drawn or a count has four digits) keep their icon and number and lose their words (the full words are in each chip's title and
+     in the summary sentence). The chips are decoration (aria-hidden), so display: none is right here. */
   @container (max-width: 1520px) {
-    .gbar-chip-word { display: none; }
+    .gbar-chips-wide .gbar-chip-word { display: none; }
   }
   /* Tiers 2 to 6: a control keeps its icon and loses its word VISUALLY: the word stays in the accessibility tree (the clip pattern, never display: none), and the control keeps a title with it. A button
      also gives back the padding the word needed, so it is as wide as the icon-only buttons beside it. */
-  @container (max-width: 1240px) {
+  @container (max-width: 1360px) {
     .gbar-lbl-snap { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .gbar-group button:has(> .gbar-lbl-snap) { padding: 0 8px; }
   }
-  @container (max-width: 1140px) {
+  @container (max-width: 1260px) {
     .gbar-lbl-find { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .gbar-group button:has(> .gbar-lbl-find) { padding: 0 8px; }
   }
-  @container (max-width: 1100px) {
+  @container (max-width: 1210px) {
     .gbar-lbl-tidy { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .gbar-group button:has(> .gbar-lbl-tidy) { padding: 0 8px; }
   }
-  @container (max-width: 1010px) {
+  @container (max-width: 1120px) {
     .gbar-lbl-unmapped { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   }
-  @container (max-width: 900px) {
+  @container (max-width: 1010px) {
     .gbar-lbl-fold { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .gbar-group button:has(> .gbar-lbl-fold) { padding: 0 8px; }
+  }
+  /* Tier 7: every control is an icon now, so the NORMAL chips give up their words too (the last word to go, so a typical bar keeps them as long as it can). */
+  @container (max-width: 840px) {
+    .gbar-chip-word { display: none; }
   }
   @container (max-width: 720px) {
     .gbar-narrow { display: none; }

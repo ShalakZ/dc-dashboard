@@ -121,6 +121,37 @@ describe("GraphBar", () => {
       expect(chips()[1].querySelector(".gbar-chip-word")).toHaveTextContent("points");
     });
 
+    it("are \"wide\" (gbar-chips-wide on the row) when a credentials chip is drawn or a count has four digits, and plain otherwise", () => {
+      const wide = () => root().querySelector(".gbar-chips")!.classList.contains("gbar-chips-wide");
+      const cases: Array<[string, Partial<typeof COUNTS>, boolean]> = [
+        ["the typical set", {}, false],
+        ["the dev data (4 sources, 180 points, 62 mapped)", { sources: 4, points: 180, mapped: 62 }, false],
+        ["the widest normal set (999 of each)", { sources: 999, points: 999, mapped: 999 }, false],
+        ["one source needing credentials", { needing: 1 }, true],
+        ["two sources needing credentials", { needing: 2 }, true],
+        ["1,000 sources", { sources: 1000 }, true],
+        ["1,000 points", { points: 1000 }, true],
+        ["1,000 mapped", { mapped: 1000 }, true],
+      ];
+      for (const [name, over, expected] of cases) {
+        const { unmount } = bar({ counts: { ...COUNTS, ...over } });
+        expect(wide(), name).toBe(expected);
+        unmount();
+      }
+    });
+
+    it("the class never comes from the \"N of M\" text: turning Unmapped only on or off leaves it as it was", () => {
+      const wide = () => root().querySelector(".gbar-chips")!.classList.contains("gbar-chips-wide");
+      for (const counts of [{ ...COUNTS, points: 999, unmapped: 999 }, { ...COUNTS, points: 1500, unmapped: 1200 }]) {
+        const off = bar({ counts, unmappedOnly: false });
+        const before = wide();
+        off.unmount();
+        const on = bar({ counts, unmappedOnly: true });
+        expect(wide(), `${counts.points} points`).toBe(before);
+        on.unmount();
+      }
+    });
+
     it("are the numbers of the summary sentence, whatever the graph and the filter", () => {
       const m = model();
       for (const unmappedOnly of [false, true]) {
@@ -207,6 +238,11 @@ describe("GraphBar", () => {
       expect(snap).toHaveAttribute("aria-pressed", String(on));
       await userEvent.click(snap);
       expect(props.onSnap).toHaveBeenCalledWith(!on);
+    });
+
+    it.each([[true], [false]])("keeps the title \"Snap to grid\" whichever its state (snap=%s): the state is aria-pressed's, a title that differs from the name would be read twice", (on) => {
+      bar({ snap: on });
+      expect(screen.getByRole("button", { name: "Snap to grid" })).toHaveAttribute("title", "Snap to grid");
     });
   });
 
@@ -484,13 +520,19 @@ describe("the bar's stylesheet (discovery-tidy.css)", () => {
     [".gbar-lbl-snap", "Snap to grid"], [".gbar-lbl-find", "Find"], [".gbar-lbl-tidy", "Tidy layout"], [".gbar-lbl-unmapped", "Unmapped only"], [".gbar-lbl-fold", "Collapse all and Expand all"],
   ] as const;
 
-  it("holds the @container tiers in priority order: the chips lose their words, then Snap to grid, Find, Tidy layout, Unmapped only and Collapse/Expand all lose theirs, then three controls go to the menu", () => {
-    const order = [".gbar-chip-word", ...DROPS.map(([selector]) => selector), ".gbar-narrow"];
-    const widths = order.map((selector) => {
-      const tier = tiers.find((r) => r.selector === selector);
-      expect(tier, `a tier rule for ${selector}`).toBeDefined();
-      return widthOf(tier!);
-    });
+  // Two families of chips (GraphBar gives the row `gbar-chips-wide` for the credentials chip or a four-digit count): the wide chips lose their words at their own early tier, before any control word goes;
+  // the normal chips keep theirs until every control has lost its word, and only then fall to icon and number.
+  const WIDE_WORDS = ".gbar-chips-wide .gbar-chip-word";
+  const NORMAL_WORDS = ".gbar-chip-word";
+  const at = (selector: string) => {
+    const tier = tiers.find((r) => r.selector === selector);
+    expect(tier, `a tier rule for ${selector}`).toBeDefined();
+    return widthOf(tier!);
+  };
+
+  it("holds the @container tiers in priority order: the wide chips lose their words first, then Snap to grid, Find, Tidy layout, Unmapped only and Collapse/Expand all lose theirs, then the normal chips, then three controls go to the menu", () => {
+    const order = [WIDE_WORDS, ...DROPS.map(([selector]) => selector), NORMAL_WORDS, ".gbar-narrow"];
+    const widths = order.map(at);
     for (let i = 1; i < widths.length; i++) expect(widths[i - 1], `${order[i - 1]} leaves before ${order[i]}`).toBeGreaterThan(widths[i]);
     expect(widths[widths.length - 1]).toBeGreaterThan(400); // below the smallest bar the page makes (an 800px window, the sidebar open) there is nothing more to take away
     expect(widths[0]).toBeLessThan(2000);
@@ -499,12 +541,35 @@ describe("the bar's stylesheet (discovery-tidy.css)", () => {
     expect(raw).toMatch(/worst/i);
   });
 
-  it("the words stay while there is room for them: at a 1148px bar (a 1440px window, the sidebar open) only Snap to grid has gone; at a 744px bar (1024px) the words have gone from every control", () => {
-    const at = (selector: string) => widthOf(tiers.find((r) => r.selector === selector)!);
+  it("each tier is at least the need of the state it leaves, measured in Chromium: the control tiers and the normal chips' words from the WIDEST normal set with its words (999 sources, 999 of 999 points, 999 mapped), the wide chips' words from the worst set, the overflow tier from the worst chips as icon and number (a chip is never dropped whole while a word could go)", () => {
+    // Measured widths in px (admin; the reader's bar is 36 narrower): controls in each state and the chips of each family, plus the 8px gap between the chips and the controls.
+    const CONTROLS = { everyWord: 961.3, snapGone: 863.8, findGone: 819.1, tidyGone: 729.3, unmappedGone: 620.5, allIcons: 442 };
+    const CHIPS = { normalWords: 381, wideWords: 539, wideIcons: 267 };
+    const GAP = 8;
+    const need = (controls: number, chips: number) => controls + GAP + chips;
+    expect(at(WIDE_WORDS), "wide chips keep their words only while every control word and the worst chips fit").toBeGreaterThanOrEqual(need(CONTROLS.everyWord, CHIPS.wideWords));
+    expect(at(".gbar-lbl-snap")).toBeGreaterThanOrEqual(need(CONTROLS.everyWord, CHIPS.normalWords));
+    expect(at(".gbar-lbl-find")).toBeGreaterThanOrEqual(need(CONTROLS.snapGone, CHIPS.normalWords));
+    expect(at(".gbar-lbl-tidy")).toBeGreaterThanOrEqual(need(CONTROLS.findGone, CHIPS.normalWords));
+    expect(at(".gbar-lbl-unmapped")).toBeGreaterThanOrEqual(need(CONTROLS.tidyGone, CHIPS.normalWords));
+    expect(at(".gbar-lbl-fold")).toBeGreaterThanOrEqual(need(CONTROLS.unmappedGone, CHIPS.normalWords));
+    expect(at(NORMAL_WORDS), "normal chips keep their words while every control is an icon and they still fit").toBeGreaterThanOrEqual(need(CONTROLS.allIcons, CHIPS.normalWords));
+    expect(at(".gbar-narrow"), "three controls go to the menu only when even the worst chips as icon and number do not fit beside all-icon controls").toBeGreaterThanOrEqual(need(CONTROLS.allIcons, CHIPS.wideIcons));
+    // and no tier is wasteful: each is within 10px of the need it is derived from (rounded up to a multiple of 10)
+    expect(at(".gbar-narrow")).toBeLessThanOrEqual(need(CONTROLS.allIcons, CHIPS.wideIcons) + 10);
+    expect(at(NORMAL_WORDS)).toBeLessThanOrEqual(need(CONTROLS.allIcons, CHIPS.normalWords) + 10);
+    expect(at(".gbar-lbl-snap")).toBeLessThanOrEqual(need(CONTROLS.everyWord, CHIPS.normalWords) + 10);
+  });
+
+  it("the words stay while there is room for them: at a 1148px bar (a 1440px window, the sidebar open) the counts keep their words and only Snap to grid, Find and Tidy layout have lost theirs; at a 744px bar (1024px) the words have gone from every control and the counts, and the controls are still in the bar", () => {
     // a tier applies when the bar is at most its threshold wide
-    expect(at(".gbar-lbl-snap"), "Snap to grid has gone at 1148").toBeGreaterThanOrEqual(1148);
-    for (const keep of [".gbar-lbl-find", ".gbar-lbl-tidy", ".gbar-lbl-unmapped", ".gbar-lbl-fold"]) expect(at(keep), `${keep} is still drawn at 1148`).toBeLessThan(1148);
+    expect(at(NORMAL_WORDS), "the counts keep their words at 1148").toBeLessThan(1148);
+    expect(at(WIDE_WORDS), "the wide counts (credentials, four digits) have lost theirs at 1148").toBeGreaterThanOrEqual(1148);
+    for (const gone of [".gbar-lbl-snap", ".gbar-lbl-find", ".gbar-lbl-tidy"]) expect(at(gone), `${gone} has gone at 1148`).toBeGreaterThanOrEqual(1148);
+    for (const keep of [".gbar-lbl-unmapped", ".gbar-lbl-fold"]) expect(at(keep), `${keep} is still drawn at 1148`).toBeLessThan(1148);
     for (const [selector, word] of DROPS) expect(at(selector), `${word} has gone at 744`).toBeGreaterThanOrEqual(744);
+    expect(at(NORMAL_WORDS), "the counts are icon and number at 744").toBeGreaterThanOrEqual(744);
+    expect(at(".gbar-narrow"), "Unmapped only, Tidy layout and Snap to grid are still in the bar at 744").toBeLessThan(744);
     expect(at(".gbar-lbl-fold")).toBeGreaterThan(at(".gbar-narrow")); // the overflow tier is the last of all
   });
 
@@ -533,12 +598,13 @@ describe("the bar's stylesheet (discovery-tidy.css)", () => {
     }
   });
 
-  it("display: none is used for three things only: chip words (decoration), the three narrow controls (their menu twins carry the names) and the narrow-only overflow button", () => {
+  it("display: none is used for three things only: chip words in their two tiers (decoration), the three narrow controls (their menu twins carry the names) and the narrow-only overflow button", () => {
     const hidden = rules.filter((r) => /display:\s*none/.test(r.body)).map((r) => `${r.at.filter((a) => a.startsWith("@container")).join("")}|${r.selector}`);
     expect(hidden.sort()).toEqual([
       `|.graph-bar .gbar-overflow-narrow`,
-      `@container (max-width: ${widthOf(tiers.find((r) => r.selector === ".gbar-narrow")!)}px)|.gbar-narrow`,
-      `@container (max-width: ${widthOf(tiers.find((r) => r.selector === ".gbar-chip-word")!)}px)|.gbar-chip-word`,
+      `@container (max-width: ${at(".gbar-narrow")}px)|.gbar-narrow`,
+      `@container (max-width: ${at(NORMAL_WORDS)}px)|${NORMAL_WORDS}`,
+      `@container (max-width: ${at(WIDE_WORDS)}px)|${WIDE_WORDS}`,
     ].sort());
     expect(body(".graph-bar .gbar-overflow-narrow", tiers.find((r) => r.selector === ".gbar-narrow")!.at)).toMatch(/display:\s*grid/); // and the narrowest tier draws it, as the .icon-btn grid it is
   });
@@ -549,6 +615,19 @@ describe("the bar's stylesheet (discovery-tidy.css)", () => {
     expect(chips).toMatch(/min-width:\s*0/);
     expect(chips).toMatch(/overflow:\s*hidden/);
     expect(chips).toMatch(/height:\s*20px/);
+  });
+
+  it("an ON control of the bar (Snap to grid, aria-pressed) differs from the focus ring: a neutral border, the accent tint and ink, and an inset accent line at the foot, beating the base rule by specificity", () => {
+    const on = body('.graph-bar button[aria-pressed="true"]');
+    expect(on).toMatch(/border-color:\s*var\(--border-strong\)/);
+    expect(on).toMatch(/background:\s*var\(--accent-tint\)/);
+    expect(on).toMatch(/color:\s*var\(--accent-ink\)/);
+    expect(on).toMatch(/box-shadow:\s*inset 0 -2px 0 var\(--accent\)/);
+    expect(on).not.toMatch(/!important/);
+    expect(on).not.toMatch(/border-color:\s*var\(--accent\)/); // the accent border is what looked like the outside focus ring (outline: 2px solid var(--ring))
+    expect(on).not.toMatch(/outline/); // and the outside outline stays the focus ring's alone
+    // `.graph-bar button[...]` (one class, one element, one attribute) outranks app.css's `button[aria-pressed="true"]` (one element, one attribute)
+    expect(readFileSync("src/app.css", "utf8")).toMatch(/\n\s*button\[aria-pressed="true"\] \{ border-color: var\(--accent\)/);
   });
 
   it("the rules of the old header actions and the old source node lines are gone (they moved to the bar and the source card)", () => {
