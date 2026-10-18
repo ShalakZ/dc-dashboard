@@ -15,6 +15,26 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w21 (2026-10-18, MERGE_PENDING)
+
+w21 adds a month check to Billing: a **Check month** button in the page header (with a count when there is something to look at) opens a drawer that lists, in plain
+words, what to look at before a month is trusted or closed. It is read-only: it reads the stored hourly readings, changes no figure, and never blocks anything. Close month
+works as before and shows one extra line with the check's count. No migration and no new permission; one new route, `GET /api/billing/month-check?month=YYYY-MM`, needs
+`billing.view` (a point's and source's names come with it only for a role that also holds `sources.view`; an address never does).
+
+For every metered asset the drawer lists, in the order they can change a bill: meters with no readings, or silent since a time; gaps (whole hours without a reading: a
+counter's energy is counted in the hour the readings come back, so the days around a gap shift and a hole before the month brings earlier energy into it; a power-only
+meter's missing time counts as 0 kWh); estimated hours (the rule in one sentence: an hour is estimated when the asset has no energy counter, so its energy is worked out from
+average power); counters that went back, dipped or fell (with the size of the fall); meters that started part way through the month; energy with no rate; and readings that did
+not change for 24 hours. Two lists are information only and never counted: assets with nothing measuring them (the ones beside a measured asset first) and meters that start
+after the month. The headline is `N things to check`, `Nothing to check` (it says only that these rules found nothing, not that the figures are right) or `Nothing to look at
+yet`, and the drawer says what was looked at. Each list shows its 50 worst and says how many more; the thresholds (24 hours, 60 minutes and one hundredth of the time, the
+24-hour tolerance for a slowly read counter, 50 per list) and what the check cannot see are in [Dashboards and billing](docs/dashboards-and-billing.md).
+
+Also changed: the Billing header is now Close or Reopen month, Check month, Download CSV, and the buttons go under the title when the header is narrower than 600 px (an
+expanded sidebar at 800 px used to cut the title); closing or reopening a month no longer waits for the check to be read again. On the seeded pilot hall's whole previous month
+the check lists 10 things (8 estimated feeds, the one gap of 6 hours, the one counter reset) and 20 unmeasured assets in about 1.4 seconds.
+
 ## w20 (2026-10-18, 310db08)
 
 w20 puts the Billing month controls and table controls on one row, front end only: no migration, no new permission, no API change. On a page
