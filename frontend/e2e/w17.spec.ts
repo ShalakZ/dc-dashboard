@@ -162,8 +162,8 @@ const labels = (page: Page) => page.locator("table.billing tbody th[scope=row] .
 const html = (page: Page) => page.locator("html");
 const filterBox = (page: Page) => page.getByRole("searchbox", { name: "Filter assets", exact: true });
 const levels = (page: Page) => page.getByRole("combobox", { name: "Show levels", exact: true });
-/** The rows line of the live bar (the inert copy that holds its room while loading has no words). */
-const line = (page: Page) => page.locator(".billing-page .billing-tools:not(.is-idle) .tools-count");
+/** The rows line, in the table's caption (there is none while the costs load: the table is not drawn then). */
+const line = (page: Page) => page.locator(".billing-page table.billing caption .tools-count");
 const monthLabel = (page: Page) => page.locator(".billing-page .month-label");
 const twisty = (page: Page, name: string) => page.getByRole("button", { name: new RegExp(`^(Collapse|Expand) ${esc(name)}, \\d+ rows? below$`) });
 /** The row of the first asset with this name (`nth` for the repeated ones: Pod A, Row 1 ...). */

@@ -142,8 +142,14 @@ changes a figure, a marker, a rate, a total or the CSV.
   row, **Expand all** opens everything, and **Show levels** (1 up to the deepest level, then All) shows that many levels: level 1 is the top
   row alone, level 2 adds the rows directly below it, and so on. It reads "Custom" while the fold you made matches no level. The `?` beside
   it says the same thing about totals.
-- **How many rows are on screen.** A line at the right of the controls says "All 370 rows shown", or "Showing 24 of 370 rows" while
-  something is folded, or "12 of 370 rows match" while you filter ("No rows match" when nothing does).
+- **How many rows are on screen.** A line at the right of the table's first row, opposite the sentence that explains the cells, says
+  "All 370 rows shown", or "Showing 24 of 370 rows" while something is folded, or "12 of 370 rows match" while you filter ("No rows
+  match" when nothing does). It stays at the right edge of the table when you scroll the days sideways, and it scrolls up out of sight
+  with that first row when you scroll the rows down (a new filter brings the table back to the top).
+- **One row of controls on a wide window.** The month controls (Previous month, Next month, Year, Month) and the table controls
+  (filter box, Collapse all, Expand all, Show levels) share one row when the page is about 1,600 px wide or more (a screen that shows 1,920 px, a 1,920 px display at 100 percent scaling, with
+  the sidebar open, or about 1,700 px with the sidebar minimised; a laptop at 125 percent scaling shows 1,536 px and keeps the two rows); on a narrower page the table controls sit on their own row under the month
+  controls, as before. The table is taller by the row that goes.
 - **The filter box (Filter by asset name).** Type part of an asset name: the table shows every row whose name contains it (capital letters do not matter; only
   the name is searched, not the path), each with the rows above it so the indent still reads as a tree. Rows below a match that do not
   match themselves are left out. The filter ignores the fold, and when you clear it (the **Clear filter** button in the box, or Escape

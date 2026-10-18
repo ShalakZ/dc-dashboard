@@ -1,5 +1,5 @@
-import type { BillingAssetRow } from "../api/types";
-import { BILLING_FOLD_KEY, billingModel, noMatchText, rowsLine, twistyLabel, visibleRows } from "./billingRows";
+import type { BillingAssetRow, BillingCosts, CostFigure } from "../api/types";
+import { BILLING_FOLD_KEY, billingHasRows, billingModel, noMatchText, rowsLine, twistyLabel, visibleRows } from "./billingRows";
 import { foldModel } from "./foldLevels";
 
 const row = (asset_id: number, parent_id: number | null, name: string, path = name): BillingAssetRow => ({
@@ -208,5 +208,21 @@ describe("the wording", () => {
   it("names the filter in the no-match text, trimmed, in straight quotes", () => {
     expect(noMatchText("rack 99")).toBe('No assets match "rack 99".');
     expect(noMatchText("  rack 99 ")).toBe('No assets match "rack 99".');
+  });
+});
+
+describe("billingHasRows", () => {
+  const figure: CostFigure = { kwh: 1, cost: 0.1, estimated: false, partial: false, no_data: false };
+  const month = (assetRows: BillingAssetRow[]): BillingCosts => ({
+    closed: null, month: "2026-10", timezone: "Asia/Qatar", currency: "QAR", days: [], assets: assetRows,
+  });
+
+  it("is false when the month has no assets at all", () => {
+    expect(billingHasRows(month([]))).toBe(false);
+  });
+
+  it("is false when no asset has a total (no energy data), true as soon as one has", () => {
+    expect(billingHasRows(month(assets))).toBe(false); // the fixture rows above all have total: null
+    expect(billingHasRows(month([...assets, { ...row(8, null, "Metered"), total: figure }]))).toBe(true);
   });
 });

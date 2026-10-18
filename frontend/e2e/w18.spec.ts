@@ -269,7 +269,7 @@ async function loaded(page: Page): Promise<void> {
 async function openBilling(page: Page): Promise<void> {
   await page.goto("/billing");
   await expect(bodyRows(page).first()).toBeVisible();
-  await expect(page.locator(".billing-page .billing-tools:not(.is-idle) .tools-count")).toHaveText(/\S/);
+  await expect(page.locator(".billing-page table.billing caption .tools-count")).toHaveText(/\S/);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------

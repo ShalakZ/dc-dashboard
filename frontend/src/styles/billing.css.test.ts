@@ -138,3 +138,121 @@ describe("the header and the first column stay while the days scroll (W17, R4)",
     }
   });
 });
+
+// w20: the month bar and the controls bar share one row when the page is wide enough. .billing-main is a size container (its inline size only: a
+// plain `size` would collapse its height), and ONE @container block switches the toolbar from stacked (the default, as before w20) to a row and
+// picks the smaller chrome value for the table box. The numbers behind the threshold are in the plan (docs/superpowers/plans/2026-10-18-w20-billing-toolbar.md, F2).
+describe("the toolbar (w20)", () => {
+  const MAIN = ".billing-page .billing-main";
+  const TOOLBAR = ".billing-page .billing-toolbar";
+  const BAR = ".billing-page .billing-bar";
+  const TOOLS = ".billing-page .billing-tools";
+  const COUNT = ".billing-page .tools-count";
+  const containerRules = billing.filter((r) => r.at.some((a) => a.startsWith("@container")));
+  const containerAt = [...new Set(containerRules.flatMap((r) => r.at.filter((a) => a.startsWith("@container"))))];
+  const inWide = (selector: string) => {
+    const found = containerRules.filter((r) => r.selector === selector);
+    expect(found, `exactly one @container rule for "${selector}"`).toHaveLength(1);
+    expect(found[0].at, `"${selector}"`).toEqual([LAYER, containerAt[0]]);
+    return found[0].body;
+  };
+  const indexOfRule = (selector: string, at: string[] = [LAYER]) =>
+    billing.findIndex((r) => r.selector === selector && r.at.length === at.length && r.at.every((a, i) => a === at[i]));
+
+  it("the wrapper under the page header is a size container on its inline size only (a plain `size`, the shorthand or `contain` would collapse its height)", () => {
+    const body = bodyOf(billing, MAIN);
+    expect(prop(body, "container-type")).toBe("inline-size");
+    expect(body).not.toMatch(/(^|[;\s])(container-type:\s*(size|normal)|contain:|container:)/); // the guard of tree-move.css.test.ts; `size` would match inside `inline-size` only without the anchor
+  });
+
+  it("the toolbar is a column of the two bars, 16px apart, 12px above the table (34 + 16 + 34 + 12 is the 96px the stacked page always had); the bars have no margin of their own", () => {
+    const body = bodyOf(billing, TOOLBAR);
+    expect(prop(body, "display")).toBe("flex");
+    expect(prop(body, "flex-direction")).toBe("column");
+    expect(prop(body, "gap")).toBe("16px");
+    expect(prop(body, "margin")).toBe("0 0 12px");
+    expect(prop(bodyOf(billing, BAR), "margin")).toBe("0");
+    expect(prop(bodyOf(billing, TOOLS), "margin")).toBe("0");
+    expect(prop(bodyOf(billing, TOOLS), "flex-wrap")).toBe("wrap"); // the table group still wraps (measured: nowrap shrinks every item and wraps the Show levels label)
+  });
+
+  it("there is exactly ONE container query in the file: (min-width: Nrem) with N at least 98, the room the two groups need (1558px, valid only with the filter's 10rem basis; w20.spec.ts measures the real switch at 99rem)", () => {
+    expect(containerAt).toHaveLength(1);
+    const m = /^@container \(min-width: ([\d.]+)rem\)$/.exec(containerAt[0]);
+    expect(m, "an unnamed (min-width: Nrem) query").not.toBeNull();
+    expect(Number(m![1])).toBeGreaterThanOrEqual(98);
+    for (const r of containerRules) expect(r.at, `"${r.selector}"`).toEqual([LAYER, containerAt[0]]);
+  });
+
+  it("in the wide layout the toolbar is one row: the month group keeps its width on the left, the table group takes the rest and is right-aligned, all on one centre line", () => {
+    const toolbar = inWide(TOOLBAR);
+    expect(prop(toolbar, "flex-direction")).toBe("row");
+    expect(prop(toolbar, "align-items")).toBe("center");
+    expect(prop(toolbar, "gap")).toBe("16px");
+    expect(prop(toolbar, "margin-bottom")).toBe("16px"); // no second row, so the 12px that sat under the controls bar is the page's 16px under the one row
+    expect(prop(inWide(`${TOOLBAR} > .billing-bar`), "flex")).toBe("none");
+    const tools = inWide(`${TOOLBAR} > .billing-tools`);
+    expect(prop(tools, "flex")).toBe("1 1 0");
+    expect(prop(tools, "min-width")).toBe("0");
+    expect(prop(tools, "justify-content")).toBe("flex-end");
+  });
+
+  it("inside the block the filter drops to its 10rem minimum and the group still wraps (review Critical: with the default 14rem basis the group needs 725px, the threshold is wrong and the tools wrap to two lines up to about 1622px)", () => {
+    expect(prop(inWide(`${TOOLBAR} .tools-filter`), "flex-basis")).toBe("10rem");
+    const inBlock = containerRules.map((r) => r.body).join(";");
+    expect(inBlock).not.toMatch(/flex-wrap/); // wrap stays (the base rule); `nowrap` was measured worse
+    expect(prop(bodyOf(billing, ".billing-page .tools-filter"), "min-width")).toBe("10rem");
+    expect(prop(bodyOf(billing, ".billing-page .tools-filter"), "flex")).toBe("1 1 14rem"); // the stacked default is untouched
+  });
+
+  it("in the wide layout the table box is taller by the 46px the missing second row gave back: --billing-chrome-wide, one per banner variant", () => {
+    expect(prop(inWide(BOX), "max-height")).toMatch(/^max\(20rem,\s*calc\(100dvh\s*-\s*var\(--billing-chrome-wide(?:,\s*[\d.]+rem)?\)\)\)$/);
+    expect(inWide(BOX)).not.toMatch(/overflow|scroll-padding/); // only the height changes; the base rule keeps the rest
+    const sets: [string, number][] = [
+      [".billing-page", 15.8],
+      [".billing-page:has(.closed-box)", 22.5],
+      [".billing-page:has(.banner-warn)", 19.6],
+      [".billing-page:has(.closed-box):has(.banner-warn)", 26.3],
+    ];
+    const wides: number[] = [];
+    for (const [sel] of sets) {
+      const stacked = rem(bodyOf(billing, sel), "--billing-chrome");
+      const wide = rem(bodyOf(billing, sel), "--billing-chrome-wide");
+      expect(stacked - wide, `"${sel}": the wide value sits 2.5 to 3.2rem under the stacked one`).toBeGreaterThanOrEqual(2.5);
+      expect(stacked - wide, `"${sel}"`).toBeLessThanOrEqual(3.2);
+      wides.push(wide);
+    }
+    // closed and warn each add to the open value, and both add both, like the stacked set
+    expect(wides[1]).toBeGreaterThan(wides[0]);
+    expect(wides[2]).toBeGreaterThan(wides[0]);
+    expect(wides[3]).toBeGreaterThan(Math.max(wides[1], wides[2]));
+  });
+
+  it("source order decides (the wide rules have the base rules' weight): base toolbar rules first, then the container block, and the short-window `max-height: none` after it", () => {
+    const base = indexOfRule(BOX);
+    const firstWide = billing.findIndex((r) => r.at.some((a) => a.startsWith("@container")));
+    const media = indexOfRule(BOX, [LAYER, MEDIA]);
+    expect(base).toBeGreaterThanOrEqual(0);
+    expect(base).toBeLessThan(firstWide);
+    expect(firstWide).toBeLessThan(media);
+    expect(indexOfRule(TOOLBAR)).toBeLessThan(firstWide);
+    expect(indexOfRule(BAR)).toBeLessThan(firstWide);
+    // the rules of the block stay together
+    const idx = billing.map((r, i) => (r.at.some((a) => a.startsWith("@container")) ? i : -1)).filter((i) => i >= 0);
+    expect(idx[idx.length - 1] - idx[0]).toBe(idx.length - 1);
+  });
+
+  it("the rows line is the last item of the caption's row, sticky at the right of the visible box (the caption is as wide as the table, which scrolls sideways), on the page's ground, one --fs-xs line", () => {
+    const row = bodyOf(billing, ".billing-page .cap-row");
+    expect(prop(row, "display")).toBe("flex");
+    expect(prop(row, "justify-content")).toBe("space-between");
+    expect(prop(row, "align-items")).toBe("baseline");
+    const count = bodyOf(billing, COUNT);
+    expect(prop(count, "position")).toBe("sticky");
+    expect(prop(count, "right")).toBe("14px"); // the caption's own right padding
+    expect(prop(count, "background")).toBe("var(--bg)");
+    expect(prop(count, "font-size")).toBe("var(--fs-xs)"); // --fs-sm made the caption 39px tall instead of 38
+    expect(prop(count, "white-space")).toBe("nowrap");
+    expect(count).not.toMatch(/min-width|margin-left|color:/); // the 28ch room and the bar's grey are gone: the caption's muted colour applies
+  });
+});

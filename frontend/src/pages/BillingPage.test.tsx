@@ -128,10 +128,13 @@ describe("BillingPage", () => {
       expect(gap).toHaveAttribute("aria-hidden", "true");
       expect(gap.style.height).toBe("34px");
       expect(screen.queryByRole("button", { name: "Download CSV" })).not.toBeInTheDocument();
-      const bar = document.querySelector(".billing-page > .row.billing-bar")!; // and the month bar's place, with its selects' height
+      const bar = document.querySelector(".billing-toolbar > .row.billing-bar")!; // and the month bar's place, with its selects' height
       expect(bar).toHaveAttribute("aria-hidden", "true");
       expect((bar.firstElementChild as HTMLElement).style.height).toBe("34px");
       expect(bar.querySelector("button, select")).toBeNull();
+      expect(bar.parentElement).toHaveClass("billing-toolbar"); // the first child of the toolbar, with the controls bar's inert copy beside it
+      expect(bar).toBe(bar.parentElement!.firstElementChild);
+      expect(bar.nextElementSibling).toHaveClass("billing-tools", "is-idle");
       held.release();
       expect(await screen.findByRole("button", { name: "Download CSV" })).toBeInTheDocument();
       expect(document.querySelectorAll("header.page-head > .actions > *")).toHaveLength(1); // the button, and the gap is gone
@@ -145,6 +148,7 @@ describe("BillingPage", () => {
       expect(await screen.findByText("no site")).toBeInTheDocument();
       expect(document.querySelector("header.page-head > .actions")).toBeNull();
       expect(document.querySelector(".billing-bar")).toBeNull();
+      expect(document.querySelector(".billing-toolbar")).toBeNull(); // no toolbar when the site failed
     });
 
     it("keeps the pickers and shows the skeleton in the table's place while the month's costs are held", async () => {
@@ -1300,9 +1304,11 @@ describe("BillingPage folding and filtering", () => {
       expect(screen.queryByRole("button", { name: "Collapse all" })).not.toBeInTheDocument();
       expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
       expect(screen.getByText("Loading billing").parentElement!.querySelector(".billing-tools")).toBeNull();
+      expect(idle.parentElement).toHaveClass("billing-toolbar"); // beside the month bar, in the toolbar
       held.release();
       expect(await screen.findByRole("button", { name: "Collapse all" })).toBeInTheDocument();
       expect(document.querySelectorAll(".billing-tools")).toHaveLength(1);
+      expect(document.querySelector(".billing-tools")).toBe(idle); // one slot: the real bar is the same element, so nothing moves
       expect(document.querySelector(".billing-tools.is-idle")).toBeNull();
       expect(document.querySelector(".billing-tools")).not.toHaveAttribute("inert");
     });
@@ -1319,10 +1325,14 @@ describe("BillingPage folding and filtering", () => {
       expect(document.querySelector(".billing-tools")).toBeNull();
     });
 
-    it("is held while the costs fail to load, under the error", async () => {
+    it("is held while the costs fail to load, beside the month bar, above the error", async () => {
       open("viewer", { status: 500, body: { detail: "costs are down" } });
-      expect(await screen.findByRole("alert")).toHaveTextContent("costs are down");
-      expect(document.querySelector(".billing-tools.is-idle")).not.toBeNull();
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("costs are down");
+      const idle = document.querySelector(".billing-tools.is-idle")!;
+      expect(idle.previousElementSibling).toHaveClass("billing-bar");
+      expect(idle.parentElement).toHaveClass("billing-toolbar");
+      expect(idle.compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Collapse all" })).not.toBeInTheDocument();
     });
 
@@ -1342,6 +1352,108 @@ describe("BillingPage folding and filtering", () => {
     });
   });
 
+  describe("the toolbar", () => {
+    const toolbar = () => document.querySelector(".billing-toolbar")!;
+    const tip = () => screen.getByRole("button", { name: "What does this mean?" });
+    const previous = () => screen.getByRole("button", { name: "Previous month" });
+    const nextMonth = () => screen.getByRole("button", { name: "Next month" });
+    /** The page on the current month with the five-row costs, and the table drawn. */
+    const shown = async (role = "viewer") => {
+      open(role);
+      await screen.findByRole("rowheader", { name: "Site" });
+    };
+    /** Tab from `from` through `count` stops and return what was focused at each. */
+    const tabFrom = async (from: HTMLElement, count: number) => {
+      from.focus();
+      const seen: Element[] = [];
+      for (let i = 0; i < count; i++) {
+        await userEvent.tab();
+        seen.push(document.activeElement!);
+      }
+      return seen;
+    };
+
+    it("puts the month bar and the controls bar in one toolbar, the month group first", async () => {
+      await shown("admin");
+      expect(Array.from(toolbar().children).map((el) => el.className)).toEqual(["row billing-bar", "billing-tools"]);
+      const main = document.querySelectorAll(".billing-main");
+      expect(main).toHaveLength(1);
+      expect(main[0].contains(toolbar())).toBe(true);
+      expect(main[0].contains(document.querySelector("table.billing"))).toBe(true);
+      expect(main[0].parentElement).toHaveClass("billing-page");
+      // the dialogs are siblings after the content, never inside the size container
+      await userEvent.click(previous());
+      await screen.findByText("September 2026");
+      await userEvent.click(await screen.findByRole("button", { name: "Close month…" }));
+      const dialog = screen.getByRole("dialog", { name: "Close September 2026" });
+      expect(main[0].contains(dialog)).toBe(false);
+    });
+
+    it("Tab walks the month group, then the table group", async () => {
+      await shown();
+      // On the current month Next month is natively disabled, so Tab skips it.
+      expect(nextMonth()).toBeDisabled();
+      expect(await tabFrom(previous(), 7)).toEqual([yearSelect(), monthSelect(), filterBox(), collapseAll(), expandAll(), levels(), tip()]);
+      await userEvent.click(previous());
+      await screen.findByText("September 2026");
+      await screen.findByRole("rowheader", { name: "Site" });
+      expect(nextMonth()).toBeEnabled();
+      expect(await tabFrom(previous(), 8)).toEqual([nextMonth(), yearSelect(), monthSelect(), filterBox(), collapseAll(), expandAll(), levels(), tip()]);
+    });
+
+    it("the rows line is a polite live region inside the table's caption, without a role", async () => {
+      await shown();
+      const count = document.querySelector(".tools-count")!;
+      expect(document.querySelectorAll(".tools-count")).toHaveLength(1);
+      expect(count.closest("table.billing caption")).not.toBeNull();
+      expect(count.closest(".billing-tools")).toBeNull();
+      expect(count).toHaveAttribute("aria-live", "polite");
+      expect(count).not.toHaveAttribute("role");
+      expect(count).toHaveTextContent("All 5 rows shown");
+      await userEvent.type(filterBox(), "ann");
+      await waitFor(() => expect(count).toHaveTextContent("1 of 5 rows match"));
+      expect(document.querySelector(".tools-count")).toBe(count); // the same element, so the one change is spoken once
+    });
+
+    it("names the table by the how-to-read sentence only", async () => {
+      await shown();
+      const sentence = /^Each cell shows kWh above and cost in QAR below\.$/;
+      const table = screen.getByRole("table", { name: sentence });
+      expect(table).toHaveAttribute("aria-labelledby");
+      expect(table.querySelector("caption .cap-text")?.id).toBe(table.getAttribute("aria-labelledby"));
+      await userEvent.type(filterBox(), "ann");
+      await waitFor(() => expect(document.querySelector(".tools-count")).toHaveTextContent("1 of 5 rows match"));
+      expect(screen.getByRole("table", { name: sentence })).toBe(table);
+      expect(screen.queryByRole("table", { name: /match/ })).not.toBeInTheDocument();
+    });
+
+    it("shows no second bar for the empty states: the toolbar's one inert copy, before the empty answer", async () => {
+      open("viewer", { body: { ...costs, assets: [] } });
+      let empty = (await screen.findByText("No assets yet.")).closest(".empty")!;
+      expect(document.querySelectorAll(".billing-tools")).toHaveLength(1);
+      expect(document.querySelector(".billing-tools")).toHaveClass("is-idle");
+      expect(document.querySelector(".billing-tools")!.parentElement).toBe(toolbar());
+      expect(toolbar().compareDocumentPosition(empty) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(document.querySelector(".tools-count")).toBeNull();
+      cleanup();
+      const none = costs.assets.map((a) => ({ ...a, days: a.days.map(() => null), total: null }));
+      open("viewer", { body: { ...costs, assets: none } });
+      empty = (await screen.findByText("No energy data for this month.")).closest(".empty")!;
+      expect(document.querySelectorAll(".billing-tools")).toHaveLength(1);
+      expect(document.querySelector(".billing-tools")).toHaveClass("is-idle");
+      expect(toolbar().compareDocumentPosition(empty) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(document.querySelector(".tools-count")).toBeNull();
+    });
+
+    it("keeps the order for a closed month: toolbar, the closed box, then the table", async () => {
+      const closed: BillingClosed = { id: 7, closed_name: "Dana", closed_at: "2026-10-14T21:30:00Z", note: "", total_kwh: 50, total_cost: 6 };
+      open("viewer", { body: { ...costs, closed, live: null } });
+      const box = (await screen.findByText(/Closed by Dana/)).closest(".closed-box")!;
+      expect(toolbar().compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(box.compareDocumentPosition(document.querySelector(".table-scroll")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+  });
+
   describe("the rest of the page", () => {
     it("exports the same file whatever is folded or filtered", async () => {
       await showBig();
@@ -1352,13 +1464,13 @@ describe("BillingPage folding and filtering", () => {
       expect(downloadCsv).toHaveBeenCalledWith("/api/billing/costs.csv?month=2026-10");
     });
 
-    it("keeps the missing-rate banner above the bar and the page's one primary button", async () => {
+    it("keeps the toolbar first, then the missing-rate banner, then the table, and the page's one primary button", async () => {
       open("admin");
       await screen.findByRole("rowheader", { name: "Annex" });
       const banner = screen.getByRole("status");
       const bar = document.querySelector(".billing-tools")!;
-      expect(banner.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      expect(bar.compareDocumentPosition(document.querySelector(".table-scroll")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(bar.compareDocumentPosition(banner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(banner.compareDocumentPosition(document.querySelector(".table-scroll")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(document.querySelectorAll(".primary")).toHaveLength(1);
       expect(screen.getAllByRole("status")).toHaveLength(1); // the rows line is a polite live region of its own, not a status
       expect(document.querySelector(".tools-count")).toHaveAttribute("aria-live", "polite");
