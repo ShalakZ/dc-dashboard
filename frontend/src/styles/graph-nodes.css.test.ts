@@ -237,36 +237,55 @@ describe("the source card styles (W12c, graph-source-card.css)", () => {
     return Number(m![1]);
   };
 
-  it("every line has a height in px, and the lines, their gaps, the node's padding and its border add up to at most 132px, inside SOURCE_H", () => {
+  it("the head may take two lines (W14: a name of two 18px lines), every other line has a height in px, and the lines, their gaps (none), the node's padding (4px, doubled class in graph-nodes.css) and its border add up to 134px, inside SOURCE_H", () => {
+    const title = card(".gsrc-head .gsrc-title");
+    const clamp = Number(/-webkit-line-clamp:\s*(\d+)/.exec(title)?.[1]);
+    const leading = px(title, "line-height");
+    expect({ clamp, leading }).toEqual({ clamp: 2, leading: 18 });
+    // the head is as tall as its tallest part: the 20px tile and button, or the title's lines (a one-line name leaves it at 20, a two-line one at 36)
+    const head = Math.max(px(card(".gsrc-head"), "min-height"), px(card(".gsrc-head .gsrc-tile"), "height"), px(card(".gsrc-head .gnode-menu-btn"), "height"), clamp * leading);
     const heights = {
-      head: px(card(".gsrc-head"), "height"),
+      head,
       sub: px(card(".gsrc-sub, .gsrc-status, .gsrc-seen"), "height"),
       mapped: px(card(".gsrc-mapped"), "height"),
       actions: px(card(".gsrc-actions"), "height"),
     };
-    expect(heights).toEqual({ head: 20, sub: 16, mapped: 20, actions: 20 });
-    const gap = px(card(".gsrc-body"), "gap");
-    expect(gap).toBe(2);
+    expect(heights).toEqual({ head: 36, sub: 16, mapped: 20, actions: 20 });
+    // no gap between the lines: the rows keep their own leading, and a gap of 1px would already reach 139
+    expect(card(".gsrc-body")).toMatch(/(?:^|[;\s])gap:\s*0\s*;/);
     // head, protocol line, status line, mapped line, Details, last seen: the full card
     const lines = [heights.head, heights.sub, heights.sub, heights.mapped, heights.actions, heights.sub];
-    const padding = 6 + 6; // `.gnode { padding: 6px 8px }`
+    // `.gnode { padding: 6px 8px }` (app.css) is narrowed for the source card by `.gnode-source.gnode-source` (graph-nodes.css)
+    const pad = /(?:^|[;\s])padding:\s*(\d+)px\s+(\d+)px\s*;?\s*$/.exec(rule(".gnode-source.gnode-source"));
+    expect(pad, "padding: 4px 8px on the source card").not.toBeNull();
+    expect([Number(pad![1]), Number(pad![2])]).toEqual([4, 8]);
+    const padding = Number(pad![1]) * 2;
     const border = 1 + 1;
-    const total = lines.reduce((a, b) => a + b, 0) + gap * (lines.length - 1) + padding + border;
-    expect(total).toBe(132);
+    const total = lines.reduce((a, b) => a + b, 0) + padding + border;
+    expect(total).toBe(134);
     expect(total).toBeLessThanOrEqual(SOURCE_H);
     // the words line plus the bar under it fill the mapped line exactly
     expect(px(card(".gsrc-words"), "height") + px(card(".gsrc-bar"), "margin-top") + px(card(".gsrc-bar"), "height")).toBe(heights.mapped);
   });
 
-  it("the title, the protocol line, the status line and the last-seen line are ONE line each: no wrap, an ellipsis, and the title gives way first (min-width 0)", () => {
-    for (const selector of [".gsrc-head .gsrc-title", ".gsrc-sub, .gsrc-status, .gsrc-seen"]) {
-      const body = card(selector);
-      expect(body, selector).toMatch(/white-space:\s*nowrap/);
-      expect(body, selector).toMatch(/overflow:\s*hidden/);
-      expect(body, selector).toMatch(/text-overflow:\s*ellipsis/);
-    }
-    expect(card(".gsrc-head .gsrc-title")).toMatch(/min-width:\s*0/);
-    expect(card(".gsrc-head .gsrc-title")).toMatch(/flex:\s*1 1 0/);
+  it("the title may take two lines (W14, P2): a two-line clamp with the ellipsis the browser draws, the title giving way first (min-width 0); the fold, the tile and the Source actions button stand at the first line", () => {
+    const title = card(".gsrc-head .gsrc-title");
+    expect(title).toMatch(/display:\s*-webkit-box/);
+    expect(title).toMatch(/-webkit-line-clamp:\s*2\b/);
+    expect(title).toMatch(/-webkit-box-orient:\s*vertical/);
+    expect(title).toMatch(/overflow:\s*hidden/);
+    expect(title).toMatch(/line-height:\s*18px/);
+    expect(title).toMatch(/min-width:\s*0/);
+    expect(title).toMatch(/flex:\s*1 1 0/);
+    expect(title).not.toMatch(/white-space:\s*nowrap/); // a nowrap title would stay on one line whatever the clamp says
+    expect(card(".gsrc-head")).toMatch(/align-items:\s*flex-start/);
+  });
+
+  it("the protocol line, the status line and the last-seen line are still ONE line each: no wrap, an ellipsis", () => {
+    const body = card(".gsrc-sub, .gsrc-status, .gsrc-seen");
+    expect(body).toMatch(/white-space:\s*nowrap/);
+    expect(body).toMatch(/overflow:\s*hidden/);
+    expect(body).toMatch(/text-overflow:\s*ellipsis/);
   });
 
   it("the menu button and the icon tile are 20px squares on the title line, never shrunk (the title takes the squeeze)", () => {
@@ -282,10 +301,21 @@ describe("the source card styles (W12c, graph-source-card.css)", () => {
   it("the bar is 4px, a plain rectangle in tokens (never a pill); its fill is the accent", () => {
     const bar = card(".gsrc-bar");
     expect(px(bar, "height")).toBe(4);
-    expect(bar).toMatch(/background:\s*var\(--border(-strong)?\)/);
+    expect(bar).toMatch(/background:\s*var\(--border-strong\)/); // W14 (P2): --border (1.2:1 on the card) made an empty track invisible
     expect(bar).not.toMatch(/border-radius/);
     expect(card(".gsrc-fill")).toMatch(/background:\s*var\(--accent\)/);
     expect(card(".gsrc-fill")).toMatch(/height:\s*100%/);
+  });
+
+  // W14 (P2): the empty track is a picture of "nothing mapped yet", so it must show on the card (--bg) in every look. The floor is 1.5:1 (a quiet track, not a control boundary: the words say the number).
+  describe.each(THEMES.flatMap((t) => (["light", "dark"] as const).map((mode) => ({ id: t.id, mode }))))("the empty track, $id, $mode", ({ id, mode }) => {
+    it("--border-strong reads on --bg at 1.5:1 or more", () => {
+      const tokens = cascade(id, mode);
+      const [track, ground] = [tokens.get("border-strong"), tokens.get("bg")];
+      expect(track, "--border-strong").toMatch(/^#[0-9a-fA-F]{6}$/);
+      expect(ground, "--bg").toMatch(/^#[0-9a-fA-F]{6}$/);
+      expect(contrast(track!, ground!), `--border-strong on --bg (${id}, ${mode})`).toBeGreaterThanOrEqual(1.5);
+    });
   });
 
   it("nothing in the card is hidden or moved by the stylesheet: no display none, no visibility, no absolute placement", () => {

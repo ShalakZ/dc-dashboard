@@ -27,6 +27,10 @@
   .gnode-more.gnode-more { padding: 0; border-color: transparent; background: none; } /* doubled class: it beats the base .gnode rule without naming .gnode here (app.css.test.ts keeps one page file from restyling another) */
   .gnode-more button { width: 100%; }
 
+  /* W14 (P2): the source card's padding is 4px 8px, not the 6px 8px of every node (app.css `.gnode`), so a name of two lines still fits the 136px that SOURCE_H keeps (134 with the lines of
+     graph-source-card.css; graph-nodes.css.test.ts adds it up). Doubled class, as above: it beats the base .gnode rule without naming .gnode here. */
+  .gnode-source.gnode-source { padding: 4px 8px; }
+
   /* W12b: "N mapped" on the title row of a collapsed asset that hides mapped points: a small plain rectangle like the protocol badge (never a pill), on the SAME row as the title and the toggle
      so the node keeps its height. The title takes the free room (min-width 0 lets a long name wrap instead of pushing the badge out), the badge and the toggle stand at the right. */
   .gnode-asset .row .node-title { flex: 1 1 auto; min-width: 0; }
