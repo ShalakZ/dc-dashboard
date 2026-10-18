@@ -28,7 +28,8 @@ lacks says "No access".
   An admin (`dashboards.default`) can mark one as the default, and the sidebar entry and the
   first page after signing in then open it. See [Dashboards and billing](dashboards-and-billing.md).
 - **Billing** (everyone): needs `billing.view`. Energy and cost per asset per day and per month, picked with the Year and Month
-  selects, with a CSV export (`billing.export`). A parent row has a small arrow that folds the rows below it (a folded row keeps its own
+  selects, with a CSV export (`billing.export`); on a page about 1,600 px wide or more the month controls and the table controls below share
+  one row, and the "Showing N of M rows" line sits at the right of the table's first row. A parent row has a small arrow that folds the rows below it (a folded row keeps its own
   totals, which already include everything below it); **Collapse all**, **Expand all** and **Show levels** fold many at once, and a
   filter box (**Filter by asset name**) shows the rows whose name contains your text with their parents ("12 of 370 rows match"). The day-number header
   stays at the top while the rows scroll and the first column stays while the days scroll sideways. A month with more than 60 rows
