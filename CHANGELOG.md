@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w21 (2026-10-18, MERGE_PENDING)
+## w21 (2026-10-18, 56da1bf)
 
 w21 adds a read-only month check to Billing: a Check month button in the page header (with a count) opens a drawer that lists, in plain words, what to look at before a
 month is trusted or closed: meters with no readings, gaps, estimated hours, counters that went back, meters that started late, energy with no rate, readings that did not
