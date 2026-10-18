@@ -474,6 +474,14 @@ async function expandSidebar(page: Page): Promise<void> {
   if ((await shell.getAttribute("data-sidebar")) !== "expanded") await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
   await expect(shell).toHaveAttribute("data-sidebar", "expanded");
   await settled(page);
+  // the column takes its width in a transition: measure only once the header's left edge has stopped moving (two reads 150 ms apart agree)
+  let last = Number.NaN;
+  await expect.poll(async () => {
+    const x = await page.locator(".billing-page .page-head").evaluate((el) => el.getBoundingClientRect().x);
+    const same = x === last;
+    last = x;
+    return same;
+  }, { intervals: [150], timeout: 5_000 }).toBe(true);
 }
 
 // Review I1: with the sidebar open at 800px the page header is 516px wide and the three buttons of a finished month (Close month…, Check month, Download CSV: about 475px) were drawn over the
@@ -507,7 +515,7 @@ test("2. the header with the sidebar expanded on a finished month: at 800 x 600 
     expect(overlaps(narrow.title, box), `${names[i]} is drawn over the title`).toBe(false);
     expect(box.y, `${names[i]} sits under the title`).toBeGreaterThanOrEqual(narrow.title.y + narrow.title.height - 1);
     expect(box.x + box.width, `${names[i]} stays inside the header`).toBeLessThanOrEqual(narrow.head.x + narrow.head.width + 1);
-    expect(box.x, `${names[i]} starts at the title's left edge`).toBeLessThanOrEqual(narrow.title.x + 1);
+    if (i === 0) expect(box.x, `${names[0]} starts at the title's left edge`).toBeLessThanOrEqual(narrow.title.x + 1); // the others follow it on the same row
   });
   for (let i = 1; i < names.length; i++) expect(narrow.buttons[i].y, `${names[i]} shares a row with ${names[0]}`).toBeLessThanOrEqual(narrow.buttons[0].y + 1);
   expect(narrow.buttons[0].x, "the order is Close month…, Check month, Download CSV").toBeLessThan(narrow.buttons[1].x);
