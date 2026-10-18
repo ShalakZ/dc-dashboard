@@ -55,6 +55,12 @@ be ticked on a custom role, as `billing.export` can). Migration `0012` gave it t
 close or reopen a month. It needs See billing: the buttons live on the Billing page, so the Roles editor offers to tick **See billing**
 with it, and the API refuses a person without the permission with a 403 whatever the page shows.
 
+See billing also opens **Check month** on the Billing page, a read-only list of what to look at in a month's readings
+(`GET /api/billing/month-check`, [Checking a month](dashboards-and-billing.md#checking-a-month)); the names of the points and sources
+in it are shown only to a person who also holds See sources, and a point's address never. It does include each meter's reading
+interval (`interval_seconds`, the polling the mapping states) and, for a counter that went back, the size of the fall in the meter's own
+units.
+
 `assets.edit` also lets a person move assets in the Assets Tree ([Moving assets](assets-and-kinds.md#moving-assets)); deleting the picked
 assets from the tree's pick bar needs `assets.delete` as well ([Deleting several assets](assets-and-kinds.md#deleting-several-assets)).
 

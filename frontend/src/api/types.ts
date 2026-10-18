@@ -335,6 +335,85 @@ export interface BillingCosts {
 /** The answer to reopening a month. */
 export interface BillingReopened { month: string; reopened_at: string }
 
+// ---- w21: the Billing month check (GET /api/billing/month-check) ----
+
+/** Where the month is by the site clock: `not_begun` (nothing is read), `open` (read up to the last full hour) or `finished`. */
+export type MonthCheckState = "not_begun" | "open" | "finished";
+/** `counter` = the asset's own meter counts energy (kWh); `power` = it only reports power (kW), so its energy is worked out and marked estimated. */
+export type MonthCheckMeterKind = "counter" | "power";
+/** One group of findings: `total` is the true number, `items` holds at most `limits.cap` of them, worst first. */
+export interface MonthCheckGroup<T> { total: number; items: T[] }
+/**
+ * What every finding says about its meter. `path` runs from the root down and ends with the asset's name. `point` and `source` are the names of the
+ * point it reads and of its source, or null when the caller may not see sources (`sources.view`); the address is never sent.
+ */
+export interface MonthCheckHead {
+  asset_id: number; path: string; kind: MonthCheckMeterKind; point: string | null; source: string | null; interval_seconds: number;
+}
+/**
+ * No readings at the end, in the whole month, or ever. `never`: the point has never recorded anything (`hours` = every hour looked at, `since` and
+ * `last_reading` null). `none_in_month`: it has older readings but none in the month (`last_reading` = the last one before it, or null).
+ * `trailing`: it stopped (`since` = the first hour with nothing after the last reading, `hours` = how long, `last_reading` = its last reading looked at).
+ * `children` = assets directly under it: while its own meter has no readings their energy is not counted in its figure.
+ */
+export interface SilentItem extends MonthCheckHead {
+  reason: "never" | "none_in_month" | "trailing"; since: string | null; hours: number; last_reading: string | null; children: number;
+}
+/**
+ * Whole hours with no reading (not counting the stretch at the end, that is `silent`). `runs` may be 0 for a power meter listed for the time missing
+ * inside hours that do have readings (`short_hours` hours, `short_minutes` minutes in all; both 0 for a counter). `leading_hours` is the length of the
+ * gap that starts the month and `previous_reading` the counter reading before the month that its first reading of the month is measured from (null
+ * for a power meter, or when the counter has none). `hours_before_month` = hours without a reading between `previous_reading` and the month start: a
+ * counter bills everything since that reading into its first reading of the month. `runs` may also be 0 for a counter listed only for that hole.
+ */
+export interface GapsItem extends MonthCheckHead {
+  runs: number; hours: number; longest_hours: number | null; longest_start: string | null; first_start: string | null; last_end: string | null;
+  leading_hours: number; hours_before_month: number; previous_reading: string | null; short_hours: number; short_minutes: number;
+}
+/**
+ * A power meter: its energy is worked out from average power in `hours_estimated` of its `hours_total` hours. `negative_hours` = hours whose power
+ * reading was below 0 (a meter fitted the wrong way round), `negative_kwh` = their energy in all (0 or below); both 0 when there are none.
+ */
+export interface EstimatedItem extends MonthCheckHead { hours_estimated: number; hours_total: number; negative_hours: number; negative_kwh: number }
+/** The three kinds of counter trouble (`reset`: went back down; `dip`: dipped below an earlier reading and recovered; `fell`: went down inside an hour). */
+export type ResetKind = "reset" | "dip" | "fell";
+/**
+ * A counter that went back or dipped. `resets`, `dips` and `falls` are the full counts; `events` are the first five by time, each with its `size`:
+ * how far the reading went down, in the meter's own units (`previous - last` for a reset, `previous - min` for a dip, `max - last` for a fall).
+ */
+export interface ResetsItem extends MonthCheckHead {
+  resets: number; dips: number; falls: number; events: { at: string; kind: ResetKind; size: number }[];
+}
+/** A meter whose first reading came after the month began (and before what was looked at ended); `children` = assets directly under it. */
+export interface StartedItem extends MonthCheckHead { first_reading: string; children: number }
+/** Energy in hours that no rate covers. `first_day` and `last_day` are site-local dates (`YYYY-MM-DD`). */
+export interface UnpricedItem extends MonthCheckHead { kwh: number; hours: number; days: number; first_day: string; last_day: string }
+/** Readings that did not change for a long time (`limits.flat_hours` or more): `runs` such stretches, the longest one `longest_hours` long. */
+export interface FlatItem extends MonthCheckHead { runs: number; longest_hours: number; longest_start: string; first_start: string }
+/** An asset nothing measures (information only). `beside_measured`: the asset above it is billed from other meters under it. */
+export interface UnmeteredItem { asset_id: number; path: string; beside_measured: boolean }
+/** A meter whose first reading came at or after the end of what was looked at (information only). */
+export interface LaterItem { asset_id: number; path: string; kind: MonthCheckMeterKind; first_reading: string }
+/** The thresholds the check used, so the answer can state them. `short_share` is a fraction (0.01 = one part in a hundred). */
+export interface MonthCheckLimits { flat_hours: number; short_minutes: number; short_share: number; max_tolerated_hours: number; cap: number }
+/**
+ * The month check: a read-only list of what to look at before a month is trusted or closed. `from` is the start of the month and `to` the end of the
+ * last full hour looked at (the end of the month once it is over). `meters` counts the meters with at least one hour looked at, `meter_hours` the
+ * hours they were looked at in all, and `things` the findings of the seven counted groups (never `unmetered` or `later`). `closed`: the month has an
+ * active close, whose billed figures are frozen; the check still describes the readings as they are stored today.
+ */
+export interface MonthCheck {
+  month: string; timezone: string; state: MonthCheckState; closed: boolean;
+  from: string; to: string; month_end: string;
+  hours: number; meters: number; meter_hours: number; things: number;
+  limits: MonthCheckLimits;
+  groups: {
+    silent: MonthCheckGroup<SilentItem>; gaps: MonthCheckGroup<GapsItem>; estimated: MonthCheckGroup<EstimatedItem>;
+    resets: MonthCheckGroup<ResetsItem>; started: MonthCheckGroup<StartedItem>; unpriced: MonthCheckGroup<UnpricedItem>;
+    flat: MonthCheckGroup<FlatItem>; unmetered: MonthCheckGroup<UnmeteredItem>; later: MonthCheckGroup<LaterItem>;
+  };
+}
+
 export const WIDGET_TYPES = ["timeseries", "bar", "stat", "gauge", "table"] as const;
 export type WidgetType = (typeof WIDGET_TYPES)[number];
 export type WidgetSource = "metric" | "energy" | "cost";

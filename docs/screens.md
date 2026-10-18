@@ -41,6 +41,12 @@ lacks says "No access".
   compare; and **Reopen month…** (a reason of at least 5 characters; download the CSV first, the app does not show the closed figures
   again) goes back to today's figures. See
   [Closing a month](dashboards-and-billing.md#closing-a-month) and [Dashboards and billing](dashboards-and-billing.md).
+  **Check month** (everyone who sees Billing) sits in the header between Close month… and Download CSV, with a count of the things to
+  check beside it (a muted `0` when nothing was found, empty while it is read or when nothing could be looked at). It opens a drawer
+  that lists, worst first, the meters with no readings, gaps, hours estimated from power, counters that went back or dipped, meters
+  that started part way through, energy with no rate and readings that did not change, then (not counted) the assets nothing measures
+  and the meters that started later; the Close month dialog repeats the answer in one line. Point and source names in it need
+  `sources.view`. It only reads and certifies nothing. See [Checking a month](dashboards-and-billing.md#checking-a-month).
 
 ## Operate
 

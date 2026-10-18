@@ -1,0 +1,34 @@
+@layer w6 {
+  /* w21: the Check month button's count on the Billing page and the month check drawer (components/MonthCheckDrawer.tsx). Tokens only; every rule is scoped by a class this piece owns. */
+
+  /* The count on the Check month button. A slot of a fixed width (2.75em holds "99+"), so the button is as wide before the answer as after it and nothing beside it moves;
+     it is empty (and then draws nothing) while the answer is read, after a failure and when nothing was looked at. A small rounded rectangle, never a pill. It sets no height:
+     the button keeps its own 34px. A number is the amber pair of a warning chip, a zero the quiet grey pair of a stale one (both pairs are measured in every look). */
+  .check-count { display: inline-block; box-sizing: border-box; width: 2.75em; padding: 0; white-space: nowrap; border-radius: var(--radius-sm); background: var(--warn-tint); color: var(--warn); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.5; text-align: center; }
+  .check-count[data-zero] { background: var(--stale-tint); color: var(--stale); }
+  .check-count:empty { background: none; }
+
+  /* The drawer's body: a headline, what was looked at, then one block per group that has findings and the information block. A column with a gap, so the
+     skeleton's hidden label (absolutely placed) adds no space and the loading shape and the answer start at the same place. */
+  .month-check-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .month-check-body > * { margin: 0; }
+  .month-check-headline { font-size: var(--fs-lg); font-weight: 600; }
+  .month-check-looked, .month-check-reason, .month-check-state { font-size: var(--fs-sm); }
+
+  .month-check-group { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding-top: 16px; border-top: 1px solid var(--border); }
+  .month-check-group > *, .month-check-sub > * { margin: 0; }
+  .month-check-group > h3 { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: var(--fs-md); font-weight: 600; }
+  .month-check-total { flex: none; color: var(--text-2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+  .month-check-sub { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .month-check-sub + .month-check-sub { margin-top: 8px; }
+  .month-check-sub > h4 { font-size: var(--fs-base); font-weight: 600; }
+  .month-check-intro, .month-check-more { font-size: var(--fs-sm); }
+
+  /* The findings: a path, what it reads, the sentences. A rule between two findings, none above the first. */
+  .month-check-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+  .month-check-item { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 10px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+  .month-check-item:first-child { padding-top: 0; border-top: 0; }
+  .month-check-path { font-weight: 600; }
+  .month-check-reads, .month-check-line { margin: 0; font-size: var(--fs-sm); }
+  .month-check-show { align-self: flex-start; margin-left: -10px; } /* the quiet button's own 10px of padding: its words line up with the text above */
+}

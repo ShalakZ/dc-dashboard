@@ -502,18 +502,18 @@ const PAGES: readonly PageCase[] = [
     floor: 10,
     named: (p) => [p.getByLabel("Dashboard name"), btn(p, "Add widget"), btn(p, "Save"), btn(p, "Cancel")],
   },
-  // 10: the month bar (Previous, Next, Year, Month) and the tools bar (filter, Collapse all, Expand all, Show levels) with Download CSV (12).
-  { name: "Billing, an open month", billing: "open", open: openBilling, floor: 10, named: (p) => [btn(p, "Previous month"), btn(p, "Next month"), p.getByLabel("Year", { exact: true }), p.getByLabel("Month", { exact: true }), btn(p, "Expand all")] },
+  // 13: the month bar (Previous, Next, Year, Month), the tools bar (filter, Collapse all, Expand all, Show levels) and the header's Check month with Download CSV (measured 13 at 1440 and 1024, w21).
+  { name: "Billing, an open month", billing: "open", open: openBilling, floor: 13, named: (p) => [btn(p, "Previous month"), btn(p, "Next month"), p.getByLabel("Year", { exact: true }), p.getByLabel("Month", { exact: true }), btn(p, "Check month"), btn(p, "Expand all")] },
   {
-    // 14: the same bars with the Closed chip and Reopen month (17).
+    // 19: the same bars with the Closed chip, and Reopen month, Check month and Download CSV in the header (measured 19, w21).
     name: "Billing, a closed month",
     billing: "closed",
     open: openBilling,
-    floor: 14,
-    named: (p) => [p.locator(".month-state .chip"), btn(p, "Previous month"), btn(p, "Next month"), btn(p, "Reopen month…"), btn(p, "Expand all")],
+    floor: 19,
+    named: (p) => [p.locator(".month-state .chip"), btn(p, "Previous month"), btn(p, "Next month"), btn(p, "Reopen month…"), btn(p, "Check month"), btn(p, "Expand all")],
   },
-  // 12: the bars of the page behind the dialog (14 with the dialog's Cancel and Close month).
-  { name: "Billing, the Close month dialog", billing: "open", open: openCloseDialog, floor: 12, named: (p) => [btn(p.getByRole("dialog"), "Cancel"), btn(p.getByRole("dialog"), "Close month")] },
+  // 14: the bars of the page behind the dialog (a finished month: Close month, Check month and Download CSV in the header); 16 with the dialog's Cancel and Close month (measured 16, w21).
+  { name: "Billing, the Close month dialog", billing: "open", open: openCloseDialog, floor: 16, named: (p) => [btn(p, "Check month"), btn(p.getByRole("dialog"), "Cancel"), btn(p.getByRole("dialog"), "Close month")] },
   // 1: Test all beside Add source (the stack has a source: w18 needs a point of one).
   { name: "Sources", open: goTo("/sources"), floor: 1, named: (p) => [btn(p, "Test all"), btn(p, "Add source")] },
   // floor 0: New scope is the only control on the page with an edge at rest.

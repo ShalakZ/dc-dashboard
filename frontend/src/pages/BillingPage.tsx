@@ -1,11 +1,12 @@
 import { useCallback, useDeferredValue, useEffect, useId, useRef, useState } from "react";
-import { useBillingCosts, useBillingMonths, useSite } from "../api/queries";
+import { useBillingCosts, useBillingMonthCheck, useBillingMonths, useSite } from "../api/queries";
 import type { BillingClosed, BillingLive } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { meets } from "../auth/need";
 import { BillingTable } from "../components/BillingTable";
 import { BillingTools } from "../components/BillingTools";
 import { CloseMonthDialog } from "../components/CloseMonthDialog";
+import { MonthCheckDrawer } from "../components/MonthCheckDrawer";
 import { PAGE_NEED } from "../components/navItems";
 import { PageHeader } from "../components/PageHeader";
 import { ReopenMonthDialog } from "../components/ReopenMonthDialog";
@@ -18,6 +19,7 @@ import {
 import { BILLING_FOLD_KEY } from "../lib/billingRows";
 import { downloadCsv } from "../lib/download";
 import { readFoldMemory, writeFoldMemory } from "../lib/foldMemory";
+import { checkLineText, countSlotText, describedByText, type MonthCheckStatus } from "../lib/monthCheck";
 import { siteMonth } from "../lib/siteTime";
 
 // Inline SVG, 24-unit viewBox, decoration only (the words next to each one say everything).
@@ -26,6 +28,9 @@ const ChevronIcon = ({ dir }: { dir: "left" | "right" }) => (
 );
 const LockIcon = () => (
   <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9.5" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
+);
+const CheckIcon = () => (
+  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /><rect x="9" y="3" width="6" height="4" rx="1" /><path d="m9 14 2 2 4-4" /></svg>
 );
 const DownloadIcon = () => (
   <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14" /></svg>
@@ -99,9 +104,12 @@ export function BillingPage() {
   // The Reopen dialog takes a copy of what the page says about the closed month at the click (its figures, today's difference, its currency): it
   // keeps saying that while the 60-second poll moves the page behind it, and still has it after the reopen refetch turns the month open.
   const [dialog, setDialog] = useState<
-    { kind: "close"; month: string } | { kind: "reopen"; month: string; closed: BillingClosed; live: BillingLive | null | undefined; currency: string | null } | null
+    { kind: "close"; month: string; checkLine: string } | { kind: "reopen"; month: string; closed: BillingClosed; live: BillingLive | null | undefined; currency: string | null } | null
   >(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  const checkButton = useRef<HTMLButtonElement>(null);
+  const [checking, setChecking] = useState(false); // the month check drawer is open
+  const checkNoteId = useId();
   // The fold and the filter live here, not in the table: paging to another month unmounts the table while the new month loads, and both must still be there.
   // `folded` is null while nothing is remembered (the table then folds a long month to a level and writes nothing); the first thing the person does writes it.
   const [folded, setFolded] = useState<ReadonlySet<number> | null>(() => readFoldMemory(BILLING_FOLD_KEY));
@@ -115,6 +123,11 @@ export function BillingPage() {
   const current = site.data ? siteMonth(new Date(), site.data.timezone) : null;
   const month = picked ?? current;
   const costs = useBillingCosts(month);
+  // The month check is read once here: the button's count, the sentence behind it, the Close month dialog's line and the drawer all come from this one answer.
+  // A failure shows as an empty count and as the message in the drawer; it never touches the table.
+  const monthCheck = useBillingMonthCheck(month);
+  const checkStatus: MonthCheckStatus = monthCheck.isError ? { status: "error", message: monthCheck.error.message }
+    : monthCheck.isPending ? { status: "loading" } : { status: "ready", data: monthCheck.data };
   // What the controls bar and the table both read (the fold and the visible rows), worked out once here; null when there is no table to draw.
   const shown = useBillingView(costs.data, folded, deferred);
   // The first month with data only narrows what Previous and the selects offer; while it is unknown (pending, failed, none) nothing is limited.
@@ -130,13 +143,22 @@ export function BillingPage() {
   const monthAction = !canClose || month === null || !costs.data ? null : closed !== null ? (
     <button key="reopen" type="button" aria-haspopup="dialog" onClick={() => setDialog({ kind: "reopen", month, closed, live, currency: frozenCurrency })}>Reopen month…</button>
   ) : finished ? (
-    <button key="close" type="button" aria-haspopup="dialog" onClick={() => setDialog({ kind: "close", month })}>Close month…</button>
+    <button key="close" type="button" aria-haspopup="dialog" onClick={() => setDialog({ kind: "close", month, checkLine: checkLineText(checkStatus) })}>Close month…</button>
   ) : null;
+  // Check month is for everybody who can see the page. Its name is exactly "Check month": the count is a decoration (aria-hidden) in a slot that keeps its width,
+  // and the number reaches a screen reader as the button's description. It is not the primary button: Download CSV stays the page's one.
+  const slot = countSlotText(checkStatus);
+  const checkMonth = month === null ? null : (
+    <button key="check" ref={checkButton} type="button" aria-haspopup="dialog" aria-describedby={checkNoteId} onClick={() => setChecking(true)}>
+      <CheckIcon />Check month<span className="check-count" aria-hidden="true" data-zero={slot === "0" || undefined}>{slot}</span>
+    </button>
+  );
   const download = canExport && month !== null ? (
     <button type="button" className="primary" onClick={exportCsv} disabled={exporting}><DownloadIcon />Download CSV</button>
   ) : null;
 
-  const holdsSpace = canClose ? site.isPending || month !== null : canExport && site.isPending;
+  // Once the month is known every viewer has Check month; until then the header keeps the height of a button.
+  const holdsSpace = site.isPending;
 
   // After a dialog is gone the focus goes back to its opener (the dialog does that itself); when the opener is gone too (closing a month swaps
   // Close for Reopen) the page heading takes it, so the focus never falls to the body.
@@ -168,11 +190,11 @@ export function BillingPage() {
       <PageHeader
         title="Billing"
         headingRef={heading}
-        // Close or Reopen sits left of Download CSV, so the download button keeps its place whatever the month. A person who may close but not export
-        // has no other button to give the header its height: the space stays, even on a month with nothing to close.
-        actions={monthAction || download ? <>{monthAction}{download}</>
-          : holdsSpace ? <ActionsSpace /> /* the buttons wait for the site's month and the costs; their height does not */ : undefined}
+        // Close or Reopen sits left of Check month and Download CSV: only the month button comes and goes, so those two keep their places whatever the month.
+        actions={monthAction || checkMonth || download ? <>{monthAction}{checkMonth}{download}</>
+          : holdsSpace ? <ActionsSpace /> /* the buttons wait for the site's month; their height does not */ : undefined}
       />
+      {checkMonth && <span id={checkNoteId} className="sr-only">{describedByText(checkStatus)}</span>}
       {site.isError && <p className="error" role="alert">{site.error.message}</p>}
       {/* One size container for everything under the header: the stylesheet switches the toolbar between stacked and one row on its width.
           The dialogs stay outside it. */}
@@ -222,9 +244,15 @@ export function BillingPage() {
           </>
         )}
       </div>
-      {dialog?.kind === "close" && <CloseMonthDialog month={dialog.month} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "close" && <CloseMonthDialog month={dialog.month} checkLine={dialog.checkLine} onClose={() => setDialog(null)} />}
       {dialog?.kind === "reopen" && (
         <ReopenMonthDialog month={dialog.month} closed={dialog.closed} live={dialog.live} currency={dialog.currency} onClose={() => setDialog(null)} />
+      )}
+      {checking && month !== null && (
+        <MonthCheckDrawer
+          month={month} timezone={site.data?.timezone ?? monthCheck.data?.timezone ?? "UTC"} status={checkStatus}
+          onClose={() => setChecking(false)} returnFocus={() => checkButton.current}
+        />
       )}
     </section>
   );

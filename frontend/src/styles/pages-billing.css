@@ -7,6 +7,12 @@
   /* The toolbar (w20): the month bar and the table's controls bar. Stacked by default, as the page always was (34 + 16 + 34 + 12 = 96px); the toolbar owns
      the spacing, so the two bars have no margin. From 99rem of container width they share one row (the @container block after the table box's rule). */
   .billing-page .billing-toolbar { display: flex; flex-direction: column; gap: 16px; margin: 0 0 12px; }
+  /* The page header (w21 review I1): Close month…, Check month and Download CSV need about 475px beside a 90px title, so below 600px of the header's own width
+     (the sidebar open or minimised decides it, not the window) the buttons go under the title instead of drawing over its end. The header is the container, as on
+     the asset page (pages-assets.css). The real buttons and the placeholder that holds their room (ActionsSpace) stack the same way, so nothing shifts when they arrive. */
+  .billing-page .page-head { container-type: inline-size; }
+  @container (max-width: 600px) { .billing-page .page-head > .actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 12px; } }
+
   /* Billing: the month bar */
   .billing-page .billing-bar { gap: 8px; margin: 0; }
   .billing-page .month-label { min-width: 9.5em; text-align: center; font-size: var(--fs-md); font-weight: 600; }

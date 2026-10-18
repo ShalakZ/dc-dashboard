@@ -33,6 +33,12 @@ export function formatSiteDateTime(iso: string, timezone: string): string {
   return f ? `${f.year}-${f.month}-${f.day} ${f.hour}:${f.minute}:${f.second}` : iso;
 }
 
+/** `2026-09-20 09:00` in the site zone (no seconds): the way the month check names an hour. Returns `iso` unchanged when it cannot be formatted. */
+export function formatSiteDateHour(iso: string, timezone: string): string {
+  const f = fields(new Date(iso), timezone);
+  return f ? `${f.year}-${f.month}-${f.day} ${f.hour}:${f.minute}` : iso;
+}
+
 /** `13:05:00` in the site zone. Returns `iso` unchanged when it cannot be formatted. */
 export function formatSiteClock(iso: string, timezone: string): string {
   const f = fields(new Date(iso), timezone);

@@ -2,7 +2,8 @@
 
 This page is for the people who build dashboards, read the monthly energy and cost report and set the tariffs, and for anyone who has to
 explain a cost figure. It covers the dashboards and their widgets, the default dashboard, the Billing page, tariffs, which rate applies
-to a day, how energy and history are calculated, how a finished month is closed so that it stops changing, and the limits of all of it.
+to a day, how energy and history are calculated, what the month check lists, how a finished month is closed so that it stops changing,
+and the limits of all of it.
 
 ## Who may do what
 
@@ -11,7 +12,7 @@ Roles are enforced by the API; the screens only hide what you cannot use. The ta
 
 | | Viewer | Operator | Admin |
 |---|---|---|---|
-| Open dashboards and Billing, export CSV | yes | yes | yes |
+| Open dashboards and Billing, export CSV, open Check month ([Checking a month](#checking-a-month)) | yes | yes | yes |
 | Close and reopen a billing month (`billing.close`, [Closing a month](#closing-a-month)) | no | no | yes |
 | Create, edit and delete dashboards | no | yes | yes |
 | Choose the default dashboard (Dashboards list, row menu) | no | no | yes |
@@ -128,6 +129,8 @@ then the month total and the rate in effect.
 - The CSV button exports one row per asset per day (`asset,date,kwh,cost,currency,estimated,partial,no_data`).
 - A month an administrator has **closed** shows a **Closed** chip beside its name and a banner; its figures no longer follow the tree
   or the rates. See [Closing a month](#closing-a-month).
+- **Check month** (header button, with a count) lists what to look at in the month's readings before it is trusted or closed. See
+  [Checking a month](#checking-a-month).
 
 The asset page shows today's cost next to today's energy.
 
@@ -178,7 +181,8 @@ with that name show, each under its hall, pod and row. Press Escape and the leve
 
 Until a month is closed it is recalculated on every request from today's tree, mappings and rates, so moving an asset or editing a
 rate changes it ([How history is calculated](#how-history-is-calculated)). Once the bill for a finished month is out, an administrator
-can **close** it: the Billing page stores the figures it shows for that month and from then on shows those.
+can **close** it: the Billing page stores the figures it shows for that month and from then on shows those. Before you close, look at
+**Check month** ([Checking a month](#checking-a-month)); it lists what the month's readings leave open, and it never blocks the close.
 
 - **What it freezes.** The Billing page and the Billing CSV of that month, exactly as they showed at the moment of closing, for every
   asset and every day (the hierarchy, names, paths, kWh, cost, the `~` and `*` marks, the currency and the time zone of that moment).
@@ -251,6 +255,145 @@ Limits of closing:
   closed month before going back if you need them.
 - A closed month keeps the time zone and the currency it was closed in; changing them in Settings or on the Tariffs page later
   relabels or re-cuts only the months that are not closed.
+
+## Checking a month
+
+**Check month** is a list of things to look at before a month is trusted or closed. It reads the same hourly readings that Billing
+uses and says where they are missing, thin or odd, and what each of those does to the figures. It only reads: it never blocks **Close
+month…**, changes no figure, marker, rate or CSV, and writes nothing (not even an audit row). It does not certify a month. The headline
+**Nothing to check** says only that the rules below found nothing in the readings; it never says that the figures are right.
+
+- **Where it is.** A **Check month** button sits in the Billing page header, between **Close month…** (or **Reopen month…**) and
+  **Download CSV**, with a count beside it: the number of things to check (`99+` above 99), a muted `0` when meters were looked at and
+  nothing was found, and nothing at all while the answer is being read, if it failed, or when nothing was looked at. The button opens a
+  drawer with the whole list. The **Close month** dialog repeats the answer in one line ("Month check: 3 things to check (see Check
+  month on the page).", or "... nothing to check ...", or "... not read yet ..."); closing works exactly as before.
+- **Who sees it.** Everyone who can open Billing (`billing.view`). The name of the point and of its source ("Reads <point>
+  (<source>)") appears only for a person who also holds `sources.view`; a point's address, a source's URL and its credentials are never
+  sent.
+- **The headline.** `N things to check` when there is anything to look at (one thing is one meter and one kind of finding, so a meter
+  with a gap and a reset is two). Otherwise `Nothing to look at yet` when nothing could be read (the month has not begun, its first hour
+  is not over, no meter recorded anything in it, or no asset has a meter mapped at all; the line under it says which), and only then
+  `Nothing to check`. A month in which every meter is silent therefore says `N things to check`, never `Nothing to check`. Under the
+  headline the drawer says what it looked at, for example "Looked at 217 meters over 720 hours (156,240 meter hours in all), from
+  2026-09-01 00:00 to 2026-10-01 00:00. Only the hourly readings that billing uses were read, so this check cannot see every kind of
+  fault." The meter hours are the hours expected of each meter added up (217 meters times 720 hours), whether or not each of those
+  hours has a reading: the missing ones are the findings below. Times are in the site time zone.
+- **What it looks at.** Every asset that has a meter of its own: an energy counter (`energy_kwh`), or, when it has none, a power meter
+  (`active_power_kw`, called a power-only meter below). A parent is not repeated: what its children add up to is not checked again.
+  It looks at the whole hours of the month, and for a month that is still running up to the last full hour (the hour in progress is
+  left out; the drawer says so). A meter is expected to have a reading in every hour from its first reading on; a meter that never
+  recorded anything is expected in every hour of the month. It sees only good readings.
+- **A closed month.** The check describes the readings as they are stored today, not the frozen figures, and the drawer says so. Unlike
+  the frozen figures, it needs a usable site time zone: the API answers 409 for a zone without a whole-hour offset, with the words
+  Billing uses.
+
+The findings, worst first inside each list:
+
+1. **Meters with no readings.** A meter that never recorded anything; one that recorded nothing in this month (the last reading before
+   it is named); or one that went silent: the last hours looked at have no reading, and the item says since when. A silent meter on an
+   asset with assets under it bills 0 for those hours whatever its children read, so their energy is missing from that asset's figure
+   (the item says how many assets are under it). A meter that never recorded, or recorded nothing this month, counts as 0 kWh for the
+   month. A counter's energy is not lost, though, when it recorded before: for one that went silent, or that recorded nothing this month
+   but did before it, the energy is counted in the hour readings return, which is in a later month if they return after this one ends
+   (the item says so); a power-only meter's silent time counts as 0 kWh.
+2. **Gaps in the readings.** Whole hours in a row without any reading.
+   - **Counter.** A counter polled faster than once an hour tolerates none: any empty hour is a gap. A counter polled once an hour or
+     slower leaves empty hours by design, so it tolerates `ceil(interval / 3600)` hours in a row, at most 24 (a counter read every
+     7,200 s tolerates 2). The same tolerance applies to the end of the month before a counter counts as silent. The energy of a gap
+     is not lost: it is counted in the hour the readings return. A gap at the start of the month brings energy used before the month
+     into it, and a gap that runs past the end of the month moves energy into the next month.
+   - **The hole before the month.** A counter's first reading of the month is measured from its last reading before the month,
+     however old that is. When the hours without a reading between the two, plus any empty hours at the start of the month, are more
+     than the tolerance, the item says "The first reading of the month counts everything since <time>" and how many hours that is.
+     Such a counter can be listed with no gap inside the month at all.
+   - **Power-only meter.** It tolerates nothing: an hour without a reading, or a row with no samples, counts as no energy, that time
+     counts as 0 kWh and the meter reads low by what it used then. It also lists partly covered hours, hours that have a row but whose
+     samples cover less than the whole hour by the engine's own rule (a meter polled every 60 s or faster: the minutes that have a
+     sample out of 60; a slower one: samples times interval out of 3,600 s). They are listed only when the missing time adds up to at
+     least 60 minutes and at least one hundredth of the minutes looked at, so the ordinary drift of a polling loop does not list every
+     meter, while one that loses a whole minute in every hour (1.7 percent) is listed. The missing part counts as 0 kWh.
+3. **Estimated from power.** The rule, in one sentence: *An hour is marked estimated when the asset has no energy (kWh) counter, so its
+   energy is worked out from average power (kW) readings; anything that adds up estimated hours is marked estimated too.* Every
+   power-only meter is listed (also a silent one, because Billing shows `~` for it), with the hours estimated out of the hours looked at.
+   The parents that add these meters up show `~` on Billing too; the check lists the meters, not the parents. A **negative power
+   reading** is named here: a transformer fitted the wrong way round gives negative kW, which makes negative kWh and lowers the asset's
+   figure and the figures above it; the item gives the hours and the kWh. A counter cannot do this.
+4. **Counter went back or dipped.** A counter should only count up. Three cases, each with the full count and the first five times, with
+   how far the reading went down in the meter's own units:
+   - **Reset**: an hour ends below the previous hour's last reading (a reset or a rollover). The hour is approximate: the engine counts
+     the rise from the previous reading up to the hour's highest reading, plus the climb from its lowest reading to the last one; what
+     happened in between is not counted.
+   - **Dip**: the lowest reading of the hour went below the previous reading but the hour ended at or above it. The figure ignores the
+     dip and counts the rise from the earlier reading.
+   - **Fell**: neither of those, yet the hour's highest reading is above its last. A reading went down inside the hour; the hour is
+     counted from its last reading.
+5. **Started part way through the month.** The meter's first reading is after the first hour of the month. Before it, the asset counts
+   what the assets under it add up to (nothing, when it has none); from then on its own meter. The hours before the first reading are
+   not missing hours.
+6. **Energy with no rate.** Hours of a meter's own energy above 0 with no rate on that local day, by the rule of
+   [Which rate applies to a day](#which-rate-applies-to-a-day). The item gives the kWh, hours and days, and the first and last day.
+   Those hours are in the kWh figures and not in the cost (Billing marks that cost `*`, or shows a dash when no rate applies at all).
+7. **Readings that did not change.** A run of **24 hours** or more of clock time in which the reading stays exactly the same: for a
+   counter, the hour's last reading equals the previous one (energy 0); for a power-only meter, every sample in the hour has one value
+   and it is the same value all through the run. An hour with no reading between two equal ones does not break the run. A counter's run
+   is counted from the end of the previous reading's hour, but not from before the month (a counter read every 7,200 s that stood
+   still for 24 hours shows 24, not 23). It can mean a meter that stopped updating. A counter counts 0 kWh for that time; a power-only meter's energy is worked out as if
+   the power had stayed the same.
+
+Two lists are information only and are never counted in the number at the top:
+
+- **Assets that nothing measures.** Assets with no assets under them, no meter of their own and no meter above them. No energy is
+  counted for them. The ones whose parent is billed from other meters under it come first ("beside measured"): that figure leaves
+  their power out. Only the direct parent is looked at, so the feeds of a free rack under a row billed from its other racks are not
+  marked beside measured, although the row's figure lacks them too.
+- **Meters that started later.** Meters whose first reading is at or after the end of what was looked at (after the month, or in
+  the hour still running). They are not counted in "Looked at" either.
+
+Limits, all stated by the API under `limits`:
+
+- 24 hours for a run of unchanged readings; 60 minutes and one hundredth of the time looked at for a power-only meter's partly covered
+  hours; a cap of 24 hours on the counter polling tolerance.
+- 50 items per list. The list says how many more there are ("and 11 more"); the number at the top counts all of them. The first five
+  reset, dip and fall times of a meter are listed.
+
+### What the check cannot see
+
+The check lists what the rules above find; the absence of a finding is not a statement about the figures. It cannot see:
+
+- A counter that is reset and climbs back **past its earlier reading within one hour**. The hour looks like a normal rise and its
+  figure is understated.
+- A counter whose first reading ever **starts from a bad zero**: the hour counts the climb from that zero.
+- A **huge torn reading** as the last sample of an hour: the hour is over-counted, and the check lists a reset in the next hour, not in
+  the hour that was spoiled. A **jump that stays up** (readings rise normally, then are higher by a fixed amount from some hour on) is
+  not seen at all: a counter must not go down, but it may go up by any amount.
+- A counter that **stood still across a month boundary**. The 24 hours are counted inside each month, so 12 hours at the end of one
+  month and 23 at the start of the next are listed in neither.
+- A counter's **partly covered hour** is not listed, because it loses no energy inside the month (the hour counts the last reading
+  minus the previous one). At the very end of a month up to 59 minutes of its energy can move into the next month.
+- A slow counter's **tolerated empty hours at the end of a finished month**. A counter polled once an hour or slower may end the month
+  with up to `ceil(interval / 3600)` empty hours (at most 24) and the check calls that normal, but the energy of those hours is counted
+  in the next month, when the next reading arrives, with no finding.
+- A power meter whose mapping states a **longer polling interval than the point really has**. The collector polls a point once for each
+  source and interval, so a point mapped twice (for example kW at 1,800 s on the billed asset and at 60 s on another) is read about
+  60 times an hour. The engine takes samples times the mapped interval out of 3,600 s as the part of the hour covered, so a few
+  samples read as a fully covered hour and a long outage inside it is not listed as partly covered. The check follows the engine's
+  rule, so Billing's figure has the same blind spot; the rollup's `minutes` column shows the hole.
+- In the first hours of a month still running, a slow counter can read as **silent** before its first reading of the month has arrived.
+- A reading the collector stores as **bad** (not a number, or infinite) is not in the hourly rollup at all: an hour made only of such
+  readings is an hour with no row, and the check cannot tell it was ever there.
+- The check **reads the hourly rollup only**. A reading that arrived later than the rollup refreshes (7 days) is not in it.
+
+### How it is counted
+
+For engineers. The check reads one row per meter and hour of `readings_1h` (the same rows as the energy engine, with the last row
+before the month for every meter). Hours are UTC hours, which are the site's hours because the site time zone must have a whole-hour
+offset. An open month is read up to the last full hour. The rules mirror `backend/dcdash/core/energy.py` and `core/cost.py`: the reset
+and dip branches of `counter_hours`, the coverage rule of `power_hours`, the splice at a meter's first reading (`own_from`), and the rate
+lookup `rate_at` by local date. The code is `backend/dcdash/core/month_check.py` (no database) and `backend/dcdash/api/billing_check.py`;
+the route is `GET /api/billing/month-check?month=YYYY-MM` (`month` defaults to the current site month; 422 for a bad month, 409 for an
+unusable time zone, both with the words of `/api/billing/costs`). Its gate is `billing.view`. It has no migration, writes nothing and
+touches none of the engine's files.
 
 ## Tariffs
 
@@ -325,6 +468,7 @@ and works in whole hours; a day or a month is the sum of its hours in the site t
   marked `~` (estimated) wherever they appear.
 - A parent asset uses its own meter if it has one, otherwise the sum of its children; a meter with no readings at all counts as 0, and
   an asset with no energy or power mapping anywhere beneath it has no figure.
+- **Check month** reads the same hourly rows and mirrors these rules without changing them; see [Checking a month](#checking-a-month).
 
 ## How history is calculated
 
@@ -363,5 +507,7 @@ Billing.
   readings a figure rests on or alarm limits, nor the width of a time series bucket, nor an average over buckets.
 - Closing a month has limits of its own (one snapshot per close, what a restore does to closed months, a close that lands during an
   edit): see [Closing a month](#closing-a-month).
+- Check month lists what its rules find and certifies nothing; what it cannot see is in
+  [What the check cannot see](#what-the-check-cannot-see).
 
 Related: [Screens](screens.md), [Roles and permissions](roles-and-permissions.md), [Assets and kinds](assets-and-kinds.md), [Storage](storage.md)

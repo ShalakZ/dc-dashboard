@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { mockFetch, type Routes } from "../test/fetchMock";
@@ -215,5 +215,40 @@ describe("CloseMonthDialog", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(posts(calls)).toHaveLength(1);
     expect(toasts.calls).toHaveLength(1);
+  });
+
+  describe("the month check line (w21)", () => {
+    const LINE = "Month check: 3 things to check (see Check month on the page).";
+    const show = (checkLine?: string) => {
+      mockFetch({ ...base });
+      renderWithProviders(<CloseMonthDialog month="2026-09" onClose={() => {}} checkLine={checkLine} />);
+      return screen.getByRole("dialog", { name: "Close September 2026" });
+    };
+
+    it("shows the line the page worded as a second paragraph under the sentence, in plain words with no link and no button in it", () => {
+      const dialog = show(LINE);
+      const line = within(dialog).getByText(LINE);
+      expect(line.tagName).toBe("P");
+      expect(line).toHaveClass("month-extra");
+      expect(line.previousElementSibling).toHaveTextContent("Freeze the figures of September 2026");
+      expect(line.querySelector("a, button")).toBeNull();
+      expect(within(dialog).getAllByRole("button").map((b) => b.textContent)).toEqual(["Cancel", "Close month"]);
+      expect(within(dialog).queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    it("renders exactly as before without the line: one paragraph, no second one", () => {
+      const dialog = show();
+      expect(dialog.querySelector(".month-extra")).toBeNull();
+      expect(dialog.querySelectorAll("form > p")).toHaveLength(1);
+    });
+
+    it("does not change what Close month sends", async () => {
+      const calls = mockFetch({ ...base });
+      renderWithProviders(<CloseMonthDialog month="2026-09" onClose={() => {}} checkLine={LINE} />);
+      await userEvent.type(note(), "first bill");
+      await userEvent.click(confirm());
+      await waitFor(() => expect(posts(calls)).toHaveLength(1));
+      expect(posts(calls)[0].body).toEqual({ note: "first bill" });
+    });
   });
 });

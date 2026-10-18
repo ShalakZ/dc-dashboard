@@ -9,7 +9,7 @@ spec guards, and the two scratch-stack self-tests. The unit tests are on [Develo
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Forty specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Forty-three specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`E2E_BASE_URL` changes it). `frontend/e2e/playwright.config.ts` makes each spec its own project and runs them one at a time in the
 order below, each depending on the one before; all but `journey` use a 1600×1000 window unless a spec sets its own sizes. Its
 `global-setup.ts` waits up to 120 s for the stack and refuses a database that already has users.
@@ -346,6 +346,24 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   rows; the Tab order runs from the month controls to the table controls; the "Showing N of M rows" line is a polite live region in
   the table's caption that stays at the right edge of the table box while it scrolls sideways; and a closed month, a missing-rate month
   and the two empty answers keep the toolbar first, the banner next and the table box inside the window. Light and dark.
+- `w21.spec.ts` (its own project, last in the list, after `w20`, the tail of the chain) checks the Billing month check. Its cases write
+  nothing and need nothing from the stack beyond the sign-in, the site's time zone and the look preference: `GET /api/billing/month-check`
+  is answered in the page by `page.route` from the fixtures in `e2e/monthCheckModel.ts` (the pilot hall's September with ten things to
+  check, a clear month, an empty one, one that has not begun, a long list, a closed month, a running month and a 500), the costs and the
+  month list from `e2e/billingModel.ts`, and any other write the page tries is refused and fails the case. The header reads Close or
+  Reopen month, Check month, Download CSV, in that order, with Check month named exactly that; its count reads 10, 0, 99+ or nothing (and
+  says so to assistive technology), adds no live region, and Check month and Download CSV keep one box on the current month, on a
+  finished month before and after its costs land, on a closed month and when the answer lands. The drawer is checked light and dark at
+  1440 x 900, 1024 x 640 and 800 x 600: its title, the headline, the groups in order, the one-sentence estimate rule, the gap and the
+  reset with their sizes, the assets nothing measures, inside the window with no sideways scroll, and no figure on the page changes
+  when it opens and closes. By keyboard, Tab reaches Check month and Enter opens it with the focus on the panel, Tab and Shift+Tab wrap
+  inside it, Escape closes it and gives the focus back, and a list of more than five lines shows five, expands with the focus kept and
+  says how many more the server did not send. It also checks the skeleton while the answer is held, the error line of a 500, the empty,
+  clear and not-begun wording, the closed and running notes, and the one line the Close month dialog shows about the check (with no
+  link or button of its own, and fixed at the click). One more case, which needs the scratch stack (the same guard as `w11.spec.ts`:
+  `COMPOSE_PROJECT_NAME` starts with `dcdash_e2e_`, skipped otherwise), seeds the three-panel history inside the stack, reads the real
+  endpoint through the real drawer and checks that the headline, the count, the groups and the paths equal what the API answered, and
+  that Panel B is listed as estimated; it removes the seed through the API afterwards.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

@@ -10,7 +10,7 @@ import {
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
   useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
   useAddStarterKinds, useAssetKinds, useAssets, useBulkDeleteAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
-  loadMovePreview, useMoveAssets, useRemoveDiscoveredSources, useTidyLayout, useBillingMonths, useCloseBillingMonth, useReopenBillingMonth,
+  loadMovePreview, useMoveAssets, useRemoveDiscoveredSources, useTidyLayout, useBillingMonths, useBillingMonthCheck, useCloseBillingMonth, useReopenBillingMonth, monthCheckRefetchMs,
 } from "./queries";
 import { ApiError } from "./client";
 import type { MoveBody, RangePreset, WidgetConfig } from "./types";
@@ -1297,6 +1297,60 @@ describe("tidying the layout (W7t)", () => {
   });
 });
 
+/** The smallest month check answer: no findings. */
+const monthCheckBody = {
+  month: "2026-09", timezone: "UTC", state: "finished", closed: false, from: "2026-09-01T00:00:00Z", to: "2026-10-01T00:00:00Z", month_end: "2026-10-01T00:00:00Z",
+  hours: 720, meters: 1, meter_hours: 720, things: 0, limits: { flat_hours: 24, short_minutes: 60, short_share: 0.01, max_tolerated_hours: 24, cap: 50 },
+  groups: Object.fromEntries(["silent", "gaps", "estimated", "resets", "started", "unpriced", "flat", "unmetered", "later"].map((name) => [name, { total: 0, items: [] }])),
+};
+
+describe("the month check query (w21)", () => {
+  it("asks for the month it is given, stays idle without one and has its own key under the billing prefix", async () => {
+    let url = "";
+    mockFetch({ "GET /api/billing/month-check": (req) => { url = req.url; return { body: monthCheckBody }; } });
+    const { result, rerender } = renderHook(({ month }: { month: string | null }) => useBillingMonthCheck(month), {
+      wrapper: stableWrapper(), initialProps: { month: null as string | null },
+    });
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(url).toBe("");
+    rerender({ month: "2026-09" });
+    await waitFor(() => expect(result.current.data?.month).toBe("2026-09"));
+    expect(new URL(url, "http://x").searchParams.get("month")).toBe("2026-09");
+    expect(keys.billingMonthCheck("2026-09")).toEqual(["billing", "month-check", "2026-09"]);
+    expect(keys.billingMonthCheckAll).toEqual(["billing", "month-check"]);
+    expect(keys.billingCostsAll).toEqual(["billing", "costs"]);
+    expect(keys.billingMonthCheck("2026-09").slice(0, 1)).toEqual(keys.billing); // so every `keys.billing` invalidation reaches it
+  });
+
+  it("is kept for five minutes, and re-read on a timer only through monthCheckRefetchMs (an open month)", async () => {
+    const calls = mockFetch({ "GET /api/billing/month-check": { body: monthCheckBody } });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const shared = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    const first = renderHook(() => useBillingMonthCheck("2026-09"), { wrapper: shared });
+    await waitFor(() => expect(first.result.current.data?.month).toBe("2026-09"));
+    const options = client.getQueryCache().find({ queryKey: keys.billingMonthCheck("2026-09") })?.observers[0].options;
+    expect(options?.staleTime).toBe(5 * 60_000);
+    expect(typeof options?.refetchInterval).toBe("function"); // the interval follows the answer it holds
+    const query = client.getQueryCache().find({ queryKey: keys.billingMonthCheck("2026-09") })!;
+    expect((options!.refetchInterval as (q: typeof query) => unknown)(query)).toBe(false); // this answer is a finished month: no timer
+    const second = renderHook(() => useBillingMonthCheck("2026-09"), { wrapper: shared }); // the drawer reading the same cache
+    expect(second.result.current.data?.month).toBe("2026-09");
+    expect(calls.filter((c) => c.path === "/api/billing/month-check")).toHaveLength(1);
+  });
+});
+
+describe("monthCheckRefetchMs (w21 review M8): an open month's count follows the table, nothing else polls", () => {
+  const answer = (state: "open" | "finished" | "not_begun") => ({ ...monthCheckBody, state }) as unknown as Parameters<typeof monthCheckRefetchMs>[0];
+
+  it("is a quarter of an hour for an open month", () => {
+    expect(monthCheckRefetchMs(answer("open"))).toBe(15 * 60_000);
+  });
+
+  it.each([["a finished month", answer("finished")], ["a month that has not begun", answer("not_begun")], ["no answer yet", undefined]])("is false for %s", (_name, data) => {
+    expect(monthCheckRefetchMs(data)).toBe(false);
+  });
+});
+
 describe("closing and reopening a billing month (W11)", () => {
   const closedBody = { month: "2026-09", timezone: "UTC", currency: null, days: [], assets: [], closed: null };
 
@@ -1305,22 +1359,65 @@ describe("closing and reopening a billing month (W11)", () => {
     ["a reopen", "reopen", useReopenBillingMonth, 200, { month: "2026-09", reopened_at: "2026-10-15T10:00:00Z" }],
     ["a refused close", "close", useCloseBillingMonth, 409, { detail: "that month is already closed" }],
     ["a refused reopen", "reopen", useReopenBillingMonth, 409, { detail: "that month is not closed" }],
-  ] as const)("posts the note to the month's route, and after %s the costs, the months list and the audit log are read again", async (_name, action, hook, status, reply) => {
+  ] as const)("posts the note to the month's route, and after %s the costs, the months list, the audit log and the month check are read again", async (_name, action, hook, status, reply) => {
     const calls = mockFetch({
       "GET /api/billing/costs": { body: closedBody },
       "GET /api/billing/months": { body: { first_month: "2026-09" } },
+      "GET /api/billing/month-check": { body: monthCheckBody },
       "GET /api/audit/options": { body: { actions: [], users: [], unattributed: false } },
       [`POST /api/billing/months/2026-09/${action}`]: { status, body: reply },
     });
     const { result } = renderHook(
-      () => ({ costs: useBillingCosts("2026-09"), months: useBillingMonths(), options: useAuditOptions(), write: hook() }),
+      () => ({ costs: useBillingCosts("2026-09"), months: useBillingMonths(), check: useBillingMonthCheck("2026-09"), options: useAuditOptions(), write: hook() }),
       { wrapper: stableWrapper() },
     );
-    const reads = () => ["/api/billing/costs", "/api/billing/months", "/api/audit/options"].map((path) => calls.filter((c) => c.method === "GET" && c.path === path).length);
-    await waitFor(() => expect(reads()).toEqual([1, 1, 1]));
+    const reads = () => ["/api/billing/costs", "/api/billing/months", "/api/billing/month-check", "/api/audit/options"].map((path) => calls.filter((c) => c.method === "GET" && c.path === path).length);
+    await waitFor(() => expect(reads()).toEqual([1, 1, 1, 1]));
     await act(async () => { await result.current.write.mutateAsync({ month: "2026-09", note: "  a reason " }).catch(() => undefined); });
     expect(calls.filter((c) => c.method === "POST").map((c) => [c.path, c.body])).toEqual([[`/api/billing/months/2026-09/${action}`, { note: "  a reason " }]]);
-    await waitFor(() => expect(reads()).toEqual([2, 2, 2])); // onSettled, not onSuccess: a refusal means the page on screen is out of date
+    await waitFor(() => expect(reads()).toEqual([2, 2, 2, 2])); // onSettled, not onSuccess: a refusal means the page on screen is out of date
+  });
+
+  // The month check is a big read (every meter of the site). The dialog that does the close must not sit and wait for it: the costs and the months
+  // list are what the page needs to show the new state, the check follows by itself.
+  it.each([
+    ["close", useCloseBillingMonth, 201, {}],
+    ["reopen", useReopenBillingMonth, 200, { month: "2026-09", reopened_at: "2026-10-15T10:00:00Z" }],
+  ] as const)("a %s resolves once the costs are read again, even when the month check never answers", async (action, hook, status, reply) => {
+    let costsAnswered = 0;
+    const calls = mockFetch({
+      "GET /api/billing/costs": () => { costsAnswered += 1; return { body: closedBody }; },
+      "GET /api/billing/months": { body: { first_month: "2026-09" } },
+      "GET /api/billing/month-check": { body: monthCheckBody },
+      "GET /api/audit/options": { body: { actions: [], users: [], unattributed: false } },
+      [`POST /api/billing/months/2026-09/${action}`]: { status, body: reply },
+    });
+    const { result } = renderHook(
+      () => ({ costs: useBillingCosts("2026-09"), months: useBillingMonths(), check: useBillingMonthCheck("2026-09"), options: useAuditOptions(), write: hook() }),
+      { wrapper: stableWrapper() },
+    );
+    await waitFor(() => expect(result.current.check.data?.month).toBe("2026-09"));
+    const checkReads = () => calls.filter((c) => c.method === "GET" && c.path === "/api/billing/month-check").length;
+    expect(checkReads()).toBe(1);
+    let asked = 0;
+    const held = holdFetch((method, path) => method === "GET" && path === "/api/billing/month-check" && ++asked > 0); // every further read of the check hangs
+    await act(async () => { await result.current.write.mutateAsync({ month: "2026-09", note: "" }); });
+    expect(costsAnswered).toBe(2);
+    await waitFor(() => expect(asked).toBe(1)); // the check was asked for again ...
+    expect(result.current.check.isFetching).toBe(true); // ... and is still waiting, yet the close has already resolved
+    held.release();
+    await waitFor(() => expect(result.current.check.isFetching).toBe(false));
+  });
+
+  it("only the close and the reopen let go of the month check lazily: a tariff write still reads it again through the billing prefix", async () => {
+    const calls = mockFetch({
+      "GET /api/billing/month-check": { body: monthCheckBody },
+      "POST /api/tariffs": { status: 201, body: { id: 1 } },
+    });
+    const { result } = renderHook(() => ({ check: useBillingMonthCheck("2026-09"), create: useCreateTariff() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.check.data?.month).toBe("2026-09"));
+    await act(async () => { await result.current.create.mutateAsync({ asset_id: null, rate_per_kwh: 0.1, effective_from: "2026-09-01" }); });
+    await waitFor(() => expect(calls.filter((c) => c.path === "/api/billing/month-check")).toHaveLength(2));
   });
 
   it("resolves only after the month has been read again, so a dialog that closes then finds the page in its new state", async () => {

@@ -15,6 +15,13 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w21 (2026-10-18, MERGE_PENDING)
+
+w21 adds a read-only month check to Billing: a Check month button in the page header (with a count) opens a drawer that lists, in plain words, what to look at before a
+month is trusted or closed: meters with no readings, gaps, estimated hours, counters that went back, meters that started late, energy with no rate, readings that did not
+change for 24 hours. No migration and no new permission; one new route, `GET /api/billing/month-check` (`billing.view`). It changes no figure and blocks nothing; Close month
+shows its count in one line. The header buttons go under the title below 600 px. Rules, limits and what it cannot see: [Dashboards and billing](docs/dashboards-and-billing.md).
+
 ## w20 (2026-10-18, 310db08)
 
 w20 puts the Billing month controls and table controls on one row, front end only: no migration, no new permission, no API change. On a page
