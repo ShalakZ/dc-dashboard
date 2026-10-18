@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w18 (2026-10-18, MERGE_PENDING)
+## w18 (2026-10-18, e1be322)
 
 w18 makes the controls consistent and says plainly what removing assets does, front end only: no migration, no new permission, no API change.
 **One height for every control:** buttons, fields, selects, filter chips, the top bar's Find field and its Live chip are all 34 px tall (the
