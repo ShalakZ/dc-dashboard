@@ -15,6 +15,15 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w20 (2026-10-18, MERGE_PENDING)
+
+w20 puts the Billing month controls and table controls on one row, front end only: no migration, no new permission, no API change. On a page
+about 1,600 px wide or more (a 1,920 px screen at 100 percent scaling with the sidebar open, about 1,700 px with it minimised) Previous month,
+Next month, Year and Month sit on the left and the filter box, Collapse all, Expand all and Show levels on the right of the same row, level and
+34 px tall; on a narrower page they stack as before. The "Showing N of M rows" line moved to the right of the table's first row (it stays at the
+right edge when you scroll the days sideways and scrolls up with that row), and the table is taller by the row that went. Every figure, fold,
+filter, remembered fold, CSV and closed month is unchanged.
+
 ## w18 (2026-10-18, e1be322)
 
 w18 makes the controls consistent and says plainly what removing assets does, front end only: no migration, no new permission, no API change.
