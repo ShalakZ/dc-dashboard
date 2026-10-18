@@ -18,7 +18,8 @@ lacks says "No access".
   `assets.view`; adding, renaming, re-iconing and deleting kinds needs `assets.kinds`. See [Asset kinds](assets-and-kinds.md#asset-kinds).
 - **Dashboards** (everyone can read; operators and admins build): needs `dashboards.view`; building needs `dashboards.edit`.
   Shared dashboards of widgets that follow the theme (light, dark and each theme colour); the information button on a card opens
-  **Details**, a panel with what the card shows, its time window and freshness, what its markers mean and its figures as text.
+  **Details**, a panel with what the card shows, its time window and freshness, what its markers mean and its figures as text (where a
+  figure says "no rate", a person who may open Tariffs gets a link to it there).
   An admin (`dashboards.default`) can mark one as the default, and the sidebar entry and the
   first page after signing in then open it. See [Dashboards and billing](dashboards-and-billing.md).
 - **Billing** (everyone): needs `billing.view`. Energy and cost per asset per day and per month, picked with the Year and Month
@@ -53,11 +54,12 @@ lacks says "No access".
   only** switch that hides what is already mapped, and **Tidy layout**, which puts every node back in its default column for everyone),
   the **Canvas controls** (**Find**, or Ctrl+K on the canvas, jumps to any source, group, point or asset, and **Snap to grid** lines nodes
   up on an 8 px grid with guides while you drag) and the **Page controls** (**Refresh**, the keyboard button that lists the keys, also
-  opened by `?` on the canvas, and **More Discovery actions**, which holds **Clear unmapped** for an admin). On a narrower window the bar
-  shows icons only, and on a still narrower one the less used controls move into the More menu. An open group of more than 50 points
+  opened by `?` on the canvas, and **More Discovery actions**, which holds **Clear unmapped** for an admin). On a narrower window the
+  controls lose their words one at a time while the counts keep theirs for as long as they fit, and on a still narrower one the less used
+  controls move into the More menu. An open group of more than 50 points
   shows 50 and a **Show 50 more** button at the end of its list; an asset with sub-assets has a small arrow to fold them away. Arrow keys
   move between nodes and Enter opens or closes one. Every node starts with a small icon (a source shows its protocol, a point what it
-  measures, an asset its own icon), and a source is a card: its short name, the protocol and address, a status dot with the status in
+  measures, an asset its own icon), and a source is a card: its short name on up to two lines, the protocol and address, a status dot with the status in
   words, `60 of 60 mapped` with a thin bar, **Details**, and when a scan last found it. Resting the pointer on a node lights its whole
   path, and on a mapped point it also shows the point's last value in a small card (`12.40 kW, 3 s ago`) for a person who may view
   assets; the view glides, a minimap sits at the bottom right, Shift-drag selects several

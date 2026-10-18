@@ -59,16 +59,20 @@ Dashboards are shared by everyone.
   - **What the markers mean here**: one line for each marker this card actually uses (`~`, `*`, the dash for no rate, "no data").
   - **Per asset**: the state of each asset in words (estimated, partial, no rate, no data, stale). A bar chart of one figure per asset
     adds its value. A chart adds a **figures table** as text, since a chart is a picture: for a metric, **Lowest** and **Highest**
-    (the extremes of the stored readings, because the roll-ups keep them), the start of the bucket the highest fell in ("Highest in the
-    bucket from"), and the **Last bucket**; for energy and cost, the highest bucket, the last bucket and **Total of the buckets
-    shown**. A total appears only when every bucket has a value, and it carries `~` or `*` when any bucket does; a cost whose highest
+    (the extremes of the stored readings, because the roll-ups keep them; under **Highest** the start of the bucket it fell in, as
+    `bucket from <time>`, which is the start of a bucket and never the moment of the peak), and the **Last bucket** (with the start of that
+    bucket under it); for energy and cost, the highest bucket, the last bucket and **Total of the buckets shown**. The panel is 560 px wide
+    (the whole window on a narrow one). Where a figure says no rate, a person who may open **Tariffs** also finds the link **Set a rate in
+    Tariffs** next to that line. A total appears only when every bucket has a value, and it carries `~` or `*` when any bucket does; a cost whose highest
     hour cannot be named because some hours have no rate shows "— unpriced hours" instead of a number. There is no average over the buckets,
     because buckets hold different numbers of readings and it would not be exact.
   - **Download CSV** at the foot of the panel: the same export as the card's CSV button.
 
   A chart is also a labelled picture for a screen reader: its name gives the kind, the assets, the metric and unit and the window, and
   points to Details for the figures. Hovering a chart shows the time and, per asset, the figure with its unit and the state in words
-  (estimated, partial, no rate) beside its `~` or `*`.
+  (estimated, partial, no rate) beside its `~` or `*`. On a bar chart of one figure per asset every asset's name stands under its bar (also
+  the asset that has no data, whose slot stays empty): wrapped over up to three lines when the card is wide enough for that, turned at an
+  angle when it is not, and cut in the middle with an ellipsis when it is still too long; the full name is in the tooltip and in Details.
 - **Legend.** A chart with more than one asset has a legend. Clicking an entry hides or shows that asset: its line and, in a metric time
   series, its min-max band go together. The choice is kept for that asset while the chart refreshes (every 30 seconds), also when a
   `~` or `*` appears on or leaves its name; it is forgotten when you leave the dashboard, and if every asset is switched off the next
