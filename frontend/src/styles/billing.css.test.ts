@@ -176,12 +176,11 @@ describe("the toolbar (w20)", () => {
     expect(prop(bodyOf(billing, TOOLS), "flex-wrap")).toBe("wrap"); // the table group still wraps (measured: nowrap shrinks every item and wraps the Show levels label)
   });
 
-  it("there is exactly ONE container query in the file: (min-width: 99rem), at least the 98rem the two groups need (1558px, valid only with the filter's 10rem basis)", () => {
+  it("there is exactly ONE container query in the file: (min-width: Nrem) with N at least 98, the room the two groups need (1558px, valid only with the filter's 10rem basis; w20.spec.ts measures the real switch at 99rem)", () => {
     expect(containerAt).toHaveLength(1);
     const m = /^@container \(min-width: ([\d.]+)rem\)$/.exec(containerAt[0]);
     expect(m, "an unnamed (min-width: Nrem) query").not.toBeNull();
     expect(Number(m![1])).toBeGreaterThanOrEqual(98);
-    expect(Number(m![1])).toBe(99);
     for (const r of containerRules) expect(r.at, `"${r.selector}"`).toEqual([LAYER, containerAt[0]]);
   });
 

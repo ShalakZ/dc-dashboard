@@ -48,7 +48,7 @@
      are reached by a small scroll of the page. On a window shorter than 560px the box has no limit and the page scrolls instead.
      The four values were measured on a wide page (the bars on one line each): the box then ends 8px inside the window. W18: the month bar and the controls bar are one control (34px) tall now, 4px less each, so every value lost 0.5rem; re-measured at 1440 x 900 on an open month: the box ends 892px down.
      w20: the rows line left the controls bar for the caption (a 916px page used to wrap it to a third line, 26px; it no longer does), the stacked values are unchanged; --billing-chrome-wide is the value for the one-row toolbar (50px
-     tall, 46px = 2.875rem less than the stacked 96px): at 1920 x 1080 on an open month the box ends 1072.2px down, as the stacked value ends 892.2 at 1440 x 900; the other three keep the same 2.875rem offset.
+     tall, 46px = 2.875rem less than the stacked 96px): at 1920 x 1080 on an open month the box ends 1072.2px down, as the stacked value ends 892.2 at 1440 x 900; the other three keep the same 2.875rem offset (measured at 1920 x 1080 with a mocked closed month, a missing-rate banner and both: the box ends 8.4, 7.6 and 8.2px inside the window).
      A narrower page wraps the month bar or the controls bar and the box ends lower; the 20rem floor can do the same on a window about 600px tall. */
   .billing-page { --billing-chrome: 15.8rem; --billing-chrome-wide: 12.925rem; }
   .billing-page:has(.closed-box) { --billing-chrome: 22.5rem; --billing-chrome-wide: 19.625rem; }
