@@ -432,6 +432,30 @@ describe("AssetTree opens folded when it is big (w17)", () => {
       expect(screen.getByRole("link", { name: "Lab rack", hidden: true }).closest("[hidden]")).not.toBeNull();
     });
 
+    it("a small tree with nothing remembered stays that way: the + stores nothing and changes no row", async () => {
+      render(ui({ onAddChild })); // the 6-node tree: its fold is empty, so there is nothing to protect
+      const before = Array.from(document.querySelectorAll(".node")).map((n) => n.textContent);
+      await userEvent.click(screen.getByRole("button", { name: "Add child of Panel 1" }));
+      expect(onAddChild).toHaveBeenCalledWith(3);
+      expect(localStorage.getItem(KEY)).toBeNull();
+      expect(Array.from(document.querySelectorAll(".node")).map((n) => n.textContent)).toEqual(before);
+      for (const name of ["Site", "Room A", "Yard"]) expect(expanded(name)).toBe("true");
+    });
+
+    it("a big tree whose remembered fold is the text none: the + changes nothing and writes nothing", async () => {
+      localStorage.setItem(KEY, "none");
+      const setItem = vi.spyOn(Storage.prototype, "setItem");
+      const view = render(lab());
+      expect(shown("Rack 3.6.1")).toBe(true); // opened fully by the remembered none
+      setItem.mockClear(); // a remembered fold is written back once when the tree mounts; only what the + does counts
+      await userEvent.click(screen.getByRole("button", { name: "Add child of Lab" }));
+      expect(onAddChild).toHaveBeenCalledWith(200);
+      expect(setItem.mock.calls.filter(([key]) => key === KEY)).toEqual([]);
+      expect(localStorage.getItem(KEY)).toBe("none");
+      view.rerender(lab([a(300, 200, "Lab rack")])); // the child arrives into a tree that is open anyway
+      expect(screen.getByRole("link", { name: "Lab rack" }).closest("[hidden]")).toBeNull();
+    });
+
     it("a folded branch is opened by the + on it, so its new child is not inside it", async () => {
       localStorage.setItem(KEY, JSON.stringify(DEFAULT_FOLDED));
       render(lab());

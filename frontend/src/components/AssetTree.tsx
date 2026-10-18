@@ -459,11 +459,13 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
   // A new Set each time, so that it counts as a change and is remembered (Expand all on a big tree is remembered as `none`).
   const collapseAll = () => changeFold(() => new Set(foldable));
   const expandAll = () => changeFold(() => new Set());
-  // Always writes the fold (a new Set each time), so the new child must not appear inside a folded branch: it opens the branch if it is folded, and
-  // if it is not, the fold of this moment becomes the remembered one. Otherwise a leaf would turn foldable with its child, and a default of
-  // "level 2" would fold it, child and all, once the refetch lands.
+  // The new child must not appear inside a folded branch. While anything is folded this writes the fold (a new Set each time): it opens the branch
+  // if it is folded, and if it is not, the fold of this moment becomes the remembered one. Otherwise a leaf would turn foldable with its child, and a
+  // default of "level 2" would fold it, child and all, once the refetch lands. An empty fold has nothing to protect, so it is left alone and a small
+  // tree (or one opened fully by Expand all) remembers nothing new.
   const addChild = useCallback((id: number) => {
     changeFold((prev) => {
+      if (prev.size === 0) return prev;
       const next = new Set(prev);
       next.delete(id);
       return next;
