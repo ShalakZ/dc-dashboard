@@ -1,7 +1,7 @@
 import type { WidgetConfig, WidgetData, WidgetPoint, WidgetSeries } from "../api/types";
 import { config, seriesData, seriesPoint, valueRow, valuesData } from "../test/dashboardFixtures";
 import {
-  aggregationWords, assetRows, bucketStartText, chartDescription, figuresText, freshnessLine, isLatestReading, markerMeanings,
+  aggregationWords, assetRows, bucketStartText, chartDescription, figuresText, freshnessLine, hasNoRate, isLatestReading, markerMeanings,
   noMetricIds, preciseAge, rangeWords, removedCount, seriesSummary, sourceWords, windowText,
 } from "./widgetDetails";
 import { figureText } from "./widgetFormat";
@@ -229,6 +229,36 @@ describe("markerMeanings", () => {
       values: [valueRow({ estimated: true, partial: true }), valueRow({ asset_id: 6, value: null, no_data: true })],
     });
     expect(markerMeanings(data).map((s) => s.split(" ")[0])).toEqual(["~", "*", "—", "no"]);
+  });
+});
+
+describe("hasNoRate", () => {
+  const dash = "— no rate: no tariff applies to this figure";
+  const cost = (over: Partial<WidgetData>): WidgetData => ({ ...valuesData({ source: "cost", metric: null, unit: "QAR" }), ...over });
+  const costSeries = (points: WidgetPoint[]): WidgetData => energySeries("hour", points, {}, { source: "cost", unit: "QAR" });
+
+  it("is true for a cost row with no value, and for a cost bucket that was recorded but has no rate", () => {
+    expect(hasNoRate(cost({ values: [valueRow({ value: null })] }))).toBe(true);
+    expect(hasNoRate(costSeries([seriesPoint({ ts: at(7200), value: 3 }), seriesPoint({ ts: at(3600), value: null })]))).toBe(true);
+  });
+  it("is false for a cost with a figure everywhere, and for a silent bucket (a gap is not a missing rate)", () => {
+    expect(hasNoRate(cost({ values: [valueRow({ value: 12 })] }))).toBe(false);
+    expect(hasNoRate(costSeries([seriesPoint({ ts: at(7200), value: 3 }), seriesPoint({ ts: at(3600), value: null, no_data: true })]))).toBe(false);
+  });
+  it("is false for a response without any marker, and for a metric or energy figure that is merely empty", () => {
+    expect(hasNoRate(valuesData())).toBe(false);
+    expect(hasNoRate(timeseries())).toBe(false);
+    expect(hasNoRate(valuesData({ values: [valueRow({ value: null, no_data: true })] }))).toBe(false);
+    expect(hasNoRate(valuesData({ source: "energy", metric: null, unit: "kWh", values: [valueRow({ value: null })] }))).toBe(false);
+  });
+  it("is true exactly when markerMeanings says the dash, over a spread of answers", () => {
+    const answers: WidgetData[] = [
+      valuesData(), timeseries(), cost({ values: [valueRow({ value: 12 })] }), cost({ values: [valueRow({ value: null })] }),
+      cost({ values: [valueRow({ estimated: true, partial: true }), valueRow({ asset_id: 6, value: null, no_data: true })] }),
+      valuesData({ values: [valueRow({ estimated: true })] }), energySeries("hour", []),
+      costSeries([seriesPoint({ ts: at(3600), value: null })]), costSeries([seriesPoint({ ts: at(3600), value: null, no_data: true })]),
+    ];
+    for (const data of answers) expect(hasNoRate(data)).toBe(markerMeanings(data).includes(dash));
   });
 });
 

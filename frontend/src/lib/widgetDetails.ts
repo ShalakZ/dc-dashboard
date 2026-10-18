@@ -127,6 +127,9 @@ const recordedNothing = (series: WidgetSeries): boolean => series.points.every((
 /** A cost bucket that was recorded but has no rate (`value === null && !no_data`); same rule as `flagsOf`. */
 const hasNoRateBucket = (series: WidgetSeries): boolean => series.points.some((p) => p.value === null && !p.no_data);
 
+/** True exactly when `markerMeanings` says the "no rate" line: both read the same `flagsOf(data).noRate`. */
+export const hasNoRate = (data: WidgetData): boolean => flagsOf(data).noRate;
+
 /**
  * One sentence for each marker THIS response uses, in a fixed order (~, *, the dash, no data). Nothing for an absent marker.
  * "No data" is said only for a row or a whole series that recorded nothing: a series with a gap but some data did record.

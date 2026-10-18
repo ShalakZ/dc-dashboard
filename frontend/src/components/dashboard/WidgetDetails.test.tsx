@@ -211,6 +211,86 @@ describe("WidgetDetails: what the markers mean", () => {
   });
 });
 
+describe("WidgetDetails: a link to Tariffs next to the no-rate line (P5)", () => {
+  const SENTENCE = "— no rate: no tariff applies to this figure";
+  const LINK = "Set a rate in Tariffs";
+  const noRateCost = () => valuesData({ type: "stat", source: "cost", metric: null, unit: "QAR", values: [valueRow({ value: null })] });
+  const costCfg = () => config({ source: "cost", metric: null, aggregation: "sum" });
+  const markerItems = (dialog: HTMLElement) =>
+    within(within(dialog).getByRole("heading", { name: "What the markers mean here" }).nextElementSibling as HTMLElement).getAllByRole("listitem");
+
+  it("offers the link inside the same list item as the no-rate sentence, after it, for a role that may open Tariffs", () => {
+    held.ids = new Set(["assets.view", "tariffs.view"]);
+    const { dialog } = open("stat", noRateCost(), costCfg());
+    const li = within(dialog()).getByText(SENTENCE).closest("li") as HTMLElement;
+    const link = within(li).getByRole("link", { name: LINK });
+    expect(link).toHaveAttribute("href", "/tariffs");
+    expect(markerItems(dialog())).toHaveLength(1); // the link is not a line of its own
+    expect(li.textContent?.startsWith(SENTENCE)).toBe(true);
+    expect(li.textContent?.endsWith(LINK)).toBe(true);
+    expect(li.firstChild?.nodeType).toBe(Node.TEXT_NODE); // the sentence comes first, the link after it
+  });
+
+  it("keeps the sentence word for word (a text match on it still finds it)", () => {
+    held.ids = new Set(["assets.view", "tariffs.view"]);
+    const { dialog } = open("stat", noRateCost(), costCfg());
+    expect(within(dialog()).getByText(SENTENCE)).toBeInTheDocument();
+  });
+
+  it("shows no link, and no error, for a role with assets.view only; the sentence is still there", () => {
+    held.ids = new Set(["assets.view"]);
+    const { dialog } = open("stat", noRateCost(), costCfg());
+    expect(within(dialog()).getByText(SENTENCE)).toBeInTheDocument();
+    expect(within(dialog()).queryByRole("link", { name: LINK })).toBeNull();
+  });
+
+  it("shows no link for a role with neither permission, or with tariffs.view only (the page needs both)", () => {
+    for (const ids of [[], ["tariffs.view"]]) {
+      held.ids = new Set(ids);
+      const { dialog, unmount } = open("stat", noRateCost(), costCfg());
+      expect(within(dialog()).getByText(SENTENCE)).toBeInTheDocument();
+      expect(within(dialog()).queryByRole("link", { name: LINK })).toBeNull();
+      unmount();
+    }
+  });
+
+  it("offers it for a cost series with an unpriced bucket too, not only for a stat", () => {
+    held.ids = new Set(["assets.view", "tariffs.view"]);
+    const data = seriesData({
+      type: "bar", source: "cost", metric: null, unit: "QAR", bucket: "hour", tier: null,
+      series: [{
+        asset_id: 5, name: "LV Panel 1", estimated: false, partial: false,
+        points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 3 }), seriesPoint({ ts: "2026-10-08T01:00:00+00:00", value: null })],
+      }],
+    });
+    const { dialog } = open("bar", data, config({ source: "cost", metric: null, aggregation: "sum", bars: "time" }));
+    expect(within(within(dialog()).getByText(SENTENCE).closest("li") as HTMLElement).getByRole("link", { name: LINK })).toHaveAttribute("href", "/tariffs");
+  });
+
+  it("has no link when the answer has no no-rate state, whatever the role holds", () => {
+    held.ids = new Set(["assets.view", "tariffs.view"]);
+    const estimated = valuesData({ type: "table", values: [valueRow({ estimated: true })] });
+    const { dialog, unmount } = open("table", estimated, config());
+    expect(within(dialog()).queryByRole("link", { name: LINK })).toBeNull();
+    unmount();
+    const priced = valuesData({ type: "stat", source: "cost", metric: null, unit: "QAR", values: [valueRow({ value: 12 })] });
+    open("stat", priced, costCfg());
+    expect(screen.queryByRole("link", { name: LINK })).toBeNull();
+  });
+
+  it("puts the link on the no-rate line only when other markers are listed around it", () => {
+    held.ids = new Set(["assets.view", "tariffs.view"]);
+    const data = valuesData({
+      type: "table", source: "cost", metric: null, unit: "QAR",
+      values: [valueRow({ estimated: true, partial: true }), valueRow({ asset_id: 6, name: "B", value: null, no_data: true })],
+    });
+    const { dialog } = open("table", data, costCfg());
+    const items = markerItems(dialog());
+    expect(items.map((li) => li.textContent?.split(" ")[0])).toEqual(["~", "*", "—", "no"]);
+    expect(items.map((li) => within(li).queryAllByRole("link").length)).toEqual([0, 0, 1, 0]);
+  });
+});
+
 describe("WidgetDetails: per asset", () => {
   it("shows the asset states in words under the name, and a value column for a bar per asset", () => {
     const data = valuesData({
