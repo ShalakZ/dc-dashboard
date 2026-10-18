@@ -503,17 +503,17 @@ const PAGES: readonly PageCase[] = [
     named: (p) => [p.getByLabel("Dashboard name"), btn(p, "Add widget"), btn(p, "Save"), btn(p, "Cancel")],
   },
   // 10: the month bar (Previous, Next, Year, Month) and the tools bar (filter, Collapse all, Expand all, Show levels) with Download CSV (12).
-  { name: "Billing, an open month", billing: "open", open: openBilling, floor: 10, named: (p) => [btn(p, "Previous month"), btn(p, "Next month"), p.getByLabel("Year", { exact: true }), p.getByLabel("Month", { exact: true }), btn(p, "Expand all")] },
+  { name: "Billing, an open month", billing: "open", open: openBilling, floor: 10, named: (p) => [btn(p, "Previous month"), btn(p, "Next month"), p.getByLabel("Year", { exact: true }), p.getByLabel("Month", { exact: true }), btn(p, "Check month"), btn(p, "Expand all")] },
   {
     // 14: the same bars with the Closed chip and Reopen month (17).
     name: "Billing, a closed month",
     billing: "closed",
     open: openBilling,
     floor: 14,
-    named: (p) => [p.locator(".month-state .chip"), btn(p, "Previous month"), btn(p, "Next month"), btn(p, "Reopen month…"), btn(p, "Expand all")],
+    named: (p) => [p.locator(".month-state .chip"), btn(p, "Previous month"), btn(p, "Next month"), btn(p, "Reopen month…"), btn(p, "Check month"), btn(p, "Expand all")],
   },
   // 12: the bars of the page behind the dialog (14 with the dialog's Cancel and Close month).
-  { name: "Billing, the Close month dialog", billing: "open", open: openCloseDialog, floor: 12, named: (p) => [btn(p.getByRole("dialog"), "Cancel"), btn(p.getByRole("dialog"), "Close month")] },
+  { name: "Billing, the Close month dialog", billing: "open", open: openCloseDialog, floor: 12, named: (p) => [btn(p, "Check month"), btn(p.getByRole("dialog"), "Cancel"), btn(p.getByRole("dialog"), "Close month")] },
   // 1: Test all beside Add source (the stack has a source: w18 needs a point of one).
   { name: "Sources", open: goTo("/sources"), floor: 1, named: (p) => [btn(p, "Test all"), btn(p, "Add source")] },
   // floor 0: New scope is the only control on the page with an edge at rest.

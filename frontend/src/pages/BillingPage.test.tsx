@@ -1,7 +1,7 @@
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiError } from "../api/client";
-import type { BillingAssetRow, BillingClosed, BillingCosts, BillingLive, CostFigure, User } from "../api/types";
+import type { BillingAssetRow, BillingClosed, BillingCosts, BillingLive, CostFigure, MonthCheck, User } from "../api/types";
 import { ESTIMATED_TIP, PARTIAL_TIP } from "../components/Figure";
 import { downloadCsv } from "../lib/download";
 import { mockFetch, type Routes } from "../test/fetchMock";
@@ -45,6 +45,18 @@ const costs: BillingCosts = {
   ],
 };
 
+/** The month check the page reads (GET /api/billing/month-check): meters were looked at and nothing was found, unless a test sets `things` or breaks the route. */
+const none = <T,>() => ({ total: 0, items: [] as T[] });
+const checkOf = (month: string, things = 0): MonthCheck => ({
+  month, timezone: "Asia/Qatar", state: "finished", closed: false,
+  from: "2026-08-31T21:00:00Z", to: "2026-09-30T21:00:00Z", month_end: "2026-09-30T21:00:00Z",
+  hours: 720, meters: 3, meter_hours: 2160, things,
+  limits: { flat_hours: 24, short_minutes: 60, short_share: 0.01, max_tolerated_hours: 24, cap: 50 },
+  groups: { silent: none(), gaps: none(), estimated: none(), resets: none(), started: none(), unpriced: none(), flat: none(), unmetered: none(), later: none() },
+});
+let checkReply: (month: string) => { status?: number; body?: unknown };
+const monthCheckRoute = ({ url }: { url: string }) => checkReply(new URL(url, "http://x").searchParams.get("month")!);
+
 let requested: (string | null)[];
 const routes = (role: string, reply: { status?: number; body?: unknown }, zone: string, months: { status?: number; body?: unknown }): Routes => ({
   "GET /api/setup": { body: { needed: false } },
@@ -55,6 +67,7 @@ const routes = (role: string, reply: { status?: number; body?: unknown }, zone: 
     return reply;
   },
   "GET /api/billing/months": months,
+  "GET /api/billing/month-check": monthCheckRoute,
 });
 /** `months` is the answer of the first-month request, or "pending" for one that never answers. */
 const open = (
@@ -86,6 +99,7 @@ const cellsOf = (asset: string) =>
 
 beforeEach(() => {
   requested = [];
+  checkReply = (month) => ({ body: checkOf(month) });
   // Only Date is faked, so React Query, user-event and waitFor keep their real timers.
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-10-15T12:00:00Z"));
@@ -137,7 +151,8 @@ describe("BillingPage", () => {
       expect(bar.nextElementSibling).toHaveClass("billing-tools", "is-idle");
       held.release();
       expect(await screen.findByRole("button", { name: "Download CSV" })).toBeInTheDocument();
-      expect(document.querySelectorAll("header.page-head > .actions > *")).toHaveLength(1); // the button, and the gap is gone
+      expect(document.querySelectorAll("header.page-head > .actions > *")).toHaveLength(2); // Check month and Download CSV, and the gap is gone
+      expect(screen.getByRole("button", { name: "Check month" })).toBeInTheDocument();
       expect(document.querySelectorAll(".billing-page .billing-bar")).toHaveLength(1); // the real bar only
       expect(document.querySelector(".billing-bar[aria-hidden]")).toBeNull();
     });
@@ -525,10 +540,11 @@ describe("BillingPage controls follow the permissions of the role (a custom role
     await accountKnown();
   };
 
-  it("billing.view alone: the table, the month bar, no Download CSV and no gap where it was, and no link to Tariffs", async () => {
+  it("billing.view alone: the table, the month bar, Check month as the header's only button (no Download CSV, no gap), and no link to Tariffs", async () => {
     await show([]);
     expect(screen.queryByRole("button", { name: "Download CSV" })).not.toBeInTheDocument();
-    expect(document.querySelector("header.page-head > .actions")).toBeNull();
+    expect(Array.from(document.querySelector("header.page-head > .actions")!.children).map((el) => el.tagName)).toEqual(["BUTTON"]);
+    expect(screen.getByRole("button", { name: "Check month" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Previous month" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Tariffs/ })).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Ask an administrator to set one.");
@@ -580,6 +596,7 @@ describe("BillingPage closed months and the Close and Reopen controls", () => {
       "GET /api/me": { body: user },
       "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
       "GET /api/billing/months": { body: { first_month: null } },
+      "GET /api/billing/month-check": monthCheckRoute,
       "GET /api/billing/costs": ({ url }) => {
         const month = new URL(url, "http://x").searchParams.get("month")!;
         return { body: bodies[month] ?? (month === "2026-09" ? september : costs) };
@@ -597,17 +614,18 @@ describe("BillingPage closed months and the Close and Reopen controls", () => {
     await screen.findByRole("rowheader", { name: "Site" });
   };
   const actions = () => document.querySelector("header.page-head > .actions");
+  /** The header's buttons by their words, left to right (the count on Check month is a decoration and not part of its name). */
+  const headerNames = () => Array.from(actions()!.children).map((el) => Array.from(el.childNodes).filter((n) => !(n instanceof Element && n.classList.contains("check-count"))).map((n) => n.textContent).join(""));
   const closeButton = () => screen.queryByRole("button", { name: "Close month…" });
   const reopenButton = () => screen.queryByRole("button", { name: "Reopen month…" });
 
   describe("the header buttons", () => {
-    it("offers Close month… on a finished open month, left of Download CSV, so the download button keeps its place; the page keeps one primary button", async () => {
+    it("offers Close month… on a finished open month, left of Check month and Download CSV, so those two keep their places; the page keeps one primary button", async () => {
       await show(userFor("admin"));
       await screen.findByRole("rowheader", { name: "Site" });
       expect(closeButton()).not.toBeInTheDocument(); // October is the current month
       await toSeptember();
-      const names = Array.from(actions()!.children).map((el) => el.textContent);
-      expect(names).toEqual(["Close month…", "Download CSV"]);
+      expect(headerNames()).toEqual(["Close month…", "Check month", "Download CSV"]);
       expect(screen.getByRole("button", { name: "Close month…" })).toHaveAttribute("type", "button");
       expect(document.querySelectorAll(".primary")).toHaveLength(1);
       expect(reopenButton()).not.toBeInTheDocument();
@@ -658,7 +676,7 @@ describe("BillingPage closed months and the Close and Reopen controls", () => {
       await toSeptember();
       expect(await screen.findByRole("button", { name: "Reopen month…" })).toHaveAttribute("type", "button");
       expect(closeButton()).not.toBeInTheDocument();
-      expect(Array.from(actions()!.children).map((el) => el.textContent)).toEqual(["Reopen month…", "Download CSV"]);
+      expect(headerNames()).toEqual(["Reopen month…", "Check month", "Download CSV"]);
       expect(document.querySelectorAll(".primary")).toHaveLength(1);
     });
 
@@ -667,24 +685,25 @@ describe("BillingPage closed months and the Close and Reopen controls", () => {
       expect(await screen.findByRole("button", { name: "Reopen month…" })).toBeInTheDocument();
     });
 
-    it("shows neither while the costs load, and the header keeps its height for a role that may close but not export", async () => {
+    it("shows neither while the costs load, and the header keeps its height for a role that may close but not export (Check month is its button once the month is known)", async () => {
       const { held } = await show(customUser("billing.close"), {}, {}, (_method, path) => path === "/api/billing/costs");
       await screen.findByText("October 2026");
       expect(closeButton()).not.toBeInTheDocument();
       expect(reopenButton()).not.toBeInTheDocument();
-      expect(actions()!.children).toHaveLength(1);
-      expect(actions()!.firstElementChild).toHaveAttribute("aria-hidden", "true"); // the room of a button
+      expect(headerNames()).toEqual(["Check month"]); // the month is known, the costs are not: Check month is there and no gap is
+      expect(actions()!.firstElementChild).not.toHaveAttribute("aria-hidden");
       held.release();
       await screen.findByRole("rowheader", { name: "Site" });
-      expect(actions()!.firstElementChild).toHaveAttribute("aria-hidden", "true"); // the current month has nothing to close: the room stays, the header does not jump
+      expect(headerNames()).toEqual(["Check month"]); // the current month has nothing to close: the header does not jump
       await toSeptember();
-      expect(Array.from(actions()!.children).map((el) => el.textContent)).toEqual(["Close month…"]);
+      expect(headerNames()).toEqual(["Close month…", "Check month"]);
     });
 
-    it("gives a role with neither permission no actions at all", async () => {
+    it("gives a role with neither permission Check month and nothing else", async () => {
       await show(customUser());
       await screen.findByRole("rowheader", { name: "Site" });
-      expect(actions()).toBeNull();
+      expect(headerNames()).toEqual(["Check month"]);
+      expect(document.querySelectorAll(".primary")).toHaveLength(0); // Check month is never the primary button
     });
   });
 
@@ -1499,6 +1518,232 @@ describe("BillingPage folding and filtering", () => {
       await showBig();
       await userEvent.click(screen.getByRole("button", { name: "What does this mean?" }));
       expect(screen.getByRole("note")).toHaveTextContent("A folded row still shows its own totals, which already include everything below it.");
+    });
+  });
+});
+
+describe("BillingPage, Check month (w21)", () => {
+  const CLOSED: BillingClosed = { id: 7, closed_name: "Dana", closed_at: "2026-10-14T21:30:00Z", note: "", total_kwh: 50, total_cost: 6 };
+  const SAME: BillingLive = { total_kwh: 50, total_cost: 6, delta_kwh: 0, delta_cost: 0, differs: false, changed_assets: 0, currency: "QAR" };
+  const customUser = (...permissions: PermissionId[]) => userFor("custom", { permissions: ["billing.view", ...permissions] });
+  const MONTH_CHECK = "/api/billing/month-check";
+
+  /** The page on October 2026 for `user`: September is a finished open month, August a closed one. The account is known when this returns. */
+  async function view(user: User, hold?: (method: string, path: string) => boolean) {
+    const calls = mockFetch({
+      "GET /api/setup": { body: { needed: false } },
+      "GET /api/me": { body: user },
+      "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
+      "GET /api/billing/months": { body: { first_month: null } },
+      "GET /api/billing/month-check": monthCheckRoute,
+      "GET /api/billing/costs": ({ url }) => {
+        const month = new URL(url, "http://x").searchParams.get("month")!;
+        return { body: month === "2026-08" ? { ...costs, month, closed: CLOSED, live: SAME } : month === "2026-09" ? { ...costs, month } : costs };
+      },
+    });
+    const held = hold ? holdFetch(hold) : { release: () => {} };
+    renderWithProviders(<><BillingPage /><SignedIn /></>, { route: "/billing", path: "/billing" });
+    await accountKnown();
+    return { calls, held };
+  }
+  const button = () => screen.getByRole("button", { name: "Check month" });
+  const slot = () => button().querySelector(".check-count")!;
+  const back = async (label: string) => {
+    await userEvent.click(screen.getByRole("button", { name: "Previous month" }));
+    await screen.findByText(label);
+    await screen.findByRole("rowheader", { name: "Site" });
+  };
+
+  it.each([
+    ["a role with billing.view only", customUser()],
+    ["a viewer", userFor("viewer")],
+    ["an admin", userFor("admin")],
+  ])("is named exactly Check month for %s, on an open month, a finished one and a closed one, and is never the primary button", async (_who, user) => {
+    await view(user);
+    for (const label of [null, "September 2026", "August 2026"]) {
+      if (label !== null) await back(label);
+      expect(screen.getAllByRole("button", { name: "Check month" })).toHaveLength(1);
+      expect(button()).toHaveAttribute("type", "button");
+      expect(button()).toHaveAttribute("aria-haspopup", "dialog");
+      expect(button()).not.toHaveClass("primary");
+      expect(button().querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    }
+    expect(document.querySelectorAll(".primary").length).toBeLessThanOrEqual(1);
+  });
+
+  describe("the count on the button", () => {
+    it("is an empty slot while the answer is read, and it is still there to keep its room", async () => {
+      const { held } = await view(userFor("viewer"), (_method, path) => path === MONTH_CHECK);
+      await screen.findByRole("rowheader", { name: "Site" });
+      expect(slot().textContent).toBe("");
+      expect(slot()).toHaveAttribute("aria-hidden", "true");
+      expect(slot()).toHaveClass("check-count");
+      expect(button()).toHaveAccessibleDescription("not read yet");
+      held.release();
+      await waitFor(() => expect(slot().textContent).toBe("0"));
+    });
+
+    it.each([
+      [0, "0", "nothing to check"],
+      [1, "1", "1 thing to check"],
+      [3, "3", "3 things to check"],
+      [99, "99", "99 things to check"],
+      [100, "99+", "100 things to check"],
+    ])("shows %i things as %s and reads out %s", async (things, text, spoken) => {
+      checkReply = (month) => ({ body: checkOf(month, things) });
+      await view(userFor("viewer"));
+      await waitFor(() => expect(slot().textContent).toBe(text));
+      expect(button()).toHaveAccessibleDescription(spoken);
+      expect(button()).toHaveAccessibleName("Check month"); // the count is not part of the name
+      if (things === 0) expect(slot()).toHaveAttribute("data-zero");
+      else expect(slot()).not.toHaveAttribute("data-zero");
+    });
+
+    it("stays empty when no meter recorded anything in the month (nothing to look at yet is not a zero)", async () => {
+      checkReply = (month) => ({ body: { ...checkOf(month), meters: 0, meter_hours: 0 } });
+      await view(userFor("viewer"));
+      await screen.findByRole("rowheader", { name: "Site" });
+      await waitFor(() => expect(button()).toHaveAccessibleDescription("nothing to look at yet"));
+      expect(slot().textContent).toBe("");
+    });
+
+    it("adds no live region and no alert: the slot is aria-hidden, the sentence behind it is plain text, and the page keeps its one status", async () => {
+      checkReply = (month) => ({ body: checkOf(month, 3) });
+      await view(userFor("viewer"));
+      await waitFor(() => expect(slot().textContent).toBe("3"));
+      const sentence = document.getElementById(button().getAttribute("aria-describedby")!)!;
+      expect(sentence).toHaveClass("sr-only");
+      expect(sentence).not.toHaveAttribute("role");
+      expect(sentence).not.toHaveAttribute("aria-live");
+      expect(sentence.textContent).toBe("3 things to check");
+      expect(sentence.parentElement).toHaveClass("billing-page"); // a child of the page, right after the header, not inside the header's actions
+      expect(sentence.previousElementSibling).toHaveClass("page-head");
+      expect(sentence.closest(".actions")).toBeNull();
+      expect(button().closest("[role]")).toBeNull();
+      expect(screen.getAllByRole("status")).toHaveLength(1); // the missing-rate banner
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("a failed check does not break the page: the table shows, no alert, an empty slot; the message waits in the drawer", async () => {
+      checkReply = () => ({ status: 500, body: { detail: "the check is down" } });
+      await view(userFor("viewer"));
+      await screen.findByRole("rowheader", { name: "Site" });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(slot().textContent).toBe("");
+      await userEvent.click(button());
+      expect(await screen.findByRole("alert")).toHaveTextContent("the check is down");
+      expect(slot().textContent).toBe("");
+      expect(button()).toHaveAccessibleDescription("not read yet");
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByRole("rowheader", { name: "Site" })).toBeInTheDocument();
+    });
+
+    it("asks for the month on screen, and again for another month, once each", async () => {
+      const { calls } = await view(userFor("viewer"));
+      await screen.findByRole("rowheader", { name: "Site" });
+      await back("September 2026");
+      const asked = calls.filter((c) => c.method === "GET" && c.path === MONTH_CHECK).length;
+      expect(asked).toBe(2);
+    });
+  });
+
+  describe("the drawer", () => {
+    it("opens from the button as a dialog named for the month (not the button's words), Escape closes it, and the focus is back on the button", async () => {
+      checkReply = (month) => ({ body: checkOf(month, 3) });
+      await view(userFor("viewer"));
+      await waitFor(() => expect(slot().textContent).toBe("3"));
+      await userEvent.click(button());
+      const dialog = await screen.findByRole("dialog", { name: "Check October 2026" });
+      expect(screen.queryByRole("dialog", { name: "Check month" })).not.toBeInTheDocument();
+      expect(within(dialog).getByText("3 things to check")).toBeInTheDocument(); // the cached answer: no skeleton
+      expect(within(dialog).queryByText("Loading the month check")).not.toBeInTheDocument();
+      expect(button()).toBeInTheDocument(); // it stays mounted behind the drawer, so the focus has somewhere to return
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(button()).toHaveFocus();
+    });
+
+    it("is named for the month on screen, and the x and a click outside close it too", async () => {
+      await view(userFor("viewer"));
+      await back("September 2026");
+      await userEvent.click(button());
+      expect(await screen.findByRole("dialog", { name: "Check September 2026" })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Close" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(button()).toHaveFocus();
+    });
+
+    it("shows its skeleton while the answer is read, then the answer in the same drawer", async () => {
+      const { held } = await view(userFor("viewer"), (_method, path) => path === MONTH_CHECK);
+      await screen.findByRole("rowheader", { name: "Site" });
+      await userEvent.click(button());
+      const dialog = await screen.findByRole("dialog", { name: "Check October 2026" });
+      expect(within(dialog).getByRole("status")).toHaveTextContent("Loading the month check");
+      held.release();
+      expect(await within(dialog).findByText("Nothing to check")).toBeInTheDocument();
+      expect(within(dialog).queryByRole("status")).not.toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: "Check October 2026" })).toBe(dialog);
+    });
+
+    it("writes nothing and moves no figure: only reads of the check", async () => {
+      const { calls } = await view(userFor("admin"));
+      await screen.findByRole("rowheader", { name: "Site" });
+      const before = cellsOf("Site");
+      await userEvent.click(button());
+      await screen.findByRole("dialog", { name: "Check October 2026" });
+      await userEvent.keyboard("{Escape}");
+      expect(cellsOf("Site")).toEqual(before);
+      expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
+    });
+  });
+
+  describe("the line in the Close month dialog", () => {
+    const LINE = (state: string) => `Month check: ${state} (see Check month on the page).`;
+    const openClose = async () => {
+      await back("September 2026");
+      await userEvent.click(screen.getByRole("button", { name: "Close month…" }));
+      return screen.findByRole("dialog", { name: "Close September 2026" });
+    };
+
+    it.each([
+      [0, "nothing to check"],
+      [3, "3 things to check"],
+    ])("says what the answer was at the click: %i things", async (things, state) => {
+      checkReply = (month) => ({ body: checkOf(month, things) });
+      await view(userFor("admin"));
+      await back("September 2026");
+      await waitFor(() => expect(button()).toHaveAccessibleDescription(state)); // the answer has landed
+      await userEvent.click(screen.getByRole("button", { name: "Close month…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Close September 2026" });
+      const line = within(dialog).getByText(LINE(state));
+      expect(line).toHaveClass("month-extra");
+      expect(line.querySelector("a, button")).toBeNull(); // plain words: no link and no button in the line
+      expect(within(dialog).queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    it("says not read yet when the answer had not arrived at the click, and keeps saying it when the answer arrives while the dialog is open", async () => {
+      const { held } = await view(userFor("admin"), (_method, path) => path === MONTH_CHECK);
+      const dialog = await openClose();
+      expect(within(dialog).getByText(LINE("not read yet"))).toBeInTheDocument();
+      held.release();
+      await waitFor(() => expect(button()).toHaveAccessibleDescription("nothing to check")); // (the button is behind the dialog, still in the document)
+      expect(within(dialog).getByText(LINE("not read yet"))).toBeInTheDocument(); // fixed at the click: nothing moves under the person
+      expect(within(dialog).queryByText(LINE("nothing to check"))).not.toBeInTheDocument();
+    });
+
+    it("says not read yet when the check failed", async () => {
+      checkReply = () => ({ status: 500, body: { detail: "the check is down" } });
+      await view(userFor("admin"));
+      const dialog = await openClose();
+      expect(within(dialog).getByText(LINE("not read yet"))).toBeInTheDocument();
+    });
+
+    it("does not stop Close month from working: the button is the same and the line adds no control", async () => {
+      await view(userFor("admin"));
+      const dialog = await openClose();
+      expect(within(dialog).getAllByRole("button").map((b) => b.textContent)).toEqual(["Cancel", "Close month"]);
+      expect(within(dialog).getByRole("button", { name: "Close month" })).toHaveClass("primary");
     });
   });
 });
