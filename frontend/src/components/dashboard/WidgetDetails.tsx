@@ -64,8 +64,14 @@ function SummaryCell({ column, row, states, data, timezone }: {
 }) {
   switch (column) {
     case "lowest": return <Figure figure={row.lowest} unit={data.unit} />;
-    case "highest": return row.highest || !states.includes("no rate") ? <Figure figure={row.highest} unit={data.unit} /> : <>{`${DASH} unpriced hours`}</>;
-    case "highestFrom": return <>{row.highestFrom ? bucketStartText(row.highestFrom, timezone, data) : DASH}</>;
+    case "highest":
+      if (!row.highest && states.includes("no rate")) return <>{`${DASH} unpriced hours`}</>;
+      return (
+        <>
+          <Figure figure={row.highest} unit={data.unit} />
+          {row.highest && row.highestFrom && <small className="wd-sub">bucket from <span className="wd-fig">{bucketStartText(row.highestFrom, timezone, data)}</span></small>}
+        </>
+      );
     case "total": return <Figure figure={row.total} unit={data.unit} />;
     case "last":
       return (
@@ -111,6 +117,7 @@ export function WidgetDetails({ title, type, data, config, timezone, following, 
   return (
     <Drawer
       title={`Details: ${title}`}
+      wide
       onClose={onClose}
       returnFocus={returnFocus}
       footer={csv && (

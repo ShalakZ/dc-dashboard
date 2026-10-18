@@ -86,8 +86,10 @@ function scrolledTo(key: string, body: HTMLElement): number | null {
  * Keys. Focus stays on the panel when it opens, so PageUp, PageDown, Home, End and the up and down arrows (only when they are pressed on the
  * panel itself, never on a control inside it) scroll the body by hand; the key is taken (preventDefault) only if the body actually moves.
  */
-export function Drawer({ title, onClose, footer, returnFocus, children }: {
+export function Drawer({ title, onClose, footer, returnFocus, wide, children }: {
   title: string;
+  /** A little wider (class `drawer-wide`) for a drawer that holds a table. Nothing else changes. */
+  wide?: boolean;
   onClose: () => void;
   footer?: ReactNode;
   returnFocus?: () => HTMLElement | null;
@@ -168,7 +170,7 @@ export function Drawer({ title, onClose, footer, returnFocus, children }: {
         if (wholeClick) latest.current.onClose();
       }}
     >
-      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className="drawer" onKeyDown={scrollWithKeys}>
+      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className={wide ? "drawer drawer-wide" : "drawer"} onKeyDown={scrollWithKeys}>
         <div className="drawer-head">
           <h2 id={titleId} className="drawer-title">{title}</h2>
           <button type="button" className="icon-btn" aria-label="Close" onClick={() => latest.current.onClose()}>

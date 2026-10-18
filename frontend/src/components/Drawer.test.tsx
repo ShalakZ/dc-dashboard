@@ -67,6 +67,18 @@ describe("Drawer", () => {
       expect(foot).toContainElement(screen.getByRole("button", { name: "Previous" }));
       expect(panel().querySelector(".drawer-body")!.compareDocumentPosition(foot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
+
+    it("is the plain panel by default, and `wide` adds the class drawer-wide and changes nothing else", () => {
+      const { unmount } = render(<Drawer title="Plain" onClose={() => {}}>body</Drawer>);
+      const plain = screen.getByRole("dialog", { name: "Plain" });
+      expect(plain.className).toBe("drawer");
+      const [plainRole, plainModal, plainTab] = [plain.getAttribute("role"), plain.getAttribute("aria-modal"), plain.getAttribute("tabindex")];
+      unmount();
+      render(<Drawer title="Wide" wide onClose={() => {}}>body</Drawer>);
+      const wide = screen.getByRole("dialog", { name: "Wide" });
+      expect(wide.className).toBe("drawer drawer-wide");
+      expect([wide.getAttribute("role"), wide.getAttribute("aria-modal"), wide.getAttribute("tabindex")]).toEqual([plainRole, plainModal, plainTab]);
+    });
   });
 
   describe("focus", () => {

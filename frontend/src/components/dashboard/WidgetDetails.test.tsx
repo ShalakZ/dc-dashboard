@@ -1,12 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { keys } from "../../api/queries";
 import type { Asset, WidgetConfig, WidgetData, WidgetType } from "../../api/types";
 import { downloadCsv } from "../../lib/download";
 import type { LiveValue } from "../../lib/stream";
+import { parseRules, stripComments } from "../../test/cssTools";
 import { config, seriesData, seriesPoint, valueRow, valuesData } from "../../test/dashboardFixtures";
 import { LiveValuesContext } from "./LiveValuesContext";
 import { WidgetDetails, type WidgetDetailsProps } from "./WidgetDetails";
@@ -252,9 +254,9 @@ describe("WidgetDetails: the figures of a chart", () => {
     const { dialog } = open("timeseries", data, config());
     const table = within(dialog()).getByRole("table");
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent))
-      .toEqual(["Asset", "Lowest", "Highest", "Highest in the bucket from", "Last bucket (average)"]);
+      .toEqual(["Asset", "Lowest", "Highest", "Last bucket (average)"]);
     const row = within(table).getAllByRole("row")[1];
-    expect(cellsOf(row)).toEqual(["LV Panel 1", "0.50 kW", "14.00* kW", "2026-10-08 03:09:36", "12.30* kW" + "from 2026-10-08 03:09:36"]);
+    expect(cellsOf(row)).toEqual(["LV Panel 1", "0.50 kW", "14.00* kW" + "bucket from 2026-10-08 03:09:36", "12.30* kW" + "from 2026-10-08 03:09:36"]);
     expect(within(dialog()).getByText("Average of each bucket, with the lowest and highest as a band")).toBeInTheDocument();
     expect(within(table).queryByRole("columnheader", { name: "Average" })).not.toBeInTheDocument();
   });
@@ -262,10 +264,43 @@ describe("WidgetDetails: the figures of a chart", () => {
   it("the time of the last bucket is a nowrap span of its own, so it never breaks inside the date (the state words around it may wrap)", () => {
     const data = seriesData({ series: [{ asset_id: 5, name: "LV Panel 1", estimated: false, partial: false, points: BUCKETS }] });
     const { dialog } = open("timeseries", data, config());
-    const sub = dialog().querySelector(".wd-table small.wd-sub") as HTMLElement;
+    const sub = dialog().querySelector(".wd-table td:last-child small.wd-sub") as HTMLElement;
     expect(sub.textContent).toBe("from 2026-10-08 03:09:36");
     const time = sub.querySelector("span.wd-fig");
     expect(time?.textContent, "only the time, not the word 'from'").toBe("2026-10-08 03:09:36");
+  });
+
+  it("the highest figure carries its bucket under it ('bucket from <time>': the start of a bucket, never the moment of the peak), in a nowrap span, and there is no column of its own for it", () => {
+    const data = seriesData({ series: [{ asset_id: 5, name: "LV Panel 1", estimated: false, partial: false, points: BUCKETS }] });
+    const { dialog } = open("timeseries", data, config());
+    const table = within(dialog()).getByRole("table");
+    expect(within(table).queryByRole("columnheader", { name: /Highest in the bucket from/ })).not.toBeInTheDocument();
+    const highest = within(table).getAllByRole("row")[1].querySelectorAll("td")[2];
+    const sub = highest.querySelector("small.wd-sub") as HTMLElement;
+    expect(sub.textContent).toBe("bucket from 2026-10-08 03:09:36");
+    expect(sub.querySelector("span.wd-fig")?.textContent, "the same text bucketStartText gives, and only the time").toBe("2026-10-08 03:09:36");
+    expect(highest.querySelector(":scope > span.wd-fig")?.textContent).toBe("14.00* kW");
+    // the last bucket keeps its own plain 'from'
+    expect(within(table).getAllByRole("row")[1].querySelectorAll("td")[3].querySelector("small.wd-sub")?.textContent).toBe("from 2026-10-08 03:09:36");
+  });
+
+  it("an hour bucket and a day bucket say the time to the minute and to the date, under the highest figure as they do under the last", () => {
+    const point = (ts: string, value: number) => seriesPoint({ ts, value });
+    const series = (bucket: "hour" | "day") => seriesData({
+      type: "bar", source: "energy", metric: null, unit: "kWh", bucket, tier: null,
+      series: [{ asset_id: 5, name: "LV Panel 1", estimated: false, partial: false, points: [point("2026-10-08T00:00:00+00:00", 1.5), point("2026-10-09T00:00:00+00:00", 2.5)] }],
+    });
+    const energy = config({ source: "energy", metric: null, aggregation: "sum", bars: "time" });
+    const hour = open("bar", series("hour"), energy);
+    expect(hour.dialog().querySelector(".wd-table td:nth-child(2) small.wd-sub")?.textContent).toBe("bucket from 2026-10-09 03:00");
+    hour.unmount();
+    const day = open("bar", series("day"), energy);
+    expect(day.dialog().querySelector(".wd-table td:nth-child(2) small.wd-sub")?.textContent).toBe("bucket from 2026-10-09");
+  });
+
+  it("is a wide drawer (class drawer-wide), because its table has several figure columns", () => {
+    const { dialog } = open("timeseries", seriesData(), config());
+    expect(dialog()).toHaveClass("drawer", "drawer-wide");
   });
 
   it("an energy series: the total only when every bucket has a value, and never a word about an average", () => {
@@ -277,15 +312,15 @@ describe("WidgetDetails: the figures of a chart", () => {
     const whole = open("bar", series([point("2026-10-08T00:00:00+00:00", 1.5), point("2026-10-08T01:00:00+00:00", 2.5)]), config({ source: "energy", metric: null, aggregation: "sum", bars: "time" }));
     const table = within(whole.dialog()).getByRole("table");
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent))
-      .toEqual(["Asset", "Highest", "Highest in the bucket from", "Last bucket (total per hour)", "Total of the buckets shown"]);
+      .toEqual(["Asset", "Highest", "Last bucket (total per hour)", "Total of the buckets shown"]);
     expect(cellsOf(within(table).getAllByRole("row")[1])).toEqual([
-      "LV Panel 1", "2.50 kWh", "2026-10-08 04:00", "2.50 kWhfrom 2026-10-08 04:00", "4.00 kWh",
+      "LV Panel 1", "2.50 kWhbucket from 2026-10-08 04:00", "2.50 kWhfrom 2026-10-08 04:00", "4.00 kWh",
     ]);
     expect(whole.dialog().textContent).not.toMatch(/average/i);
     whole.unmount();
     const gap = open("bar", series([point("2026-10-08T00:00:00+00:00", 1.5), point("2026-10-08T01:00:00+00:00", null, true)]), config({ source: "energy", metric: null, aggregation: "sum", bars: "time" }));
     const row = within(within(gap.dialog()).getByRole("table")).getAllByRole("row")[1];
-    expect(cellsOf(row)[4]).toBe("—"); // no total: a missing bucket makes it not exact
+    expect(cellsOf(row)[3]).toBe("—"); // no total: a missing bucket makes it not exact
     expect(within(gap.dialog()).getByText("A total is shown only when every bucket has a value.")).toBeInTheDocument();
   });
 
@@ -301,7 +336,7 @@ describe("WidgetDetails: the figures of a chart", () => {
     const cells = cellsOf(within(within(dialog()).getByRole("table")).getAllByRole("row")[1]);
     expect(cells[0]).toBe("LV Panel 1no rate");
     expect(cells[1]).toBe("— unpriced hours");
-    expect(cells[2]).toBe("—");
+    expect(cells[2]).toBe("3.00 QARfrom 2026-10-08 03:00"); // the last priced bucket, as before; the highest names no bucket (nothing is claimed)
     expect(cells[1]).not.toMatch(/\d/);
     expect(within(dialog()).getByText("— no rate: no tariff applies to this figure")).toBeInTheDocument();
   });
@@ -319,6 +354,38 @@ describe("WidgetDetails: the figures of a chart", () => {
   it("says in a note what the figures are taken from", () => {
     const { dialog } = open("timeseries", seriesData(), config());
     expect(within(dialog()).getByText(/of the buckets shown/)).toBeInTheDocument();
+  });
+
+  it("has at most four columns (Asset and three figures), so the table fits the wide drawer", () => {
+    const heads = (dialog: HTMLElement) => within(within(dialog).getByRole("table")).getAllByRole("columnheader").length;
+    const metric = open("timeseries", seriesData({ series: [{ asset_id: 5, name: "LV Panel 1", estimated: false, partial: false, points: BUCKETS }] }), config());
+    expect(heads(metric.dialog())).toBe(4);
+    metric.unmount();
+    const energy = open("bar", seriesData({
+      type: "bar", source: "energy", metric: null, unit: "kWh", bucket: "hour", tier: null,
+      series: [{ asset_id: 5, name: "LV Panel 1", estimated: false, partial: false, points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 1.5 })] }],
+    }), config({ source: "energy", metric: null, aggregation: "sum", bars: "time" }));
+    expect(heads(energy.dialog())).toBe(4);
+  });
+});
+
+describe("WidgetDetails: the table's stylesheet (jsdom has no layout; the drawer was looked at in a browser at 1440, 1024 and 800)", () => {
+  const rules = parseRules(stripComments(readFileSync("src/styles/widgets-details.css", "utf8")));
+  const body = (selector: string) => {
+    const found = rules.filter((r) => r.selector === selector && r.at.length === 1);
+    expect(found, `one plain rule for "${selector}"`).toHaveLength(1);
+    return found[0].body;
+  };
+
+  it("a figure and a time never break inside (nowrap), while the words of a sub-line may wrap", () => {
+    expect(body(".wd-fig")).toMatch(/white-space:\s*nowrap/);
+    expect(body(".wd-sub")).toMatch(/white-space:\s*normal/);
+    expect(body(".wd-sub")).toMatch(/display:\s*block/);
+  });
+
+  it("the Asset column keeps a readable width and the box scrolls sideways inside itself only as a net", () => {
+    expect(body(".wd-table td:first-child")).toMatch(/min-width:\s*11ch/);
+    expect(body(".wd-table-wrap")).toMatch(/overflow-x:\s*auto/);
   });
 });
 

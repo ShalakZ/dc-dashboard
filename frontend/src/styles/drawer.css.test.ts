@@ -48,11 +48,27 @@ describe("the drawer's stylesheet", () => {
   it("is 520px wide at most (min(520px, 100vw)) and the whole width below 720px, the same breakpoint as the toast stack", () => {
     expect(rule(".drawer")).toMatch(/width:\s*min\(520px,\s*100vw\)/);
     expect(rule(".drawer")).toMatch(/height:\s*100%/);
-    const narrow = drawer.filter((r) => r.selector === ".drawer" && r.at.some((a) => /max-width:\s*719\.98px/.test(a)));
+    const narrow = drawer.filter((r) => r.selector.split(",").map((s) => s.trim()).includes(".drawer") && r.at.some((a) => /max-width:\s*719\.98px/.test(a)));
     expect(narrow).toHaveLength(1);
     expect(narrow[0].body).toMatch(/width:\s*100%/);
+    expect(narrow[0].body).toMatch(/border-left:\s*0/);
     const stackNarrow = toasts.filter((r) => r.selector === ".toast-stack" && r.at.some((a) => /max-width:\s*719\.98px/.test(a)));
     expect(stackNarrow, "the toast stack's narrow breakpoint is the same text").toHaveLength(1);
+  });
+
+  it("a wide drawer (class drawer-wide, for a drawer with a table) is min(560px, 100vw), beats the plain width, and the narrow window still gets the whole width with no border", () => {
+    const wide = rule(".drawer.drawer-wide");
+    expect(wide).toMatch(/width:\s*min\(560px,\s*100vw\)/);
+    expect(wide.replace(/width:[^;]+;?/, "").trim(), "it changes the width and nothing else").toBe("");
+    // Same cascade layer and not inside a media query, written after .drawer; two classes beat one, so order does not decide it.
+    expect(css.indexOf(".drawer.drawer-wide {")).toBeGreaterThan(css.indexOf(".drawer {"));
+    // The narrow block names both selectors, and comes after the wide rule, so a phone is never 560px wide.
+    const narrow = drawer.find((r) => r.at.some((a) => /max-width:\s*719\.98px/.test(a)) && r.selector.includes(".drawer.drawer-wide"));
+    expect(narrow, "the narrow block names .drawer.drawer-wide").toBeDefined();
+    expect(narrow!.selector.split(",").map((s) => s.trim()).sort()).toEqual([".drawer", ".drawer.drawer-wide"]);
+    expect(narrow!.body).toMatch(/width:\s*100%/);
+    expect(narrow!.body).toMatch(/border-left:\s*0/);
+    expect(css.indexOf("@media (max-width: 719.98px)")).toBeGreaterThan(css.indexOf(".drawer.drawer-wide {"));
   });
 
   it("is a column: a pinned head, one scrolling body that does not chain its scroll to the page, and an optional pinned footer", () => {

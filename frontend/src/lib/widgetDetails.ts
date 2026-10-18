@@ -196,7 +196,7 @@ export interface SeriesSummaryRow {
   total: DetailFigure | null;
 }
 
-export type SummaryKey = "lowest" | "highest" | "highestFrom" | "last" | "total";
+export type SummaryKey = "lowest" | "highest" | "last" | "total";
 export interface SummaryColumn { key: SummaryKey; heading: string }
 export interface SeriesSummary { columns: SummaryColumn[]; rows: SeriesSummaryRow[] }
 
@@ -254,7 +254,6 @@ export function seriesSummary(data: WidgetData, config: AggregationConfig): Seri
   const columns: SummaryColumn[] = [
     ...(metric ? [{ key: "lowest" as const, heading: "Lowest" }] : []),
     { key: "highest", heading: "Highest" },
-    { key: "highestFrom", heading: "Highest in the bucket from" },
     { key: "last", heading: `Last bucket (${lastWords})` },
     ...(metric ? [] : [{ key: "total" as const, heading: "Total of the buckets shown" }]),
   ];
