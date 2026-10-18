@@ -27,7 +27,7 @@ lacks says "No access".
 - **Billing** (everyone): needs `billing.view`. Energy and cost per asset per day and per month, picked with the Year and Month
   selects, with a CSV export (`billing.export`). A parent row has a small arrow that folds the rows below it (a folded row keeps its own
   totals, which already include everything below it); **Collapse all**, **Expand all** and **Show levels** fold many at once, and a
-  **Filter assets** box shows the rows whose name contains your text with their parents ("12 of 370 rows match"). The day-number header
+  filter box (**Filter by asset name**) shows the rows whose name contains your text with their parents ("12 of 370 rows match"). The day-number header
   stays at the top while the rows scroll and the first column stays while the days scroll sideways. A month with more than 60 rows
   opens folded to the deepest level that keeps 60 rows or fewer; the fold is remembered in this browser for this site address (not per
   month and not per account), the filter is not, and the CSV always has every asset and every day. See

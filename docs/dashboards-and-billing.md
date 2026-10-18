@@ -136,15 +136,15 @@ The asset page shows today's cost next to today's energy.
 A data centre has hundreds of assets, so Billing lets you fold the rows, filter them and keep the day numbers in sight. None of it
 changes a figure, a marker, a rate, a total or the CSV.
 
-- **Fold.** A row with assets below it has a small arrow in its name cell; the arrow's name is, for example, "Collapse Hall 1, 59 rows
-  below" (or "Expand Hall 1, 59 rows below" when the row is folded). A folded row still shows its own rate, month total and day figures,
+- **Fold.** A row with assets below it has a small arrow in its name cell; the arrow's name is, for example, "Collapse Hall 1, 181 rows
+  below" (or "Expand Hall 1, 181 rows below" when the row is folded; 181 is the demo hall's Hall 1). A folded row still shows its own rate, month total and day figures,
   which already include everything below it, so folding hides detail and never a total. **Collapse all** folds everything into the top
-  row, **Expand all** opens everything, and **Show levels** (All, or 1 up to the deepest level) shows that many levels: level 1 is the top
+  row, **Expand all** opens everything, and **Show levels** (1 up to the deepest level, then All) shows that many levels: level 1 is the top
   row alone, level 2 adds the rows directly below it, and so on. It reads "Custom" while the fold you made matches no level. The `?` beside
   it says the same thing about totals.
 - **How many rows are on screen.** A line at the right of the controls says "All 370 rows shown", or "Showing 24 of 370 rows" while
   something is folded, or "12 of 370 rows match" while you filter ("No rows match" when nothing does).
-- **Filter assets.** Type part of an asset name: the table shows every row whose name contains it (capital letters do not matter; only
+- **The filter box (Filter by asset name).** Type part of an asset name: the table shows every row whose name contains it (capital letters do not matter; only
   the name is searched, not the path), each with the rows above it so the indent still reads as a tree. Rows below a match that do not
   match themselves are left out. The filter ignores the fold, and when you clear it (the **Clear filter** button in the box, or Escape
   while you are in it) the fold you had comes back. Collapse all, Expand all and Show levels are greyed out while the box has text. The
@@ -165,7 +165,7 @@ changes a figure, a marker, a rate, a total or the CSV.
 - **The CSV** always has every asset and every day, whatever is folded or filtered.
 
 Try it with the demo hall ([The pilot hall](developing.md#the-pilot-hall-a-demo-tree-with-racks)): open Billing and choose Show levels 5
-(the 141 rows down to the racks); scroll down and watch the day numbers stay at the top. Then type Rack 01 in Filter assets: the racks
+(the 141 rows down to the racks); scroll down and watch the day numbers stay at the top. Then type Rack 01 in the filter box (Filter by asset name): the racks
 with that name show, each under its hall, pod and row. Press Escape and the level you chose is back.
 
 ## Closing a month
