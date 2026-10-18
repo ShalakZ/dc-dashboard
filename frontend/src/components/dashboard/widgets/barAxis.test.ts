@@ -275,7 +275,7 @@ describe("barAxisLayout", () => {
     expect(layout.slot).toBeLessThan(MIN_SLOT_PX);
     expect(layout.mode).toBe("rotate");
     expect(layout.bottom).toBe(8);
-    expect(layout.left).toBeGreaterThan(12); // grows with the first name: containLabel counts a turned name as centred on its tick, the axis draws it ending there
+    expect(layout.left).toBeGreaterThan(12); // grows with the first name: containLabel takes only the HEIGHT of the turned names, and the first name ends at its tick, so its width must be in `left`
     expect(layout.left).toBeLessThanOrEqual(Math.floor(DEFAULT_CHART_WIDTH * 0.4)); // never more than two fifths of the chart
     expect(layout.labels).toEqual(shortLabels(names, AXIS_CHARS));
     for (const label of layout.labels.values()) expect(Array.from(label).length).toBeLessThanOrEqual(AXIS_CHARS);

@@ -188,7 +188,7 @@ export interface AxisLayout {
   labels: Map<string, string>;
   /** `grid.bottom`: the room under the plot for the labels (wrapped), or the margin under the turned names (rotated, which uses containLabel). */
   bottom: number;
-  /** `grid.left`: WRAPPED_LEFT_PX, or ROTATED_LEFT_PX when rotated (containLabel counts the y axis's numbers). */
+  /** `grid.left`: WRAPPED_LEFT_PX, or `rotatedLeft(...)` when rotated: at least ROTATED_LEFT_PX, up to 0.4 of the chart width for a long first name (containLabel counts the y axis's numbers and the turned names' height, not their width). */
   left: number;
 }
 
