@@ -14,7 +14,7 @@ import { useCreateAsset } from "../hooks/useCreateAsset";
 import { useTreeDelete } from "../hooks/useTreeDelete";
 import { useTreeMove } from "../hooks/useTreeMove";
 import { kindIconId } from "../lib/assetIcons";
-import { assetDeletePath, assetImpact, assetLoss } from "../lib/impact";
+import { assetDeletePath, assetImpact, assetLoss, assetNote } from "../lib/impact";
 import { buildTree, descendantIds, parseAssetId } from "../lib/tree";
 
 /** Inline SVG, 24-unit viewBox, drawn with the 1.7 stroke of `svg.i`; decoration only (the text beside it is the name). */
@@ -166,6 +166,7 @@ export function AssetsPage() {
           queryKey={["impact", "asset", deleting.id]}
           load={() => loadAssetImpact(deleting.id)}
           loss={assetLoss}
+          note={assetNote}
           isPlain={(impact) => impact.assets === 1 && impact.mappings === 0 && impact.tariffs === 0}
           plainMessage="This can't be undone."
           grown={assetImpact}

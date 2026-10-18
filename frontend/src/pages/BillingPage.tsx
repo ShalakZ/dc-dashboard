@@ -171,7 +171,7 @@ export function BillingPage() {
           : holdsSpace ? <ActionsSpace /> /* the buttons wait for the site's month and the costs; their height does not */ : undefined}
       />
       {site.isError && <p className="error" role="alert">{site.error.message}</p>}
-      {month === null && site.isPending && <div className="row billing-bar" aria-hidden="true"><ActionsSpace height={38} /></div>}
+      {month === null && site.isPending && <div className="row billing-bar" aria-hidden="true"><ActionsSpace /></div>}
       {month !== null && (
         <div className="row billing-bar">
           <button type="button" onClick={() => setPicked(shiftMonth(month, -1))} disabled={firstMonth !== null && month <= firstMonth}>

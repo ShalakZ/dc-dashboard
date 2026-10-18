@@ -18,7 +18,7 @@ import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
 import { useNow } from "../hooks/useNow";
 import { ageNow, formatAge, formatSpan, secondsSince } from "../lib/age";
-import { sourceDeletePath, sourceImpact, sourceLoss } from "../lib/impact";
+import { sourceDeletePath, sourceImpact, sourceLoss, sourceNote } from "../lib/impact";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { sourceStatusText } from "../lib/sourceStatus";
 
@@ -169,6 +169,7 @@ export function SourcesPage() {
           queryKey={["impact", "source", deleting.id]}
           load={() => loadSourceImpact(deleting.id)}
           loss={sourceLoss}
+          note={sourceNote}
           isPlain={(impact) => impact.points === 0 && impact.mappings === 0}
           // The preview counts only MAPPED points; the unmapped ones of a source are deleted with it too, so the plain sentence says so.
           plainMessage="Its points go with it. This can't be undone."

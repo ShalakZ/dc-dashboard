@@ -246,9 +246,9 @@ describe("the shell (W6 sidebar)", () => {
         expect(bodyOf(field)).toMatch(/color:\s*var\(--top-find-text\)/);
         expect(bodyOf(`${field}::placeholder`)).toMatch(/color:\s*var\(--top-find-ph\)/);
         expect(bodyOf(".qf-field > svg.i")).toMatch(/color:\s*var\(--top-find-ph\)/);
-        // the base input rule (min-height 38px) comes first in the file and has the same weight as ".qf input": the selector must outrank it
+        // the base input rule (min-height var(--ctl-h)) comes first in the file and has the same weight as ".qf input": the selector must outrank it
         expect(bodyOf(field)).toMatch(/min-height:\s*0/);
-        expect(bodyOf(field)).toMatch(/height:\s*34px/);
+        expect(bodyOf(field)).toMatch(/height:\s*var\(--ctl-h\)/); // the same height as the chip beside it and the buttons in a page
       });
 
       it("gives the field the border that reaches 3:1, and keeps the quieter ring for the chip and the shortcut hint beside it", () => {
@@ -843,10 +843,10 @@ describe("the page style files (src/styles/*.css)", () => {
     expect(bare).toEqual([]);
   });
 
-  it("the Tariffs form bars size their Save and Add buttons, not the ? tips in the same bar (a 38px tip would sit 10px below its label line)", () => {
+  it("the Tariffs form bars leave the size of their Save and Add buttons to the base button (W18: --ctl-h, like the fields beside them), and any rule that does size one spares the ? tips (a 34px tip would sit 10px below its label line)", () => {
     const billing = parsed.find((p) => p.file === "pages-billing.css")!;
     const onButtons = billing.rules.flatMap((r) => selectorParts(r.selector).filter((part) => /\.inline-form button/.test(part)).map((part) => ({ part, body: r.body })));
-    expect(onButtons.length, "a rule that sizes the buttons of the form bars").toBeGreaterThan(0);
+    expect(rules.find((r) => r.selector === "button")!.body, "the base button the bar's buttons take their height from").toMatch(/min-height:\s*var\(--ctl-h\)/);
     for (const { part, body } of onButtons) {
       if (/(min-)?(height|width)\s*:/.test(body)) expect(part, "spares the icon buttons").toContain(":not(.icon-btn)");
     }
@@ -975,7 +975,7 @@ describe("the row menu, the trash button and the info tip (W7b)", () => {
 
   it("the tip and menu buttons keep a hit area of 24px or more", () => {
     expect(only(".tip-btn").body).toMatch(/width:\s*24px;\s*height:\s*24px/);
-    expect(only(".icon-btn").body).toMatch(/width:\s*28px;\s*height:\s*28px/);
+    expect(only(".icon-btn").body).toMatch(/width:\s*var\(--ctl-h-xs\);\s*height:\s*var\(--ctl-h-xs\)/);
   });
 });
 
@@ -1186,7 +1186,7 @@ describe("the app-shell skeleton (W7h)", () => {
 
   it("the find box has the real field's size, border and ground, drawn after the navy placeholder rule so it wins", () => {
     const find = only(".sk-shell .navbar .sk-find");
-    expect(find.body).toMatch(/height:\s*34px/);
+    expect(find.body).toMatch(/height:\s*var\(--ctl-h\)/);
     expect(find.body).toMatch(/border:\s*1px solid var\(--top-find-border\)/);
     expect(find.body).toMatch(/background:\s*var\(--top-find-bg\)/);
     expect(find.body).toMatch(/border-radius:\s*var\(--radius\)/);

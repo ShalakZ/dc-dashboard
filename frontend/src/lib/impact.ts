@@ -37,6 +37,19 @@ export const assetLoss = (i: AssetImpact) =>
 export const sourceLoss = (i: SourceImpact) =>
   `${counted(i.points, "mapped point")} and ${counted(i.mappings, "mapping")} will be deleted; the past energy and cost figures that depend on them ${HISTORY}`;
 
+// W18: what the loss sentences above do not say. A month that is not closed is worked out from today's tree, so it loses the figures; closing a finished
+// month first freezes its bill; and the readings themselves stay stored (`readings.point_id` has no foreign key). The two notes differ on one fact: a
+// deleted asset takes only its mappings, the points belong to the source and stay, so mapping the same points to an asset again gives the open months their
+// figures back; a deleted source takes its points with it, so nothing is left to map. A paragraph of its own, drawn only when the delete has mappings,
+// that is, energy figures.
+export const ASSET_KEEP_NOTE = "Months that are not closed follow today's assets, so they lose these figures. To keep a finished month's bill, close that month before you delete. The meter readings themselves stay stored: map the same points to an asset again and those months get their figures back.";
+export const SOURCE_KEEP_NOTE = "Months that are not closed follow today's mappings, so they lose these figures. Deleting the source also deletes its points, so they cannot be mapped again. To keep a finished month's bill, close that month before you delete. The stored readings stay on disk; the retention limits on the Storage page trim the detailed ones in time.";
+
+/** The note for deleting assets with these counts, or null when no mapping goes (a branch of empty assets, a tariff only: no readings to explain). */
+export const assetNote = (i: AssetImpact): string | null => (i.mappings > 0 ? ASSET_KEEP_NOTE : null);
+/** The note for deleting a source with these counts, or null when nothing is mapped (the preview counts only mapped points, so this is `points > 0` too). */
+export const sourceNote = (i: SourceImpact): string | null => (i.mappings > 0 ? SOURCE_KEEP_NOTE : null);
+
 /** PUT /api/settings/storage wants confirmation: the server's description of what saving would delete and whether anything is
  * deleted now (false = the limit is only shorter), otherwise null. */
 export const storageLoss = (error: unknown): { detail: string; deletesNow: boolean } | null => {

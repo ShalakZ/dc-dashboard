@@ -7,7 +7,7 @@ import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
 import { READ_ONLY_TEXT, ReadOnlyNote } from "../components/ReadOnlyNote";
 import { SaveButton } from "../components/SaveButton";
-import { PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
+import { CTL_H, PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
 import { useRowsPerDay, useSaveStorageSettings, useSetStorageDefault, useStorage, useStorageSettings } from "../api/queries";
 import type { RowsPerDayRange, StorageSettings, StorageStats } from "../api/types";
 import { storageLoss } from "../lib/impact";
@@ -55,6 +55,8 @@ export function validate(s: StorageSettings): string | null {
 export const UTC_NOTE = "Days are UTC days, midnight to midnight UTC, not days in the site's time zone.";
 /** The retention card's first paragraph; the loading frame draws the same words as grey pills, so it breaks into the same lines. */
 export const DISK_NOTE = "Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.";
+/** W18: what removing assets or sources does to the stored readings (nothing: no foreign key; retention drops the raw and 1-minute ones, the hourly summaries stay). Static, so the skeleton draws it too. */
+export const READINGS_NOTE = "Removing assets or sources does not remove their readings. They leave when retention drops them (see the limits below), except the hourly summaries, which stay. Shorten the retention to free space sooner; saving a shorter retention asks first.";
 /** What Set as default says when it worked. It is also the longest line the retention card's message slot has to hold, so the slot reserves its height (data-reserve). */
 const DEFAULT_SET_NOTE = "This site's default is updated. It is not in use yet: press Save to use these values.";
 /** The last sentence of the summary under the buttons; a role that cannot change the settings has no Resets and does not read it. */
@@ -226,10 +228,11 @@ export function StoragePage() {
             </PageCardSkeleton>
             <PageCardSkeleton className="retention-card">
               <ParagraphSkeleton text={DISK_NOTE} className="muted" />
+              <ParagraphSkeleton text={READINGS_NOTE} className="muted" />
               <div className="retention-form">
                 <div className="retention-fields">
                   {FIELDS.map(([key], i) => (
-                    <div className="sk-field" key={key}><Skeleton width={i % 2 ? "18ch" : "22ch"} /><Skeleton variant="block" height={38} /></div>
+                    <div className="sk-field" key={key}><Skeleton width={i % 2 ? "18ch" : "22ch"} /><Skeleton variant="block" height={CTL_H} /></div>
                   ))}
                 </div>
                 <div className="retention-foot">
@@ -316,6 +319,7 @@ export function StoragePage() {
         <RowsPerDay initial={s.rows_per_day} />
         <PageCard className="retention-card" icon="database" title="Retention and capacity">
           <p className="muted">{DISK_NOTE}</p>
+          <p className="muted">{READINGS_NOTE}</p>
           <form className="retention-form" onSubmit={(e: FormEvent) => { e.preventDefault(); submit(false); }}>
             <div className="retention-fields">
               {FIELDS.map(([key, label]) => (

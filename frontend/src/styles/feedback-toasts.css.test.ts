@@ -89,7 +89,7 @@ describe("the toast's stylesheet", () => {
     expect(action).toMatch(/background:\s*var\(--bg\)/);
     expect(action).toMatch(/flex:\s*none/);
     expect(action).toMatch(/max-width:\s*45%/);
-    expect(action).toMatch(/min-height:\s*28px/); // as tall as the close button beside it, so the row does not grow
+    expect(action).toMatch(/min-height:\s*var\(--ctl-h-xs\)/); // as tall as the close button beside it (also --ctl-h-xs), so the row does not grow
     expect(action, "not a pill").not.toMatch(/border-radius/);
     expect(rule(".toast-action:hover:not(:disabled)")).toMatch(/background:\s*var\(--accent-tint\)/);
   });

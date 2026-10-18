@@ -187,7 +187,9 @@ can **close** it: the Billing page stores the figures it shows for that month an
   with no data ("no energy data was recorded for that month") and a month that is already closed ("that month is already closed by
   <name> on <date>"), and the refusal appears inside the dialog. The dialog, **Close <Month Year>**, explains that later changes to
   assets, mappings or rates will not change the figures and takes an optional note of up to 500 characters; its button reads **Close
-  month**. Closing takes a few seconds.
+  month**. The note box is at least four lines tall and at most twelve (or 40 percent of the window, whichever is less): you can drag
+  it taller or shorter inside those limits, and a longer note scrolls inside it (the Reopen dialog's reason box is the same). Closing
+  takes a few seconds.
 - **What a closed month shows.** The **Closed** chip beside the month name and a banner above the table, "Closed by <name> on Thu 15 Oct
   2026." (the date is the site's calendar date; the note, if any, is on the next line). The table is the stored one. A quiet line
   under the banner is always there on a closed month, so the table does not move when it changes: when today's tree and rates would
@@ -215,6 +217,16 @@ can **close** it: the Billing page stores the figures it shows for that month an
   give" line. A closed month stays reachable from **Previous month** and the Year and Month selects even after its meters are replaced
   or its source is deleted: the first month the selects offer is the first month with data or the first month that was ever closed (also after a reopen), whichever is
   earlier. There is no list of closed months yet: open a month and look for the chip.
+- **Removing assets or sources, and the readings.** A month that is not closed is worked out from today's tree and mappings, so removing
+  assets (or the source that feeds them) takes their figures out of every month that is not closed, and out of the dashboards; a closed
+  month keeps what it billed. When a removal takes mappings with it, its confirmation says so in a paragraph of its own, under the
+  sentence with the counts: *Months that are not closed follow today's assets, so they lose these figures. To keep a finished month's
+  bill, close that month before you delete. The meter readings themselves stay stored: map the same points to an asset again and those
+  months get their figures back.* A source's note differs in one fact: a source's points go with it, so its figures cannot be mapped
+  back (the stored readings stay on disk, and the retention limits on the Storage page trim the detailed ones in time). Only a finished
+  month can be closed, so the current month always follows the tree. No removal ever deletes readings (the table has no link to assets
+  or points), which is why the database does not shrink after you remove assets: retention drops the raw and 1-minute readings when
+  their days are up ([Storage](storage.md)).
 - **Size.** A snapshot holds every asset and every day of the month as JSON: about 5 MB for a big site (2,000 assets, 31 days),
   stored once per close and compressed by the database. There is no cap, and a reopened snapshot stays in the database.
 

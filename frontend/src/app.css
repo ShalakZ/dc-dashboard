@@ -36,7 +36,10 @@
   --motion: 150ms ease;
   --side-w-open: 236px; --side-w-closed: 64px; --tree-w: 280px; --tree-w-closed: 44px; /* the tree is 280px in a narrow window too: at 248px its five header controls cut the title "Assets Tree" */
   --find-w: 300px; --find-min: 120px;                     /* the quick find in the top bar: 300px wanted (220px below 1180px), never less than 120px (it gives room to the chip, the clock and the profile) */
-  --btn-h: 34px;                                          /* the height of every button: Add asset, Edit and the labelled Delete in a page header are one family (W7o) */
+  --ctl-h: 34px;                                          /* the standard height of every control that has a visible edge: buttons, inputs, selects, the Find field, the top-bar chip, filter chips, segmented buttons and a status chip in a row of controls (W7o buttons, W18 the rest) */
+  --ctl-h-sm: 30px;                                       /* the borderless text buttons, .quiet and .danger-quiet: their box has no edge, so the rows around them are laid out for 30 */
+  --ctl-h-xs: 28px;                                       /* icon buttons and the small button of a banner, a toast or an audit entry */
+  --chip-h: 22px;                                         /* a status chip inside a line of text or a table cell (in a row of controls it is --ctl-h) */
   --toast-clear: 96px;                                    /* room under a page, so the end of a list scrolls clear of a settled toast (two lines: 62px plus its 16px margin) */
   /* w13 dashboard widgets (styles/widgets.css; the dark values are themes.css's, the presets change none of them). Every widget colour, size and corner is one
      of these, so a tweak is an edit here: the card (density and corners: --widget-pad, --widget-head-h, --widget-row-h, --widget-radius, --widget-shadow,
@@ -149,7 +152,7 @@
   .bar-in > .grow + .vr, .bar-in > .vr + .vr { display: none; } /* a chip or a clock that is not shown leaves no separator behind */
   /* The data chip: the words and a shape carry the state, the colour only reinforces it (a filled dot is live, a hollow ring is stale
      or waiting, a diamond is offline). The diamond is the stale amber too: there is no red that reads on this navy. */
-  .live { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border-radius: var(--radius-sm); background: var(--top-find-bg); box-shadow: inset 0 0 0 1px var(--top-chip-border); color: var(--top-find-text); font-size: var(--fs-sm); white-space: nowrap; }
+  .live { display: inline-flex; align-items: center; gap: 7px; height: var(--ctl-h); padding: 0 12px; border-radius: var(--radius-sm); background: var(--top-find-bg); box-shadow: inset 0 0 0 1px var(--top-chip-border); color: var(--top-find-text); font-size: var(--fs-sm); white-space: nowrap; }
   .live::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--top-live); }
   .live b { font-weight: 600; }
   .live .detail { color: var(--top-find-ph); }
@@ -200,7 +203,7 @@
   .qf { position: relative; flex: 0 1 auto; width: var(--find-w); min-width: var(--find-min); max-width: 100%; } /* the one child of the bar that gives way when the row is too wide (800px with the sidebar open); the chip, the clock and the profile are as wide as their content */
   .qf-field { position: relative; display: flex; align-items: center; }
   .qf-field > svg.i { position: absolute; left: 10px; width: 16px; height: 16px; color: var(--top-find-ph); pointer-events: none; }
-  .qf input[type="search"] { width: 100%; min-height: 0; height: 34px; padding: 0 64px 0 34px; text-overflow: ellipsis; border: 1px solid var(--top-find-border); border-radius: var(--radius); background: var(--top-find-bg); color: var(--top-find-text); font-size: var(--fs-sm); }
+  .qf input[type="search"] { width: 100%; min-height: 0; height: var(--ctl-h); padding: 0 64px 0 34px; text-overflow: ellipsis; border: 1px solid var(--top-find-border); border-radius: var(--radius); background: var(--top-find-bg); color: var(--top-find-text); font-size: var(--fs-sm); }
   .qf input[type="search"]::placeholder { color: var(--top-find-ph); opacity: 1; }
   .qf input[type="search"]:focus-visible { outline-offset: 1px; }
   .qf input[type="search"]::-webkit-search-cancel-button { display: none; } /* Chromium's blue clear cross is unreadable on the navy; Escape clears */
@@ -239,8 +242,12 @@
   label .muted, .field-help { font-size: var(--fs-xs); }
   label .error, .field .error { font-size: var(--fs-xs); font-weight: 600; }
   input:is(:not([type]), [type="text"], [type="password"], [type="number"], [type="date"], [type="time"], [type="datetime-local"], [type="search"], [type="email"], [type="url"]),
-  select, textarea { min-height: 38px; padding: 0 12px; border: 1px solid var(--field-border); border-radius: var(--radius); background: var(--bg); color: var(--text); font-family: inherit; font-size: var(--fs-base); font-weight: 400; line-height: 1.4; }
+  select, textarea { min-height: var(--ctl-h); padding: 0 12px; border: 1px solid var(--field-border); border-radius: var(--radius); background: var(--bg); color: var(--text); font-family: inherit; font-size: var(--fs-base); font-weight: 400; line-height: 1.4; }
   textarea { width: 100%; min-height: 0; padding: 8px 12px; }
+  /* A note box (a dialog's, and the scan scope's Targets, which sits in a page card) is at least four lines and at most twelve, or 40% of the window if
+     that is less. It resizes between those limits and scrolls inside when the text is longer. 18px is the 8px padding twice plus the 2px border;
+     `rows` is only the starting size. */
+  .dialog textarea, .scope-card textarea { resize: vertical; min-height: calc(4lh + 18px); max-height: min(40vh, calc(12lh + 18px)); }
   input:is(:not([type]), [type="text"], [type="password"], [type="number"], [type="date"], [type="time"], [type="datetime-local"], [type="search"], [type="email"], [type="url"]):disabled,
   select:disabled, textarea:disabled { background: var(--surface); color: var(--text-disabled); }
   input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offset: 0; border-color: var(--ring); }
@@ -271,7 +278,7 @@
 
   /* Buttons: square-ish (radius 4 to 8 px, never a pill). Variants win over the base by class specificity; the base hover and
      disabled states use :where() so they never outrank a variant. */
-  button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--btn-h); padding: 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); font-family: inherit; font-size: var(--fs-sm); font-weight: 500; line-height: 1.4; cursor: pointer; }
+  button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--ctl-h); padding: 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); font-family: inherit; font-size: var(--fs-sm); font-weight: 500; line-height: 1.4; cursor: pointer; }
   button svg.i { width: 16px; height: 16px; }
   button:where(:hover:not(:disabled)) { background: var(--surface); }
   button:where(:disabled) { opacity: 0.55; cursor: not-allowed; }
@@ -281,11 +288,11 @@
   .primary:disabled { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); opacity: 1; } /* a disabled primary must not read as a faded accent fill */
   button.danger { border-color: var(--danger); background: var(--danger); color: var(--bg); }
   button.danger:hover:not(:disabled) { border-color: var(--danger-hover); background: var(--danger-hover); }
-  .quiet { min-height: 30px; padding: 0 10px; border-color: transparent; background: none; color: var(--accent); }
+  .quiet { min-height: var(--ctl-h-sm); padding: 0 10px; border-color: transparent; background: none; color: var(--accent); }
   .quiet:hover:not(:disabled) { background: var(--accent-tint); }
-  .danger-quiet { min-height: 30px; padding: 0 10px; border-color: transparent; background: none; color: var(--crit); }
+  .danger-quiet { min-height: var(--ctl-h-sm); padding: 0 10px; border-color: transparent; background: none; color: var(--crit); }
   .danger-quiet:hover:not(:disabled) { background: var(--crit-tint); }
-  .icon-btn { flex: none; display: grid; place-items: center; width: 28px; height: 28px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
+  .icon-btn { flex: none; display: grid; place-items: center; width: var(--ctl-h-xs); height: var(--ctl-h-xs); min-height: 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
   .icon-btn:hover:not(:disabled) { background: var(--accent-tint); color: var(--accent); }
   .icon-btn svg.i { width: 16px; height: 16px; }
   .icon-btn[aria-current="page"] { background: var(--accent-tint); color: var(--accent); } /* a link styled as an icon button (the tree header's link to Asset kinds) on its own page */
@@ -360,7 +367,7 @@
   .tree-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .tree-body[hidden] { display: none; }
   .tree-filter { position: relative; flex: none; padding: 10px 12px 8px; }
-  .tree-filter input[type="search"] { width: 100%; min-height: 34px; padding: 0 10px 0 32px; font-size: var(--fs-sm); text-overflow: ellipsis; }
+  .tree-filter input[type="search"] { width: 100%; padding: 0 10px 0 32px; font-size: var(--fs-sm); text-overflow: ellipsis; }
   .tree-filter svg.i { position: absolute; left: 22px; top: 19px; width: 16px; height: 16px; color: var(--text-2); pointer-events: none; }
   .tree-scroll { flex: 1; min-height: 0; overflow: auto; padding: 2px 0 8px; }
   .tree-body > .sk-region { flex: 1; min-height: 0; display: flex; flex-direction: column; } /* the loading region stands in for the filter and the scroll area, so .tree-scroll keeps its flex chain */
@@ -419,7 +426,7 @@
   .section-title { margin: 28px 0 12px; font-size: var(--fs-lg); font-weight: 600; }
 
   /* Status chips: tinted fill, a shape, and always the word (colour plus shape plus word) */
-  .chip { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: var(--radius-sm); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: var(--chip-h); padding: 0 8px; border-radius: var(--radius-sm); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; }
   .chip::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
   .chip-ok { background: var(--ok-tint); color: var(--ok); }
   .chip-stale { background: var(--stale-tint); color: var(--stale); }
@@ -430,6 +437,7 @@
   .chip-bad::before { width: 7px; height: 7px; border-radius: 0; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
   .chip-off { background: var(--bg); color: var(--text-disabled); box-shadow: inset 0 0 0 1px var(--border-strong); }
   .chip-off::before { width: 7px; height: 2px; border-radius: 0; }
+  .page-head > .actions > .chip { height: var(--ctl-h); padding: 0 12px; } /* a chip that stands in a row of controls (the asset page's "live") is as tall as the buttons beside it; in a line of text or a table cell it stays --chip-h */
 
   /* Status icons: the same shapes without a chip, for a bare mark (give it role="img" and an aria-label) */
   .st { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; }
@@ -449,7 +457,7 @@
   .banner { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 20px; padding: 12px 16px; border: 1px solid; border-radius: var(--radius); font-size: var(--fs-sm); }
   .banner svg.i { margin-top: 1px; }
   .banner strong { font-weight: 600; }
-  .banner .b-act { margin: -5px 0 -5px auto; min-height: 28px; white-space: nowrap; } /* a button as tall as one text line, so the text and the button centre on each other */
+  .banner .b-act { margin: -5px 0 -5px auto; min-height: var(--ctl-h-xs); white-space: nowrap; } /* a button as tall as one text line, so the text and the button centre on each other */
   .banner .b-link { flex: none; color: inherit; font-weight: 600; text-decoration: underline; white-space: nowrap; } /* a link in a banner: the banner's own ink, like the one on the Billing page */
   .banner-warn { border-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
   .banner-warn svg.i { color: var(--warn-icon); }
@@ -493,7 +501,7 @@
   .page-grid > .span-all { grid-column: 1 / -1; }
   /* A quick filter of the Audit toolbar. Not .chip (the 22px status chip of Users, Sources, Scans and the widgets); the pressed tint is
      the base button[aria-pressed="true"] rule's, so it has no hover rule of its own (a class rule would outrank it). */
-  .filter-chip { height: 30px; min-height: 0; padding: 0 10px; font-size: var(--fs-sm); }
+  .filter-chip { height: var(--ctl-h); min-height: 0; padding: 0 10px; font-size: var(--fs-sm); }
   /* A bar behind a number in a table cell (Storage's rows per day): inside the cell a flex row of the track (the accent tint) holding the
      fill (a share of the track, set inline as a percentage, the accent) and then the number. A percentage width straight on the cell would be a share of the whole cell. */
   .databar-cell { display: flex; align-items: center; gap: 10px; }
@@ -511,9 +519,9 @@
   .sk::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--skeleton-shine), transparent); animation: sk-sweep 1.4s linear infinite; }
   .sk-line { display: inline-block; vertical-align: middle; width: 8ch; height: 0.8em; border-radius: var(--radius-sm); } /* inside its own span, which keeps the text's line height in a flex or grid parent */
   .sk-words .sk-line { margin-right: 0.5ch; } /* the space between two words: the pills break where the words will */
-  .sk-block { display: block; flex: none; width: 100%; height: 38px; border-radius: var(--radius); }
+  .sk-block { display: block; flex: none; width: 100%; height: var(--ctl-h); border-radius: var(--radius); } /* a control box, so it takes the control height; CTL_H in Skeleton.tsx is the same number for the boxes drawn with a height prop */
   .sk-circle { display: inline-block; flex: none; vertical-align: middle; width: 16px; height: 16px; border-radius: 50%; }
-  .sk-field { display: grid; gap: 6px; font-size: var(--fs-sm); } /* a label line over a 38px field, as the real label is a grid */
+  .sk-field { display: grid; gap: 6px; font-size: var(--fs-sm); } /* a label line over a field of the control height (--ctl-h), as the real label is a grid */
   .sk-stack { display: grid; gap: 14px; } /* the rows of a form card, as .form-card form */
   .sk-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
   .sk-quad { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 8px; } /* the dashboard's widgets: the grid's 10px gap, under .dash-head's 8px */
@@ -544,7 +552,7 @@
   .sk-shell .navbar .sk, .sk-shell .side .sk { background: var(--side-bg-active); }
   .sk-shell .navbar .sk::after, .sk-shell .side .sk::after { display: none; }
   .sk-shell .brand .lbl::before { content: "DC Dashboard"; } /* the name is drawn here so the markup holds no text */
-  .sk-shell .navbar .sk-find { display: block; width: 100%; height: 34px; border: 1px solid var(--top-find-border); border-radius: var(--radius); background: var(--top-find-bg); } /* the real field's box */
+  .sk-shell .navbar .sk-find { display: block; width: 100%; height: var(--ctl-h); border: 1px solid var(--top-find-border); border-radius: var(--radius); background: var(--top-find-bg); } /* the real field's box */
   .sk-shell .side-row { pointer-events: none; cursor: default; }
   .sk-shell .side-row .sk-circle { width: 18px; height: 18px; } /* the row icon's size */
 
@@ -631,7 +639,7 @@
   /* While a grid is open the dialog's buttons stick over its bottom (styles/icon-picker.css), which the browser does not know: a field
      scrolled into view by Tab or by opening the grid (scrollIntoView, nearest) would land under them. The scroll padding keeps that much
      clear: the row (one button), the dialog's 22 px bottom padding band it covers, and a gap. */
-  .dialog:has(.icon-grid:not([hidden])) { scroll-padding-bottom: calc(var(--btn-h) + 22px + 12px); }
+  .dialog:has(.icon-grid:not([hidden])) { scroll-padding-bottom: calc(var(--ctl-h) + 22px + 12px); }
   .icon-field-label { font-size: var(--fs-sm); font-weight: 600; }
   .icon-field-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .icon-caption { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-sm); color: var(--text); }

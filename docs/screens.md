@@ -15,7 +15,10 @@ lacks says "No access".
   reach the rest), and the tree scrolls the selected asset into view. Adding and
   editing assets and mapping points needs `assets.edit` (also needed to pick several assets and move them), deleting
   `assets.delete`. With `assets.edit` each row of an open asset's **Metrics** table has a menu (`Actions for <metric>`) with **Unmap…** and
-  **Move to another asset…**, which ask first and offer an Undo for 10 seconds. See [Assets and kinds](assets-and-kinds.md).
+  **Move to another asset…**, which ask first and offer an Undo for 10 seconds. The page header's "live" chip is as tall as the buttons
+  beside it (every control with a visible edge is 34 px, the top-bar Live chip and the Find field included). Deleting an asset (or
+  several) that has mapped points adds a paragraph to its confirmation: months that are not closed lose the figures, a finished month
+  can be closed first, and the stored readings stay (see [Dashboards and billing](dashboards-and-billing.md)). See [Assets and kinds](assets-and-kinds.md).
 - **Asset kinds** (everyone reads, admins change): the Asset kinds button of the Assets Tree (`/assets/kinds`). Reading needs
   `assets.view`; adding, renaming, re-iconing and deleting kinds needs `assets.kinds`. See [Asset kinds](assets-and-kinds.md#asset-kinds).
 - **Dashboards** (everyone can read; operators and admins build): needs `dashboards.view`; building needs `dashboards.edit`.

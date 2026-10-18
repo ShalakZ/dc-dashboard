@@ -155,9 +155,13 @@ from them. A single asset is still deleted from its own page, and the bar's Dele
   delete). It lists the first 8 picked names and "and N more" for the rest, then what else goes with them, added up over the picks: the
   sub-assets nobody picked, the mappings and the tariffs. When anything beyond the picks goes, the button reads **Delete anyway** and the
   billing warning is the single delete's own: `5 assets, 2 mappings and 1 tariff will be deleted; their past energy and cost figures disappear
-  from Billing and dashboards, except in closed months, which keep their billed figures.` The dialog always ends with "This can't be undone." (the names and the notes are one paragraph, the billing warning and that sentence the next) A pick that sits inside another pick gets a note,
+  from Billing and dashboards, except in closed months, which keep their billed figures.` The loss paragraph always ends with "This can't be undone." (the names and the notes are one paragraph, the billing warning and that sentence the next) A pick that sits inside another pick gets a note,
   `LVP02 is inside Data_Hall_1, which is also picked, so it goes with it.` (the first three, then "and N more are inside other picked assets,
-  so they go with them"). Picks that the filter hides are still deleted, as they are still moved; the dialog names them.
+  so they go with them"). Picks that the filter hides are still deleted, as they are still moved; the dialog names them. When the delete
+  takes mappings (energy figures) the dialog then shows a note in a paragraph of its own after the loss paragraph, the same words as the
+  single asset delete: `Months that are not closed follow today's assets, so they lose these figures. To keep a finished month's bill,
+  close that month before you delete. The meter readings themselves stay stored: map the same points to an asset again and those months
+  get their figures back.` It is left out for a plain delete, for sub-assets or tariffs with no mapping, and while the numbers load.
 - **Only top-level picks are sent.** Deleting an asset deletes everything below it, so a pick inside another pick goes with it and is not
   sent on its own. Each top-level asset is deleted by its own request (`DELETE /api/assets/{id}`), one after the other, with the counts the
   dialog showed. If a branch grew in the meantime the server refuses that request; when nothing has been deleted yet the dialog stays

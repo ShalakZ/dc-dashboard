@@ -10,6 +10,9 @@ import { CHART_HEIGHT } from "../lib/chartBox";
 type Size = number | string;
 type Variant = "line" | "block" | "circle";
 
+/** The skeleton of a control draws its box at the height of `--ctl-h` in `app.css` (a test compares the two), so a form does not jump when its data arrives. */
+export const CTL_H = 34;
+
 /**
  * One placeholder. A line is an inline-block set in the text's own line box and sits in a plain span of its own: a bare inline-block that is a
  * direct child of a flex or grid parent (`.tile-label`, `.crumbs li`, `.page-head`) becomes a flex or grid item and loses the text's line height.
@@ -148,7 +151,7 @@ export function TableSkeleton({ columns, rows, label, caption, headless, widths 
 }
 
 /**
- * A `.form-card` of `rows` fields: a label line over a 38px field, as the real label is a grid. `wide` is the full-width card. `bare` is the
+ * A `.form-card` of `rows` fields: a label line over a field of the control height (`CTL_H`), as the real label is a grid. `wide` is the full-width card. `bare` is the
  * rows alone, for a card the page already draws (the sign-in card keeps its real heading). `inline` is the Tariffs page's one-row bar
  * (`.inline-form`: the fields side by side and a button), not a card.
  */
@@ -156,13 +159,13 @@ export function FormSkeleton({ rows, label, wide, bare, inline }: { rows: number
   const fields = Array.from({ length: rows }, (_, i) => (
     <div className="sk-field" key={i}>
       <Skeleton width={HEAD_WIDTHS[i % HEAD_WIDTHS.length]} />
-      <Skeleton variant="block" width={inline ? 110 : undefined} height={38} />
+      <Skeleton variant="block" width={inline ? 110 : undefined} height={CTL_H} />
     </div>
   ));
   return (
     <Labelled label={label}>
       {inline ? (
-        <div className="inline-form" aria-hidden="true">{fields}<Skeleton variant="block" width={92} height={38} /></div>
+        <div className="inline-form" aria-hidden="true">{fields}<Skeleton variant="block" width={92} height={CTL_H} /></div>
       ) : bare ? (
         <div className="sk-stack" aria-hidden="true">{fields}</div>
       ) : (
@@ -216,7 +219,7 @@ export function ChartBlock({ label }: { label?: string }) {
 }
 
 /**
- * The trend frame: the real `.trend-bar` row, whose label is a grid of a text line, a 6px gap and the 38px select (about 62px), and a 38px range
+ * The trend frame: the real `.trend-bar` row, whose label is a grid of a text line, a 6px gap and the 34px select (about 58px), and a 34px range
  * picker aligned to its bottom, over the chart block. No aria-label: the real frame is the "Trend" section and this one must not be found as it.
  */
 export function TrendSkeleton({ label }: { label?: string }) {
@@ -224,8 +227,8 @@ export function TrendSkeleton({ label }: { label?: string }) {
     <Labelled label={label}>
       <div className="trend-frame" aria-hidden="true">
         <div className="row trend-bar">
-          <div className="sk-field"><Skeleton width="7ch" /><Skeleton variant="block" width={160} height={38} /></div>
-          <Skeleton variant="block" width={182} height={38} />
+          <div className="sk-field"><Skeleton width="7ch" /><Skeleton variant="block" width={160} height={CTL_H} /></div>
+          <Skeleton variant="block" width={182} height={CTL_H} />
         </div>
         <Skeleton variant="block" height={CHART_HEIGHT} />
       </div>
@@ -282,18 +285,18 @@ export function PageHeaderSkeleton({ crumbs, icon, sub, actions, label }: { crum
         {crumbs ? <TrailSkeleton widths={["6ch", "10ch", "12ch"]} /> : null}
         {icon ? <div className="page-title"><Skeleton variant="block" width={40} height={40} />{title}</div> : title}
         {sub ? <p className="sub"><Skeleton width="30ch" /></p> : null}
-        {actions ? <div className="actions"><Skeleton variant="block" width={96} height={34} /></div> : null}
+        {actions ? <div className="actions"><Skeleton variant="block" width={96} height={CTL_H} /></div> : null}
       </header>
     </Labelled>
   );
 }
 
 /**
- * A gap (34px, or the `height` given) for a button or a row of controls that depends on data: the actions slot of a REAL page header
+ * A gap (`CTL_H`, or the `height` given) for a button or a row of controls that depends on data: the actions slot of a REAL page header
  * (Sources, Scans, Billing: one without its actions is 6.5px shorter), Audit's place for the Friendly/Raw switch, Billing's for the month
- * bar (38px, its selects). Not grey: it stands outside any region, and a grey block would show before the fade-in delay.
+ * bar. Not grey: it stands outside any region, and a grey block would show before the fade-in delay.
  */
-export function ActionsSpace({ height = 34 }: { height?: number } = {}) {
+export function ActionsSpace({ height = CTL_H }: { height?: number } = {}) {
   return <span aria-hidden="true" style={{ display: "block", height }} />;
 }
 
@@ -366,7 +369,7 @@ export function AssetSkeleton({ label, canEdit }: { label: string; canEdit?: boo
 
 /**
  * The dashboard page, which has no `.page-head`: its top is the trail (Dashboards and the dashboard's name) and the `.row.dash-head` (the title,
- * a spacer, the range label and its 142x38 select, and for someone who can edit the 55px Edit button), then the widgets. The widgets are four
+ * a spacer, the range label and its 142x34 select, and for someone who can edit the 55px Edit button), then the widgets. The widgets are four
  * 240px blocks in two columns with the grid's 10px gap: the real grid is the dashboard's own layout, which is not known yet. The region is
  * `.sk-dash`, which gives the trail the margin `main > .crumbs` gives the real one. None of the grid's class names: a locator must not find it.
  */
@@ -378,8 +381,8 @@ export function DashboardSkeleton({ label, canEdit }: { label: string; canEdit?:
         <div className="sk-h1"><Skeleton width="18ch" /></div>
         <span className="spacer" />
         <Skeleton width="14ch" />
-        <Skeleton variant="block" width={142} height={38} />
-        {canEdit ? <Skeleton variant="block" width={55} height={34} /> : null}
+        <Skeleton variant="block" width={142} height={CTL_H} />
+        {canEdit ? <Skeleton variant="block" width={55} height={CTL_H} /> : null}
       </div>
       <div className="sk-quad" aria-hidden="true">
         {[0, 1, 2, 3].map((i) => <Skeleton key={i} variant="block" height={240} />)}

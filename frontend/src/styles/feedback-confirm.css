@@ -9,4 +9,7 @@
   .confirm-body:empty { display: none; }
   /* A message may hold a blank line between its paragraphs (the assets delete puts the billing warning in its own): keep the newline, collapse the rest. */
   .confirm-body p { white-space: pre-line; }
+  /* W18: a note in a paragraph of its own under the message. The dialog zeroes every paragraph's margin (.dialog p), so this selector out-ranks it; the
+     gap is one line, the blank line the message's own two paragraphs have between them. */
+  .confirm-body .confirm-note { margin-top: 1lh; }
 }

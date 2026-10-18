@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { loadAssetList, loadImpacts, type RemoveItem } from "../api/assetsBulk";
 import type { AssetImpact } from "../api/types";
-import { deleteConfirmLabel, deleteMessage, deleteTitle, sumImpacts, treeDrift, type DeletePlan, type RemoveResult } from "../lib/assetsBulk";
+import { deleteConfirmLabel, deleteMessage, deleteTitle, isPlainDelete, sumImpacts, treeDrift, type DeletePlan, type RemoveResult } from "../lib/assetsBulk";
+import { assetNote } from "../lib/impact";
 import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog";
 
 interface Props {
@@ -100,6 +101,8 @@ export function BulkDeleteAssetsDialog({ plan, run, onStale, onDone, onCancel }:
     <ConfirmDeleteDialog
       title={deleteTitle(plan.picked.length)}
       message={blocked ? "" : deleteMessage(plan, sum)}
+      // What the loss sentence leaves out (months that are not closed, the stored readings): for a delete that takes more than the picks and has mappings.
+      note={blocked || sum === null ? undefined : isPlainDelete(plan, sum) ? undefined : assetNote(sum) ?? undefined}
       confirmLabel={deleteConfirmLabel(plan, sum)}
       loading={preview.isPending}
       // The server's words alone ("Internal Server Error") say nothing about what failed.

@@ -15,6 +15,22 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w18 (2026-10-18, MERGE_PENDING)
+
+w18 makes the controls consistent and says plainly what removing assets does, front end only: no migration, no new permission, no API change.
+**One height for every control:** buttons, fields, selects, filter chips, the top bar's Find field and its Live chip are all 34 px tall (the
+Live chip was 28 px, the asset page's "live" chip 22 px, and the fields and selects on Billing, Audit, Dashboards and Diagnostics were 38 px
+beside 34 px buttons); the asset page's chip and Billing's Closed chip are as tall as the buttons beside them. Borderless text buttons stay
+30 px and icon buttons 28 px. The loading skeletons draw the same heights, so a form does not move when it loads. **The note box** of Close month
+and Reopen month (and the Targets box of a scan scope) is at least four lines tall and at most twelve lines or 40 percent of the window,
+whichever is less: you can drag it between those limits, and a longer note scrolls inside it. **Removing assets or a source:** when the removal
+takes mappings, its confirmation adds a paragraph of its own: a month that is not closed follows today's assets (or mappings) and loses those
+figures, so close a finished month first to keep its bill; after an asset is removed its points and readings stay, so mapping the same points to an
+asset again brings the figures back, while removing a source deletes its points too. The Storage page says that removing assets or sources
+never removes readings, that retention trims them, and that the hourly summaries stay. **Not changed:** every figure, rate, marker, CSV and
+closed month, and the readings themselves (only retention removes them). A new end-to-end spec, `w18.spec.ts`, measures the real pages, so a
+control that is 4 px off fails a test. Nothing to do when you upgrade; the code to go back to is `71be4c9`.
+
 ## w17 (2026-10-18, d68bf39)
 
 w17 makes Billing usable with a real data centre, front end only: no migration, no new permission, no API change. **Billing:** a row
@@ -536,55 +552,27 @@ summary's title). The `api` container applies the migration the first time it st
 
 ### Upgrading to W7f (no migration)
 
-Schema stays at `0007`; nothing in the database or the API changes, so there is nothing to restore. The code to go back to is
-`10feba7` (`main` before W7f).
+Schema stays at `0007`; nothing in the database or the API changes. The code to go back to is `10feba7` (`main` before W7f).
 
-W7f (loading skeletons) is front end only, so only the `web` image changes: while a page waits for its first data it shows quiet grey
-shapes in the layout the data will have (the Assets tree, the summary tiles, the asset page and its chart, the tables of Dashboards,
-Billing, Sources, Scans, Users & Roles, Tariffs, Storage and Audit, the forms of Settings and Storage, the dashboard and the Discovery graph)
-instead of a bare "loading..." line. The shapes appear only if the wait lasts longer than about a sixth of a second, so a quick page
-shows none, and only on the first load of a page: the pages that refresh themselves in the background never bring them back, and a
-failed load shows its error as before. Screen readers hear one "Loading ..." line per area. With "reduce motion" switched on in the
-system the shapes do not shimmer. Sign-in, setup, Password and Diagnostics are unchanged, and the dashboard widgets keep their own
-"loading..." line until their own redesign.
-
-1. **Back up first** (a habit here: nothing in the database changes), as in step 1 of "Upgrading and going back".
-2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
-   the simulator). Only `web` is rebuilt. Reload open browser tabs.
-3. **Verify.** `docker compose exec api alembic current` still prints `0007 (head)`. In the browser's developer tools set the network
-   to "Slow 4G", open the Users & Roles page and watch grey bars take the place of the table until the list arrives.
-4. **Going back.** Check out `10feba7` and rebuild as in step 2. There is no database step.
+W7f (loading skeletons) is front end only (the `web` image): while a page waits for its first data it shows quiet grey shapes in the
+layout the data will have, instead of a bare "loading..." line, only when the wait lasts about a sixth of a second and only on a page's
+first load; screen readers hear one "Loading ..." line per area, and "reduce motion" stops the shimmer. Back up as usual, rebuild with
+`docker compose up -d --build` (add `--profile dev` on a stack that has the simulator), reload open tabs. To go back, check out
+`10feba7` and rebuild (no database step).
 
 ## W7e (2026-10-12, 10feba7)
 
 ### Upgrading to W7e (no migration)
 
-Schema stays at `0007`; nothing in the database or the API changes, so there is nothing to undo there. The code to go back to is
-`499fdc5` (`main` before W7e).
+Schema stays at `0007`; nothing in the database or the API changes. The code to go back to is `499fdc5` (`main` before W7e).
 
-W7e (theme polish) is front end only:
-
-- **Buttons, links, hover and selection take the theme colour.** The Add asset button, the links, the breadcrumb links, the selected
-  tree row, the pressed toggles and the focus ring follow the Theme colour in the profile panel, in Light and in Dark. They used to be
-  the same blue in every theme. **The default look changes:** Navy and gold's buttons were a vivid blue (`#1d5bd8`) and are now a
-  navy blue (`#2a4590`) in Light mode and a soft blue in Dark mode; Graphite keeps its blue. The dashboard widgets keep their light
-  blue in every theme.
-- **The profile panel has two dropdowns,** Mode and Theme colour, instead of seven round buttons.
-- **A thin bar runs along the top edge while a page loads or you change pages,** in the theme's marker colour (gold on Navy and gold
-  and on Maroon and gold, light blue on Graphite, dark brown on Desert gold). Pages that refresh themselves in the background
-  (the status chip, the summary) do not show it. With "reduce motion" switched on in the system it is a full line that appears and
-  disappears instead of sweeping. The sign-in and setup pages do not have it.
-- **The Assets tree, the asset's title, the "By kind" list and quick find carry an icon** that follows the asset's kind (Site,
-  Building, Room, Row, Rack, Panel, Meter, Circuit, UPS, PDU, generator, transformer, chiller, and a plain cube for any other kind).
-  The four tiles (Assets, Live power, Energy today, Cost today) have an icon of their own beside their caption.
-
-1. **Back up first** (a habit here: nothing in the database changes), as in step 1 of "Upgrading and going back".
-2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
-   the simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you. Reload open browser tabs.
-3. **Verify.** `docker compose exec api alembic current` still prints `0007 (head)`; the profile panel shows the Mode and Theme
-   colour dropdowns, and choosing Maroon and gold turns the Add asset button maroon in Light mode.
-4. **Going back.** Check out `499fdc5` and rebuild as in step 2. There is no database step: the stored Mode and Theme colour choices
-   are the same in both versions.
+W7e (theme polish) is front end only (the `web` image): buttons, links, the selected tree row and the focus ring follow the Theme colour
+in Light and in Dark (Navy and gold's buttons change from a vivid blue to a navy blue in Light mode; the dashboard widgets keep their
+light blue); the profile panel has a Mode and a Theme colour dropdown instead of seven round buttons; a thin bar in the theme's marker
+colour runs along the top edge while a page loads or you change pages; the Assets tree, the asset's title, the "By kind" list and quick
+find carry an icon that follows the asset's kind. Back up as usual, rebuild with `docker compose up -d --build` (the setup scripts pass
+the build id), reload open tabs, and check that `docker compose exec api alembic current` still prints `0007 (head)`. To go back,
+check out `499fdc5` and rebuild (no database step).
 
 ## W7d (2026-10-12, 499fdc5)
 

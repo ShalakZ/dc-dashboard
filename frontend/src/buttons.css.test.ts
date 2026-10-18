@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { parseRules, stripComments, type Rule } from "./test/cssTools";
 
 // W7o: one button height. Add asset, Edit and the labelled Delete in a page header are the same family: they all take their height from the
-// base `button` rule, which reads the --btn-h token, and nothing sizes them one by one. Vitest has `css: false`, so the files are read as text.
+// base `button` rule, which reads the --ctl-h token (W18 renamed it from --btn-h), and nothing sizes them one by one. Vitest has `css: false`, so the files are read as text.
 const read = (file: string) => parseRules(stripComments(readFileSync(file, "utf8")));
 const app = read("src/app.css");
 const pages = readdirSync("src/styles").filter((f) => f.endsWith(".css")).map((f) => ({ file: `styles/${f}`, rules: read(`src/styles/${f}`) }));
@@ -20,15 +20,15 @@ const sizes = (body: string) => /(?:^|[;\s])(?:min-|max-)?(?:height|width)\s*:/.
 const parts = (selector: string) => selector.split(",").map((part) => part.trim());
 
 describe("the header buttons share one height (W7o)", () => {
-  it("--btn-h is 34px, once, in :root", () => {
+  it("--ctl-h is 34px, once, in :root", () => {
     const root = app.filter((r) => r.selector === ":root");
-    expect(root[0].body).toMatch(/--btn-h:\s*34px/);
-    expect(root.filter((r) => /--btn-h\s*:/.test(r.body))).toHaveLength(1);
+    expect(root[0].body).toMatch(/--ctl-h:\s*34px/);
+    expect(root.filter((r) => /--ctl-h\s*:/.test(r.body))).toHaveLength(1);
   });
 
   it("the base button takes its minimum height from the token, and never a fixed height that would pin it", () => {
     const base = only("button");
-    expect(base.body).toMatch(/min-height:\s*var\(--btn-h\)/);
+    expect(base.body).toMatch(/min-height:\s*var\(--ctl-h\)/);
     expect(base.body).not.toMatch(/(?:^|[;\s])height\s*:/);
     expect(base.body).not.toMatch(/min-height:\s*\d/);
   });
@@ -48,16 +48,16 @@ describe("the header buttons share one height (W7o)", () => {
   });
 
   it("the compact icon buttons of a table row get their size from .icon-btn alone: no rule gives the bin or the menu button a size of its own", () => {
-    // the bin and the three-dot button of one row are both .icon-btn (28px); a width or height on one of them would make the pair unequal
+    // the bin and the three-dot button of one row are both .icon-btn (--ctl-h-xs, 28px); a width or height on one of them would make the pair unequal
     const offenders = everyRule.filter(({ rule }) => parts(rule.selector).some((p) => /\.(?:trash-btn|row-menu-btn)(?![\w-])(?!.*\.lid)(?!\s+svg)/.test(p)) && sizes(rule.body));
     expect(offenders.map(({ file, rule }) => `${file}: ${rule.selector}`)).toEqual([]);
-    expect(only(".icon-btn").body).toMatch(/width:\s*28px;\s*height:\s*28px/);
+    expect(only(".icon-btn").body).toMatch(/width:\s*var\(--ctl-h-xs\);\s*height:\s*var\(--ctl-h-xs\)/);
   });
 
   it("the guard can see a clash (the checks run on a small example)", () => {
     const sample = parseRules(".page-head .actions .trash-btn { width: 34px; } .x .row-menu-btn { height: 30px; } .ok .trash-btn:hover { color: red; }");
     expect(sample.filter((r) => sizes(r.body)).map((r) => r.selector)).toEqual([".page-head .actions .trash-btn", ".x .row-menu-btn"]);
-    expect(sizes("min-height: var(--btn-h); padding: 0 14px;")).toBe(true);
+    expect(sizes("min-height: var(--ctl-h); padding: 0 14px;")).toBe(true);
     expect(sizes("padding: 0 14px; line-height: 1.4;")).toBe(false);
   });
 });

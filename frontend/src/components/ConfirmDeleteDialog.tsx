@@ -31,6 +31,11 @@ interface Props {
    * its life (it drops the line when the choice changes or the next request starts); a refused request shows its own error line as always.
    */
   notice?: string;
+  /**
+   * A second paragraph under the message, in the same polite region: something the person should read before confirming that is not the
+   * sentence the dialog is about. Not drawn while the numbers load or when empty.
+   */
+  note?: string;
 }
 
 const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), button:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -40,7 +45,7 @@ const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), button:not([di
  * Rendered into the body, like SignOutDialog, so a caller may keep it inside a form or a table row: the backdrop would be invalid markup in a
  * row, and the buttons (plain `type="button"`) would otherwise submit the form they sit in.
  */
-export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confirmLabel = "Delete anyway", loading = false, loadError, tone = "danger", blocked = false, children, confirmDisabled = false, notice }: Props) {
+export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confirmLabel = "Delete anyway", loading = false, loadError, tone = "danger", blocked = false, children, confirmDisabled = false, notice, note }: Props) {
   const { run, busy, error } = useAction();
   const dialog = useRef<HTMLDivElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
@@ -120,6 +125,7 @@ export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confi
         {/* One polite region for the checking line and the sentence that replaces it, so the sentence is announced when it arrives (no role: a status here would join every status lookup on the page). */}
         <div id={bodyId} aria-live="polite" className="confirm-body">
           {loading ? <p className="confirm-checking">Checking what this deletes…</p> : message !== "" && <p>{message}</p>}
+          {!loading && note && <p className="confirm-note">{note}</p>}
         </div>
         {children}
         {loadError && <p className="error" role="alert">{loadError}</p>}

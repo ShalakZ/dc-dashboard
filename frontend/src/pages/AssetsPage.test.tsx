@@ -13,6 +13,7 @@ import { renderWithProviders } from "../test/render";
 import { spyToasts } from "../test/toasts";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
+import { ASSET_KEEP_NOTE } from "../lib/impact";
 import type { PermissionId } from "../lib/permissions";
 import { AssetPage } from "./AssetPage";
 import { AssetsPage } from "./AssetsPage";
@@ -711,6 +712,25 @@ describe("AssetsPage", () => {
       expect(await within(dialog).findByText(BRANCH_TEXT)).toBeInTheDocument();
       expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
       expect(within(dialog).getByRole("button", { name: "Delete anyway" })).toBeInTheDocument();
+    });
+
+    // W18 R4: the words about months that are not closed and the stored readings, as a paragraph of their own, only when there are mappings.
+    it("says, in a paragraph of its own, what happens to months that are not closed and to the readings, when the asset has mappings", async () => {
+      setup(branch);
+      await click("Delete Room A");
+      const dialog = await dialogOf();
+      const loss = await within(dialog).findByText(BRANCH_TEXT);
+      const note = within(dialog).getByText(ASSET_KEEP_NOTE);
+      expect(note.tagName).toBe("P");
+      expect(loss.nextElementSibling).toBe(note);
+    });
+
+    it("has no such paragraph for an asset that holds sub-assets or a tariff but no mapping", async () => {
+      setup({ assets: 2, mappings: 0, tariffs: 1 });
+      await click("Delete Room A");
+      const dialog = await dialogOf();
+      expect(await within(dialog).findByText(/2 assets, 0 mappings and 1 tariff will be deleted/)).toBeInTheDocument();
+      expect(within(dialog).queryByText(ASSET_KEEP_NOTE)).not.toBeInTheDocument();
     });
 
     it.each([["Cancel", async () => userEvent.click(screen.getByRole("button", { name: "Cancel" }))], ["Escape", async () => userEvent.keyboard("{Escape}")]])(

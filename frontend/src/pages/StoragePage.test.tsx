@@ -11,7 +11,7 @@ import { renderWithProviders } from "../test/render";
 import { pastSaveWindow, useSaveClock } from "../test/saveWindow";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
-import { checkRange, DISK_NOTE, FIELDS, sizeText, StoragePage, UTC_NOTE, validate } from "./StoragePage";
+import { checkRange, DISK_NOTE, FIELDS, READINGS_NOTE, sizeText, StoragePage, UTC_NOTE, validate } from "./StoragePage";
 
 const base = {
   "GET /api/setup": { body: { needed: false } },
@@ -593,6 +593,25 @@ describe("StoragePage cards and data bars (W7j)", () => {
     expect(form.querySelectorAll(".retention-fields > .has-tip")).toHaveLength(5);
   });
 
+  // W18 R5: removing assets or sources leaves their readings stored; the card says so, once, as a static muted paragraph right under the free-disk note
+  // (the skeleton draws it too, in the same place).
+  it("says under the free-disk sentence that removing assets or sources keeps their readings, in a plain muted paragraph (no live region, no role)", async () => {
+    await open();
+    const card = screen.getByRole("heading", { name: "Retention and capacity" }).closest(".page-card") as HTMLElement;
+    const disk = within(card).getByText(DISK_NOTE);
+    const readings = within(card).getByText(READINGS_NOTE);
+    expect(readings.tagName).toBe("P");
+    expect(readings).toHaveClass("muted");
+    expect(disk.nextElementSibling).toBe(readings);
+    expect(readings.nextElementSibling).toBe(card.querySelector(":scope > form.retention-form"));
+    expect(readings).not.toHaveAttribute("role");
+    expect(readings.closest("[aria-live]")).toBeNull();
+    expect(screen.getAllByText(/does not remove their readings/)).toHaveLength(1);
+    expect(READINGS_NOTE).toBe(
+      "Removing assets or sources does not remove their readings. They leave when retention drops them (see the limits below), except the hourly summaries, which stay. Shorten the retention to free space sooner; saving a shorter retention asks first.",
+    );
+  });
+
   it("Save in the card still sends the five settings through the form", async () => {
     const calls = mockFetch(routes({ "PUT /api/settings/storage": (req: { body: unknown }) => ({ body: { ...settings, ...(req.body as object) } }) }));
     renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
@@ -702,11 +721,14 @@ describe("StoragePage while it loads (W7f)", () => {
     expect(retention).toHaveAttribute("aria-hidden", "true");
     expect(retention.querySelector(":scope > .page-card-head h2 .sk-line")).not.toBeNull();
     expect(retention.querySelectorAll(".retention-fields > .sk-field")).toHaveLength(5);
-    // the two paragraphs are word pills of the real sentences (they wrap into the lines the text will, at every width), the buttons are the real 34px
+    // the three paragraphs are word pills of the real sentences (they wrap into the lines the text will, at every width; W18 added the readings note
+    // right after the free-disk one, so nothing moves when the page loads), the buttons are the real 34px
     const paragraphs = retention.querySelectorAll("p.sk-words.muted");
-    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs).toHaveLength(3);
     expect(paragraphs[0].querySelectorAll(".sk-line")).toHaveLength(DISK_NOTE.split(/\s+/).length);
-    expect(paragraphs[1].querySelectorAll(".sk-line").length).toBeGreaterThan(30);
+    expect(paragraphs[1].querySelectorAll(".sk-line")).toHaveLength(READINGS_NOTE.split(/\s+/).length);
+    expect(paragraphs[1].previousElementSibling).toBe(paragraphs[0]);
+    expect(paragraphs[2].querySelectorAll(".sk-line").length).toBeGreaterThan(30);
     expect([...retention.querySelectorAll(".retention-foot .row > .sk-block")].map((b) => (b as HTMLElement).style.height)).toEqual(["34px", "34px", "34px", "34px"]);
     // none of it is in the accessibility tree and nothing can be focused
     expect(screen.queryByRole("heading", { name: "Rows per day" })).not.toBeInTheDocument();
@@ -796,8 +818,8 @@ describe("StoragePage controls follow the permissions of the role (a custom role
     const retention = screen.getByText("Loading storage").parentElement!.querySelector(".retention-card")!;
     expect(retention.querySelectorAll(".retention-foot .row > .sk-block")).toHaveLength(0);
     const paragraphs = retention.querySelectorAll("p.sk-words.muted");
-    expect(paragraphs).toHaveLength(3);
-    expect(paragraphs[1].querySelectorAll(".sk-line")).toHaveLength(READ_ONLY_TEXT.split(/\s+/).length);
+    expect(paragraphs).toHaveLength(4); // the free-disk note, the readings note, the read-only line and the summary
+    expect(paragraphs[2].querySelectorAll(".sk-line")).toHaveLength(READ_ONLY_TEXT.split(/\s+/).length);
     hold.release();
     expect(await screen.findByText(READ_ONLY_TEXT)).toBeInTheDocument();
   });

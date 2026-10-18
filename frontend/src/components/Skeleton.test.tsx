@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { StrictMode, type ReactElement } from "react";
 import { CHART_HEIGHT } from "../lib/chartBox";
 import {
-  ActionsSpace, AssetSkeleton, CanvasSkeleton, GraphBarSpace, ChartBlock, DashboardSkeleton, FleetSkeleton, FormSkeleton, PageCardSkeleton, PageHeaderSkeleton, PageSkeleton, ParagraphSkeleton,
+  ActionsSpace, AssetSkeleton, CanvasSkeleton, CTL_H, GraphBarSpace, ChartBlock, DashboardSkeleton, FleetSkeleton, FormSkeleton, PageCardSkeleton, PageHeaderSkeleton, PageSkeleton, ParagraphSkeleton,
   resetSkeletonClock, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton, TreeSkeleton, TrendSkeleton,
 } from "./Skeleton";
 
@@ -238,7 +238,7 @@ describe("TableSkeleton", () => {
 });
 
 describe("FormSkeleton", () => {
-  it("is a .form-card holding one field per row: a label line, then a 38px block", () => {
+  it("is a .form-card holding one field per row: a label line, then a block of the control height", () => {
     const { container } = render(<FormSkeleton rows={3} />);
     const card = container.firstElementChild!;
     expect(card).toHaveClass("form-card");
@@ -247,7 +247,7 @@ describe("FormSkeleton", () => {
     expect(fields).toHaveLength(3);
     for (const field of fields) {
       expect(field.querySelector(".sk-line")).not.toBeNull();
-      expect((field.querySelector(".sk-block") as HTMLElement).style.height).toBe("38px");
+      expect((field.querySelector(".sk-block") as HTMLElement).style.height).toBe(`${CTL_H}px`);
     }
   });
 
@@ -260,7 +260,7 @@ describe("FormSkeleton", () => {
     expect(stack.querySelectorAll(".sk-field")).toHaveLength(2);
   });
 
-  it("with inline is the Tariffs bar: the fields side by side in a .inline-form and a 38px button block, no card", () => {
+  it("with inline is the Tariffs bar: the fields side by side in a .inline-form and a button block of the control height, no card", () => {
     const { container } = render(<FormSkeleton rows={1} inline />);
     const bar = container.firstElementChild!;
     expect(bar).toHaveClass("inline-form");
@@ -268,7 +268,7 @@ describe("FormSkeleton", () => {
     expect(container.querySelector(".form-card")).toBeNull();
     expect(bar.querySelectorAll(":scope > .sk-field")).toHaveLength(1);
     const button = bar.querySelector<HTMLElement>(":scope > .sk-block")!;
-    expect(button.style.height).toBe("38px");
+    expect(button.style.height).toBe(`${CTL_H}px`);
   });
 
   it("with wide takes the full-width card", () => {
@@ -331,7 +331,7 @@ describe("ChartBlock", () => {
 });
 
 describe("TrendSkeleton", () => {
-  it("is a .trend-frame: the real toolbar row (a label column of a line and a 38px block, then a 38px range block), then the chart block", () => {
+  it("is a .trend-frame: the real toolbar row (a label column of a line and a block of the control height, then a range block of it), then the chart block", () => {
     const { container } = render(<TrendSkeleton />);
     const frame = container.firstElementChild!;
     expect(frame).toHaveClass("trend-frame");
@@ -340,9 +340,9 @@ describe("TrendSkeleton", () => {
     expect(bar).not.toBeNull();
     const column = bar.querySelector(":scope > .sk-field")!;
     expect(column.querySelector(".sk-line")).not.toBeNull();
-    expect((column.querySelector(".sk-block") as HTMLElement).style.height).toBe("38px");
+    expect((column.querySelector(".sk-block") as HTMLElement).style.height).toBe(`${CTL_H}px`);
     const range = bar.querySelector<HTMLElement>(":scope > .sk-block")!;
-    expect(range.style.height).toBe("38px");
+    expect(range.style.height).toBe(`${CTL_H}px`);
     const chart = frame.lastElementChild as HTMLElement;
     expect(chart).toHaveClass("sk-block");
     expect(chart.style.height).toBe(`${CHART_HEIGHT}px`);
@@ -411,9 +411,9 @@ describe("ActionsSpace", () => {
     expect(gap.textContent).toBe("");
   });
 
-  it("takes a height of its own (Billing's month bar is 38px)", () => {
-    const { container } = render(<ActionsSpace height={38} />);
-    expect((container.firstElementChild as HTMLElement).style.height).toBe("38px");
+  it("takes a height of its own", () => {
+    const { container } = render(<ActionsSpace height={40} />);
+    expect((container.firstElementChild as HTMLElement).style.height).toBe("40px");
   });
 });
 
@@ -597,19 +597,19 @@ describe("DashboardSkeleton", () => {
     expect(trail.querySelectorAll("li .sep")).toHaveLength(1);
   });
 
-  it("draws the head row as the real .row.dash-head: a title line, the spacer, the range label, the 142x38 select, and no Edit block unless canEdit", () => {
+  it("draws the head row as the real .row.dash-head: a title line, the spacer, the range label, the 142 by control-height select, and no Edit block unless canEdit", () => {
     const { container } = render(<DashboardSkeleton label="Loading the dashboard" />);
     const row = container.querySelector(".row.dash-head")!;
     expect(row.querySelector(":scope > .sk-h1 .sk-line")).not.toBeNull();
     expect(row.querySelector(":scope > .spacer")).not.toBeNull();
     const blocks = [...row.querySelectorAll<HTMLElement>(":scope > .sk-block")];
-    expect(blocks.map((b) => [b.style.width, b.style.height])).toEqual([["142px", "38px"]]);
+    expect(blocks.map((b) => [b.style.width, b.style.height])).toEqual([["142px", `${CTL_H}px`]]);
   });
 
   it("with canEdit adds the Edit button's block, 55x34, after the select", () => {
     const { container } = render(<DashboardSkeleton label="Loading the dashboard" canEdit />);
     const blocks = [...container.querySelectorAll<HTMLElement>(".dash-head > .sk-block")];
-    expect(blocks.map((b) => [b.style.width, b.style.height])).toEqual([["142px", "38px"], ["55px", "34px"]]);
+    expect(blocks.map((b) => [b.style.width, b.style.height])).toEqual([["142px", `${CTL_H}px`], ["55px", "34px"]]);
   });
 
   it("ends in four 240px blocks in a two-column grid", () => {
@@ -622,7 +622,7 @@ describe("DashboardSkeleton", () => {
 describe("CanvasSkeleton", () => {
   beforeEach(resetSkeletonClock);
 
-  it("is one region that IS the .graph-layout row, around one aria-hidden block that takes the row's height (auto, not the 38px default)", () => {
+  it("is one region that IS the .graph-layout row, around one aria-hidden block that takes the row's height (auto, not the control-height default)", () => {
     const { container } = render(<CanvasSkeleton label="Loading the graph" />);
     const region = screen.getByRole("status");
     expect(screen.getAllByRole("status")).toHaveLength(1);
@@ -796,5 +796,22 @@ describe("ParagraphSkeleton", () => {
     const markup = first.container.innerHTML;
     first.unmount();
     expect(render(<ParagraphSkeleton text={text} className="muted" />).container.innerHTML).toBe(markup);
+  });
+});
+
+// W18: the skeleton of a control is drawn at the control height. CTL_H (a number, because the boxes are sized in inline styles) and --ctl-h (the
+// token every real control reads) are two spellings of one value; this is the only place that can see them drift apart.
+describe("CTL_H", () => {
+  it("equals the --ctl-h token of app.css, and the default field box and the Find box follow the token", () => {
+    const css = readFileSync("src/app.css", "utf8");
+    expect(CTL_H).toBe(Number(/--ctl-h:\s*(\d+)px/.exec(css)![1]));
+    expect(/\.sk-block\s*{[^}]*height:\s*var\(--ctl-h\)/.test(css)).toBe(true);
+    expect(/\.sk-find\s*{[^}]*height:\s*var\(--ctl-h\)/.test(css)).toBe(true);
+  });
+
+  it("is what ActionsSpace, a form field and the page header's actions block draw", () => {
+    expect((render(<ActionsSpace />).container.firstElementChild as HTMLElement).style.height).toBe(`${CTL_H}px`);
+    const { container } = render(<PageHeaderSkeleton actions />);
+    expect((container.querySelector(".actions .sk-block") as HTMLElement).style.height).toBe(`${CTL_H}px`);
   });
 });

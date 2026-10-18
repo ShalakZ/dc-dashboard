@@ -12,7 +12,7 @@ import { MappingForm, type MappingBody } from "../components/MappingForm";
 import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import { RowActions } from "../components/RowActions";
-import { PageHeaderSkeleton, Skeleton, SkeletonRegion, TableSkeleton } from "../components/Skeleton";
+import { CTL_H, PageHeaderSkeleton, Skeleton, SkeletonRegion, TableSkeleton } from "../components/Skeleton";
 import { useAction } from "../hooks/useAction";
 import { useMappingActions } from "../hooks/useMappingActions";
 import { DEFAULT_POINT_VIEW, sortBy, viewPoints, type PointSortKey } from "../lib/points";
@@ -80,7 +80,7 @@ export function SourcePointsPage() {
         <PageHeaderSkeleton crumbs actions />
         <div className="row toolbar" aria-hidden="true">
           <Skeleton width="15ch" />
-          <Skeleton variant="block" width={260} height={38} />
+          <Skeleton variant="block" width={260} height={CTL_H} />
           <Skeleton width="18ch" />
         </div>
         <TableSkeleton columns={6} rows={6} />

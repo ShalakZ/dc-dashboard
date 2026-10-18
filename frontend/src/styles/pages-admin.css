@@ -25,9 +25,9 @@
   .users-page .row-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; white-space: nowrap; } /* nowrap only here: the delete dialog sits beside this box in the same cell and must wrap */
   .users-page .row-error { display: block; margin-top: 4px; font-size: var(--fs-xs); font-weight: 600; text-align: right; }
   .users-page .row-actions .reset-form { display: flex; align-items: center; gap: 6px; max-width: none; margin: 0; }
-  .users-page .row-actions .reset-form input[type="password"] { width: 12em; min-height: 34px; }
+  .users-page .row-actions .reset-form input[type="password"] { width: 12em; }
   .form-card .create-user { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); align-items: end; }
-  .form-card .create-user > button { justify-self: start; min-height: 38px; }
+  .form-card .create-user > button { justify-self: start; }
   .form-card .create-user > p { grid-column: 1 / -1; }
   .form-card .create-user > p.role-note { min-height: 1lh; margin-top: -6px; font-size: var(--fs-sm); } /* what the chosen role is for: a line under the row, close to it. The paragraph is always there; min-height keeps the line when it is empty, so the card has one height for every role (a description that wraps may still grow it) */
 
@@ -65,7 +65,6 @@
   .storage-tiles .tile > .muted:first-child .tip { margin: -4px -6px -4px 0; } /* the 24 px tip button does not make the caption line taller */
   .storage-page .page-card p { margin: 0; } /* the card's own gap spaces its lines; a browser margin would add to it */
   .storage-page .rows-range { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 14px; }
-  .storage-page .rows-range input[type="date"] { min-height: 34px; }
   /* The table fills its card: the day takes what it needs, the bar the rest. A long range scrolls inside the card (366 days must not stretch
      both cards); the first row does not move. */
   .storage-page .rows-day td:first-child { width: 1%; white-space: nowrap; }
@@ -93,7 +92,7 @@
   .role-badge { display: inline-block; margin-left: 8px; padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; vertical-align: 1px; }
   .roles-panel .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; white-space: nowrap; }
   /* A built-in row has no bin; this empty box (the bin's 28px, see .icon-btn) keeps its "..." in the column of the custom rows' "...". */
-  .roles-panel .icon-btn-spacer { flex: none; width: 28px; height: 28px; }
+  .roles-panel .icon-btn-spacer { flex: none; width: var(--ctl-h-xs); height: var(--ctl-h-xs); }
   /* The editor is wider than the 440px every other dialog has (the grid has three columns), and on a short window the body scrolls while
      the error line and Save / Cancel stay in sight; the same two-row grid as the connection check's dialog. */
   .dialog.narrow:has(> .role-editor) { width: min(56rem, 96vw); overflow: hidden; grid-template-rows: auto minmax(0, 1fr); }
@@ -131,7 +130,7 @@
   .audit-page .range-group input { width: 140px; }
   .audit-page .range-group .field:first-child input { border-radius: var(--radius) 0 0 var(--radius); }
   .audit-page .range-group .field:last-child input { border-radius: 0 var(--radius) var(--radius) 0; }
-  .audit-page .range-sep { display: grid; place-items: center; height: 38px; padding: 0 10px; border: solid var(--field-border); border-width: 1px 0; background: var(--surface); color: var(--text-2); font-size: var(--fs-sm); }
+  .audit-page .range-sep { display: grid; place-items: center; height: var(--ctl-h); padding: 0 10px; border: solid var(--field-border); border-width: 1px 0; background: var(--surface); color: var(--text-2); font-size: var(--fs-sm); }
   .audit-page .filter-bar .quick-row { align-items: center; justify-content: space-between; }
   .audit-page .filter-bar .filter-tools { align-items: center; margin-left: auto; }
   .audit-page .jump-field { display: flex; align-items: center; gap: 8px; }
@@ -182,7 +181,7 @@
 
   /* One entry in the drawer (components/AuditDrawer.tsx): the facts in the shared .kv box, the changes table, the stored JSON */
   .audit-entry .ev-tile { display: inline-grid; margin-right: 8px; vertical-align: middle; } /* in a line of text here, not in the row's flex line */
-  .audit-entry .copy-btn { min-height: 28px; margin-left: 10px; padding: 0 10px; }
+  .audit-entry .copy-btn { min-height: var(--ctl-h-xs); margin-left: 10px; padding: 0 10px; }
   .audit-entry td { overflow-wrap: anywhere; }
   .audit-entry .section-title { margin-top: 24px; }
   .audit-entry .entry-json { margin: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -234,13 +233,13 @@
   .report-fields > fieldset > p { grid-column: 1 / -1; min-height: 2lh; } /* both help texts are two lines at this basis; the reserve covers a font that sets one of them in one */
   .report-fields > .report-source { flex: 0 1 18rem; grid-template-columns: minmax(0, 1fr); min-width: 12rem; }
   .report-source select { width: 100%; min-width: 0; } /* the select takes its field's width, not that of its longest source name */
-  .report-fields > .report-mask { min-height: 38px; } /* level with the select beside it */
+  .report-fields > .report-mask { min-height: var(--ctl-h); } /* the checkbox and its words centre on the select beside it */
   .report-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 0; padding-top: 18px; border-top: 1px solid var(--border); } /* the card's 14px gap comes on top of these margins */
   .report-built { margin: 0; font-weight: 600; }
   .report-part { display: grid; gap: 8px; margin: 0 0 8px; }
   .report-part-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
   .report-part-head h3 { margin: 0; font-size: var(--fs-md); font-weight: 600; }
-  .report-text { height: 18em; font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.5; white-space: pre; overflow: auto; resize: vertical; }
+  .report-text { height: 18em; min-height: 8em; max-height: min(70vh, 40em); font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.5; white-space: pre; overflow: auto; resize: vertical; }
   .address-key { margin: 0; }
   .address-key > summary { width: fit-content; font-weight: 600; cursor: pointer; }
   .address-key > p { margin: 8px 0; }

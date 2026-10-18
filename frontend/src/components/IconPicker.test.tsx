@@ -526,7 +526,7 @@ describe("IconPicker styles", () => {
     expect(error).toHaveLength(1);
     expect(error[0].body).toMatch(/position:\s*sticky/);
     // What Tab and the opening scroll bring into view must stay clear of that row: the dialog's scroll padding, not a margin on the field (the two add up)
-    expect(declares(".dialog:has(.icon-grid:not([hidden]))", /scroll-padding-bottom:\s*calc\(var\(--btn-h\)\s*\+\s*22px/)).toBe(true);
+    expect(declares(".dialog:has(.icon-grid:not([hidden]))", /scroll-padding-bottom:\s*calc\(var\(--ctl-h\)\s*\+\s*22px/)).toBe(true);
     expect(declares(".icon-field", /scroll-margin/)).toBe(false);
   });
 

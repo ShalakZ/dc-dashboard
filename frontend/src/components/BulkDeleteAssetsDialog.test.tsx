@@ -1,9 +1,10 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useAssets, useInvalidate, keys } from "../api/queries";
 import type { Asset, AssetImpact } from "../api/types";
 import type { RemoveItem } from "../api/assetsBulk";
 import { planDelete, type DeletePlan, type RemoveResult } from "../lib/assetsBulk";
+import { ASSET_KEEP_NOTE } from "../lib/impact";
 import { buildTree, descendantIds } from "../lib/tree";
 import { indexTree } from "../lib/treeMove";
 import { holdFetch } from "../test/holdFetch";
@@ -134,6 +135,55 @@ describe("BulkDeleteAssetsDialog", () => {
     await ready("Delete anyway");
     expect(box).toHaveTextContent(sentence);
     expect(box).toHaveTextContent("their past energy and cost figures disappear from Billing and dashboards, except in closed months, which keep their billed figures. This can't be undone.");
+  });
+
+  // W18 R4: the note about months that are not closed and the stored readings is a paragraph of its own after the message, only for a delete that
+  // takes more than the picks and has mappings (energy data) in its sum.
+  describe("the note about billing and readings", () => {
+    const noteIn = (box: HTMLElement) => within(box).queryByText(ASSET_KEEP_NOTE);
+
+    it("shows after the message, as its own paragraph, when the sum has mappings (one root, or the roots added up)", async () => {
+      open(plan(7), { [impactPath(7)]: { body: impact(1, 1, 0) } });
+      const box = await dialog("Delete 1 asset?");
+      await ready("Delete anyway");
+      const note = noteIn(box)!;
+      expect(note).toBeInTheDocument();
+      expect(note.tagName).toBe("P");
+      expect(note.previousElementSibling).toHaveTextContent("This can't be undone.");
+      cleanup();
+      // one root with no mapping and one with: the sum has mappings
+      open(plan(2, 7), { [impactPath(2)]: { body: impact(3, 0, 0) }, [impactPath(7)]: { body: impact(1, 2, 0) } });
+      const both = await dialog("Delete 2 assets?");
+      await ready("Delete anyway");
+      expect(noteIn(both)).toBeInTheDocument();
+    });
+
+    it("is not drawn while the numbers load", async () => {
+      const view = open(plan(7), { [impactPath(7)]: { body: impact(1, 1, 0) } }, undefined, { hold: true });
+      const box = await dialog("Delete 1 asset?");
+      expect(noteIn(box)).toBeNull();
+      await act(async () => view.held!.release());
+      await ready("Delete anyway");
+      expect(noteIn(box)).toBeInTheDocument();
+    });
+
+    it("is not drawn for a plain delete, for sub-assets nobody picked that hold no mapping, or for a tariff only", async () => {
+      open(plan(3, 4, 7));
+      const plainBox = await dialog("Delete 3 assets?");
+      await ready();
+      expect(noteIn(plainBox)).toBeNull();
+      cleanup();
+      open(plan(2), { [impactPath(2)]: { body: impact(3, 0, 0) } }); // Hall A with two racks nobody picked, nothing mapped
+      const emptyBranch = await dialog("Delete 1 asset?");
+      await ready("Delete anyway");
+      expect(emptyBranch).toHaveTextContent("3 assets, 0 mappings and 0 tariffs will be deleted");
+      expect(noteIn(emptyBranch)).toBeNull();
+      cleanup();
+      open(plan(7), { [impactPath(7)]: { body: impact(1, 0, 2) } });
+      const tariffOnly = await dialog("Delete 1 asset?");
+      await ready("Delete anyway");
+      expect(noteIn(tariffOnly)).toBeNull();
+    });
   });
 
   it("adds the numbers of all the roots up", async () => {
