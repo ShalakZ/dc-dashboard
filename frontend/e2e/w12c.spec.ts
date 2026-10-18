@@ -23,7 +23,7 @@ import { latestBody, node as nid, SMALL, SMALL_GROUPS, SMALL_NAMES, smallModel, 
 //   bubble    the keyboard button opens a dialog with six titled groups; Escape and Tab close it and give the focus back to the opener (the button; the canvas when `?` opened it), never <body>;
 //             `?` typed into the Find field is a letter; it fits the window at 1440 x 900, 1024 x 640 and 800 x 600.
 //   find      the Find card (it stays in the canvas) does not cover the Source details panel's Close button at 1440, 1024 and 800 px.
-//   card      a source card: the short title on ONE line (the full name in `title` and in every name), protocol and address, status word and origin, "N of M mapped", Details, and the `Source actions
+//   card      a source card: the short title on up to TWO lines (w14: a clamp; the full name in `title` and in every name), protocol and address, status word and origin, "N of M mapped", Details, and the `Source actions
 //             for <name>` menu, whose items equal the right-click menu's; a role with discovery.view only has no such button and no Remove or Create assets in the right-click menu.
 //   icons     a `gicon` of the right drawing on every node kind; an asset with a chosen icon shows that one; Find's options carry an icon.
 //   value     the card for a mapped point (mocked answers): after the dwell, the words, the age counting, stale / bad reading / no reading / a failed read, none for an unmapped point, one read per hover, the
@@ -302,7 +302,8 @@ interface BarReading {
   barScroll: number;
   /**
    * How far the Discovery page's own content (header, bar, canvas row) reaches past the window's right edge. The document's own sideways scroll (`documentScroll`) is written down but not asserted:
-   * at 800 px with the sidebar expanded the shell's TOP bar (the profile button, `.navbar`) ends at 818 px on EVERY page (Assets, Sources and Scans too), which is not this page's content.
+   * at 800 px with the sidebar expanded the shell's TOP bar (the profile button, `.navbar`) used to end at 818 px on EVERY page (Assets, Sources and Scans too), which is not this page's content; w14 (P6) fixed
+   * that and its spec asserts a document that does not scroll sideways at all, so this stays a note here.
    */
   contentOverflow: number;
   documentScroll: number;
@@ -667,7 +668,7 @@ test.describe("W12c: the Find card and the Source details panel", () => {
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 test.describe("W12c: the source card", () => {
-  // The cases of cardModel(): the title is the name without " at host:port", on ONE line; the second line is the protocol and where it listens.
+  // The cases of cardModel(): the title is the name without " at host:port", on up to TWO lines (w14: a clamp of two 18px lines, the rest cut); the next line is the protocol and where it listens.
   const CARDS = [
     { id: SMALL.alpha, full: "OPC UA server at 10.20.0.11:4840", title: "OPC UA server", sub: "OPC UA · 10.20.0.11:4840", status: "online · discovered", mapped: "4 of 9 mapped", create: "Create assets for 2 groups…", remove: false },
     { id: SMALL.bravo, full: "Modbus device at 10.20.0.12:502", title: "Modbus device", sub: "Modbus · 10.20.0.12:502", status: "offline · discovered", mapped: "0 of 2 mapped", create: "Create assets for 1 group…", remove: true },
@@ -675,7 +676,7 @@ test.describe("W12c: the source card", () => {
     { id: SMALL.delta, full: SMALL_NAMES.delta, title: SMALL_NAMES.delta, sub: "Simulator · w7u", status: "disabled · manual", mapped: "0 of 2 mapped", create: "Create assets for 1 group…", remove: false },
   ] as const;
 
-  test("the card says: the short title on one line, the protocol and address, the status word, N of M mapped, Details and the Source actions menu; its menu is the right-click menu", async ({ page }) => {
+  test("the card says: the short title on up to two lines, the protocol and address, the status word, N of M mapped, Details and the Source actions menu; its menu is the right-click menu", async ({ page }) => {
     test.setTimeout(180_000);
     await arrive(page, cardModel(), { width: 1440, height: 900 });
     const zoom = await page.locator(".react-flow__viewport").evaluate((el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).a);
@@ -685,11 +686,14 @@ test.describe("W12c: the source card", () => {
         const title = card.locator(".gsrc-title");
         await expect(title, "the short title").toHaveText(c.title);
         await expect(title, "and the full name in its title attribute").toHaveAttribute("title", c.full);
-        const lines = await title.evaluate((el) => ({ height: el.getBoundingClientRect().height, nowrap: getComputedStyle(el).whiteSpace, ellipsis: getComputedStyle(el).textOverflow, cut: el.scrollWidth > el.clientWidth }));
-        expect.soft(lines.height / zoom, "ONE line").toBeLessThanOrEqual(22);
-        expect.soft(lines.nowrap).toBe("nowrap");
-        expect.soft(lines.ellipsis).toBe("ellipsis");
-        if (c.full === LONG_NAME) expect.soft(lines.cut, "a name too long for the card is cut with an ellipsis").toBe(true);
+        // w14: the title is a clamp of TWO 18px lines (-webkit-line-clamp: 2), cut VERTICALLY: its box (clientHeight, CSS px) is at most two lines tall, and a name that needs more has a taller content
+        // (Chromium reports the whole text as the scrollHeight of a clamped box). It is no longer one nowrap line cut by width.
+        const lines = await title.evaluate((el) => ({ box: el.clientHeight, clamp: getComputedStyle(el).getPropertyValue("-webkit-line-clamp"), overflow: getComputedStyle(el).overflow, cut: el.scrollHeight > el.clientHeight }));
+        expect.soft(lines.box, "at most TWO lines").toBeLessThanOrEqual(2 * 18 + 1);
+        expect.soft(lines.clamp).toBe("2");
+        expect.soft(lines.overflow).toBe("hidden");
+        if (c.full === LONG_NAME) expect.soft(lines.cut, "a name too long for the card is cut after its second line").toBe(true);
+        else expect.soft(lines.cut, "a name that fits two lines is whole").toBe(false);
         await expect(card.locator(".gsrc-sub"), "protocol and address").toHaveText(c.sub);
         await expect(card.locator(".gsrc-status"), "status word and origin").toHaveText(c.status);
         await expect(card.locator(".gsrc-words"), "the mapped share in words").toHaveText(c.mapped);
