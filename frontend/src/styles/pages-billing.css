@@ -49,6 +49,30 @@
   table.billing tbody th[scope="row"] { z-index: 1; min-width: 150px; max-width: 260px; overflow: hidden; border-right: 1px solid var(--border); text-overflow: ellipsis; } /* the title carries the full path */
   table.billing tbody tr:hover > th[scope="row"] { background: var(--row-hover); }
 
+  /* The name cell (W17): the twisty (or a spacer of its width) and the name in one flex box inside the row header, which keeps the indent and the clip.
+     The name is what shrinks and gets the ellipsis; its title (the row header's) carries the full path. A row shown only because something under it
+     matches the filter reads quieter than the matches themselves. */
+  .billing-page .bill-name { display: flex; align-items: center; gap: 2px; }
+  .billing-page .bill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .billing-page .bill-label.is-context { color: var(--text-2); }
+  .billing-page .bill-caret { display: grid; place-items: center; color: var(--text-2); } /* the arrow of a row while a filter is on: nothing to press, so no button box */
+  .billing-page .bill-caret svg.i { width: 16px; height: 16px; }
+  /* A filter that matches nothing: one row, and its words stay at the left edge of the box when the days are scrolled sideways. */
+  .billing-page td:has(> .bill-nomatch) { padding: 0; }
+  .billing-page .bill-nomatch { position: sticky; left: 0; display: inline-block; padding: 14px 10px; color: var(--text-2); }
+
+  /* The controls bar over the table (W17): one row that may wrap, 38px tall like the other controls. The inert copy that holds its room while the costs
+     load is this same box. The rows line has a room of its own, so its words never move the controls. */
+  .billing-page .billing-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 38px; margin: 0 0 12px; }
+  .billing-page .tools-filter { position: relative; flex: 1 1 14rem; min-width: 10rem; max-width: 22rem; }
+  .billing-page .tools-filter input[type="search"] { width: 100%; padding-right: 38px; text-overflow: ellipsis; }
+  .billing-page .tools-filter input[type="search"]::-webkit-search-cancel-button { display: none; } /* Chromium's own cross: Clear filter is the one, like the quick find's Escape */
+  .billing-page .tools-clear { position: absolute; top: 50%; right: 5px; transform: translateY(-50%); }
+  .billing-page .tools-levels { display: flex; align-items: center; gap: 8px; }
+  .billing-page .tools-levels label { font-size: var(--fs-sm); font-weight: 600; }
+  .billing-page .tools-levels select { width: 8.5rem; } /* fixed: the word Custom never changes it */
+  .billing-page .tools-count { min-width: 28ch; margin-left: auto; font-size: var(--fs-sm); color: var(--text-2); text-align: right; white-space: nowrap; }
+
   /* The key under the table: one wrapping row, each mark in a small tile */
   .billing-page ul.legend { gap: 6px 22px; margin: 14px 0 0; font-size: var(--fs-xs); }
   .billing-page ul.legend li { display: flex; align-items: center; gap: 6px; }

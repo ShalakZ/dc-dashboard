@@ -1,8 +1,11 @@
-import { useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router";
-import type { BillingCosts, CostFigure } from "../api/types";
-import { depthsByAsset, fmtCost, fmtKwh, fmtRate } from "../lib/billing";
+import type { BillingAssetRow, BillingCosts, CostFigure } from "../api/types";
+import { fmtCost, fmtKwh, fmtRate } from "../lib/billing";
+import { billingModel, noMatchText, rowsLine, twistyLabel, visibleRows } from "../lib/billingRows";
+import { sizeDefaultFold, type FoldModel } from "../lib/foldLevels";
 import { formatSiteDay } from "../lib/siteTime";
+import { BillingTools } from "./BillingTools";
 import { ESTIMATED_TIP, Figure, PARTIAL_TIP } from "./Figure";
 
 // Inline SVG, 24-unit viewBox, decoration only (the words next to each one say everything).
@@ -52,11 +55,108 @@ function Legend() {
   );
 }
 
-/** `canSetRates`: the person may open the Tariffs page AND change a rate on it, so the note links to it; for anyone else it says to ask. */
-export function BillingTable({ costs, canSetRates }: { costs: BillingCosts; canSetRates: boolean }) {
-  const depth = useMemo(() => depthsByAsset(costs.assets), [costs.assets]);
-  if (costs.assets.length === 0) return <Empty text="No assets yet." />;
-  if (costs.assets.every((a) => a.total === null)) return <Empty text="No energy data for this month." />;
+/** The ids a month can fold: only rows that have something below them, so what is remembered never holds a stray id. */
+function restricted(model: FoldModel, folded: ReadonlySet<number>): Set<number> {
+  return new Set(model.foldable.filter((id) => folded.has(id)));
+}
+
+const CaretIcon = () => (
+  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5" /></svg>
+);
+
+/** `caret` is the decorative arrow a row has while a filter is on (it is shown open, and there is nothing to press). */
+type RowMode = "leaf" | "open" | "folded" | "caret";
+
+interface RowProps {
+  row: BillingAssetRow;
+  depth: number;
+  mode: RowMode;
+  /** Shown only because a row under it matches the filter. */
+  context: boolean;
+  /** The number of rows under it, folded or not. */
+  below: number;
+  days: readonly string[];
+  /** Stable: a fold redraws the row that was pressed and the rows that appear, not the rest. */
+  onToggle: (id: number) => void;
+}
+
+/**
+ * One asset. The name cell is the row header: the indent stays on the `th`, the twisty and the name sit in a flex box inside it, and `aria-labelledby`
+ * names the row by the asset's name alone (the twisty has a name of its own). The twisty is ONE button for open and folded, so a press never replaces
+ * it and the focus stays on it; a leaf has a spacer of the same width. The figure cells are the same as ever.
+ */
+const BillingRow = memo(function BillingRow({ row, depth, mode, context, below, days, onToggle }: RowProps) {
+  const id = row.asset_id;
+  // A null day is "no meter" for an asset without any figure, otherwise a day that has not been reached yet.
+  const emptyTitle = row.total === null ? "no meter" : "not yet";
+  return (
+    <tr>
+      <th scope="row" title={row.path} style={{ paddingLeft: 8 + depth * 16 }} aria-labelledby={`billing-asset-${id}`}>
+        <span className="bill-name">
+          {mode === "leaf" ? <span className="twisty-sp" /> : mode === "caret" ? (
+            <span className="twisty-sp bill-caret" aria-hidden="true"><CaretIcon /></span>
+          ) : (
+            <button
+              type="button"
+              className="twisty"
+              aria-expanded={mode === "open"}
+              aria-label={twistyLabel(row.name, mode === "open", below)}
+              onClick={() => onToggle(id)}
+            >
+              <CaretIcon />
+            </button>
+          )}
+          <span id={`billing-asset-${id}`} className={context ? "bill-label is-context" : "bill-label"}>{row.name}</span>
+        </span>
+      </th>
+      <td className="num">{fmtRate(row.rate_per_kwh)}</td>
+      <FigureCell figure={row.total} emptyTitle={emptyTitle} />
+      {row.days.map((d, i) => <FigureCell key={days[i]} figure={d} emptyTitle={emptyTitle} />)}
+    </tr>
+  );
+});
+
+/**
+ * `canSetRates`: the person may open the Tariffs page AND change a rate on it, so the note links to it; for anyone else it says to ask.
+ * `folded` is the remembered fold, or null when nothing is remembered (a long month then opens folded to a level; a visit remembers nothing).
+ * `filter` is the text the rows and the line follow (the page defers it so typing stays quick); `typed` is what the box shows.
+ * Only the rows that are visible are drawn, never hidden ones. The costs, the totals and the CSV are the month's, whatever is folded or filtered.
+ */
+export function BillingTable({ costs, canSetRates, folded, onFold, filter, typed, onFilter }: {
+  costs: BillingCosts;
+  canSetRates: boolean;
+  folded: ReadonlySet<number> | null;
+  onFold: (next: ReadonlySet<number>) => void;
+  filter: string;
+  typed: string;
+  onFilter: (text: string) => void;
+}) {
+  const model = useMemo(() => billingModel(costs.assets), [costs.assets]);
+  const effective = useMemo(() => (folded === null ? sizeDefaultFold(model) : restricted(model, folded)), [folded, model]);
+  const view = useMemo(() => visibleRows(costs.assets, model, effective, filter), [costs.assets, model, effective, filter]);
+
+  // The press handler never changes, so the rows that are not touched by a fold are not drawn again.
+  const latest = useRef({ effective, onFold });
+  latest.current = { effective, onFold };
+  const onToggle = useCallback((id: number) => {
+    const { effective: now, onFold: change } = latest.current;
+    const next = new Set(now);
+    if (!next.delete(id)) next.add(id);
+    change(next);
+  }, []);
+
+  // A new filter shows other rows: the box starts at the top (a fold or the first draw leaves it where it is).
+  const scroller = useRef<HTMLDivElement>(null);
+  const seen = useRef(filter);
+  useEffect(() => {
+    if (seen.current === filter) return;
+    seen.current = filter;
+    if (scroller.current) scroller.current.scrollTop = 0;
+  }, [filter]);
+
+  // The two empty states keep the bar's room (an inert copy), so the page does not move when a month with rows is paged to.
+  if (costs.assets.length === 0) return <><BillingTools idle /><Empty text="No assets yet." /></>;
+  if (costs.assets.every((a) => a.total === null)) return <><BillingTools idle /><Empty text="No energy data for this month." /></>;
   const missingRate = costs.assets.some((a) => a.total !== null && a.total.kwh > 0 && (a.total.cost === null || a.total.partial));
   return (
     <>
@@ -76,7 +176,8 @@ export function BillingTable({ costs, canSetRates }: { costs: BillingCosts; canS
           <span>Some consumption has no rate (shown as — or *). Ask an administrator to set one.</span>
         </div>
       ))}
-      <div className="table-scroll table-wrap">
+      <BillingTools typed={typed} onFilter={onFilter} model={model} effective={effective} onFold={onFold} line={rowsLine(view)} />
+      <div className="table-scroll table-wrap" ref={scroller}>
         <table className="billing">
           <caption className="muted">
             Each cell shows kWh above and cost{costs.currency ? ` in ${costs.currency}` : ""} below.
@@ -90,18 +191,22 @@ export function BillingTable({ costs, canSetRates }: { costs: BillingCosts; canS
             </tr>
           </thead>
           <tbody>
-            {costs.assets.map((a) => {
-              // A null day is "no meter" for an asset without any figure, otherwise a day that has not been reached yet.
-              const emptyTitle = a.total === null ? "no meter" : "not yet";
-              return (
-                <tr key={a.asset_id}>
-                  <th scope="row" title={a.path} style={{ paddingLeft: 8 + (depth.get(a.asset_id) ?? 0) * 16 }}>{a.name}</th>
-                  <td className="num">{fmtRate(a.rate_per_kwh)}</td>
-                  <FigureCell figure={a.total} emptyTitle={emptyTitle} />
-                  {a.days.map((d, i) => <FigureCell key={costs.days[i]} figure={d} emptyTitle={emptyTitle} />)}
-                </tr>
-              );
-            })}
+            {view.rows.length === 0 ? (
+              <tr>
+                <td colSpan={3 + costs.days.length}><span className="bill-nomatch">{noMatchText(filter)}</span></td>
+              </tr>
+            ) : view.rows.map((r) => (
+              <BillingRow
+                key={r.asset.asset_id}
+                row={r.asset}
+                depth={r.depth}
+                mode={view.filtering && r.mode === "open" ? "caret" : r.mode}
+                context={r.context}
+                below={r.below}
+                days={costs.days}
+                onToggle={onToggle}
+              />
+            ))}
           </tbody>
         </table>
       </div>

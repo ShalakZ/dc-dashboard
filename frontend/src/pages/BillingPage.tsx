@@ -1,9 +1,10 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useId, useRef, useState } from "react";
 import { useBillingCosts, useBillingMonths, useSite } from "../api/queries";
 import type { BillingClosed, BillingLive } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { meets } from "../auth/need";
 import { BillingTable } from "../components/BillingTable";
+import { BillingTools } from "../components/BillingTools";
 import { CloseMonthDialog } from "../components/CloseMonthDialog";
 import { PAGE_NEED } from "../components/navItems";
 import { PageHeader } from "../components/PageHeader";
@@ -13,7 +14,9 @@ import { useToast } from "../components/Toasts";
 import {
   clampMonth, closedOnText, liveDeltaText, MONTH_NAMES, monthLabel, monthsOfYear, SAME_FIGURES_TEXT, shiftMonth, yearsBetween,
 } from "../lib/billing";
+import { BILLING_FOLD_KEY } from "../lib/billingRows";
 import { downloadCsv } from "../lib/download";
+import { readFoldMemory, writeFoldMemory } from "../lib/foldMemory";
 import { siteMonth } from "../lib/siteTime";
 
 // Inline SVG, 24-unit viewBox, decoration only (the words next to each one say everything).
@@ -98,6 +101,15 @@ export function BillingPage() {
     { kind: "close"; month: string } | { kind: "reopen"; month: string; closed: BillingClosed; live: BillingLive | null | undefined; currency: string | null } | null
   >(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  // The fold and the filter live here, not in the table: paging to another month unmounts the table while the new month loads, and both must still be there.
+  // `folded` is null while nothing is remembered (the table then folds a long month to a level and writes nothing); the first thing the person does writes it.
+  const [folded, setFolded] = useState<ReadonlySet<number> | null>(() => readFoldMemory(BILLING_FOLD_KEY));
+  const [filter, setFilter] = useState("");
+  const deferred = useDeferredValue(filter); // the box shows the live text; the rows and the line follow it a moment later
+  const changeFold = useCallback((next: ReadonlySet<number>) => {
+    setFolded(next);
+    writeFoldMemory(BILLING_FOLD_KEY, next);
+  }, []);
   // "This month" is decided on the site's wall clock: near a month end it differs from the browser's and from UTC.
   const current = site.data ? siteMonth(new Date(), site.data.timezone) : null;
   const month = picked ?? current;
@@ -175,6 +187,8 @@ export function BillingPage() {
         </div>
       )}
       {exportError && <p className="error" role="alert">{exportError}</p>}
+      {/* The controls bar's room while the costs load or fail: an inert copy of the bar, outside the skeleton (whose region and label stay as they were). */}
+      {(site.isPending || month !== null) && !costs.data && <BillingTools idle />}
       {(site.isPending || (month !== null && costs.isPending)) && (
         // The costs poll sets a query that failed before pending again for a second, with no error: the skeleton and the error would take turns.
         costs.errorUpdateCount === 0 ? <TableSkeleton columns={7} rows={5} label="Loading billing" caption /> : <p className="muted">loading…</p>
@@ -186,7 +200,15 @@ export function BillingPage() {
           {costs.data.closed && (
             <ClosedNotice closed={costs.data.closed} live={costs.data.live} currency={costs.data.currency} timezone={site.data?.timezone ?? costs.data.timezone} />
           )}
-          <BillingTable costs={costs.data} canSetRates={can("tariffs.edit") && meets(PAGE_NEED.tariffs, can)} />
+          <BillingTable
+            costs={costs.data}
+            canSetRates={can("tariffs.edit") && meets(PAGE_NEED.tariffs, can)}
+            folded={folded}
+            onFold={changeFold}
+            filter={deferred}
+            typed={filter}
+            onFilter={setFilter}
+          />
         </>
       )}
       {dialog?.kind === "close" && <CloseMonthDialog month={dialog.month} onClose={() => setDialog(null)} />}
