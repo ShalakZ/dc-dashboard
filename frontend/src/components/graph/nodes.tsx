@@ -153,7 +153,7 @@ function mappedPoints(source: GraphSource): number {
 /**
  * W12c: the source card. Six lines of FIXED height (the stylesheet sets each in px; graph-source-card.css has the table and the measured result), so the card fits the
  * room `SOURCE_H` keeps for it and a line that changes its words (a status, "Seen ... 9 min ago" -> "10 min ago") moves nothing:
- *   head: the fold (a chevron, on the LEFT), the protocol icon as a tile, the short title on ONE line (the full name in its `title` and in every accessible name), the
+ *   head: the fold (a chevron, on the LEFT), the protocol icon as a tile, the short title on up to TWO lines (w14; the full name in its `title` and in every accessible name), the
  *         "Source actions" menu button at the right end when the page gave the node an `onMenu`;
  *   protocol and where it listens; the status dot, its WORD and the origin (the word is the signal, the dot decoration); "N of M mapped" in words with a 4px bar under
  *   them (decoration); Details when the page gave `onSelect`; the last-seen line when there is one.
