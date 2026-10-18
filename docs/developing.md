@@ -45,7 +45,8 @@ For `npm run dev` to reach the API without Caddy, publish it for the time being:
 
 A new stack has no past, so Billing and its **Close month…** button have nothing to show. `dcdash.seed.history` makes a month of
 made-up readings for a **development or scratch stack**. It ships in the `api` image but is inert: it writes nothing unless it is
-asked twice, with `--yes` and with `DCDASH_ALLOW_SEED_HISTORY=1` in its environment. **Never run it on a real installation.**
+asked twice, with `--yes` and with `DCDASH_ALLOW_SEED_HISTORY=1` in its environment. **Never run it on a real installation.** A demo
+install (a laptop that only shows the simulator or a test connection) is fine; a stack that holds data someone needs is not.
 
 ```bash
 docker compose exec -T api python -m dcdash.seed.history                  # the dry run: prints the plan, writes nothing
@@ -74,6 +75,71 @@ default range, and `--seed N` changes the small random jitter (the default seed 
 - **Who uses it.** The end-to-end tests of close month (`frontend/e2e/w11.spec.ts`) seed their own history this way in a scratch
   project ([End-to-end tests](end-to-end-tests.md)); the figures of a seeded month are also what `backend/tests/test_seed_history.py`
   checks against the energy engine.
+
+### The pilot hall (a demo tree with racks)
+
+`--layout pilot-hall` makes a bigger made-up data centre instead of the three panels: halls, pods, rows and 117 racks with two feeds
+each, and a month of readings for all of them. It is for a demo. The two switches and the refusals work as above, and the old
+layout stays the default.
+
+```bash
+docker compose exec -T api python -m dcdash.seed.history --layout pilot-hall                       # the dry run: prints the plan, writes nothing
+docker compose exec -T -e DCDASH_ALLOW_SEED_HISTORY=1 api python -m dcdash.seed.history --layout pilot-hall --yes
+```
+
+Run them in the folder that holds `compose.yaml`. The same two lines work on Linux, macOS and WSL and in Windows PowerShell 5.1: on the
+work laptop run `scripts\update.ps1` first so the code is current, then type them in the install folder (PowerShell passes
+`-e DCDASH_ALLOW_SEED_HISTORY=1`, `--layout pilot-hall` and `--yes` to docker unchanged). Options: `--interval-minutes 5|10|15|30|60`
+(default 30, the spacing of the samples), `--days N` (the last N days instead of the previous month) and `--seed N`.
+
+- **What it makes.** The Site **Seeded pilot hall** with **Hall 1** and **Hall 2**, two pods each (**Pod A**, **Pod B**), two rows per
+  pod, 117 racks (Rack 01 to 59 in Hall 1, 01 to 58 in Hall 2), each with **Feed A** and **Feed B**; beside the halls an **Electrical**
+  group with eight panels (Panel 1A to Panel 4B). That is 370 assets and 442 points in a disabled simulator source
+  `seeded-pilot-hall`. 100 racks draw 2 to 11 kW, split about half and half between A and B; 6 are idle (a fraction of a kW); 5 have
+  only Feed A; 6 are free (the feeds exist, nothing is metered, so no figure). A feed has an energy counter (`energy_kwh`) and a power
+  point (`active_power_kw`) that reads the same load; the load follows the hour of the day and differs by a few per cent from one day
+  to the next. Eight B feeds in Hall 2 have only the power point, so their energy is an estimate (`~`): Hall 2, the Site and the totals
+  show it, Hall 1 is exact. One Hall 1 feed has a 6-hour gap and another resets once. Every name is made up, there are no tenants, and
+  it writes no tariff, dashboard, audit row or asset kind.
+- **Kinds.** It uses only kinds that exist. A fresh install has Site, Room, Row, Rack, Circuit and Panel, so a hall and a pod are
+  "Room" there; press **Add all 39 data-centre kinds** on the Asset kinds page first
+  ([The starter pack](assets-and-kinds.md#the-starter-pack)) to get **Data hall** for the halls. The dry run and the final report say
+  which kind each level got.
+- **Size and time.** Measured on a development PC. With the default 30 minutes and the default 30-day raw retention (29 days of data):
+  about 615,000 readings and a minute and a half. With the raw retention raised to 60 days (a whole previous month, 47 days): about
+  1,000,000 readings and a little over two minutes. `--interval-minutes 15` doubles the readings (about three minutes measured with
+  the 60-day retention); `--interval-minutes 60` roughly halves them and `--interval-minutes 5` is about six times the default (both
+  estimated from these runs, not run over a whole month). A slow laptop takes longer, a
+  repeated seed on one database takes longer too (a rollup refresh also recomputes the readings of earlier, removed seeds), and
+  `--days 7` makes it small. It prints "written 5 of 30 days" lines while it works.
+- **The range.** From the start of the previous site month up to now, but never earlier than the raw retention allows (30 days by
+  default), with the same raw-retention and rollup refusals as above. On 18 October the previous month therefore holds only 19 to 30
+  September, and the first 18 days of September read 0.0 in Billing. For the whole previous month raise the raw retention first
+  (Settings, Storage, 60 days; then the range starts on 1 September; see [Storage](storage.md#the-storage-page)).
+- **Seeing past data.** Set a rate first: Tariffs, a site-wide rate with an effective-from date before the range, for example
+  2020-01-01. Then in Billing pick the previous month (the Year and Month selects): the Site total and every hall, row and rack are
+  there, with the day columns on the right (the Billing CSV has one row per asset and day at every level, so do not add up its kWh
+  column). In the Assets Tree a Feed page has a Trend that opens on `active_power_kw` (the daily curve; pick `energy_kwh` for the
+  rising counter) and has a 7d range; a hall, row or rack page shows Live power, Energy today and Cost today, because it adds up the
+  feeds below it, but no Trend of its own. The tree opens fully expanded (370 assets): use Collapse all in its header, the filter, or
+  Ctrl+K. The data ends at the moment the command ran, so "Energy today", the 1h, 6h and 24h trends and the live chip only show
+  something in the hours after the run: run it shortly before a demo.
+- **Live power.** A parent adds up the live power of the feeds below it: the Site reads about 600 to 700 kW depending on the hour of
+  the day, and each rack a few kW. Between one hour and an hour and a half after the run (three sample spacings counted from the last
+  sample, which is up to half an hour old) the feeds count as not reporting and a parent says so; Billing and the 7d and month views
+  are not affected.
+- **Why the panels carry no kWh.** A parent without a meter adds up every child. A kWh meter on a panel beside the halls would count
+  the same energy twice at the Site and in the total of Billing, so the panels carry voltage and current only (the current follows the
+  feeds of their pod). Energy per panel needs a "fed by" relation between assets, which does not exist yet.
+- **Refusals and "half-way".** Nothing is written without `--yes` and `DCDASH_ALLOW_SEED_HISTORY=1`. A second run is refused while the
+  source `seeded-pilot-hall`, or a top-level asset **Seeded pilot hall**, exists; the old layout (Seeded demo) can exist beside it. On
+  a stack whose rollups outlive their raw data it refuses and says so. A run that fails or is stopped removes what it made (source,
+  assets, points, mappings and readings) and says so. If the process was killed, the next run is refused and you remove the seed by
+  hand, as below. Ctrl+C on `docker compose exec` stops your terminal, not the command inside the container: wait for it to finish
+  before you start another.
+- **Remove it.** In the Assets Tree pick **Seeded pilot hall** and Delete (the dialog says 370 assets and 442 mappings), then in
+  Sources delete `seeded-pilot-hall`. It takes under a second. As with the old layout, the readings and rollup rows of the removed
+  points stay behind as orphans: the raw readings until the raw retention drops them, the rollups much later.
 
 ## Conventions
 

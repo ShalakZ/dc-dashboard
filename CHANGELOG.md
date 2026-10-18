@@ -15,6 +15,27 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w16 (2026-10-18, MERGE)
+
+w16 adds a second layout to the development history seeder: `python -m dcdash.seed.history --layout pilot-hall` makes a made-up data
+centre for demos and tests, with a month of readings, on a development or scratch stack. It is the Site "Seeded pilot hall" with two
+halls, four pods, eight rows and 117 racks, each rack with a Feed A and a Feed B (370 assets, 442 points), and an "Electrical" group with
+eight panels. A feed has an energy counter and a power point that read the same load, which follows the hour of the day and differs by a
+few per cent from one day to the next; 100 racks are live, 6 idle, 5 have one feed, 6 are free (the feeds exist, nothing is metered);
+eight Hall 2 feeds report power only, so their energy is an estimate (`~`) and Hall 1 is exact; one feed has a 6-hour gap and one counter
+resets once. The panels carry voltage and current only, never energy, because a parent without a meter adds up every child and a kWh
+meter on a panel beside the halls would count the same energy twice at the Site and in Billing. Every name is generic; there are no
+tenants. It uses only asset kinds that exist (a fresh install has "Room" for halls and pods; the Asset kinds page's "Add all 39
+data-centre kinds" gives "Data hall"), and the dry run and the report say which kind each level got. It is as guarded as the first layout:
+nothing is written without `--yes` and `DCDASH_ALLOW_SEED_HISTORY=1`, no audit row, tariff, dashboard, setting or kind is written, a
+second run is refused, the raw-retention clamp and the pending-drop check are the same, and a run that fails or is stopped removes what
+it made. `--interval-minutes` (5, 10, 15, 30, 60; default 30) sets the spacing of the samples and `--days N` the range. Measured on a
+development PC: about 615,000 readings and a minute and a half for the default range (29 days, the default 30-day raw retention), about
+1,000,000 readings and a little over two minutes for a whole previous month (raw retention 60 days). Billing for the previous month, the
+Assets Tree, a rack's Feed page and its 7d trend then have data to show; the commands for Linux and for Windows PowerShell, how to see
+past data and how to remove the seed are in [Developing](docs/developing.md#the-pilot-hall-a-demo-tree-with-racks). The default layout
+(three panels) and its figures are unchanged. No migration, no API or screen change, no new permission; nothing to do on upgrade.
+
 ## w13 (2026-10-17, 4202012)
 
 w13 (the dashboard widget overhaul) changes how the dashboard widgets look and what they tell you; no figure, unit or rounding a widget
