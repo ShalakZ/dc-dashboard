@@ -531,8 +531,9 @@ def build_report(
             ))
         if (g := check.gaps) is not None:
             groups["gaps"].append((
-                # worst first: the time missing (a minute of short time counts as a minute), then the hole before the month
-                (-(g.hours * 60 + g.short_minutes), -(g.hours_before_month + g.leading_hours), *tail),
+                # worst first: the time missing, counting the hole before the month (a minute of short time counts as a minute), so a
+                # counter that billed a whole earlier month into its first hour cannot fall below 50 one-hour gaps (re-review I1)
+                (-((g.hours + g.hours_before_month) * 60 + g.short_minutes), -g.leading_hours, *tail),
                 {**head, "runs": g.runs, "hours": g.hours, "longest_hours": g.longest_hours,
                  "longest_start": _iso_or_none(g.longest_start), "first_start": _iso_or_none(g.first_start),
                  "last_end": _iso_or_none(g.last_end), "leading_hours": g.leading_hours,

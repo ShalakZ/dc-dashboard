@@ -397,6 +397,17 @@ def test_a_gap_item_lists_the_hole_before_the_month_in_its_ranking():
     assert [(i["asset_id"], i["hours_before_month"]) for i in items(report, "gaps")] == [(2, 9), (1, 0)]
 
 
+def test_a_hole_before_the_month_is_not_pushed_out_of_the_cap_by_one_hour_gaps():
+    # re-review I1: 60 power-only meters with a one-hour gap and one counter whose whole August lands in its first September hour
+    gap = set(span(at(15, 3), at(15, 4)))
+    inputs = [pmi([prow(h) for h in MONTH if h not in gap], asset=100 + n) for n in range(60)]
+    inputs.append(mi(rising(list(MONTH)), asset=1, before=crow(START - 743 * HOUR, 50.0)))
+    tree = tree_of((1, None, "M001"), *[(100 + n, None, f"P{n:03d}") for n in range(60)])
+    report = run(inputs, tree)
+    assert report["groups"]["gaps"]["total"] == 61 and len(report["groups"]["gaps"]["items"]) == 50
+    assert items(report, "gaps")[0]["asset_id"] == 1 and items(report, "gaps")[0]["hours_before_month"] == 742  # 743 hours back, less the baseline's own hour
+
+
 def test_a_leading_gap_has_no_previous_reading_without_a_row_before_or_for_a_power_only_meter():
     rows = [h for h in MONTH if h >= at(3)]
     assert find(run([mi(rising(rows), first=at(20, 0, 8))]), "gaps")["leading_hours"] == 48
