@@ -47,11 +47,18 @@ describe("loss texts", () => {
 describe("keep notes", () => {
   it("say that months which are not closed lose the figures, that closing first keeps them, and that the readings stay", () => {
     expect(ASSET_KEEP_NOTE).toBe(
-      "Billing for every month that is not closed is worked out from today's assets, so those months lose these figures. To keep a finished month's bill, close that month before you delete. The readings stay stored: retention removes the raw and 1-minute ones later, and the hourly summaries stay.",
+      "Months that are not closed follow today's assets, so they lose these figures. To keep a finished month's bill, close that month before you delete. The meter readings themselves stay stored: map the same points to an asset again and those months get their figures back.",
     );
     expect(SOURCE_KEEP_NOTE).toBe(
-      "Billing for every month that is not closed is worked out from today's mappings, so those months lose the figures of these points. To keep a finished month's bill, close that month before you delete. The readings stay stored: retention removes the raw and 1-minute ones later, and the hourly summaries stay.",
+      "Months that are not closed follow today's mappings, so they lose these figures. Deleting the source also deletes its points, so they cannot be mapped again. To keep a finished month's bill, close that month before you delete. The stored readings stay on disk; the retention limits on the Storage page trim the detailed ones in time.",
     );
+  });
+  it("tell an asset delete (the figures can come back by mapping the same points again) from a source delete (they cannot)", () => {
+    expect(ASSET_KEEP_NOTE).toContain("map the same points to an asset again");
+    expect(ASSET_KEEP_NOTE).toContain("get their figures back");
+    expect(ASSET_KEEP_NOTE).not.toContain("cannot be mapped again");
+    expect(SOURCE_KEEP_NOTE).toContain("so they cannot be mapped again");
+    expect(SOURCE_KEEP_NOTE).not.toContain("get their figures back");
   });
   it("assetNote is the asset note when there are mappings, and null when there are none (a branch of empty assets, a tariff only)", () => {
     expect(assetNote({ assets: 1, mappings: 2, tariffs: 0 })).toBe(ASSET_KEEP_NOTE);

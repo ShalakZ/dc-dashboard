@@ -1,22 +1,25 @@
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
 import { costsFor, type ApiCosts } from "./billingModel";
-import { treeLink } from "./shell";
 
 // W18 (one control-height scale, limits on the note box, plain words about removing assets): a guard that MEASURES the real pages, so a later patch that makes one control 4 px taller than the
 // one beside it fails here. Admin `admin` / `correct-horse`, the account the earlier projects use.
 //
-// What it makes and what it writes. beforeAll makes, through the API, what the cases need: two assets `w18 <run>` and `w18 <run> b`, a dashboard `w18 <run>` and ONE mapped point on the first asset
-// (a free point of any source; when every point of the stack is mapped, as on the look stack's seed, a mapping is moved over to the asset for the run and moved back in afterAll). The asset has a
-// mapped metric, so its page header shows the "live" chip. afterAll takes all of it away again (also after a failed case) and puts the look back to Light and Navy and gold. Every Billing case
+// What it makes and what it writes. It never moves, edits or deletes a mapping that was there before it. beforeAll reads the stack for an asset that already has a mapped metric (not named `w18 `): the
+// asset page of a real asset shows the "live" chip, so the header cases use it and NO asset and NO mapping is made (read only). Only a stack with no such asset gets `w18 <run>` and ONE mapping of a FREE
+// point of any source (its custom_unit `w18-spec` marks it as the spec's own; a stack with no free point fails the run with a message). The remove cases pick two top-level rows of the Assets Tree
+// (they are only picked, never deleted); a stack with fewer than two gets an unmapped `w18 <run> b`. A dashboard `w18 <run>` is made for the dashboard cases. afterAll deletes only what this run made
+// (also after a failed case) and puts the look back to Light and Navy and gold; sweep() takes away what a stopped run left, and refuses (throws) to delete a `w18 ` asset that holds a mapping the spec
+// did not make, so a mapping an older version of this spec moved is never deleted with it. Every Billing case
 // answers GET /api/billing/costs, /api/billing/months and /api/billing/costs.csv through page.route from e2e/billingModel.ts (an open month, a month closed with a note) and the remove dialogs get
 // GET /api/assets/{id}/impact from page.route; the confirming buttons (Close month, Reopen month, Delete) are never pressed, and any other write the page tries is refused with a 500 and fails the
 // case (the sign-in and the look's save are the only ones allowed). The look is the admin's saved preference, set through PUT /api/me/preferences before a page opens.
 //
 // The checker. `measureRows` reads the page in one page.evaluate: every visible control that has an EDGE at rest (a border with a colour, a background with alpha, or an inset ring: the Live
-// chip) and two of them on one line (centres within 6 px, neither inside the other, their lowest common ancestor no taller than the taller one plus 48 px: a bar, not a section) must be within
+// chip) and two of them on one line (centres within 6 px, neither inside the other, their lowest common ancestor no taller than the taller one plus 56 px, room for the labels above a form row: a bar, not a section) must be within
 // 1 px of each other in height. A control without an edge (an icon button, a quiet text button, a tab, the profile button) is not compared: its hover box is drawn only when asked. The mouse is
 // parked and the focus dropped first, because a hovered `.icon-btn` gains a tint. ALLOWED lists, with the reason, what is not compared; nothing else is exempt. It also returns `pairs`, how
-// many pairs it compared, so a case can assert that it did compare something, and `edged`, every control that counted as having an edge.
+// many pairs it compared, `pagePairs`, how many of those have neither control inside the top bar (the page's own: the top bar's Find field and Live chip are one pair on every page, so a page's
+// floor counts `pagePairs` only), and `edged`, every control that counted as having an edge.
 //
 // Locators. Playwright matches a name by case-insensitive SUBSTRING, so every button and dialog is looked up with `exact: true` ("Close month…" is also the start of the dialog's "Close month").
 //
@@ -30,8 +33,8 @@ import { treeLink } from "./shell";
 //   4   the same in dark + desert gold for Billing (a closed month), Audit, an asset page and the top bar (Assets Tree): the Live chip and the Find field still count as having an edge.
 //   5   the note box: the Close month dialog and the Reopen month dialog at 1440 x 900, 1024 x 640 and 800 x 600: at least 4 lines, at most the smaller of 12 lines and 40% of the window, a drag
 //       of 900 px down and up stays inside, Cancel and the confirming button are reachable at both ends, 40 typed lines move the count and the buttons by nothing and scroll inside the box.
-//   6   the remove dialogs: an asset with energy data (the asset page's header button) keeps its sentence and adds the note of three sentences inside the dialog's description, with the focus on
-//       Cancel; a leaf has no note; the bulk dialog of the Assets Tree's pick bar shows the note too.
+//   6   the remove dialogs: an asset with energy data (the asset page's header button) keeps its sentence and adds the note (months not closed lose the figures, close first, the figures come back
+//       when the same points are mapped again) inside the dialog's description, with the focus on Cancel; a leaf has no note; the bulk dialog of the Assets Tree's pick bar (two top-level rows) shows the note too.
 //   7   Storage: the retention card says that removing assets keeps their readings, and while its settings are held back its skeleton has the same paragraphs above the form.
 
 const ADMIN = { username: "admin", password: "correct-horse" };
@@ -42,6 +45,8 @@ const SECOND = `w18 ${RUN} b`;
 const DASHBOARD = `w18 ${RUN}`;
 /** What a stopped run of this spec left: `w18 <digits>` and `w18 <digits> b`. */
 const LEFTOVER = /^w18 \d+( b)?$/;
+/** The custom_unit of the one mapping this spec makes (on a free point): the mark that it is the spec's own, so sweep() knows what it may delete with a leftover asset. */
+const SPEC_UNIT = "w18-spec";
 /** The standard control height in px (`--ctl-h`): the Find field, the Live chip and the buttons. */
 const CTL_H = 34;
 
@@ -52,16 +57,19 @@ const DARK: Look = { mode: "dark", theme: "desert-gold" };
 interface ApiAsset { id: number; parent_id: number | null; name: string }
 interface ApiNamed { id: number; name: string }
 interface ApiPoint { id: number; address: string; mapping: { id: number; asset_id: number } | null }
+interface ApiSummary { metrics: { mapping_id: number }[] }
+interface ApiMapping { id: number; custom_unit: string | null }
 interface Box { x: number; y: number; width: number; height: number }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // What the cases need from the stack
 
+/** The asset whose page shows the "live" chip: a real asset that already has a mapped metric, else the `w18 <run>` asset this run made. */
 let assetId = 0;
-let secondId = 0;
+let assetName = ASSET;
 let dashboardId = 0;
-/** A mapping moved over to the asset for the run (when no point was free): where it goes back to. */
-let moved: { mappingId: number; from: number } | null = null;
+/** The assets this run made (none on a stack that has a mapped asset and two top-level assets): afterAll deletes exactly these. */
+const made: number[] = [];
 
 async function asAdmin<T>(browser: Browser, use: (request: APIRequestContext) => Promise<T>): Promise<T> {
   const context = await browser.newContext({ baseURL: BASE_URL });
@@ -86,32 +94,41 @@ async function createAsset(request: APIRequestContext, name: string): Promise<nu
   return ((await made.json()) as ApiAsset).id;
 }
 
-/** Takes away what a stopped run left (assets with their mappings, dashboards). */
+/**
+ * Takes away what a stopped run left (assets, dashboards). A `w18 ` asset is deleted only when every mapping it holds carries the spec's mark (custom_unit `w18-spec`): a mapping without it is a real one
+ * (an older version of this spec moved real mappings onto its asset), and deleting the asset would delete it, so the run stops with a message instead.
+ */
 async function sweep(request: APIRequestContext): Promise<void> {
-  for (const asset of (await getJson<ApiAsset[]>(request, "/api/assets")).filter((a) => LEFTOVER.test(a.name))) await request.delete(`/api/assets/${asset.id}?confirm=true`);
+  for (const asset of (await getJson<ApiAsset[]>(request, "/api/assets")).filter((a) => LEFTOVER.test(a.name))) {
+    for (const metric of (await getJson<ApiSummary>(request, `/api/assets/${asset.id}/summary`)).metrics) {
+      const mapping = await getJson<ApiMapping>(request, `/api/mappings/${metric.mapping_id}`);
+      if (mapping.custom_unit !== SPEC_UNIT) {
+        throw new Error(`w18: refusing to delete the leftover asset "${asset.name}" (id ${asset.id}): it holds mapping ${mapping.id}, which this spec did not make (no custom_unit "${SPEC_UNIT}"). Move that mapping back to its own asset, then run again.`);
+      }
+    }
+    await request.delete(`/api/assets/${asset.id}?confirm=true`);
+  }
   for (const dashboard of (await getJson<ApiNamed[]>(request, "/api/dashboards")).filter((d) => LEFTOVER.test(d.name))) await request.delete(`/api/dashboards/${dashboard.id}`);
 }
 
-/**
- * Gives the asset one mapped point, so its page shows the "live" chip (the chip is there when the asset has a mapped metric). A free point of any source is mapped; when there is none (the look stack's
- * seed maps all of its points) a mapped point is moved over to the asset, and afterAll moves it back. A stack with no point at all fails the run, never skips it.
- */
-async function mapAPoint(request: APIRequestContext, forAsset: number): Promise<void> {
-  let candidate: { mappingId: number; asset: number } | null = null;
-  for (const source of await getJson<ApiNamed[]>(request, "/api/sources")) {
-    for (const point of await getJson<ApiPoint[]>(request, `/api/sources/${source.id}/points`)) {
-      if (point.mapping === null) {
-        const made = await request.post("/api/mappings", { data: { point_id: point.id, asset_id: forAsset, metric: "active_power_kw", scale: 1, interval_seconds: null, custom_unit: null } });
-        expect(made.status(), `mapping the free point ${point.address} to the asset: ${await made.text()}`).toBe(201);
-        return;
-      }
-      candidate ??= { mappingId: point.mapping.id, asset: point.mapping.asset_id };
-    }
+/** Every point of every source, read only. */
+async function allPoints(request: APIRequestContext): Promise<ApiPoint[]> {
+  const points: ApiPoint[] = [];
+  for (const source of await getJson<ApiNamed[]>(request, "/api/sources")) points.push(...(await getJson<ApiPoint[]>(request, `/api/sources/${source.id}/points`)));
+  return points;
+}
+
+/** The first asset (not a `w18 ` one) whose summary lists a mapped metric, so its page shows the "live" chip; null when the stack has none. Reads only. */
+async function findMappedAsset(request: APIRequestContext, assets: ApiAsset[], points: ApiPoint[]): Promise<ApiAsset | null> {
+  const byId = new Map(assets.map((a) => [a.id, a]));
+  const tried = new Set<number>();
+  for (const point of points) {
+    const asset = point.mapping === null ? undefined : byId.get(point.mapping.asset_id);
+    if (asset === undefined || asset.name.startsWith("w18 ") || tried.has(asset.id)) continue;
+    tried.add(asset.id);
+    if ((await getJson<ApiSummary>(request, `/api/assets/${asset.id}/summary`)).metrics.length > 0) return asset;
   }
-  expect(candidate, "the stack has no source with a point: w18 needs one point to map so the asset page shows its live chip").not.toBeNull();
-  const move = await request.patch(`/api/mappings/${candidate!.mappingId}`, { data: { asset_id: forAsset } });
-  expect(move.ok(), `moving a mapping to the asset: ${move.status()} ${await move.text()}`).toBe(true);
-  moved = { mappingId: candidate!.mappingId, from: candidate!.asset };
+  return null;
 }
 
 test.beforeAll(async ({ browser }) => {
@@ -119,26 +136,34 @@ test.beforeAll(async ({ browser }) => {
     const saved = await request.put("/api/me/preferences", { data: LIGHT });
     expect(saved.ok(), `starting from the light look: ${saved.status()} ${await saved.text()}`).toBe(true);
     await sweep(request);
-    assetId = await createAsset(request, ASSET);
-    secondId = await createAsset(request, SECOND);
+    const assets = await getJson<ApiAsset[]>(request, "/api/assets");
+    const points = await allPoints(request);
+    let tops = assets.filter((a) => a.parent_id === null).length;
+    const existing = await findMappedAsset(request, assets, points);
+    if (existing) {
+      assetId = existing.id;
+      assetName = existing.name;
+    } else {
+      // Only a stack with no mapped asset: the asset of the run and ONE mapping of a free point (a point that is mapped is never touched).
+      const free = points.find((p) => p.mapping === null);
+      expect(free, "the stack has no mapped asset and no free point: w18 needs one or the other so an asset page shows its live chip, and it never moves a mapping").toBeDefined();
+      assetId = await createAsset(request, ASSET);
+      made.push(assetId);
+      tops++;
+      const mapped = await request.post("/api/mappings", { data: { point_id: free!.id, asset_id: assetId, metric: "active_power_kw", scale: 1, interval_seconds: null, custom_unit: SPEC_UNIT } });
+      expect(mapped.status(), `mapping the free point ${free!.address} to the asset: ${await mapped.text()}`).toBe(201);
+    }
+    if (tops < 2) made.push(await createAsset(request, SECOND)); // the bulk remove case picks two top-level rows
     const dashboard = await request.post("/api/dashboards", { data: { name: DASHBOARD, range: "24h" } });
     expect(dashboard.ok(), `creating the dashboard: ${dashboard.status()} ${await dashboard.text()}`).toBe(true);
     dashboardId = ((await dashboard.json()) as ApiNamed).id;
-    await mapAPoint(request, assetId);
   });
 });
 
 test.afterAll(async ({ browser }) => {
   await asAdmin(browser, async (request) => {
     const failures: string[] = [];
-    // A moved mapping goes home first: deleting the asset would delete it with the asset.
-    if (moved) {
-      const back = await request.patch(`/api/mappings/${moved.mappingId}`, { data: { asset_id: moved.from } });
-      if (!back.ok()) failures.push(`moving mapping ${moved.mappingId} back to asset ${moved.from}: ${back.status()} ${await back.text()}`);
-      moved = null;
-    }
-    for (const id of [assetId, secondId]) {
-      if (id === 0) continue;
+    for (const id of made.splice(0)) {
       const gone = await request.delete(`/api/assets/${id}?confirm=true`);
       if (![200, 204, 404].includes(gone.status())) failures.push(`deleting asset ${id}: ${gone.status()}`);
     }
@@ -272,6 +297,8 @@ const SKIPPED_INSIDE = "[inert], [hidden], .react-flow, .tree-scroll, .sk-shell,
 interface RowsReport {
   /** The pairs on one line that both have an edge and are not allowed to differ: the pairs compared. */
   pairs: number;
+  /** Of those, the pairs with neither control inside the top bar (`.navbar`): the page's own. */
+  pagePairs: number;
   /** One line per compared pair whose heights differ by more than 1 px. */
   violations: string[];
   /** Every control that counted as having an edge (the allow-list left out), named as the violations name them. */
@@ -332,6 +359,7 @@ async function measureRows(page: Page): Promise<RowsReport> {
     const controls = [...document.querySelectorAll(candidates)].filter(isShown).filter((el) => !isAllowed(el)).filter(hasEdge);
     const violations: string[] = [];
     let pairs = 0;
+    let pagePairs = 0;
     for (let i = 0; i < controls.length; i++) {
       for (let j = i + 1; j < controls.length; j++) {
         const a = controls[i];
@@ -340,12 +368,13 @@ async function measureRows(page: Page): Promise<RowsReport> {
         const ra = a.getBoundingClientRect();
         const rb = b.getBoundingClientRect();
         if (Math.abs((ra.top + ra.bottom) / 2 - (rb.top + rb.bottom) / 2) > 6) continue;
-        if (lowestCommon(a, b).getBoundingClientRect().height > Math.max(ra.height, rb.height) + 48) continue;
+        if (lowestCommon(a, b).getBoundingClientRect().height > Math.max(ra.height, rb.height) + 56) continue;
         pairs++;
+        if (a.closest(".navbar") === null && b.closest(".navbar") === null) pagePairs++;
         if (Math.abs(ra.height - rb.height) > 1) violations.push(`${describe(a)} is ${ra.height}px high beside ${describe(b)} at ${rb.height}px`);
       }
     }
-    return { pairs, violations, edged: controls.map(describe) };
+    return { pairs, pagePairs, violations, edged: controls.map(describe) };
   }, { candidates: CANDIDATES, allowed: ALLOWED, skipped: SKIPPED_INSIDE });
 }
 
@@ -439,7 +468,7 @@ interface PageCase {
   open: (page: Page) => Promise<void>;
   /** Two or three controls of the page by name: the page is the one it should be, and loaded. */
   named: (page: Page) => Locator[];
-  /** At least this many pairs were compared: the top bar's Find field and Live chip are one, the rest is the page's own bars. */
+  /** At least this many of the PAGE'S OWN pairs were compared (`pagePairs`: neither control in the top bar, whose Find field and Live chip are one pair on every page). Why a page's floor is what it is: see PAGES. */
   floor: number;
 }
 
@@ -452,37 +481,59 @@ async function openCloseDialog(page: Page): Promise<void> {
   await expect(page.getByRole("dialog")).toBeVisible();
 }
 
+// The floors count the page's own pairs (`pagePairs`), read from the pages at 1440 and 1024 on the look stack (the largest count in brackets) and set to what holds on any stack: a bar that is the page's
+// own (a Billing answer is mocked, the dashboard is the spec's own) is counted from its controls; a count that depends on the stack's data is kept lower. A floor of 0 says why on the line above it:
+// the page has no bar of two edged controls on one line, so its case checks the heights of what is there and the named controls, nothing more.
 const PAGES: readonly PageCase[] = [
-  { name: "Assets Tree", open: goTo("/assets"), floor: 1, named: (p) => [btn(p, "Add asset"), p.getByPlaceholder("Filter by name or kind")] },
-  { name: "an asset page", open: goTo(() => `/assets/${assetId}`), floor: 5, named: (p) => [p.locator(".page-head .actions > .chip"), btn(p.locator(".page-head .actions"), "Edit"), btn(p.locator(".page-head .actions"), "Add asset")] },
-  { name: "Asset kinds", open: goTo("/assets/kinds"), floor: 5, named: (p) => [btn(p, "New kind"), p.getByRole("button", { name: /^All \d+$/ })] },
-  { name: "Dashboards", open: goTo("/dashboards"), floor: 1, named: (p) => [btn(p, "New dashboard")] },
-  { name: "a dashboard", open: goTo(() => `/dashboards/${dashboardId}`), floor: 2, named: (p) => [btn(p, "Edit"), p.getByLabel("Dashboard range")] },
+  // floor 0: the Filter box sits in the tree column and Add asset in the page header, never on one line (the tree's own buttons have no edge at rest).
+  { name: "Assets Tree", open: goTo("/assets"), floor: 0, named: (p) => [btn(p, "Add asset"), p.getByPlaceholder("Filter by name or kind")] },
+  // 6: the header's four edged controls on one line (the live chip, Edit, Delete, Add asset); the page brings more (16: the trend's metric select and range buttons, the tree's Move to...).
+  { name: "an asset page", open: goTo(() => `/assets/${assetId}`), floor: 6, named: (p) => [p.locator(".page-head .actions > .chip"), btn(p.locator(".page-head .actions"), "Edit"), btn(p.locator(".page-head .actions"), "Add asset")] },
+  // 6: the four filter chips (All, Starter, Yours, Unused) on one line (7 with the page header's two buttons).
+  { name: "Asset kinds", open: goTo("/assets/kinds"), floor: 6, named: (p) => [btn(p, "New kind"), p.getByRole("button", { name: /^All \d+$/ })] },
+  // floor 0: New dashboard is the only control on the page with an edge at rest.
+  { name: "Dashboards", open: goTo("/dashboards"), floor: 0, named: (p) => [btn(p, "New dashboard")] },
+  // 1: the range select beside Edit.
+  { name: "a dashboard", open: goTo(() => `/dashboards/${dashboardId}`), floor: 1, named: (p) => [btn(p, "Edit"), p.getByLabel("Dashboard range")] },
   {
+    // 10: name, range, Add widget, Save and Cancel on one line (10).
     name: "a dashboard in edit mode",
     open: async (p) => { await p.goto(`/dashboards/${dashboardId}`); await btn(p, "Edit").click(); },
-    floor: 6,
+    floor: 10,
     named: (p) => [p.getByLabel("Dashboard name"), btn(p, "Add widget"), btn(p, "Save"), btn(p, "Cancel")],
   },
-  { name: "Billing, an open month", billing: "open", open: openBilling, floor: 8, named: (p) => [btn(p, "Previous month"), btn(p, "Next month"), p.getByLabel("Year", { exact: true }), p.getByLabel("Month", { exact: true }), btn(p, "Expand all")] },
+  // 10: the month bar (Previous, Next, Year, Month) and the tools bar (filter, Collapse all, Expand all, Show levels) with Download CSV (12).
+  { name: "Billing, an open month", billing: "open", open: openBilling, floor: 10, named: (p) => [btn(p, "Previous month"), btn(p, "Next month"), p.getByLabel("Year", { exact: true }), p.getByLabel("Month", { exact: true }), btn(p, "Expand all")] },
   {
+    // 14: the same bars with the Closed chip and Reopen month (17).
     name: "Billing, a closed month",
     billing: "closed",
     open: openBilling,
-    floor: 9,
+    floor: 14,
     named: (p) => [p.locator(".month-state .chip"), btn(p, "Previous month"), btn(p, "Next month"), btn(p, "Reopen month…"), btn(p, "Expand all")],
   },
-  { name: "Billing, the Close month dialog", billing: "open", open: openCloseDialog, floor: 2, named: (p) => [btn(p.getByRole("dialog"), "Cancel"), btn(p.getByRole("dialog"), "Close month")] },
-  { name: "Sources", open: goTo("/sources"), floor: 2, named: (p) => [btn(p, "Test all"), btn(p, "Add source")] },
-  { name: "Scans", open: goTo("/scans"), floor: 1, named: (p) => [btn(p, "New scope")] },
-  { name: "Users", open: goTo("/users"), floor: 1, named: (p) => [p.getByLabel("Username", { exact: true }), btn(p, "Create user")] },
-  { name: "Roles", open: goTo("/users/roles"), floor: 1, named: (p) => [btn(p, "New role")] },
-  { name: "Settings", open: goTo("/settings"), floor: 1, named: (p) => [p.getByLabel("Timezone", { exact: true }), btn(p, "Save sign-in protection")] },
-  { name: "Tariffs", open: goTo("/tariffs"), floor: 2, named: (p) => [p.getByLabel("Currency", { exact: true }), btn(p, "Add rate").first()] },
-  { name: "Storage", open: goTo("/storage"), floor: 3, named: (p) => [p.getByLabel("Rows from day", { exact: true }), p.getByLabel("Raw retention (days)", { exact: true }), btn(p, "Set as default")] },
+  // 12: the bars of the page behind the dialog (14 with the dialog's Cancel and Close month).
+  { name: "Billing, the Close month dialog", billing: "open", open: openCloseDialog, floor: 12, named: (p) => [btn(p.getByRole("dialog"), "Cancel"), btn(p.getByRole("dialog"), "Close month")] },
+  // 1: Test all beside Add source (the stack has a source: w18 needs a point of one).
+  { name: "Sources", open: goTo("/sources"), floor: 1, named: (p) => [btn(p, "Test all"), btn(p, "Add source")] },
+  // floor 0: New scope is the only control on the page with an edge at rest.
+  { name: "Scans", open: goTo("/scans"), floor: 0, named: (p) => [btn(p, "New scope")] },
+  // 6: Username, Password, Role and Create user on one line (the form is 84 px high with its labels above, so the bar limit of 34 + 56 is what lets it count).
+  { name: "Users", open: goTo("/users"), floor: 6, named: (p) => [p.getByLabel("Username", { exact: true }), btn(p, "Create user")] },
+  // floor 0: New role is the only edged control on its line (the Users and Roles tabs above it are on a line of their own).
+  { name: "Roles", open: goTo("/users/roles"), floor: 0, named: (p) => [btn(p, "New role")] },
+  // floor 0: the two cards stack their fields one under another and each keeps its Save at its foot, so no two edged controls of one card share a line.
+  { name: "Settings", open: goTo("/settings"), floor: 0, named: (p) => [p.getByLabel("Timezone", { exact: true }), btn(p, "Save sign-in protection")] },
+  // 1: the Currency field beside its Save button (the rate rows, with their labels and tips above the fields, are taller than the checker's bar limit and are not counted).
+  { name: "Tariffs", open: goTo("/tariffs"), floor: 1, named: (p) => [p.getByLabel("Currency", { exact: true }), btn(p, "Add rate").first()] },
+  // 2: the date fields and the retention card's buttons.
+  { name: "Storage", open: goTo("/storage"), floor: 2, named: (p) => [p.getByLabel("Rows from day", { exact: true }), p.getByLabel("Raw retention (days)", { exact: true }), btn(p, "Set as default")] },
+  // 20: the filter bar and the pager (52 at 1440, 40 at 1024); kept well under what they give, so a wrap at another width does not fail it.
   { name: "Audit", open: goTo("/audit"), floor: 20, named: (p) => [btn(p, "Export CSV"), btn(p, "Today"), p.getByLabel("Go to date", { exact: true })] },
-  { name: "Diagnostics", open: goTo("/diagnostics"), floor: 2, named: (p) => [btn(p, "Build report"), btn(p, "Run connection check")] },
-  { name: "Password", open: goTo("/password"), floor: 1, named: (p) => [p.getByLabel("Current password", { exact: true }), btn(p, "Change password")] },
+  // 1: the connection check's source select beside Run connection check (Build report and its select are each on a line of their own).
+  { name: "Diagnostics", open: goTo("/diagnostics"), floor: 1, named: (p) => [btn(p, "Build report"), btn(p, "Run connection check")] },
+  // floor 0: the three password fields stack, and Change password sits under them.
+  { name: "Password", open: goTo("/password"), floor: 0, named: (p) => [p.getByLabel("Current password", { exact: true }), btn(p, "Change password")] },
 ];
 
 async function measurePage(page: Page, c: PageCase): Promise<void> {
@@ -491,7 +542,7 @@ async function measurePage(page: Page, c: PageCase): Promise<void> {
   for (const named of c.named(page)) await expect(named, `${c.name}: a named control is there`).toBeVisible();
   const report = await measureRows(page);
   expect(report.violations, `${c.name}: no two controls on one line differ in height`).toEqual([]);
-  expect(report.pairs, `${c.name}: pairs compared (the controls with an edge: ${report.edged.join(" | ")})`).toBeGreaterThanOrEqual(c.floor);
+  expect(report.pagePairs, `${c.name}: the page's own pairs compared (the controls with an edge: ${report.edged.join(" | ")})`).toBeGreaterThanOrEqual(c.floor);
 }
 
 for (const width of [1440, 1024]) {
@@ -521,7 +572,7 @@ for (const name of ["Billing, a closed month", "Audit", "an asset page", "Assets
       for (const named of c.named(page)) await expect(named, `${c.name}: a named control is there`).toBeVisible();
       const report = await measureRows(page);
       expect(report.violations, `${name}: no two controls on one line differ in height`).toEqual([]);
-      expect(report.pairs, `${name}: pairs compared (${report.edged.join(" | ")})`).toBeGreaterThanOrEqual(c.floor);
+      expect(report.pagePairs, `${name}: the page's own pairs compared (${report.edged.join(" | ")})`).toBeGreaterThanOrEqual(c.floor);
       // The rule is by alpha: a theme that made an edge transparent would hide a pair, so the two controls of the top bar must still count.
       expect(report.edged.some((e) => e.startsWith("span.live ")), `the Live chip has an edge in dark (${report.edged.join(" | ")})`).toBe(true);
       expect(report.edged.some((e) => e.startsWith("input ") && e.includes("Find an asset or page")), `the Find field has an edge in dark (${report.edged.join(" | ")})`).toBe(true);
@@ -636,8 +687,9 @@ const counted = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`
 /** The sentence the delete dialogs have always said (lib/impact.ts assetLoss), written here again. */
 const LOSS = (assets: number, mappings: number, tariffs: number) =>
   `${counted(assets, "asset")}, ${counted(mappings, "mapping")} and ${counted(tariffs, "tariff")} will be deleted; their past energy and cost figures disappear from Billing and dashboards, except in closed months, which keep their billed figures.`;
-/** What the note must say, in its key words: a month that is not closed loses the figures, closing first keeps a finished month, the hourly summaries stay. */
-const NOTE_WORDS = ["not closed", "close that month", "hourly summaries stay"] as const;
+/** What the note of an ASSET delete must say, in its key words: a month that is not closed loses the figures, closing first keeps a finished month, mapping the same points again brings the figures back.
+ * (A source's note says "cannot be mapped again" instead: its points go with it. No case here removes a source.) */
+const NOTE_WORDS = ["not closed", "close that month", "get their figures back"] as const;
 
 /** The dialog's note is inside the region its `aria-describedby` names (the polite description), and Cancel has the focus. */
 async function expectNoteDescribesDialog(dialog: Locator, note: Locator): Promise<void> {
@@ -652,8 +704,8 @@ test("6a. the remove dialog of an asset with energy data keeps its sentence and 
   await answerImpact(page, assetId, { assets: 3, mappings: 3, tariffs: 0 });
   await page.goto(`/assets/${assetId}`);
   await loaded(page);
-  await btn(page.locator(".page-head"), `Delete ${ASSET}`).click();
-  const dialog = page.getByRole("dialog", { name: `Delete "${ASSET}"?`, exact: true });
+  await btn(page.locator(".page-head"), `Delete ${assetName}`).click();
+  const dialog = page.getByRole("dialog", { name: `Delete "${assetName}"?`, exact: true });
   await expect(dialog).toBeVisible();
   await expect(btn(dialog, "Delete anyway"), "the numbers are in").toBeEnabled();
   await expect(dialog.locator(".confirm-body"), "the old sentence is still there").toContainText(LOSS(3, 3, 0));
@@ -670,8 +722,8 @@ test("6b. the remove dialog of a leaf has no note and says only that it cannot b
   await answerImpact(page, assetId, { assets: 1, mappings: 0, tariffs: 0 });
   await page.goto(`/assets/${assetId}`);
   await loaded(page);
-  await btn(page.locator(".page-head"), `Delete ${ASSET}`).click();
-  const dialog = page.getByRole("dialog", { name: `Delete "${ASSET}"?`, exact: true });
+  await btn(page.locator(".page-head"), `Delete ${assetName}`).click();
+  const dialog = page.getByRole("dialog", { name: `Delete "${assetName}"?`, exact: true });
   await expect(dialog).toBeVisible();
   await expect(btn(dialog, "Delete"), "the numbers are in").toBeEnabled();
   await expect(dialog.locator(".confirm-body"), "the plain message").toHaveText("This can't be undone.");
@@ -683,18 +735,27 @@ test("6b. the remove dialog of a leaf has no note and says only that it cannot b
 
 test("6c. the bulk remove dialog of the Assets Tree's pick bar shows the note for assets with energy data", async ({ page }) => {
   await prepare(page);
-  for (const id of [assetId, secondId]) await answerImpact(page, id, { assets: 1, mappings: 2, tariffs: 0 });
   await page.goto("/assets");
   await loaded(page);
-  await treeLink(page, ASSET).click({ modifiers: ["Control"] });
-  await treeLink(page, SECOND).click({ modifiers: ["Control"] });
-  const bar = page.getByRole("region", { name: "Asset tree" }).getByRole("group", { name: "Selection", exact: true });
+  // The first two top-level rows of the tree, whatever the stack holds: they are picked and never deleted (the impact is answered here, the confirming button is not pressed).
+  const tree = page.getByRole("region", { name: "Asset tree" });
+  const tops = await tree.evaluate((region) =>
+    [...region.querySelectorAll<HTMLElement>(".node[data-asset-id]")].filter((node) => node.closest("li")?.parentElement?.closest("li") == null).slice(0, 2).map((node) => Number(node.dataset.assetId)),
+  );
+  expect(tops.length, "the Assets Tree has two top-level rows to pick").toBe(2);
+  // The dialog checks the server's count of assets under each pick against the asset list, so the answer for a row with sub-assets counts them (the row and everything below it).
+  const list = (await (await page.request.get("/api/assets")).json()) as ApiAsset[];
+  const below = (id: number): number => 1 + list.filter((a) => a.parent_id === id).reduce((sum, child) => sum + below(child.id), 0);
+  const counts = tops.map(below);
+  for (const [i, id] of tops.entries()) await answerImpact(page, id, { assets: counts[i], mappings: 2, tariffs: 0 });
+  for (const id of tops) await tree.locator(`a[href="/assets/${id}"]`).click({ modifiers: ["Control"] });
+  const bar = tree.getByRole("group", { name: "Selection", exact: true });
   await expect(bar).toContainText("2 picked");
   await btn(bar, "Delete the 2 picked assets").click();
   const dialog = page.getByRole("dialog", { name: "Delete 2 assets?", exact: true });
   await expect(dialog).toBeVisible();
   await expect(btn(dialog, "Delete anyway"), "the numbers are in").toBeEnabled();
-  await expect(dialog.locator(".confirm-body"), "the sentence of the two picks together").toContainText(LOSS(2, 4, 0));
+  await expect(dialog.locator(".confirm-body"), "the sentence of the two picks together").toContainText(LOSS(counts[0] + counts[1], 4, 0));
   const note = dialog.locator(".confirm-note");
   await expect(note, "one note paragraph").toHaveCount(1);
   for (const words of NOTE_WORDS) await expect(note, `the note says "${words}"`).toContainText(words);

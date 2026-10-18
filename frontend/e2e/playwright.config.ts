@@ -288,9 +288,11 @@ export default defineConfig({
       dependencies: ["w14"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
-    // MEASURES the real pages (control heights on one line, the note box of the Close month and Reopen month dialogs, the remove dialogs) and needs nothing from the stack's own data. beforeAll
-    // makes what it needs through the API and afterAll takes it away again, also after a failed case: two assets `w18 <run>` and `w18 <run> b` (the first with one point mapped, so its page shows
-    // the "live" chip: a free point of any source, else a mapping moved over for the run and moved back), and a dashboard `w18 <run>`. Every Billing case answers GET /api/billing/costs, /months and
+    // MEASURES the real pages (control heights on one line, the note box of the Close month and Reopen month dialogs, the remove dialogs). It needs from the stack either an asset that already has a
+    // mapped metric (its page shows the "live" chip; then NO asset and NO mapping is made, the spec only reads) or, when there is none, at least one source with a FREE point (it makes the asset
+    // `w18 <run>` and ONE mapping of that point, marked custom_unit `w18-spec`; a stack with neither fails the run with a message). It never moves, edits or deletes a mapping that was there before
+    // it, and sweep() refuses to delete a leftover `w18 ` asset that holds a mapping it did not make. A stack with fewer than two top-level assets gets an unmapped `w18 <run> b` (the bulk remove
+    // case picks two rows), and a dashboard `w18 <run>` is made for the dashboard cases; afterAll deletes only what the run made, also after a failed case. Every Billing case answers GET /api/billing/costs, /months and
     // /costs.csv through page.route from e2e/billingModel.ts and the remove dialogs get GET /api/assets/{id}/impact from page.route, so any other write the page tries is refused with a 500 and fails
     // the case (the Close month, Reopen month and delete buttons are never pressed). Its cases set the admin's look (light navy-gold, dark desert-gold) through PUT /api/me/preferences and
     // afterAll puts it back to light navy-gold. Each case that needs a window size sets it itself (1920, 1440, 1024, 800 wide).

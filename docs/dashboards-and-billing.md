@@ -220,12 +220,13 @@ can **close** it: the Billing page stores the figures it shows for that month an
 - **Removing assets or sources, and the readings.** A month that is not closed is worked out from today's tree and mappings, so removing
   assets (or the source that feeds them) takes their figures out of every month that is not closed, and out of the dashboards; a closed
   month keeps what it billed. When a removal takes mappings with it, its confirmation says so in a paragraph of its own, under the
-  sentence with the counts: *Billing for every month that is not closed is worked out from today's assets (mappings, for a source), so
-  those months lose these figures. To keep a finished month's bill, close that month before you delete. The readings stay stored:
-  retention removes the raw and 1-minute ones later, and the hourly summaries stay.* Only a finished month can be closed, so the
-  current month always follows the tree. No removal ever deletes readings (the table has no link to assets or points), which is why the
-  database does not shrink after you remove assets: retention drops the raw and 1-minute readings when their days are up
-  ([Storage](storage.md)).
+  sentence with the counts: *Months that are not closed follow today's assets, so they lose these figures. To keep a finished month's
+  bill, close that month before you delete. The meter readings themselves stay stored: map the same points to an asset again and those
+  months get their figures back.* A source's note differs in one fact: a source's points go with it, so its figures cannot be mapped
+  back (the stored readings stay on disk, and the retention limits on the Storage page trim the detailed ones in time). Only a finished
+  month can be closed, so the current month always follows the tree. No removal ever deletes readings (the table has no link to assets
+  or points), which is why the database does not shrink after you remove assets: retention drops the raw and 1-minute readings when
+  their days are up ([Storage](storage.md)).
 - **Size.** A snapshot holds every asset and every day of the month as JSON: about 5 MB for a big site (2,000 assets, 31 days),
   stored once per close and compressed by the database. There is no cap, and a reopened snapshot stays in the database.
 
