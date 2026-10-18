@@ -1,4 +1,4 @@
-import type { BillingAssetRow, BillingClosed, BillingLive } from "../api/types";
+import type { BillingClosed, BillingLive } from "../api/types";
 import { formatSiteDay, siteDay } from "./siteTime";
 
 /** `2026-01` moved by `delta` months, as plain `YYYY-MM` string maths (no Date, so no timezone can shift it). */
@@ -38,16 +38,6 @@ export function monthsOfYear(year: number, lowest: string, current: string): num
 /** `month` pulled into [lowest, current]; plain string compares are right for `YYYY-MM`. */
 export const clampMonth = (month: string, lowest: string, current: string) =>
   month < lowest ? lowest : month > current ? current : month;
-
-/** Tree depth per asset id. The API lists assets parents-first, so one pass over the parent chain is enough. */
-export function depthsByAsset(assets: readonly BillingAssetRow[]): Map<number, number> {
-  const depth = new Map<number, number>();
-  for (const a of assets) {
-    const parent = a.parent_id === null ? undefined : depth.get(a.parent_id);
-    depth.set(a.asset_id, parent === undefined ? 0 : parent + 1);
-  }
-  return depth;
-}
 
 export const fmtKwh = (kwh: number) => kwh.toFixed(1);
 export const fmtCost = (cost: number) => cost.toFixed(2);

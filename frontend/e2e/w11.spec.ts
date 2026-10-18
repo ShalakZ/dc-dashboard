@@ -432,8 +432,7 @@ async function expectDialogInWindow(page: Page, form: ReturnType<typeof monthDia
   }
   const sideways = await page.evaluate(() => {
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
-    // Max with 0: the Billing page keeps a stable scrollbar gutter (w17), and a gutter with no painted scrollbar reads scrollWidth below clientWidth.
-    return { page: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth), dialog: dialog ? dialog.scrollWidth - dialog.clientWidth : 0 };
+    return { page: document.documentElement.scrollWidth - document.documentElement.clientWidth, dialog: dialog ? dialog.scrollWidth - dialog.clientWidth : 0 };
   });
   expect(sideways, `${when}: nothing scrolls sideways with the dialog open`).toEqual({ page: 0, dialog: 0 });
 }
@@ -878,7 +877,7 @@ test.describe("W11: close month", () => {
         expect(banner.y + banner.height, "the banner is above the line about today").toBeLessThanOrEqual(delta.y + 0.5);
         expect(delta.y + delta.height, "the line about today is above the table").toBeLessThanOrEqual(grid.y + 0.5);
         const sideways = await page.evaluate(() => ({
-          page: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth), // (the stable gutter of w17 makes the difference negative)
+          page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           section: (document.querySelector(".billing-page") as HTMLElement).scrollWidth - (document.querySelector(".billing-page") as HTMLElement).clientWidth,
         }));
         expect(sideways, `nothing scrolls sideways at ${at}`).toEqual({ page: 0, section: 0 });

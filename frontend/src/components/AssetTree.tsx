@@ -459,10 +459,17 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
   // A new Set each time, so that it counts as a change and is remembered (Expand all on a big tree is remembered as `none`).
   const collapseAll = () => changeFold(() => new Set(foldable));
   const expandAll = () => changeFold(() => new Set());
+  // Always writes the fold (a new Set each time), so the new child must not appear inside a folded branch: it opens the branch if it is folded, and
+  // if it is not, the fold of this moment becomes the remembered one. Otherwise a leaf would turn foldable with its child, and a default of
+  // "level 2" would fold it, child and all, once the refetch lands.
   const addChild = useCallback((id: number) => {
-    unfold([id]);
-    onAddChild?.(id); // the new child must not appear inside a folded branch
-  }, [unfold, onAddChild]);
+    changeFold((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    onAddChild?.(id);
+  }, [changeFold, onAddChild]);
 
   // ---- W7p: picking, dragging, Move to... ----
   const movable = move !== undefined;
@@ -662,9 +669,12 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
     const box = column.current?.querySelector<HTMLElement>(".tree-scroll");
     if (!box) return;
     // Not scrollIntoView: it would scroll the page as well. A layout with no sizes (jsdom) gives zero rects, so nothing moves there.
+    // A row wholly outside the box is centred in it; a row cut by an edge moves only by the part that is out, so the one the person just clicked stays under the pointer.
     const b = box.getBoundingClientRect();
     const r = row.getBoundingClientRect();
-    if (r.top < b.top || r.bottom > b.bottom) box.scrollTop += (r.top + r.height / 2) - (b.top + b.height / 2);
+    if (r.bottom <= b.top || r.top >= b.bottom) box.scrollTop += (r.top + r.height / 2) - (b.top + b.height / 2);
+    else if (r.top < b.top) box.scrollTop -= b.top - r.top;
+    else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom;
   });
 
   const noFold = visible !== null || foldable.size === 0; // a filter has its own view of the tree

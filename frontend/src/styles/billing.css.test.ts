@@ -59,8 +59,19 @@ describe("the scroll box of the Billing table (W17, R4)", () => {
     );
   });
 
-  it("the page keeps the room of its scrollbar, so a fold or a filter that makes the page scroll moves nothing sideways", () => {
-    expect(prop(bodyOf(billing, "html:has(.billing-page)"), "scrollbar-gutter")).toBe("stable");
+  it("a classic scrollbar always has its track on Billing, so a fold or a filter that changes the height moves nothing sideways and no blank notch shows beside the top bar", () => {
+    const html = bodyOf(billing, "html:has(.billing-page)");
+    expect(prop(html, "overflow-y")).toBe("scroll");
+    expect(prop(html, "scrollbar-gutter")).toBeUndefined(); // a reserved gutter leaves a blank strip when the page does not scroll
+  });
+
+  it("a filter that matches nothing wraps its message and keeps it at the left edge: a long filter never widens the table", () => {
+    const body = bodyOf(billing, ".billing-page .bill-nomatch");
+    expect(prop(body, "position")).toBe("sticky");
+    expect(prop(body, "left")).toBe("0");
+    expect(prop(body, "white-space")).toBe("normal");
+    expect(prop(body, "max-width")).toBe("min(60ch, 70vw)");
+    expect(prop(body, "overflow-wrap")).toBe("anywhere");
   });
 
   it("the bar over the table holds its room while idle and shows nothing", () => {

@@ -50,8 +50,9 @@
   @media (max-height: 559.98px) {
     .billing-page .table-wrap.table-scroll { max-height: none; }
   }
-  /* The page's own scrollbar comes and goes when a fold or a filter changes the height: its room is kept, so Download CSV and the bars never shift sideways. */
-  html:has(.billing-page) { scrollbar-gutter: stable; }
+  /* A classic scrollbar always has its track on Billing, so folding or filtering never shifts the page sideways, and nothing blank shows beside the top bar
+     (a reserved gutter would leave a notch there when the page does not scroll). An overlay scrollbar is unaffected. */
+  html:has(.billing-page) { overflow-y: scroll; }
   /* The inert copy of the controls bar holds the bar's room while the costs load: the same box, nothing drawn. */
   .billing-page .billing-tools.is-idle { visibility: hidden; }
 
@@ -79,7 +80,7 @@
   .billing-page .bill-caret svg.i { width: 16px; height: 16px; }
   /* A filter that matches nothing: one row, and its words stay at the left edge of the box when the days are scrolled sideways. */
   .billing-page td:has(> .bill-nomatch) { padding: 0; }
-  .billing-page .bill-nomatch { position: sticky; left: 0; display: inline-block; padding: 14px 10px; color: var(--text-2); }
+  .billing-page .bill-nomatch { position: sticky; left: 0; display: inline-block; max-width: min(60ch, 70vw); padding: 14px 10px; color: var(--text-2); white-space: normal; overflow-wrap: anywhere; } /* a long filter wraps: the message never widens the table */
 
   /* The controls bar over the table (W17): one row that may wrap, 38px tall like the other controls. The inert copy that holds its room while the costs
      load is this same box. The rows line has a room of its own, so its words never move the controls. */

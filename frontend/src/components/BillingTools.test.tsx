@@ -33,20 +33,20 @@ describe("BillingTools", () => {
     expect(root).not.toHaveClass("is-idle");
   });
 
-  it("offers All and the levels 1 to the deepest, and reads Custom only while the fold matches no level", () => {
+  it("offers the levels 1 to the deepest and then All (the arrow keys walk one way), and reads Custom only while the fold matches no level", () => {
     bar();
-    expect(optionTexts()).toEqual(["All", "1", "2", "3"]);
+    expect(optionTexts()).toEqual(["1", "2", "3", "All"]);
     expect(levels()).toHaveValue("all");
   });
 
   it("names the level of the fold it is given, and Custom (disabled) for any other", () => {
     const { unmount } = render(<BillingTools typed="" onFilter={vi.fn()} model={chain} effective={foldedForLevel(chain, 2)} onFold={vi.fn()} line="" />);
     expect(levels()).toHaveValue("2");
-    expect(optionTexts()).toEqual(["All", "1", "2", "3"]);
+    expect(optionTexts()).toEqual(["1", "2", "3", "All"]);
     unmount();
     render(<BillingTools typed="" onFilter={vi.fn()} model={chain} effective={new Set([1])} onFold={vi.fn()} line="" />);
     expect(levels()).toHaveValue("custom");
-    expect(optionTexts()).toEqual(["All", "1", "2", "3", "Custom"]);
+    expect(optionTexts()).toEqual(["1", "2", "3", "All", "Custom"]);
     expect(within(levels()).getByRole("option", { name: "Custom" })).toBeDisabled();
   });
 

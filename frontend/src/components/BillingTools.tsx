@@ -88,8 +88,8 @@ export function BillingTools(props: { idle: true } | LiveTools) {
           disabled={locked}
           onChange={(event) => onFold(event.target.value === "all" ? new Set() : foldedForLevel(model, Number(event.target.value)))}
         >
-          <option value="all">All</option>
           {Array.from({ length: model.maxDepth }, (_, i) => <option key={i + 1} value={String(i + 1)}>{i + 1}</option>)}
+          <option value="all">All</option>{/* after the deepest level, so the arrow keys walk 1, 2 ... to All in one direction */}
           {level === null && <option value="custom" disabled>Custom</option>}
         </select>
         <InfoTip>{FOLD_TIP}</InfoTip>

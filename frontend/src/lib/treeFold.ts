@@ -4,12 +4,7 @@ import type { TreeNode } from "./tree";
 export const TREE_FOLD_KEY = "dcdash.assetTreeFolded";
 const KEY = TREE_FOLD_KEY;
 
-/** The ids of the folded branches the user left last time (empty when nothing is remembered). See `readFoldMemory` for what is ignored. */
-export function readFolded(): Set<number> {
-  return readFoldMemory(KEY) ?? new Set();
-}
-
-/** The same, but `null` when nothing is remembered (a first visit, or the empty `[]` that older versions wrote on every visit) and an empty set after an explicit Expand all. */
+/** The ids of the folded branches the user left last time: `null` when nothing is remembered (a first visit, or the empty `[]` that older versions wrote on every visit) and an empty set after an explicit Expand all. See `readFoldMemory` for what is ignored. */
 export const readFoldedOrNull = (): Set<number> | null => readFoldMemory(KEY);
 
 /** Remembers the folded ids: at most 5000, sorted, each once; an empty set is remembered as `none` (see `writeFoldMemory`). */

@@ -402,6 +402,46 @@ describe("AssetTree opens folded when it is big (w17)", () => {
     expectLevel2();
     expect(localStorage.getItem(KEY)).toBeNull();
   });
+
+  describe("adding a child (+)", () => {
+    // The 67 nodes above plus three leaves under the Root: 70 nodes, and "Lab" is a leaf at depth 1 (no twisty, so the default does not fold it).
+    const withLeaves = (extra: Asset[] = []) => buildTree([...bigAssets(), a(200, 1, "Lab"), a(201, 1, "Spare 1"), a(202, 1, "Spare 2"), ...extra]);
+    const lab = (extra: Asset[] = []) => ui({ nodes: withLeaves(extra), onAddChild });
+    let onAddChild: ReturnType<typeof vi.fn>;
+    beforeEach(() => { onAddChild = vi.fn(); });
+
+    it("the child of a leaf in a big tree with nothing remembered shows when it arrives: the + remembers the fold of the moment", async () => {
+      const view = render(lab());
+      expect(bigAssets().length + 3).toBe(70);
+      expect(localStorage.getItem(KEY)).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Add child of Lab" }));
+      expect(onAddChild).toHaveBeenCalledWith(200);
+      expect(savedFold()).toEqual(DEFAULT_FOLDED); // the default, written: it is what the person saw when they pressed +
+      // The refetch lands: Lab now has a child. A level-2 default would fold Lab (a foldable row at depth 1); the remembered fold does not.
+      view.rerender(lab([a(300, 200, "Lab rack")]));
+      const child = screen.getByRole("link", { name: "Lab rack" });
+      expect(child.closest("[hidden]")).toBeNull();
+      expect(expanded("Lab")).toBe("true");
+      expect(savedFold()).toEqual(DEFAULT_FOLDED); // the new foldable row is not added to what is folded
+      expect(expanded("Hall 1")).toBe("false"); // the rest is still at the default
+    });
+
+    it("without the + the same refetch folds the new child, which is what the + guards against", () => {
+      const view = render(lab());
+      view.rerender(lab([a(300, 200, "Lab rack")]));
+      expect(screen.getByRole("link", { name: "Lab rack", hidden: true }).closest("[hidden]")).not.toBeNull();
+    });
+
+    it("a folded branch is opened by the + on it, so its new child is not inside it", async () => {
+      localStorage.setItem(KEY, JSON.stringify(DEFAULT_FOLDED));
+      render(lab());
+      expect(expanded("Hall 1")).toBe("false");
+      // Hall 1's own + sits on its row, which is shown (the Root is open): pressing it opens the Hall before the child arrives.
+      await userEvent.click(screen.getByRole("button", { name: "Add child of Hall 1" }));
+      expect(expanded("Hall 1")).toBe("true");
+      expect(savedFold()).toEqual(DEFAULT_FOLDED.filter((id) => id !== 2));
+    });
+  });
 });
 
 describe("AssetTree scrolls the open asset into view (w17)", () => {
@@ -434,6 +474,27 @@ describe("AssetTree scrolls the open asset into view (w17)", () => {
     render(ui({ nodes: bigNodes(), selectedId: deep }));
     expect(scrollBox().scrollTop).toBe(0);
     expect(seen).toEqual([false]);
+  });
+
+  it("a row cut by the bottom edge scrolls by the part that is out, not to the middle", () => {
+    mockRects([100, 400], [380, 412]); // 12px below the box's bottom
+    render(ui({ nodes: bigNodes(), selectedId: deep }));
+    expect(scrollBox().scrollTop).toBe(12);
+  });
+
+  it("a row cut by the top edge scrolls back by the part that is out, not to the middle", () => {
+    mockRects([100, 400], [700, 730]);
+    const view = render(ui({ nodes: bigNodes(), selectedId: deep }));
+    expect(scrollBox().scrollTop).toBe(465); // far outside: centred
+    mockRects([100, 400], [88, 120]); // 12px above the box's top
+    view.rerender(ui({ nodes: bigNodes(), selectedId: rackId(3, 6, 1) }));
+    expect(scrollBox().scrollTop).toBe(465 - 12);
+  });
+
+  it("a row that only touches the box from outside counts as outside and is centred", () => {
+    mockRects([100, 400], [400, 430]); // its top is the box's bottom: none of it is in view
+    render(ui({ nodes: bigNodes(), selectedId: deep }));
+    expect(scrollBox().scrollTop).toBe(415 - 250);
   });
 
   it("a layout with no sizes (no rects) changes nothing", () => {

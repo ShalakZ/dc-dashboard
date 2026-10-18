@@ -1026,7 +1026,7 @@ describe("BillingPage folding and filtering", () => {
       expect(rowNames()).toEqual(["Site", "MV2", "LV Panel 1", "Spare", "Annex"]);
       expect(line()).toBe("All 5 rows shown");
       expect(levels()).toHaveValue("all");
-      expect(Array.from(levels().querySelectorAll("option")).map((o) => o.textContent)).toEqual(["All", "1", "2"]);
+      expect(Array.from(levels().querySelectorAll("option")).map((o) => o.textContent)).toEqual(["1", "2", "All"]);
       expect(localStorage.getItem(KEY)).toBeNull();
     });
 
@@ -1113,7 +1113,7 @@ describe("BillingPage folding and filtering", () => {
 
     it("Show levels folds to that level, and a manual change after it reads Custom until a level is chosen again", async () => {
       await showBig();
-      expect(Array.from(levels().querySelectorAll("option")).map((o) => o.textContent)).toEqual(["All", "1", "2", "3"]);
+      expect(Array.from(levels().querySelectorAll("option")).map((o) => o.textContent)).toEqual(["1", "2", "3", "All"]);
       await userEvent.selectOptions(levels(), "2");
       expect(rowNames()).toEqual(["Site", "Hall 1", "Hall 2", "Hall 3", "Hall 4", "Spare"]);
       expect(levels()).toHaveValue("2");

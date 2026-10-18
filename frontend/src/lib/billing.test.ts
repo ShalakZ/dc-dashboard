@@ -1,6 +1,6 @@
-import type { BillingAssetRow, BillingLive } from "../api/types";
+import type { BillingLive } from "../api/types";
 import {
-  clampMonth, closedOnText, depthsByAsset, fmtCost, fmtKwh, fmtRate, fmtSigned, fmtSignedKwh, liveDeltaText, MONTH_NAMES, monthLabel, monthsOfYear, shiftMonth, yearsBetween,
+  clampMonth, closedOnText, fmtCost, fmtKwh, fmtRate, fmtSigned, fmtSignedKwh, liveDeltaText, MONTH_NAMES, monthLabel, monthsOfYear, shiftMonth, yearsBetween,
 } from "./billing";
 
 describe("shiftMonth", () => {
@@ -27,22 +27,6 @@ describe("monthLabel and number formats", () => {
     expect(fmtRate(1)).toBe("1");
     expect(fmtRate(0)).toBe("0");
     expect(fmtRate(null)).toBe("—");
-  });
-});
-
-describe("depthsByAsset", () => {
-  const row = (asset_id: number, parent_id: number | null, name: string, path: string): BillingAssetRow => ({
-    asset_id, parent_id, name, path, rate_per_kwh: null, days: [], total: null,
-  });
-
-  it("derives depth from the parent chain, not from splitting the path on ' / '", () => {
-    const depth = depthsByAsset([
-      row(1, null, "Site", "Site"),
-      row(2, 1, "MV2", "Site / MV2"),
-      row(3, 2, "A / B", "Site / MV2 / A / B"), // an asset name that itself contains ' / '
-      row(4, 1, "Spare", "Site / Spare"),
-    ]);
-    expect([...depth]).toEqual([[1, 0], [2, 1], [3, 2], [4, 1]]);
   });
 });
 

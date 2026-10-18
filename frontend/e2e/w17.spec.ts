@@ -551,14 +551,14 @@ test("6. the header row and the first column stay in view while the rows scroll,
         expect(Math.abs(r.rowLeft - r.boxLeft), `${name}: a row header sits at the left of the box (${r.rowLeft} against ${r.boxLeft})`).toBeLessThanOrEqual(1);
         expect(r.rowHit, `${name}: the row header is on top at its own centre`).toBe(true);
         expect(r.cornerHit, `${name}: the corner is on top of both`).toBe(true);
-        expect(r.pageOver, `${name}: the page does not scroll sideways`).toBeLessThanOrEqual(0);
+        expect(r.pageOver, `${name}: the page does not scroll sideways`).toBe(0);
       });
     }
     await test.step("800 x 600: no sideways scroll, the bar and the table are there", async () => {
       await setLook(page, LIGHT);
       await page.setViewportSize({ width: 800, height: 600 });
       await openBilling(page);
-      expect(await pageOverflow(page), "the page does not scroll sideways").toBeLessThanOrEqual(0);
+      expect(await pageOverflow(page), "the page does not scroll sideways").toBe(0);
       await expect(page.locator(".billing-page .billing-tools:not(.is-idle)")).toBeVisible();
       await expect(filterBox(page)).toBeVisible();
       await expect(btn(page, "Collapse all")).toBeVisible();
@@ -567,7 +567,7 @@ test("6. the header row and the first column stay in view while the rows scroll,
       await expect(page.locator("table.billing thead th").first()).toBeVisible();
       await btn(page, "Expand all").click();
       await expect(bodyRows(page)).toHaveCount(370);
-      expect(await pageOverflow(page), "nor with every row open").toBeLessThanOrEqual(0);
+      expect(await pageOverflow(page), "nor with every row open").toBe(0);
     });
   } finally {
     await setLook(page, LIGHT);
