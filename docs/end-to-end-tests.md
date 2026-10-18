@@ -336,6 +336,16 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   while typing, both buttons reachable at 800 x 600) and that the removal confirmations show the new note paragraph only when the
   removal has mappings. It makes what it needs (an asset with a mapped point, a dashboard) and removes it again; Billing is answered by
   `page.route` from `e2e/billingModel.ts`, so it writes nothing else.
+- `w20.spec.ts` (its own project, last in the list, after `w18`, the tail of the chain) checks the Billing toolbar. It writes nothing and
+  needs nothing from the stack beyond the sign-in and the look preference: `GET /api/billing/costs` and the month list are answered in
+  the page by `page.route` from the generated pilot-hall month (`e2e/billingModel.ts`: an open month, a closed month, one missing rate,
+  the two empty answers), and any other write the page tries is refused and fails the case. It measures the real page. At 1920 px the
+  month controls and the table controls share one row (one centre line, 34 px tall, the table controls on one line); at 1860, 1440,
+  1280, 1024 and 800 px they stack with nothing overlapping or clipped; the switch is exactly at 99rem of the page's own width (1583 px
+  stacks, 1585 px shares a row); nothing above the table moves when the costs land, when a fold, a filter or another month changes the
+  rows; the Tab order runs from the month controls to the table controls; the "Showing N of M rows" line is a polite live region in
+  the table's caption that stays at the right edge of the table box while it scrolls sideways; and a closed month, a missing-rate month
+  and the two empty answers keep the toolbar first, the banner next and the table box inside the window. Light and dark.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

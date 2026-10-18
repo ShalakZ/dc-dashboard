@@ -302,5 +302,15 @@ export default defineConfig({
       dependencies: ["w17"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // WRITES NOTHING and needs nothing from the stack beyond the sign-in, the site's time zone and the look preference (the Billing toolbar of w20): every case answers GET /api/billing/costs and
+    // /api/billing/months through page.route from e2e/billingModel.ts (370 rows: an open month, a closed month, one missing rate, the two empty answers), and any other write the page tries is
+    // refused with a 500 and fails the case. Its cases set the admin's look (light navy-gold, dark desert-gold) through PUT /api/me/preferences before a page opens, and afterAll puts it back to
+    // light navy-gold. Each case that needs a window size sets it itself (1920, 1860, 1440, 1280, 1024, 800 wide, and the two widths around the 99rem threshold).
+    {
+      name: "w20",
+      testMatch: "w20.spec.ts",
+      dependencies: ["w18"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
+    },
   ],
 });
