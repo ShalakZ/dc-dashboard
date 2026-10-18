@@ -10,7 +10,7 @@ const flat = foldModel([{ id: 1, parent_id: null }, { id: 2, parent_id: null }])
 function bar(over: Partial<Parameters<typeof BillingTools>[0]> = {}) {
   const onFilter = vi.fn();
   const onFold = vi.fn();
-  const props = { typed: "", onFilter, model: chain, effective: new Set<number>(), onFold, line: "All 4 rows shown", ...over } as Parameters<typeof BillingTools>[0];
+  const props = { typed: "", onFilter, model: chain, effective: new Set<number>(), onFold, ...over } as Parameters<typeof BillingTools>[0];
   render(<BillingTools {...props} />);
   return { onFilter, onFold };
 }
@@ -18,7 +18,7 @@ const levels = () => screen.getByRole("combobox", { name: "Show levels" });
 const optionTexts = () => within(levels()).getAllByRole("option").map((o) => o.textContent);
 
 describe("BillingTools", () => {
-  it("is one plain row, not a form, with the five controls and the rows line", () => {
+  it("is one plain row, not a form, with the five controls and no rows line (that lives in the table's caption)", () => {
     bar();
     const root = document.querySelector(".billing-tools")!;
     expect(root.tagName).toBe("DIV");
@@ -27,9 +27,7 @@ describe("BillingTools", () => {
     expect(screen.getByRole("button", { name: "Collapse all" })).toHaveAttribute("type", "button");
     expect(screen.getByRole("button", { name: "Expand all" })).toHaveAttribute("type", "button");
     expect(screen.getByRole("button", { name: "What does this mean?" })).toHaveAttribute("type", "button");
-    expect(root.querySelector(".tools-count")).toHaveTextContent("All 4 rows shown");
-    expect(root.querySelector(".tools-count")).toHaveAttribute("aria-live", "polite");
-    expect(root.querySelector(".tools-count")).not.toHaveAttribute("role");
+    expect(root.querySelector(".tools-count")).toBeNull();
     expect(root).not.toHaveClass("is-idle");
   });
 
@@ -40,11 +38,11 @@ describe("BillingTools", () => {
   });
 
   it("names the level of the fold it is given, and Custom (disabled) for any other", () => {
-    const { unmount } = render(<BillingTools typed="" onFilter={vi.fn()} model={chain} effective={foldedForLevel(chain, 2)} onFold={vi.fn()} line="" />);
+    const { unmount } = render(<BillingTools typed="" onFilter={vi.fn()} model={chain} effective={foldedForLevel(chain, 2)} onFold={vi.fn()} />);
     expect(levels()).toHaveValue("2");
     expect(optionTexts()).toEqual(["1", "2", "3", "All"]);
     unmount();
-    render(<BillingTools typed="" onFilter={vi.fn()} model={chain} effective={new Set([1])} onFold={vi.fn()} line="" />);
+    render(<BillingTools typed="" onFilter={vi.fn()} model={chain} effective={new Set([1])} onFold={vi.fn()} />);
     expect(levels()).toHaveValue("custom");
     expect(optionTexts()).toEqual(["1", "2", "3", "All", "Custom"]);
     expect(within(levels()).getByRole("option", { name: "Custom" })).toBeDisabled();
@@ -71,12 +69,12 @@ describe("BillingTools", () => {
   });
 
   it("turns them off while the filter has text, and leaves them on for spaces alone (no filter)", () => {
-    const { unmount } = render(<BillingTools typed="ra" onFilter={vi.fn()} model={chain} effective={new Set()} onFold={vi.fn()} line="" />);
+    const { unmount } = render(<BillingTools typed="ra" onFilter={vi.fn()} model={chain} effective={new Set()} onFold={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Collapse all" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Expand all" })).toBeDisabled();
     expect(levels()).toBeDisabled();
     unmount();
-    render(<BillingTools typed="  " onFilter={vi.fn()} model={chain} effective={new Set()} onFold={vi.fn()} line="" />);
+    render(<BillingTools typed="  " onFilter={vi.fn()} model={chain} effective={new Set()} onFold={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Collapse all" })).toBeEnabled();
     expect(levels()).toBeEnabled();
   });
@@ -119,6 +117,6 @@ describe("BillingTools", () => {
     expect(root.querySelectorAll("select option")).toHaveLength(1);
     expect(root.querySelector("select option")).toHaveTextContent("All");
     expect(root.querySelector("input")).toHaveValue("");
-    expect(root.querySelector(".tools-count")?.textContent).toBe(" ");
+    expect(root.querySelector(".tools-count")).toBeNull();
   });
 });

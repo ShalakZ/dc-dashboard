@@ -1,4 +1,4 @@
-import type { BillingAssetRow } from "../api/types";
+import type { BillingAssetRow, BillingCosts } from "../api/types";
 import { foldModel, type FoldModel } from "./foldLevels";
 
 /** Where the Billing page remembers which rows are folded (one value for the page, in this browser, for this site address). */
@@ -22,6 +22,11 @@ export interface VisibleRows {
   /** The rows whose name matches the filter (0 when there is no filter). */
   matches: number;
   filtering: boolean;
+}
+
+/** Whether the month has a table to draw: at least one asset, and at least one with energy data. The two empty answers are exactly its negation. */
+export function billingHasRows(costs: BillingCosts): boolean {
+  return costs.assets.length > 0 && costs.assets.some((a) => a.total !== null);
 }
 
 /** The fold model of the billing rows, which are keyed by `asset_id`. */

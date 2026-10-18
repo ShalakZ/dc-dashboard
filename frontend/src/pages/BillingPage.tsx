@@ -11,6 +11,7 @@ import { PageHeader } from "../components/PageHeader";
 import { ReopenMonthDialog } from "../components/ReopenMonthDialog";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
+import { useBillingView } from "../hooks/useBillingView";
 import {
   clampMonth, closedOnText, liveDeltaText, MONTH_NAMES, monthLabel, monthsOfYear, SAME_FIGURES_TEXT, shiftMonth, yearsBetween,
 } from "../lib/billing";
@@ -114,6 +115,8 @@ export function BillingPage() {
   const current = site.data ? siteMonth(new Date(), site.data.timezone) : null;
   const month = picked ?? current;
   const costs = useBillingCosts(month);
+  // What the controls bar and the table both read (the fold and the visible rows), worked out once here; null when there is no table to draw.
+  const shown = useBillingView(costs.data, folded, deferred);
   // The first month with data only narrows what Previous and the selects offer; while it is unknown (pending, failed, none) nothing is limited.
   const firstMonth = useBillingMonths().data?.first_month ?? null;
 
@@ -171,46 +174,54 @@ export function BillingPage() {
           : holdsSpace ? <ActionsSpace /> /* the buttons wait for the site's month and the costs; their height does not */ : undefined}
       />
       {site.isError && <p className="error" role="alert">{site.error.message}</p>}
-      {month === null && site.isPending && <div className="row billing-bar" aria-hidden="true"><ActionsSpace /></div>}
-      {month !== null && (
-        <div className="row billing-bar">
-          <button type="button" onClick={() => setPicked(shiftMonth(month, -1))} disabled={firstMonth !== null && month <= firstMonth}>
-            <ChevronIcon dir="left" />Previous month
-          </button>
-          <strong className="month-label" aria-live="polite">{monthLabel(month)}</strong>
-          {/* The chip's room is always there, so Next and the selects keep their place when a closed month is paged to. */}
-          <span className="month-state">{closed !== null && <span className="chip closed-chip">Closed</span>}</span>
-          <button type="button" onClick={() => setPicked(shiftMonth(month, 1))} disabled={current !== null && month >= current}>
-            Next month<ChevronIcon dir="right" />
-          </button>
-          <MonthJump month={month} firstMonth={firstMonth} current={current} onPick={setPicked} />
-        </div>
-      )}
-      {exportError && <p className="error" role="alert">{exportError}</p>}
-      {/* The controls bar's room while the costs load or fail: an inert copy of the bar, outside the skeleton (whose region and label stay as they were). */}
-      {(site.isPending || month !== null) && !costs.data && <BillingTools idle />}
-      {(site.isPending || (month !== null && costs.isPending)) && (
-        // The costs poll sets a query that failed before pending again for a second, with no error: the skeleton and the error would take turns.
-        costs.errorUpdateCount === 0 ? <TableSkeleton columns={7} rows={5} label="Loading billing" caption /> : <p className="muted">loading…</p>
-      )}
-      {costs.isError && <p className="error" role="alert">{costs.error.message}</p>}
-      {costs.data && (
-        // One render with the table: the banner never turns up after it.
-        <>
-          {costs.data.closed && (
-            <ClosedNotice closed={costs.data.closed} live={costs.data.live} currency={costs.data.currency} timezone={site.data?.timezone ?? costs.data.timezone} />
-          )}
-          <BillingTable
-            costs={costs.data}
-            canSetRates={can("tariffs.edit") && meets(PAGE_NEED.tariffs, can)}
-            folded={folded}
-            onFold={changeFold}
-            filter={deferred}
-            typed={filter}
-            onFilter={setFilter}
-          />
-        </>
-      )}
+      {/* One size container for everything under the header: the stylesheet switches the toolbar between stacked and one row on its width.
+          The dialogs stay outside it. */}
+      <div className="billing-main">
+        {(site.isPending || month !== null) && (
+          // The month bar and the table's controls bar, side by side when the window is wide and stacked when it is not. The controls bar is the
+          // inert copy while the costs load or fail and for the two empty months (the room it takes is the same box), the real one when there is a table.
+          <div className="billing-toolbar">
+            {month === null ? <div className="row billing-bar" aria-hidden="true"><ActionsSpace /></div> : (
+              <div className="row billing-bar">
+                <button type="button" onClick={() => setPicked(shiftMonth(month, -1))} disabled={firstMonth !== null && month <= firstMonth}>
+                  <ChevronIcon dir="left" />Previous month
+                </button>
+                <strong className="month-label" aria-live="polite">{monthLabel(month)}</strong>
+                {/* The chip's room is always there, so Next and the selects keep their place when a closed month is paged to. */}
+                <span className="month-state">{closed !== null && <span className="chip closed-chip">Closed</span>}</span>
+                <button type="button" onClick={() => setPicked(shiftMonth(month, 1))} disabled={current !== null && month >= current}>
+                  Next month<ChevronIcon dir="right" />
+                </button>
+                <MonthJump month={month} firstMonth={firstMonth} current={current} onPick={setPicked} />
+              </div>
+            )}
+            {shown !== null
+              ? <BillingTools typed={filter} onFilter={setFilter} model={shown.model} effective={shown.effective} onFold={changeFold} />
+              : <BillingTools idle />}
+          </div>
+        )}
+        {exportError && <p className="error" role="alert">{exportError}</p>}
+        {(site.isPending || (month !== null && costs.isPending)) && (
+          // The costs poll sets a query that failed before pending again for a second, with no error: the skeleton and the error would take turns.
+          costs.errorUpdateCount === 0 ? <TableSkeleton columns={7} rows={5} label="Loading billing" caption /> : <p className="muted">loading…</p>
+        )}
+        {costs.isError && <p className="error" role="alert">{costs.error.message}</p>}
+        {costs.data && (
+          // One render with the table: the banner never turns up after it.
+          <>
+            {costs.data.closed && (
+              <ClosedNotice closed={costs.data.closed} live={costs.data.live} currency={costs.data.currency} timezone={site.data?.timezone ?? costs.data.timezone} />
+            )}
+            <BillingTable
+              costs={costs.data}
+              canSetRates={can("tariffs.edit") && meets(PAGE_NEED.tariffs, can)}
+              shown={shown}
+              filter={deferred}
+              onFold={changeFold}
+            />
+          </>
+        )}
+      </div>
       {dialog?.kind === "close" && <CloseMonthDialog month={dialog.month} onClose={() => setDialog(null)} />}
       {dialog?.kind === "reopen" && (
         <ReopenMonthDialog month={dialog.month} closed={dialog.closed} live={dialog.live} currency={dialog.currency} onClose={() => setDialog(null)} />

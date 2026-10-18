@@ -17,17 +17,15 @@ interface LiveTools {
   /** The branches that are folded now (a size default or the remembered fold, restricted to this month's rows). */
   effective: ReadonlySet<number>;
   onFold: (next: ReadonlySet<number>) => void;
-  /** The words beside the controls: how many rows are on screen, or how many match. */
-  line: string;
 }
 
 const noop = () => {};
 const NO_MODEL: FoldModel = { roots: [], depth: new Map(), children: new Map(), below: new Map(), foldable: [], maxDepth: 0, total: 0 };
 
 /**
- * The bar over the Billing table: the filter box, Collapse all and Expand all, the Show levels select with its tip, and the rows line.
- * One row that may wrap, never a form (a form would be a grid, and Enter would submit). With `idle` it is the same markup with no data,
- * inert and hidden from assistive technology, drawn (hidden) while the costs load or when there is no table, so the room it takes is the same box.
+ * The bar over the Billing table: the filter box, Collapse all and Expand all, and the Show levels select with its tip (the rows line is in the
+ * table's caption). One row that may wrap, never a form (a form would be a grid, and Enter would submit). With `idle` it is the same markup with
+ * no data, inert and hidden from assistive technology, drawn (hidden) while the costs load or when there is no table, so the room it takes is the same box.
  *
  * Collapse all, Expand all and the select are natively disabled while the filter has text (the focus is in the filter then, and the filter has
  * its own view of the rows) and when no row has anything below it.
@@ -39,7 +37,6 @@ export function BillingTools(props: { idle: true } | LiveTools) {
   const onFilter = live?.onFilter ?? noop;
   const onFold = live?.onFold ?? noop;
   const model = live?.model ?? NO_MODEL;
-  const line = live?.line ?? " ";
   const level = live ? levelOfFold(live.model, live.effective) : "all";
   const filterId = useId();
   const levelsId = useId();
@@ -94,7 +91,6 @@ export function BillingTools(props: { idle: true } | LiveTools) {
         </select>
         <InfoTip>{FOLD_TIP}</InfoTip>
       </span>
-      <span className="tools-count" aria-live="polite">{line}</span>
     </div>
   );
 }

@@ -1,11 +1,10 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useId, useRef } from "react";
 import { Link } from "react-router";
 import type { BillingAssetRow, BillingCosts, CostFigure } from "../api/types";
+import type { BillingView } from "../hooks/useBillingView";
 import { fmtCost, fmtKwh, fmtRate } from "../lib/billing";
-import { billingModel, noMatchText, rowsLine, twistyLabel, visibleRows } from "../lib/billingRows";
-import { sizeDefaultFold, type FoldModel } from "../lib/foldLevels";
+import { noMatchText, rowsLine, twistyLabel } from "../lib/billingRows";
 import { formatSiteDay } from "../lib/siteTime";
-import { BillingTools } from "./BillingTools";
 import { ESTIMATED_TIP, Figure, PARTIAL_TIP } from "./Figure";
 
 // Inline SVG, 24-unit viewBox, decoration only (the words next to each one say everything).
@@ -53,11 +52,6 @@ function Legend() {
       <li>empty cell: no meter, or the day has not been reached yet</li>
     </ul>
   );
-}
-
-/** The ids a month can fold: only rows that have something below them, so what is remembered never holds a stray id. */
-function restricted(model: FoldModel, folded: ReadonlySet<number>): Set<number> {
-  return new Set(model.foldable.filter((id) => folded.has(id)));
 }
 
 const CaretIcon = () => (
@@ -118,28 +112,28 @@ const BillingRow = memo(function BillingRow({ row, depth, mode, context, below, 
 
 /**
  * `canSetRates`: the person may open the Tariffs page AND change a rate on it, so the note links to it; for anyone else it says to ask.
- * `folded` is the remembered fold, or null when nothing is remembered (a long month then opens folded to a level; a visit remembers nothing).
- * `filter` is the text the rows and the line follow (the page defers it so typing stays quick); `typed` is what the box shows.
+ * `shown` is what the page worked out for the bar and this table together (`useBillingView`: the fold model, the fold in effect and the visible
+ * rows); it is null for the two empty months, which draw their answer and nothing else (the page's toolbar holds the bar's inert copy).
+ * `filter` is the text the rows follow (the page defers it so typing stays quick).
  * Only the rows that are visible are drawn, never hidden ones. The costs, the totals and the CSV are the month's, whatever is folded or filtered.
+ * The rows line is in the caption, after the how-to-read sentence; the table is named by the sentence alone.
  */
-export function BillingTable({ costs, canSetRates, folded, onFold, filter, typed, onFilter }: {
+export function BillingTable({ costs, canSetRates, shown, filter, onFold }: {
   costs: BillingCosts;
   canSetRates: boolean;
-  folded: ReadonlySet<number> | null;
-  onFold: (next: ReadonlySet<number>) => void;
+  shown: BillingView | null;
   filter: string;
-  typed: string;
-  onFilter: (text: string) => void;
+  onFold: (next: ReadonlySet<number>) => void;
 }) {
-  const model = useMemo(() => billingModel(costs.assets), [costs.assets]);
-  const effective = useMemo(() => (folded === null ? sizeDefaultFold(model) : restricted(model, folded)), [folded, model]);
-  const view = useMemo(() => visibleRows(costs.assets, model, effective, filter), [costs.assets, model, effective, filter]);
+  const captionId = useId();
 
   // The press handler never changes, so the rows that are not touched by a fold are not drawn again.
+  const effective = shown?.effective;
   const latest = useRef({ effective, onFold });
   latest.current = { effective, onFold };
   const onToggle = useCallback((id: number) => {
     const { effective: now, onFold: change } = latest.current;
+    if (!now) return;
     const next = new Set(now);
     if (!next.delete(id)) next.add(id);
     change(next);
@@ -154,9 +148,9 @@ export function BillingTable({ costs, canSetRates, folded, onFold, filter, typed
     if (scroller.current) scroller.current.scrollTop = 0;
   }, [filter]);
 
-  // The two empty states keep the bar's room (an inert copy), so the page does not move when a month with rows is paged to.
-  if (costs.assets.length === 0) return <><BillingTools idle /><Empty text="No assets yet." /></>;
-  if (costs.assets.every((a) => a.total === null)) return <><BillingTools idle /><Empty text="No energy data for this month." /></>;
+  // The two empty states have no bar of their own: the page's toolbar holds the inert copy, so the page does not move when a month with rows is paged to.
+  if (shown === null) return <Empty text={costs.assets.length === 0 ? "No assets yet." : "No energy data for this month."} />;
+  const { view } = shown;
   const missingRate = costs.assets.some((a) => a.total !== null && a.total.kwh > 0 && (a.total.cost === null || a.total.partial));
   return (
     <>
@@ -176,11 +170,14 @@ export function BillingTable({ costs, canSetRates, folded, onFold, filter, typed
           <span>Some consumption has no rate (shown as — or *). Ask an administrator to set one.</span>
         </div>
       ))}
-      <BillingTools typed={typed} onFilter={onFilter} model={model} effective={effective} onFold={onFold} line={rowsLine(view)} />
       <div className="table-scroll table-wrap" ref={scroller}>
-        <table className="billing">
+        <table className="billing" aria-labelledby={captionId}>
           <caption className="muted">
-            Each cell shows kWh above and cost{costs.currency ? ` in ${costs.currency}` : ""} below.
+            <div className="cap-row">
+              {/* The table is named by the sentence alone (the count changes at every filter and would rename it); the caption stays its description. */}
+              <span id={captionId} className="cap-text">Each cell shows kWh above and cost{costs.currency ? ` in ${costs.currency}` : ""} below.{" "}</span>
+              <span className="tools-count" aria-live="polite">{rowsLine(view)}</span>
+            </div>
           </caption>
           <thead>
             <tr>
