@@ -13,9 +13,10 @@
   .billing-page .banner a { color: inherit; font-weight: 600; text-decoration: underline; }
   .billing-page .empty { margin-top: 8px; }
 
-  /* A closed month (W11). The chip's room is always there (paging to a closed month moves nothing); it fits the chip, 6 + 6 + "Closed" in 12px + 16 of padding. */
-  .billing-page .month-state { display: inline-flex; align-items: center; min-width: 5rem; }
+  /* A closed month (W11). The chip's room is always there (paging to a closed month moves nothing); it fits the chip, 6 + 6 + "Closed" in 12px + 24 of padding (81px with the fallback font; 84px here), so Next month stands on the same x in an open month and a closed one. */
+  .billing-page .month-state { display: inline-flex; align-items: center; min-width: 5.25rem; }
   .billing-page .closed-chip { background: var(--info-tint); color: var(--info-ink); }
+  .billing-page .month-state .chip { height: var(--ctl-h); padding: 0 12px; } /* it stands in the month bar, among buttons and selects: as tall as they are (a chip in a line of text stays --chip-h) */
   /* The banner over the table and the quiet line about today's figures under it travel together; the box carries the gap to the table. */
   .billing-page .closed-box { margin: 0 0 16px; }
   .billing-page .closed-box .banner { margin: 0; }
@@ -40,12 +41,12 @@
      (--billing-chrome is what sits above it: the top bar, the page header, the month bar, the controls bar and the caption; a closed month's banner
      and the missing-rate banner each add theirs), so the header stays in view while the rows scroll. The legend and the page's bottom room below it
      are reached by a small scroll of the page. On a window shorter than 560px the box has no limit and the page scrolls instead.
-     The four values were measured on a wide page (the bars on one line each): the box then ends 8px inside the window. A narrower page wraps the month bar
+     The four values were measured on a wide page (the bars on one line each): the box then ends 8px inside the window. W18: the month bar and the controls bar are one control (34px) tall now, 4px less each, so every value lost 0.5rem; re-measured at 1440 x 900 on an open month: the box ends 892px down. A narrower page wraps the month bar
      or the controls bar and the box ends lower; the 20rem floor can do the same on a window about 600px tall. */
-  .billing-page { --billing-chrome: 16.3rem; }
-  .billing-page:has(.closed-box) { --billing-chrome: 23rem; }
-  .billing-page:has(.banner-warn) { --billing-chrome: 20.1rem; }
-  .billing-page:has(.closed-box):has(.banner-warn) { --billing-chrome: 26.8rem; }
+  .billing-page { --billing-chrome: 15.8rem; }
+  .billing-page:has(.closed-box) { --billing-chrome: 22.5rem; }
+  .billing-page:has(.banner-warn) { --billing-chrome: 19.6rem; }
+  .billing-page:has(.closed-box):has(.banner-warn) { --billing-chrome: 26.3rem; }
   .billing-page .table-wrap.table-scroll { max-height: max(20rem, calc(100dvh - var(--billing-chrome))); overflow: auto; scroll-padding-top: 2.75rem; } /* the padding keeps a Tab-focused twisty from hiding under the header */
   @media (max-height: 559.98px) {
     .billing-page .table-wrap.table-scroll { max-height: none; }
@@ -82,9 +83,9 @@
   .billing-page td:has(> .bill-nomatch) { padding: 0; }
   .billing-page .bill-nomatch { position: sticky; left: 0; display: inline-block; max-width: min(60ch, 70vw); padding: 14px 10px; color: var(--text-2); white-space: normal; overflow-wrap: anywhere; } /* a long filter wraps: the message never widens the table */
 
-  /* The controls bar over the table (W17): one row that may wrap, 38px tall like the other controls. The inert copy that holds its room while the costs
+  /* The controls bar over the table (W17): one row that may wrap, one control tall (--ctl-h) like the others. The inert copy that holds its room while the costs
      load is this same box. The rows line has a room of its own, so its words never move the controls. */
-  .billing-page .billing-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 38px; margin: 0 0 12px; }
+  .billing-page .billing-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: var(--ctl-h); margin: 0 0 12px; }
   .billing-page .tools-filter { position: relative; flex: 1 1 14rem; min-width: 10rem; max-width: 22rem; }
   .billing-page .tools-filter input[type="search"] { width: 100%; padding-right: 38px; text-overflow: ellipsis; }
   .billing-page .tools-filter input[type="search"]::-webkit-search-cancel-button { display: none; } /* Chromium's own cross: Clear filter is the one, like the quick find's Escape */
@@ -106,7 +107,6 @@
 
   .tariff-table { --row-x: 12px; } /* a little tighter than the app's 14px: four columns and an edit row must fit a card of 434px */
   .tariff-table td { font-variant-numeric: tabular-nums; }
-  .tariff-table td input { min-height: 34px; }
   .tariff-table td input[type="date"] { width: 132px; }
   .tariff-table td input[type="number"] { width: 11ch; text-align: right; } /* wide enough for a rate like 1234.5678 and its spin buttons */
   .tariff-table :is(td.date-cell, td.num) { white-space: nowrap; }
@@ -134,7 +134,6 @@
   .tariffs-page .inline-form input[type="date"] { width: 170px; }
   .tariffs-page .inline-form input[type="number"] { width: 130px; }
   .tariffs-page .inline-form .currency-field input { width: 110px; }
-  .tariffs-page .inline-form button:not(.icon-btn) { min-height: 38px; } /* not the ? tips: they stay 24px and keep their place on the label line */
   .tariffs-page .inline-form p.error { flex: 0 0 100%; margin: 0; font-size: var(--fs-sm); font-weight: 600; }
   /* The add forms' message line: always one line tall, so a validation problem or a server refusal changes nothing around it. It restates the
      errors' size and the document's line-height (1.4), so its 1lh is exactly the line of the p.error inside. A long asset-list failure may wrap and grow it. */

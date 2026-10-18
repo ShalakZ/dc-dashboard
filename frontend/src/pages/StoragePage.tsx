@@ -7,7 +7,7 @@ import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
 import { READ_ONLY_TEXT, ReadOnlyNote } from "../components/ReadOnlyNote";
 import { SaveButton } from "../components/SaveButton";
-import { PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
+import { CTL_H, PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
 import { useRowsPerDay, useSaveStorageSettings, useSetStorageDefault, useStorage, useStorageSettings } from "../api/queries";
 import type { RowsPerDayRange, StorageSettings, StorageStats } from "../api/types";
 import { storageLoss } from "../lib/impact";
@@ -229,7 +229,7 @@ export function StoragePage() {
               <div className="retention-form">
                 <div className="retention-fields">
                   {FIELDS.map(([key], i) => (
-                    <div className="sk-field" key={key}><Skeleton width={i % 2 ? "18ch" : "22ch"} /><Skeleton variant="block" height={38} /></div>
+                    <div className="sk-field" key={key}><Skeleton width={i % 2 ? "18ch" : "22ch"} /><Skeleton variant="block" height={CTL_H} /></div>
                   ))}
                 </div>
                 <div className="retention-foot">

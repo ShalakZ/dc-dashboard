@@ -9,7 +9,7 @@ import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
 import { READ_ONLY_TEXT, ReadOnlyNote } from "../components/ReadOnlyNote";
 import { SaveButton } from "../components/SaveButton";
-import { FormSkeleton, PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion } from "../components/Skeleton";
+import { CTL_H, FormSkeleton, PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion } from "../components/Skeleton";
 import { formatSiteDateTime } from "../lib/siteTime";
 
 /** ApiError.message already carries the API's `detail`; drop pydantic's "Value error, " prefix. */
@@ -209,7 +209,7 @@ export function SettingsPage() {
         <SkeletonRegion label="Loading settings" className="page-grid">
           <PageCardSkeleton>
             <div className="settings-form">
-              <div className="sk-field"><Skeleton width="9ch" /><Skeleton variant="block" height={38} /></div>
+              <div className="sk-field"><Skeleton width="9ch" /><Skeleton variant="block" height={CTL_H} /></div>
               <ParagraphSkeleton text={TIMEZONE_HELP} className="muted" />
               <div className="form-foot">
                 {canEdit ? <><div className="row"><Skeleton variant="block" width={SAVE_WIDTH} height={34} /></div><div className="form-status" /></> : <ParagraphSkeleton text={READ_ONLY_TEXT} className="muted" />}
@@ -219,8 +219,8 @@ export function SettingsPage() {
           <PageCardSkeleton>
             <div className="settings-form">
               <div className="sk-switch"><Skeleton variant="circle" width={16} /><Skeleton width="36ch" /></div>
-              <div className="sk-field"><Skeleton width="22ch" /><Skeleton variant="block" height={38} /></div>
-              <div className="sk-field"><Skeleton width="18ch" /><Skeleton variant="block" height={38} /></div>
+              <div className="sk-field"><Skeleton width="22ch" /><Skeleton variant="block" height={CTL_H} /></div>
+              <div className="sk-field"><Skeleton width="18ch" /><Skeleton variant="block" height={CTL_H} /></div>
               <ParagraphSkeleton text={SIGN_IN_HELP} className="muted" />
               <div className="form-foot">
                 {canEditSignIn ? <><div className="row"><Skeleton variant="block" width={SAVE_WIDTH} height={34} /></div><div className="form-status" /></> : <ParagraphSkeleton text={SIGN_IN_READ_ONLY_TEXT} className="muted" />}

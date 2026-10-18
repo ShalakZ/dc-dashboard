@@ -130,7 +130,7 @@ describe("BillingPage", () => {
       expect(screen.queryByRole("button", { name: "Download CSV" })).not.toBeInTheDocument();
       const bar = document.querySelector(".billing-page > .row.billing-bar")!; // and the month bar's place, with its selects' height
       expect(bar).toHaveAttribute("aria-hidden", "true");
-      expect((bar.firstElementChild as HTMLElement).style.height).toBe("38px");
+      expect((bar.firstElementChild as HTMLElement).style.height).toBe("34px");
       expect(bar.querySelector("button, select")).toBeNull();
       held.release();
       expect(await screen.findByRole("button", { name: "Download CSV" })).toBeInTheDocument();

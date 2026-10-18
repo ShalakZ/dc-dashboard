@@ -23,7 +23,7 @@
      scroll box's content edge, which is where the row sits at the end of the scroll too, so it never jumps. The dialog's own 22 px of
      bottom padding lies below that edge and the fields scroll through it, so the first shadow paints that band in the page colour
      (they must not show under the buttons); the second is the hairline the scrolled fields slide under. The error's offset is the
-     row's height, one button (`--btn-h`). */
+     row's height, one button (`--ctl-h`). */
   form:has(.icon-grid:not([hidden])) > .row:last-child { position: sticky; bottom: 0; z-index: 1; background: var(--bg); box-shadow: 0 22px 0 0 var(--bg), 0 -1px 0 0 var(--border); }
-  form:has(.icon-grid:not([hidden])) > .error { position: sticky; bottom: var(--btn-h); z-index: 1; background: var(--bg); }
+  form:has(.icon-grid:not([hidden])) > .error { position: sticky; bottom: var(--ctl-h); z-index: 1; background: var(--bg); }
 }

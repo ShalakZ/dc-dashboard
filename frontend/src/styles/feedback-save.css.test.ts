@@ -90,7 +90,7 @@ describe("the SaveButton section", () => {
     // the three skeletons that stand in for it draw the same number
     expect(readFileSync("src/pages/SettingsPage.tsx", "utf8")).toMatch(/SAVE_WIDTH = 92;/);
     expect(readFileSync("src/pages/StoragePage.tsx", "utf8")).toMatch(/\[92, 120, 124, 176\]/);
-    expect(readFileSync("src/components/Skeleton.tsx", "utf8")).toMatch(/<Skeleton variant="block" width=\{92\} height=\{38\} \/>/);
+    expect(readFileSync("src/components/Skeleton.tsx", "utf8")).toMatch(/<Skeleton variant="block" width=\{92\} height=\{CTL_H\} \/>/);
   });
 
   it("the faces that are not showing are hidden, not collapsed (they still set the width)", () => {

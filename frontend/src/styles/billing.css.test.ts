@@ -59,6 +59,20 @@ describe("the scroll box of the Billing table (W17, R4)", () => {
     );
   });
 
+  it("the four chrome values are the ones measured with the 34px month bar and controls bar (W18: 0.5rem less than with the 38px ones), and the chip's room holds the 34px chip", () => {
+    // Measured at 1440 x 900 on the pilot-hall look stack: an open month's table box ends 892px down (8px inside the window), as before the change,
+    // and a closed month's at 872px, as before; Next month stands on the same x in both (the room is 84px, the chip 81px with the fallback font).
+    expect(rem(bodyOf(billing, ".billing-page"), "--billing-chrome")).toBe(15.8);
+    expect(rem(bodyOf(billing, ".billing-page:has(.closed-box)"), "--billing-chrome")).toBe(22.5);
+    expect(rem(bodyOf(billing, ".billing-page:has(.banner-warn)"), "--billing-chrome")).toBe(19.6);
+    expect(rem(bodyOf(billing, ".billing-page:has(.closed-box):has(.banner-warn)"), "--billing-chrome")).toBe(26.3);
+    expect(prop(bodyOf(billing, ".billing-page .month-state"), "min-width")).toBe("5.25rem");
+    const chip = bodyOf(billing, ".billing-page .month-state .chip");
+    expect(prop(chip, "height")).toBe("var(--ctl-h)");
+    expect(prop(chip, "padding")).toBe("0 12px");
+    expect(prop(bodyOf(billing, ".billing-page .billing-tools"), "min-height")).toBe("var(--ctl-h)");
+  });
+
   it("a classic scrollbar always has its track on Billing, so a fold or a filter that changes the height moves nothing sideways and no blank notch shows beside the top bar", () => {
     const html = bodyOf(billing, "html:has(.billing-page)");
     expect(prop(html, "overflow-y")).toBe("scroll");

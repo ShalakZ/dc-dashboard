@@ -36,13 +36,14 @@ describe("the asset page header drops its buttons under the title in a narrow pa
 
   it("the widths are the buttons + the 16px gap + 16rem (256px) for the title column, and the chip's one is the wider", () => {
     const [narrow, chip] = [px(plain[0].at[1]), px(withChip[0].at[1])];
-    // Edit, Delete and Add asset are 304px; with the "reconnecting…" chip, the widest the group gets, 443px (measured in the browser).
+    // Edit, Delete and Add asset are 304px; with the "reconnecting…" chip, the widest the group gets, 449px (measured in the browser in W18, when the chip became
+    // as tall as the buttons and took 12px of side padding: 448.6px, was 443px with the 22px chip; Segoe UI is narrower, so a Windows machine has room to spare).
     expect(narrow).toBeGreaterThanOrEqual(304 + 16 + 256);
-    expect(chip).toBeGreaterThanOrEqual(443 + 16 + 256);
+    expect(chip).toBeGreaterThanOrEqual(449 + 16 + 256);
     expect(chip).toBeGreaterThan(narrow);
     // A few pixels of slack, not a different layout: a threshold far above the sum would drop the buttons for no reason.
     expect(narrow - (304 + 16 + 256)).toBeLessThanOrEqual(10);
-    expect(chip - (443 + 16 + 256)).toBeLessThanOrEqual(10);
+    expect(chip - (449 + 16 + 256)).toBeLessThanOrEqual(10);
   });
 
   it("a page with no chip keeps its buttons beside the title in the 636px pane of a 1024px window with the sidebar minimized (w7i.spec.ts expects the sub line to end before them)", () => {

@@ -66,5 +66,4 @@
 
   /* The review dialog: the point rows are denser than a page table (a dozen of them share 45vh) */
   .dialog-rows td { padding-top: 6px; padding-bottom: 6px; }
-  .dialog-rows select, .dialog-rows input:is(:not([type]), [type="number"]) { min-height: 34px; }
 }

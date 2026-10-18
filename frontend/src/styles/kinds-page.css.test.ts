@@ -74,7 +74,7 @@ describe("the Asset kinds page's toolbar and rows", () => {
   it("the slot has a fixed basis and a minimum height, and its own line below 720px of the toolbar's width, in both states", () => {
     const body = plain(".kinds-page .kinds-slot");
     expect(declared(body, "flex")).toBe("0 0 360px");
-    expect(declared(body, "min-height")).toBe("var(--btn-h)");
+    expect(declared(body, "min-height")).toBe("var(--ctl-h)");
     expect(declared(inContainer("(max-width: 720px)", ".kinds-page .kinds-slot"), "flex-basis")).toBe("100%");
     // Where the bar wraps under its count the slot keeps the wrapped height in the idle state too: 20px line + one or two 30px lines of buttons.
     expect(declared(plain(".kinds-page .kinds-selected"), "line-height")).toBe("20px");

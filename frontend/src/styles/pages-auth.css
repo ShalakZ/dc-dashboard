@@ -12,7 +12,7 @@
   .auth-lead { margin: 0 0 20px; font-size: var(--fs-sm); color: var(--text-2); }
   .auth-card form { gap: 14px; max-width: none; margin: 0; }
   .auth-card form .error, .password-page form .error { margin: 0; padding: 8px 12px; border: 1px solid var(--crit); border-radius: var(--radius-sm); background: var(--crit-tint); font-size: var(--fs-sm); font-weight: 600; }
-  .auth-card button.primary { width: 100%; min-height: 38px; margin-top: 4px; }
+  .auth-card button.primary { width: 100%; margin-top: 4px; }
 
   /* Change password: the one primary button sits left under the fields; its errors take the card's alert box (rule above) and the
      confirmation is a toast */
