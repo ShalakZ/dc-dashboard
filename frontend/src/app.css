@@ -244,6 +244,10 @@
   input:is(:not([type]), [type="text"], [type="password"], [type="number"], [type="date"], [type="time"], [type="datetime-local"], [type="search"], [type="email"], [type="url"]),
   select, textarea { min-height: var(--ctl-h); padding: 0 12px; border: 1px solid var(--field-border); border-radius: var(--radius); background: var(--bg); color: var(--text); font-family: inherit; font-size: var(--fs-base); font-weight: 400; line-height: 1.4; }
   textarea { width: 100%; min-height: 0; padding: 8px 12px; }
+  /* A note box (a dialog's, and the scan scope's Targets, which sits in a page card) is at least four lines and at most twelve, or 40% of the window if
+     that is less. It resizes between those limits and scrolls inside when the text is longer. 18px is the 8px padding twice plus the 2px border;
+     `rows` is only the starting size. */
+  .dialog textarea, .scope-card textarea { resize: vertical; min-height: calc(4lh + 18px); max-height: min(40vh, calc(12lh + 18px)); }
   input:is(:not([type]), [type="text"], [type="password"], [type="number"], [type="date"], [type="time"], [type="datetime-local"], [type="search"], [type="email"], [type="url"]):disabled,
   select:disabled, textarea:disabled { background: var(--surface); color: var(--text-disabled); }
   input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offset: 0; border-color: var(--ring); }

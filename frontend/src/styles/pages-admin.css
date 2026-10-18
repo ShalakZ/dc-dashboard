@@ -239,7 +239,7 @@
   .report-part { display: grid; gap: 8px; margin: 0 0 8px; }
   .report-part-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
   .report-part-head h3 { margin: 0; font-size: var(--fs-md); font-weight: 600; }
-  .report-text { height: 18em; font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.5; white-space: pre; overflow: auto; resize: vertical; }
+  .report-text { height: 18em; min-height: 8em; max-height: min(70vh, 40em); font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.5; white-space: pre; overflow: auto; resize: vertical; }
   .address-key { margin: 0; }
   .address-key > summary { width: fit-content; font-weight: 600; cursor: pointer; }
   .address-key > p { margin: 8px 0; }

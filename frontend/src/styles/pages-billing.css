@@ -27,7 +27,6 @@
 
   /* The Close month and Reopen month dialogs (components/MonthDialog.tsx; Modal is not portaled, so they sit inside the page, but nothing here relies on it).
      The count is right-aligned in the field's own width and the error has two lines of room, so typing or a refusal moves nothing. */
-  .month-dialog textarea { resize: vertical; }
   .month-dialog .month-count { min-height: 1lh; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; text-align: right; }
   .month-dialog .month-over { color: var(--crit); font-weight: 600; } /* 501/500: over the limit, the confirming button waits */
   .month-dialog .month-slot { min-height: 2lh; font-size: var(--fs-sm); line-height: 1.4; }

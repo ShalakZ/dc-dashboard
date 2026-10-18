@@ -118,3 +118,49 @@ describe("nobody patches a control back to the old 38px", () => {
     expect(sample.filter((r) => old.test(r.body)).map((r) => r.selector)).toEqual([".a", ".b"]);
   });
 });
+
+describe("a note box has a minimum and a maximum height", () => {
+  // The Close month note box could be dragged to 904 px in a 900 px window. One rule limits every textarea in a dialog (the Close and Reopen month
+  // notes) and the same rule reaches the scan scope's Targets, which ScansPage draws in a page card (.scope-card), not in a dialog; the Diagnostics
+  // report box is a page box and has its own limits.
+  const box = () => {
+    const found = app.filter((r) => r.selector === ".dialog textarea, .scope-card textarea");
+    expect(found, 'exactly one rule for ".dialog textarea, .scope-card textarea" in app.css').toHaveLength(1);
+    return found[0];
+  };
+
+  it("the textarea of a dialog (and of the scope card) resizes only up and down, from four lines to twelve lines or 40% of the window, whichever is less", () => {
+    const rule = box();
+    expect(prop(rule.body, "resize")).toBe("vertical");
+    expect(prop(rule.body, "min-height")).toBe("calc(4lh + 18px)");
+    expect(prop(rule.body, "max-height")).toBe("min(40vh, calc(12lh + 18px))");
+  });
+
+  it("the rule is in @layer w6 of app.css, after the base textarea rule it adjusts", () => {
+    const rule = box();
+    expect(rule.at).toEqual(["@layer w6"]);
+    expect(rule.order).toBeGreaterThan(app.find((r) => r.selector === "textarea")!.order);
+  });
+
+  it("the Close month dialog has no limits of its own (the shared rule replaces its old resize rule)", () => {
+    const own = read("src/styles/pages-billing.css").filter((r) => r.selector === ".month-dialog textarea");
+    expect(own.map((r) => r.body.trim())).toEqual([]);
+  });
+
+  it("the Diagnostics report box keeps its resize and gets a minimum and a maximum", () => {
+    const body = inPages("src/styles/pages-admin.css", ".report-text");
+    expect(prop(body, "resize")).toBe("vertical");
+    expect(prop(body, "min-height")).toBe("8em");
+    expect(prop(body, "max-height")).toBe("min(70vh, 40em)");
+  });
+
+  it("no rule in any stylesheet lets a textarea resize in both directions", () => {
+    const both = everyRule.filter(({ rule }) => /resize\s*:\s*(both|horizontal)/.test(rule.body));
+    expect(both.map(({ file, rule }) => `${file}: ${rule.selector}`)).toEqual([]);
+  });
+
+  it("the check can see a rule (it runs on a small example)", () => {
+    const sample = parseRules(".a textarea { resize: both; } .b { resize: vertical; } .c { resize: horizontal; }");
+    expect(sample.filter((r) => /resize\s*:\s*(both|horizontal)/.test(r.body)).map((r) => r.selector)).toEqual([".a textarea", ".c"]);
+  });
+});
