@@ -80,19 +80,23 @@ export function headlineReason(check: MonthCheck): string | null {
   if (check.things > 0) return null;
   if (check.state === "not_begun") return "This month has not begun.";
   if (check.hours === 0) return "The first hour of this month is not over yet.";
-  if (check.meters === 0) return "No meter has recorded anything in this month.";
+  if (check.meters === 0) {
+    // Meters that start after what was looked at are waited for; with none of those either, there is no meter to wait for.
+    return check.groups.later.total > 0 ? "No meter has recorded anything in this month." : "No asset has an energy (kWh) counter or a power (kW) reading mapped.";
+  }
   return null;
 }
 
 /**
- * What was read, so an empty answer is never mistaken for a clean one: the meters, the hours, the total hours of readings (left out when it only
- * repeats the hours), the span in the site zone, and that only the hourly readings billing uses were read. An open month ends at its last full hour.
+ * What was read, so an empty answer is never mistaken for a clean one: the meters, the hours, the meter hours in all (every meter's expected hours
+ * added up, whether or not each has a reading: left out when it only repeats the hours), the span in the site zone, and that only the hourly
+ * readings billing uses were read, so some faults cannot be seen. An open month ends at its last full hour.
  */
 export function lookedAtLine(check: MonthCheck, timezone: string): string {
   if (check.state === "not_begun" || check.hours === 0) return "Nothing was read.";
-  const total = check.meter_hours === check.hours ? "" : ` (${noun(check.meter_hours, "hour")} of readings)`;
+  const total = check.meter_hours === check.hours ? "" : ` (${noun(check.meter_hours, "meter hour")} in all)`;
   const span = `from ${formatSiteDateHour(check.from, timezone)} to ${formatSiteDateHour(check.to, timezone)}${check.state === "open" ? ", the last full hour" : ""}`;
-  return `Looked at ${noun(check.meters, "meter")} over ${hoursText(check.hours)}${total}, ${span}. Only the hourly readings that billing uses were read.`;
+  return `Looked at ${noun(check.meters, "meter")} over ${hoursText(check.hours)}${total}, ${span}. Only the hourly readings that billing uses were read, so this check cannot see every kind of fault.`;
 }
 
 /** One sentence about the month's state: a closed month (the bill is frozen, the check is not) or an open one; null otherwise. */
@@ -133,11 +137,12 @@ export function groupIntro(key: CheckGroupKey, check: MonthCheck): string {
   const limits = check.limits;
   switch (key) {
     case "silent":
-      return "Meters that recorded nothing in this month, or that stopped recording before it ended.";
+      return "Meters that recorded nothing in this month, or that stopped recording before the end of what was looked at.";
     case "gaps":
       return (
         "Hours in a row with no reading at all. " +
-        `A counter read less often than once an hour may miss up to ${hoursText(limits.max_tolerated_hours)} by design, and that is allowed for. ` +
+        "A counter read once an hour or less often may miss as many hours in a row as its reading interval is long, rounded up (a counter read every 2 hours: 2 hours), " +
+        `at most ${hoursText(limits.max_tolerated_hours)}, and that is allowed for. A counter read more often than once an hour has no such allowance. ` +
         `A power meter also lists the time missing inside hours that have readings, from ${noun(limits.short_minutes, "minute")} and one part in ${oneIn(limits.short_share)} of the time looked at.`
       );
     case "estimated":
@@ -175,20 +180,23 @@ function underIt(item: SilentItem): string[] {
     : [];
 }
 
+/** A counter's energy while it has no readings is not lost: the engine bills it into the first reading that comes back. */
+const COUNTER_LATER = "The energy it measures in that time is not lost: it is counted when readings come back, in a later month if they come back after this one ends.";
+
 function silentLines(item: SilentItem, timezone: string): string[] {
   const counter = item.kind === "counter";
   const zero = counter ? "It counts as 0 kWh." : "Its energy counts as an estimated 0 kWh.";
   if (item.reason === "never") return ["No reading has ever been recorded.", zero, ...underIt(item)];
   if (item.reason === "none_in_month") {
     const last = item.last_reading ? ` (the last one before it was ${formatSiteDateHour(item.last_reading, timezone)})` : "";
-    return [`No readings in this month${last}.`, zero, ...underIt(item)];
+    // A counter that did record before the month will bill its energy into the first reading that comes back; one that never recorded has nothing to move.
+    const later = counter && item.last_reading !== null ? [COUNTER_LATER] : [];
+    return [`No readings in this month${last}.`, zero, ...later, ...underIt(item)];
   }
   const since = item.since
     ? `No readings since ${formatSiteDateHour(item.since, timezone)} (${hoursText(item.hours)} at the end of what was looked at).`
     : `No readings at the end of what was looked at (${hoursText(item.hours)}).`;
-  const effect = counter
-    ? "The energy it measures in that time is not lost: it is counted when readings come back, in a later month if they come back after this one ends."
-    : "That time counts as 0 kWh.";
+  const effect = counter ? COUNTER_LATER : "That time counts as 0 kWh.";
   return [since, effect, ...underIt(item)];
 }
 
@@ -335,6 +343,27 @@ export function unmeteredLines(item: UnmeteredItem): string {
 export function laterLine(item: LaterItem, timezone: string): string {
   return `First reading ${formatSiteDateHour(item.first_reading, timezone)}: after what was looked at.`;
 }
+
+/** What the meters that started after everything that was looked at are: information, never part of the number. */
+export function laterIntro(total: number): string {
+  return total === 1
+    ? "1 meter gave its first reading after what was looked at. Until then its asset counts what the assets under it add up to. It is not part of the number at the top."
+    : `${num(total)} meters gave their first reading after what was looked at. Until then each asset counts what the assets under it add up to. They are not part of the number at the top.`;
+}
+
+// ---- the drawer's own words (here, not in the component, so the wording scan covers them) ----
+
+/** The heading of the information block and its two parts. */
+export const NOT_COUNTED_TITLE = "Not counted";
+export const UNMETERED_TITLE = "Assets nothing measures";
+export const LATER_TITLE = "Meters that started later";
+
+/** The label of the status region while the first answer is read. */
+export const LOADING_LABEL = "Loading the month check";
+
+/** The button under a long list: `Show all 20`, and `Show fewer` once it is open. */
+export const showAllText = (count: number) => `Show all ${num(count)}`;
+export const SHOW_FEWER = "Show fewer";
 
 // ---- the button and the Close month dialog ----
 

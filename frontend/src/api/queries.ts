@@ -565,18 +565,28 @@ export const useBillingCosts = (month: string | null) =>
     queryFn: () => api.get<BillingCosts>(`/api/billing/costs?${new URLSearchParams({ month: month! })}`),
   });
 
+/** How often an open month's check is read again: a quarter of an hour. */
+const MONTH_CHECK_OPEN_REFETCH_MS = 15 * 60_000;
+
+/** The month check's re-read interval for the answer it holds: `15 * 60_000` while the month is open, `false` (never) for a finished month, a month that has not begun or no answer yet. */
+export function monthCheckRefetchMs(data: MonthCheck | undefined): number | false {
+  return data?.state === "open" ? MONTH_CHECK_OPEN_REFETCH_MS : false;
+}
+
 /**
  * What the month check reports for a month: every meter of the site, so it is a big read, and a month's check changes when its readings, tree,
- * meters or rates change, never by itself within minutes. Hence `staleTime` of five minutes and NO `refetchInterval` (unlike the costs, which the
- * page re-reads every minute). Every billing write still reaches it through the `["billing"]` prefix of its key, and a navigation back to the page
- * after five minutes reads it again. The Check month button's count and the drawer read the same cache entry, so opening the drawer costs nothing.
- * Idle while `month` is null (the site timezone has not loaded yet).
+ * meters or rates change, never by itself within minutes. Hence `staleTime` of five minutes, and a re-read every 15 minutes for an OPEN month only
+ * (`monthCheckRefetchMs`: the costs are re-read every minute, so the count would otherwise stay at its first answer while the page stays open; a
+ * finished month's readings do not move, so it never polls). Every billing write still reaches it through the `["billing"]` prefix of its key, and a
+ * navigation back to the page after five minutes reads it again. The Check month button's count and the drawer read the same cache entry, so opening
+ * the drawer costs nothing. Idle while `month` is null (the site timezone has not loaded yet).
  */
 export const useBillingMonthCheck = (month: string | null) =>
   useQuery({
     queryKey: keys.billingMonthCheck(month),
     enabled: month !== null,
     staleTime: 5 * 60_000,
+    refetchInterval: (query) => monthCheckRefetchMs(query.state.data),
     queryFn: () => api.get<MonthCheck>(`/api/billing/month-check?${new URLSearchParams({ month: month! })}`),
   });
 

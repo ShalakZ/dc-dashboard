@@ -2,8 +2,9 @@ import type {
   EstimatedItem, FlatItem, GapsItem, LaterItem, MonthCheck, MonthCheckGroup, MonthCheckHead, ResetsItem, SilentItem, StartedItem, UnmeteredItem, UnpricedItem,
 } from "../api/types";
 import {
-  GROUP_ORDER, checkLineText, countSlotText, describedByText, groupIntro, groupTitle, headline, headlineReason, itemLines, laterLine, lookedAtLine,
-  moreLine, stateNote, unmeteredIntro, unmeteredLines, type CheckGroupKey, type MonthCheckStatus,
+  GROUP_ORDER, LATER_TITLE, LOADING_LABEL, NOT_COUNTED_TITLE, SHOW_FEWER, UNMETERED_TITLE, checkLineText, countSlotText, describedByText, groupIntro, groupTitle,
+  headline, headlineReason, itemLines, laterIntro, laterLine, lookedAtLine, moreLine, showAllText, stateNote, unmeteredIntro, unmeteredLines,
+  type CheckGroupKey, type MonthCheckStatus,
 } from "./monthCheck";
 
 // Every case names its zone: Asia/Qatar is UTC+3 all year, so 06:00Z reads 09:00 and the result never depends on the machine running the tests.
@@ -15,7 +16,7 @@ function check(over: Partial<MonthCheck> = {}): MonthCheck {
   return {
     month: "2026-09", timezone: ZONE, state: "finished", closed: false,
     from: "2026-08-31T21:00:00Z", to: "2026-09-30T21:00:00Z", month_end: "2026-09-30T21:00:00Z",
-    hours: 720, meters: 217, meter_hours: 150480, things: 0, limits: LIMITS,
+    hours: 720, meters: 217, meter_hours: 156240, things: 0, limits: LIMITS,
     groups: {
       silent: none(), gaps: none(), estimated: none(), resets: none(), started: none(), unpriced: none(), flat: none(), unmetered: none(), later: none(),
     },
@@ -54,10 +55,23 @@ describe("headline and its reason (D6: the order is the whole point)", () => {
     expect(headlineReason(c)).toBe("The first hour of this month is not over yet.");
   });
 
-  it("is Nothing to look at yet when no meter recorded anything in the month", () => {
-    const c = check({ meters: 0, meter_hours: 0 });
+  it("is Nothing to look at yet when the only meters of the site started after what was looked at: no meter has recorded anything in the month", () => {
+    const laterItem: LaterItem = { asset_id: 1, path: "A / B", kind: "counter", first_reading: "2026-10-01T05:00:00Z" };
+    const c = check({ meters: 0, meter_hours: 0, groups: { ...check().groups, later: { total: 1, items: [laterItem] } } });
     expect(headline(c)).toBe("Nothing to look at yet");
     expect(headlineReason(c)).toBe("No meter has recorded anything in this month.");
+  });
+
+  it("is Nothing to look at yet, with its own reason, for a site that has no meter at all (nothing to wait for; review M4)", () => {
+    const c = check({ meters: 0, meter_hours: 0 });
+    expect(headline(c)).toBe("Nothing to look at yet");
+    expect(headlineReason(c)).toBe("No asset has an energy (kWh) counter or a power (kW) reading mapped.");
+    expect(headlineReason(check({ state: "open", meters: 0, meter_hours: 0 }))).toBe("No asset has an energy (kWh) counter or a power (kW) reading mapped.");
+  });
+
+  it("keeps the other reasons first: a month that has not begun or whose first hour is not over says so even with no meter", () => {
+    expect(headlineReason(check({ state: "not_begun", hours: 0, meters: 0, meter_hours: 0 }))).toBe("This month has not begun.");
+    expect(headlineReason(check({ state: "open", hours: 0, meters: 0, meter_hours: 0 }))).toBe("The first hour of this month is not over yet.");
   });
 
   it("puts things first: every meter silent for ever is a list to read, never an empty answer", () => {
@@ -76,25 +90,33 @@ describe("headline and its reason (D6: the order is the whole point)", () => {
 
 describe("lookedAtLine", () => {
   it("says what was read, in the site zone, and never promises anything", () => {
+    // 217 meters x 720 hours = 156,240 meter hours: the number counts EXPECTED hours, so it is never called readings (review C1)
     expect(lookedAtLine(check(), ZONE)).toBe(
-      "Looked at 217 meters over 720 hours (150,480 hours of readings), from 2026-09-01 00:00 to 2026-10-01 00:00. Only the hourly readings that billing uses were read.",
+      "Looked at 217 meters over 720 hours (156,240 meter hours in all), from 2026-09-01 00:00 to 2026-10-01 00:00. Only the hourly readings that billing uses were read, so this check cannot see every kind of fault.",
     );
   });
 
   it("ends an open month at the last full hour", () => {
     const c = check({ state: "open", to: "2026-09-12T11:00:00Z", hours: 275, meters: 4, meter_hours: 1100 });
     expect(lookedAtLine(c, ZONE)).toBe(
-      "Looked at 4 meters over 275 hours (1,100 hours of readings), from 2026-09-01 00:00 to 2026-09-12 14:00, the last full hour. Only the hourly readings that billing uses were read.",
+      "Looked at 4 meters over 275 hours (1,100 meter hours in all), from 2026-09-01 00:00 to 2026-09-12 14:00, the last full hour. Only the hourly readings that billing uses were read, so this check cannot see every kind of fault.",
     );
   });
 
   it("uses the singular, and leaves out the total when it only repeats the hours", () => {
     const c = check({ hours: 1, meters: 1, meter_hours: 1, from: "2026-08-31T21:00:00Z", to: "2026-08-31T22:00:00Z" });
-    expect(lookedAtLine(c, ZONE)).toBe("Looked at 1 meter over 1 hour, from 2026-09-01 00:00 to 2026-09-01 01:00. Only the hourly readings that billing uses were read.");
+    expect(lookedAtLine(c, ZONE)).toBe(
+      "Looked at 1 meter over 1 hour, from 2026-09-01 00:00 to 2026-09-01 01:00. Only the hourly readings that billing uses were read, so this check cannot see every kind of fault.",
+    );
   });
 
   it("keeps the total for one meter that started late", () => {
-    expect(lookedAtLine(check({ meters: 1, meter_hours: 500 }), ZONE)).toContain("Looked at 1 meter over 720 hours (500 hours of readings), from");
+    expect(lookedAtLine(check({ meters: 1, meter_hours: 500 }), ZONE)).toContain("Looked at 1 meter over 720 hours (500 meter hours in all), from");
+  });
+
+  it("never calls the total readings: it counts the hours expected of each meter, with or without a reading", () => {
+    expect(lookedAtLine(check(), ZONE)).not.toMatch(/of readings/);
+    expect(lookedAtLine(check({ meters: 1, meter_hours: 1, hours: 720 }), ZONE)).toContain("(1 meter hour in all)");
   });
 
   it("says nothing was read when no hour is over yet", () => {
@@ -142,8 +164,9 @@ describe("group titles and introductions", () => {
   });
 
   it("states the thresholds of gaps and flat from the limits the server used", () => {
+    // The rule of the server's tolerated_hours: a counter read every 3600 s or slower may miss ceil(interval / 3600) hours, at most the limit; a faster one none (review I2)
     expect(groupIntro("gaps", check())).toBe(
-      "Hours in a row with no reading at all. A counter read less often than once an hour may miss up to 24 hours by design, and that is allowed for. A power meter also lists the time missing inside hours that have readings, from 60 minutes and one part in 100 of the time looked at.",
+      "Hours in a row with no reading at all. A counter read once an hour or less often may miss as many hours in a row as its reading interval is long, rounded up (a counter read every 2 hours: 2 hours), at most 24 hours, and that is allowed for. A counter read more often than once an hour has no such allowance. A power meter also lists the time missing inside hours that have readings, from 60 minutes and one part in 100 of the time looked at.",
     );
     expect(groupIntro("flat", check())).toBe("Readings that stay exactly the same for 24 hours or more. That can mean a meter that stopped updating.");
     const other = check({ limits: { ...LIMITS, flat_hours: 48, max_tolerated_hours: 12, short_minutes: 30, short_share: 0.02 } });
@@ -155,7 +178,7 @@ describe("group titles and introductions", () => {
   });
 
   it("has a plain introduction for the other groups", () => {
-    expect(groupIntro("silent", check())).toBe("Meters that recorded nothing in this month, or that stopped recording before it ended.");
+    expect(groupIntro("silent", check())).toBe("Meters that recorded nothing in this month, or that stopped recording before the end of what was looked at.");
     expect(groupIntro("resets", check())).toBe("A counter should only count up. These went back down, or dipped below an earlier reading, at least once.");
     expect(groupIntro("started", check())).toBe(
       "These meters gave their first reading after the month began. Before that, the asset counts what the assets under it add up to.",
@@ -188,9 +211,17 @@ describe("itemLines: silent (counter: moves later; power: counts as zero)", () =
 
   it("nothing in the month, with and without an earlier reading", () => {
     const withLast = silent("counter", { reason: "none_in_month", last_reading: "2026-08-31T20:00:00Z" });
-    expect(itemLines("silent", withLast, ZONE).lines).toEqual(["No readings in this month (the last one before it was 2026-08-31 23:00).", "It counts as 0 kWh."]);
+    // a counter that recorded before the month bills its energy into the first reading that comes back: the trailing item's second sentence (review M1)
+    expect(itemLines("silent", withLast, ZONE).lines).toEqual([
+      "No readings in this month (the last one before it was 2026-08-31 23:00).",
+      "It counts as 0 kWh.",
+      "The energy it measures in that time is not lost: it is counted when readings come back, in a later month if they come back after this one ends.",
+    ]);
     const without = silent("power", { reason: "none_in_month" });
     expect(itemLines("silent", without, ZONE).lines).toEqual(["No readings in this month.", "Its energy counts as an estimated 0 kWh."]);
+    // a counter with nothing before the month has nothing to move, and a power meter's time is simply 0
+    expect(itemLines("silent", silent("counter", { reason: "none_in_month" }), ZONE).lines).toEqual(["No readings in this month.", "It counts as 0 kWh."]);
+    expect(itemLines("silent", silent("power", { reason: "none_in_month", last_reading: "2026-08-31T20:00:00Z" }), ZONE).lines).toHaveLength(2);
   });
 
   it("stopped before the end: a counter's energy is not lost, a power meter's is", () => {
@@ -609,6 +640,7 @@ function everyString(): string[] {
     {}, { things: 1 }, { things: 12 }, { things: 1200 }, { closed: true }, { state: "open" }, { state: "open", closed: true },
     { state: "not_begun", hours: 0, meters: 0, meter_hours: 0 }, { state: "open", hours: 0, meters: 0, meter_hours: 0 }, { meters: 0, meter_hours: 0 },
     { hours: 1, meters: 1, meter_hours: 1 }, { meters: 1, meter_hours: 500 },
+    { meters: 0, meter_hours: 0, groups: { ...check().groups, later: { total: 1, items: [] } } }, // only meters that started after what was looked at
     { limits: { flat_hours: 48, short_minutes: 30, short_share: 0.02, max_tolerated_hours: 12, cap: 25 } },
   ];
   for (const state of states) {
@@ -635,6 +667,9 @@ function everyString(): string[] {
     out.push(laterLine({ asset_id: 1, path: "A", kind, first_reading: "2026-10-01T00:00:00Z" }, ZONE));
   }
   for (const beside of [true, false]) out.push(unmeteredLines({ asset_id: 1, path: "A", beside_measured: beside }));
+  // the drawer's own words (review M2): they live in this module so this scan reaches them
+  for (const total of [1, 2, 20]) out.push(laterIntro(total));
+  out.push(NOT_COUNTED_TITLE, UNMETERED_TITLE, LATER_TITLE, LOADING_LABEL, SHOW_FEWER, showAllText(6), showAllText(2000));
   for (const [total, shown] of [[62, 50], [51, 50], [3, 3]]) {
     const more = moreLine({ total, items: new Array(shown).fill({}) }, 50);
     if (more !== null) out.push(more);
@@ -671,6 +706,16 @@ describe("no sentence promises that the month is right", () => {
     expect(joined).toContain("It has 1 asset under it");
     expect(joined).toContain("1 hour had a negative power reading");
     expect(joined).not.toMatch(/\b1 (hours|gaps|times|stretches|days|things|meters|assets)\b/);
+  });
+
+  it("scans the drawer's own words too: its headings, the intro of the later meters, its loading label and its two fold buttons", () => {
+    expect(strings).toEqual(expect.arrayContaining([
+      "Not counted", "Assets nothing measures", "Meters that started later", "Loading the month check", "Show fewer", "Show all 6", "Show all 2,000",
+      "20 meters gave their first reading after what was looked at. Until then each asset counts what the assets under it add up to. They are not part of the number at the top.",
+      "No asset has an energy (kWh) counter or a power (kW) reading mapped.",
+      "The energy it measures in that time is not lost: it is counted when readings come back, in a later month if they come back after this one ends.",
+    ]));
+    expect(laterIntro(1)).toMatch(/^1 meter gave its first reading/);
   });
 
   it("scans the new sentences: the hole before the month, silent parents, negative power and the size of a fall", () => {

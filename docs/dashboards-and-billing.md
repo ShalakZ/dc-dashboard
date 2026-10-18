@@ -273,10 +273,12 @@ month…**, changes no figure, marker, rate or CSV, and writes nothing (not even
   sent.
 - **The headline.** `N things to check` when there is anything to look at (one thing is one meter and one kind of finding, so a meter
   with a gap and a reset is two). Otherwise `Nothing to look at yet` when nothing could be read (the month has not begun, its first hour
-  is not over, or no meter recorded anything in it), and only then `Nothing to check`. A month in which every meter is silent therefore
-  says `N things to check`, never `Nothing to check`. Under the headline the drawer says what it looked at, for example "Looked at 217
-  meters over 720 hours (150,480 hours of readings), from 2026-09-01 00:00 to 2026-10-01 00:00. Only the hourly readings that billing
-  uses were read." Times are in the site time zone.
+  is not over, no meter recorded anything in it, or no asset has a meter mapped at all; the line under it says which), and only then
+  `Nothing to check`. A month in which every meter is silent therefore says `N things to check`, never `Nothing to check`. Under the
+  headline the drawer says what it looked at, for example "Looked at 217 meters over 720 hours (156,240 meter hours in all), from
+  2026-09-01 00:00 to 2026-10-01 00:00. Only the hourly readings that billing uses were read, so this check cannot see every kind of
+  fault." The meter hours are the hours expected of each meter added up (217 meters times 720 hours), whether or not each of those
+  hours has a reading: the missing ones are the findings below. Times are in the site time zone.
 - **What it looks at.** Every asset that has a meter of its own: an energy counter (`energy_kwh`), or, when it has none, a power meter
   (`active_power_kw`, called a power-only meter below). A parent is not repeated: what its children add up to is not checked again.
   It looks at the whole hours of the month, and for a month that is still running up to the last full hour (the hour in progress is
@@ -292,8 +294,9 @@ The findings, worst first inside each list:
    it is named); or one that went silent: the last hours looked at have no reading, and the item says since when. A silent meter on an
    asset with assets under it bills 0 for those hours whatever its children read, so their energy is missing from that asset's figure
    (the item says how many assets are under it). A meter that never recorded, or recorded nothing this month, counts as 0 kWh for the
-   month. For a meter that went silent, a counter's energy is not lost: it is counted in the hour readings return, which is in a later
-   month if they return after this one ends; a power-only meter's silent time counts as 0 kWh.
+   month. A counter's energy is not lost, though, when it recorded before: for one that went silent, or that recorded nothing this month
+   but did before it, the energy is counted in the hour readings return, which is in a later month if they return after this one ends
+   (the item says so); a power-only meter's silent time counts as 0 kWh.
 2. **Gaps in the readings.** Whole hours in a row without any reading.
    - **Counter.** A counter polled faster than once an hour tolerates none: any empty hour is a gap. A counter polled once an hour or
      slower leaves empty hours by design, so it tolerates `ceil(interval / 3600)` hours in a row, at most 24 (a counter read every
@@ -344,7 +347,7 @@ Two lists are information only and are never counted in the number at the top:
   counted for them. The ones whose parent is billed from other meters under it come first ("beside measured"): that figure leaves
   their power out. Only the direct parent is looked at, so the feeds of a free rack under a row billed from its other racks are not
   marked beside measured, although the row's figure lacks them too.
-- **Meters that start after the month.** Meters whose first reading is at or after the end of what was looked at (after the month, or in
+- **Meters that started later.** Meters whose first reading is at or after the end of what was looked at (after the month, or in
   the hour still running). They are not counted in "Looked at" either.
 
 Limits, all stated by the API under `limits`:
@@ -368,6 +371,14 @@ The check lists what the rules above find; the absence of a finding is not a sta
   month and 23 at the start of the next are listed in neither.
 - A counter's **partly covered hour** is not listed, because it loses no energy inside the month (the hour counts the last reading
   minus the previous one). At the very end of a month up to 59 minutes of its energy can move into the next month.
+- A slow counter's **tolerated empty hours at the end of a finished month**. A counter polled once an hour or slower may end the month
+  with up to `ceil(interval / 3600)` empty hours (at most 24) and the check calls that normal, but the energy of those hours is counted
+  in the next month, when the next reading arrives, with no finding.
+- A power meter whose mapping states a **longer polling interval than the point really has**. The collector polls a point once for each
+  source and interval, so a point mapped twice (for example kW at 1,800 s on the billed asset and at 60 s on another) is read about
+  60 times an hour. The engine takes samples times the mapped interval out of 3,600 s as the part of the hour covered, so a few
+  samples read as a fully covered hour and a long outage inside it is not listed as partly covered. The check follows the engine's
+  rule, so Billing's figure has the same blind spot; the rollup's `minutes` column shows the hole.
 - In the first hours of a month still running, a slow counter can read as **silent** before its first reading of the month has arrived.
 - A reading the collector stores as **bad** (not a number, or infinite) is not in the hourly rollup at all: an hour made only of such
   readings is an hour with no row, and the check cannot tell it was ever there.

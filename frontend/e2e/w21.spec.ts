@@ -46,7 +46,7 @@ const DOWNLOAD_BUTTON = "Download CSV";
 const UNMETERED_INTRO = "20 assets have no meter of their own and no meter above them, so no energy is counted for them. They are not part of the number at the top.";
 const CLOSED_NOTE = "This month is closed: its billed figures are frozen. This check describes the readings as they are stored today.";
 const RUNNING_NOTE = "This month is still running: the check stops at the last full hour.";
-const LOOKED_AT = /^Looked at 217 meters over 720 hours \(150,480 hours of readings\), from \d{4}-\d\d-\d\d \d\d:\d\d to \d{4}-\d\d-\d\d \d\d:\d\d\. Only the hourly readings that billing uses were read\.$/;
+const LOOKED_AT = /^Looked at 217 meters over 720 hours \(156,240 meter hours in all\), from \d{4}-\d\d-\d\d \d\d:\d\d to \d{4}-\d\d-\d\d \d\d:\d\d\. Only the hourly readings that billing uses were read, so this check cannot see every kind of fault\.$/;
 
 interface Box { x: number; y: number; width: number; height: number }
 
@@ -463,6 +463,71 @@ for (const look of LOOKS) {
   }
 }
 
+/** True when two boxes share any area (half a pixel of touching is not sharing). */
+function overlaps(a: Box, b: Box): boolean {
+  return a.x < b.x + b.width - 0.5 && b.x < a.x + a.width - 0.5 && a.y < b.y + b.height - 0.5 && b.y < a.y + a.height - 0.5;
+}
+
+/** Opens the sidebar (a window under 1180px starts with it minimized, and it stays as the person left it) and waits until the page has stopped moving. */
+async function expandSidebar(page: Page): Promise<void> {
+  const shell = page.locator(".shell");
+  if ((await shell.getAttribute("data-sidebar")) !== "expanded") await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+  await expect(shell).toHaveAttribute("data-sidebar", "expanded");
+  await settled(page);
+}
+
+// Review I1: with the sidebar open at 800px the page header is 516px wide and the three buttons of a finished month (Close month…, Check month, Download CSV: about 475px) were drawn over the
+// end of the title ("Billir"). Below 600px of the header's own width the buttons go under the title; from there up they share its row. Measured on a finished month, where all three are there.
+test("2. the header with the sidebar expanded on a finished month: at 800 x 600 the title is not overlapped or clipped and the actions sit under it, at 1024 x 640 the three buttons stay on the title's row", async ({ page }) => {
+  test.setTimeout(90_000);
+  await prepare(page);
+  await page.setViewportSize({ width: 800, height: 600 });
+  await openBilling(page);
+  await toPreviousMonth(page);
+  await expect(btn(page, CLOSE_BUTTON)).toBeVisible();
+  await expect(actions(page), "Close month…, Check month and Download CSV").toHaveCount(3);
+  await expandSidebar(page);
+
+  const heading = page.locator(".billing-page .page-head h1");
+  const names = [CLOSE_BUTTON, CHECK_BUTTON, DOWNLOAD_BUTTON];
+  const read = async () => ({
+    title: await boxOf(heading, "the title"),
+    head: await boxOf(page.locator(".billing-page .page-head"), "the page header"),
+    buttons: await Promise.all(names.map((name) => boxOf(btn(page, name), name))),
+    clipped: await heading.evaluate((el) => el.scrollWidth - el.clientWidth),
+    headOverflow: await page.locator(".billing-page .page-head").evaluate((el) => el.scrollWidth - el.clientWidth),
+  });
+
+  // 800 x 600: a header narrower than 600px, so the actions leave the title's row.
+  const narrow = await read();
+  expect(narrow.head.width, "the header is under the 600px where the buttons wrap").toBeLessThan(600);
+  expect(narrow.clipped, "the title is not clipped").toBeLessThanOrEqual(1);
+  expect(narrow.headOverflow, "the header does not overflow sideways").toBeLessThanOrEqual(1);
+  narrow.buttons.forEach((box, i) => {
+    expect(overlaps(narrow.title, box), `${names[i]} is drawn over the title`).toBe(false);
+    expect(box.y, `${names[i]} sits under the title`).toBeGreaterThanOrEqual(narrow.title.y + narrow.title.height - 1);
+    expect(box.x + box.width, `${names[i]} stays inside the header`).toBeLessThanOrEqual(narrow.head.x + narrow.head.width + 1);
+    expect(box.x, `${names[i]} starts at the title's left edge`).toBeLessThanOrEqual(narrow.title.x + 1);
+  });
+  for (let i = 1; i < names.length; i++) expect(narrow.buttons[i].y, `${names[i]} shares a row with ${names[0]}`).toBeLessThanOrEqual(narrow.buttons[0].y + 1);
+  expect(narrow.buttons[0].x, "the order is Close month…, Check month, Download CSV").toBeLessThan(narrow.buttons[1].x);
+  expect(narrow.buttons[1].x).toBeLessThan(narrow.buttons[2].x);
+
+  // 1024 x 640 with the sidebar still open: the header is wide enough, the three buttons are on the title's row, to its right.
+  await page.setViewportSize({ width: 1024, height: 640 });
+  await settled(page);
+  const wide = await read();
+  expect(wide.head.width, "the header is 600px or more").toBeGreaterThanOrEqual(600);
+  expect(wide.clipped).toBeLessThanOrEqual(1);
+  wide.buttons.forEach((box, i) => {
+    expect(overlaps(wide.title, box), `${names[i]} is drawn over the title`).toBe(false);
+    expect(box.x, `${names[i]} is right of the title`).toBeGreaterThanOrEqual(wide.title.x + wide.title.width - 1);
+    expect(box.y, `${names[i]} is on the title's row`).toBeLessThan(wide.title.y + wide.title.height);
+    expect(box.y + box.height, `${names[i]} is on the title's row`).toBeGreaterThan(wide.title.y);
+  });
+  for (let i = 1; i < names.length; i++) expect(Math.abs(wide.buttons[i].y - wide.buttons[0].y), `${names[i]} shares a row with ${names[0]}`).toBeLessThanOrEqual(1);
+});
+
 // ---------------------------------------------------------------------------------------------------------------------------------
 // 3. The keyboard
 
@@ -611,8 +676,8 @@ test("4. a 500 answer shows the drawer's error line and leaves the table untouch
 
 const NOTHING: readonly { name: CheckChoice; reason: string; looked: string | RegExp }[] = [
   {
-    name: "empty", reason: "No meter has recorded anything in this month.",
-    looked: /^Looked at 0 meters over 720 hours \(0 hours of readings\), from \d{4}-\d\d-\d\d \d\d:\d\d to \d{4}-\d\d-\d\d \d\d:\d\d\. Only the hourly readings that billing uses were read\.$/,
+    name: "empty", reason: "No asset has an energy (kWh) counter or a power (kW) reading mapped.",
+    looked: /^Looked at 0 meters over 720 hours \(0 meter hours in all\), from \d{4}-\d\d-\d\d \d\d:\d\d to \d{4}-\d\d-\d\d \d\d:\d\d\. Only the hourly readings that billing uses were read, so this check cannot see every kind of fault\.$/,
   },
   { name: "not_begun", reason: "This month has not begun.", looked: "Nothing was read." },
 ];
@@ -640,7 +705,7 @@ test('4. the "clear" answer says Nothing to check and still says what it looked 
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(headline(page)).toHaveText("Nothing to check");
   await expect(page.locator(".drawer .month-check-reason")).toHaveCount(0);
-  await expect(page.locator(".drawer .month-check-looked")).toHaveText(/^Looked at 217 meters over 720 hours \(150,480 hours of readings\), from /);
+  await expect(page.locator(".drawer .month-check-looked")).toHaveText(/^Looked at 217 meters over 720 hours \(156,240 meter hours in all\), from /);
   await expect(page.locator(".drawer .month-check-group > h3")).toHaveText(["Not counted"]);
   await expect(infoBlock(page).locator(".month-check-intro")).toHaveText("Every asset at the bottom of the tree has a meter of its own or one above it.");
 });
@@ -731,7 +796,7 @@ test("6. a running month says in the drawer that the check stops at the last ful
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(headline(page)).toHaveText("8 things to check");
   await expect(page.locator(".drawer .month-check-state")).toHaveText(RUNNING_NOTE);
-  await expect(page.locator(".drawer .month-check-looked")).toHaveText(/, the last full hour\. Only the hourly readings that billing uses were read\.$/);
+  await expect(page.locator(".drawer .month-check-looked")).toHaveText(/, the last full hour\. Only the hourly readings that billing uses were read, so this check cannot see every kind of fault\.$/);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------

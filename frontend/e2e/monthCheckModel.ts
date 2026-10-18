@@ -56,7 +56,7 @@ const UNMETERED: UnmeteredItem[] = [
 const base = (over: Partial<ApiMonthCheck> = {}, groups: Partial<ApiMonthCheck["groups"]> = {}): ApiMonthCheck => ({
   month: "2026-09", timezone: "Asia/Qatar", state: "finished", closed: false,
   from: "2026-08-31T21:00:00Z", to: "2026-09-30T21:00:00Z", month_end: "2026-09-30T21:00:00Z",
-  hours: 720, meters: 217, meter_hours: 150_480, things: 0, limits: LIMITS,
+  hours: 720, meters: 217, meter_hours: 156_240, things: 0, limits: LIMITS,
   groups: {
     silent: empty(), gaps: empty(), estimated: empty(), resets: empty(), started: empty(), unpriced: empty(), flat: empty(),
     unmetered: empty(), later: empty(), ...groups,

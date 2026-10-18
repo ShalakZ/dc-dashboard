@@ -1,7 +1,7 @@
 @layer w6 {
   /* w21: the Check month button's count on the Billing page and the month check drawer (components/MonthCheckDrawer.tsx). Tokens only; every rule is scoped by a class this piece owns. */
 
-  /* The count on the Check month button. A slot of a fixed width (3ch holds "99+"), so the button is as wide before the answer as after it and nothing beside it moves;
+  /* The count on the Check month button. A slot of a fixed width (2.75em holds "99+"), so the button is as wide before the answer as after it and nothing beside it moves;
      it is empty (and then draws nothing) while the answer is read, after a failure and when nothing was looked at. A small rounded rectangle, never a pill. It sets no height:
      the button keeps its own 34px. A number is the amber pair of a warning chip, a zero the quiet grey pair of a stale one (both pairs are measured in every look). */
   .check-count { display: inline-block; box-sizing: border-box; width: 2.75em; padding: 0; white-space: nowrap; border-radius: var(--radius-sm); background: var(--warn-tint); color: var(--warn); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.5; text-align: center; }

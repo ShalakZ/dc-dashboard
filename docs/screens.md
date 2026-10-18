@@ -45,7 +45,7 @@ lacks says "No access".
   check beside it (a muted `0` when nothing was found, empty while it is read or when nothing could be looked at). It opens a drawer
   that lists, worst first, the meters with no readings, gaps, hours estimated from power, counters that went back or dipped, meters
   that started part way through, energy with no rate and readings that did not change, then (not counted) the assets nothing measures
-  and the meters that start after the month; the Close month dialog repeats the answer in one line. Point and source names in it need
+  and the meters that started later; the Close month dialog repeats the answer in one line. Point and source names in it need
   `sources.view`. It only reads and certifies nothing. See [Checking a month](dashboards-and-billing.md#checking-a-month).
 
 ## Operate

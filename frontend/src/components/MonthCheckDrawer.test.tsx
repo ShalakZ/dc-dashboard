@@ -14,7 +14,7 @@ function check(over: Partial<MonthCheck> = {}, groups: Partial<MonthCheck["group
   return {
     month: "2026-09", timezone: ZONE, state: "finished", closed: false,
     from: "2026-08-31T21:00:00Z", to: "2026-09-30T21:00:00Z", month_end: "2026-09-30T21:00:00Z",
-    hours: 720, meters: 217, meter_hours: 150480, things: 0, limits: LIMITS,
+    hours: 720, meters: 217, meter_hours: 156240, things: 0, limits: LIMITS,
     groups: { silent: none(), gaps: none(), estimated: none(), resets: none(), started: none(), unpriced: none(), flat: none(), unmetered: none(), later: none(), ...groups },
     ...over,
   };
@@ -52,7 +52,7 @@ describe("MonthCheckDrawer", () => {
       expect(d).toHaveClass("drawer-wide");
       expect(screen.getByRole("heading", { level: 2, name: "Check September 2026" })).toBeInTheDocument();
       expect(within(d).getByText("10 things to check")).toHaveClass("month-check-headline");
-      expect(within(d).getByText(/^Looked at 217 meters over 720 hours \(150,480 hours of readings\), from 2026-09-01 00:00 to 2026-10-01 00:00\./)).toBeInTheDocument();
+      expect(within(d).getByText(/^Looked at 217 meters over 720 hours \(156,240 meter hours in all\), from 2026-09-01 00:00 to 2026-10-01 00:00\./)).toBeInTheDocument();
       expect(d.querySelector(".month-check-headline")!.nextElementSibling).toHaveClass("month-check-looked"); // headline, then (no reason) what was looked at
     });
 
@@ -91,12 +91,14 @@ describe("MonthCheckDrawer", () => {
       expect(within(dialog()).getByText("Every asset at the bottom of the tree has a meter of its own or one above it.")).toBeInTheDocument();
     });
 
-    it.each([
-      ["a month that has not begun", { state: "not_begun" as const, hours: 0, meters: 0, meter_hours: 0 }, "This month has not begun.", "Nothing was read."],
-      ["a month whose first hour is not over", { state: "open" as const, hours: 0, meters: 0, meter_hours: 0 }, "The first hour of this month is not over yet.", "Nothing was read."],
-      ["a month no meter recorded in", { meters: 0, meter_hours: 0 }, "No meter has recorded anything in this month.", /^Looked at 0 meters over 720 hours/],
-    ])("says Nothing to look at yet, and why, for %s", (_name, over, reason, looked) => {
-      show(ready(check(over)));
+    type NothingCase = [name: string, over: Partial<MonthCheck>, reason: string, looked: string | RegExp, groups: Partial<MonthCheck["groups"]>];
+    it.each<NothingCase>([
+      ["a month that has not begun", { state: "not_begun", hours: 0, meters: 0, meter_hours: 0 }, "This month has not begun.", "Nothing was read.", {}],
+      ["a month whose first hour is not over", { state: "open", hours: 0, meters: 0, meter_hours: 0 }, "The first hour of this month is not over yet.", "Nothing was read.", {}],
+      ["a site with no meter mapped", { meters: 0, meter_hours: 0 }, "No asset has an energy (kWh) counter or a power (kW) reading mapped.", /^Looked at 0 meters over 720 hours/, {}],
+      ["a month the only meters started after", { meters: 0, meter_hours: 0 }, "No meter has recorded anything in this month.", /^Looked at 0 meters over 720 hours/, { later: group([later(0)]) }],
+    ])("says Nothing to look at yet, and why, for %s", (_name, over, reason, looked, groups) => {
+      show(ready(check(over, groups)));
       expect(within(dialog()).getByText("Nothing to look at yet")).toBeInTheDocument();
       expect(within(dialog()).getByText(reason)).toBeInTheDocument();
       expect(within(dialog()).getByText(looked)).toBeInTheDocument();
@@ -236,6 +238,36 @@ describe("MonthCheckDrawer", () => {
       expect(words.length).toBeGreaterThan(1500);
       expect(words).not.toMatch(/\b(ok|ready|verified|correct|accurate|guarantee|safe|all good|passed)\b/i);
       expect(words).not.toContain("%");
+    });
+  });
+
+  describe("the drawer's own words (review M2)", () => {
+    // The same list the words module's scan uses: whole words, any case, and a percent sign.
+    const BANNED = /\b(ok|ready|verified|correct|accurate|guarantee|safe|all good|passed)\b|%/i;
+
+    it("scans the whole text of the pilot answer with every list open: its headings, the later meters' intro and its fold buttons are clean", async () => {
+      show(ready({ ...pilot(), state: "open", groups: { ...pilot().groups, later: group(times(7, later)) } }));
+      for (let guard = 0; guard < 10; guard++) {
+        const closed = within(dialog()).queryAllByRole("button", { name: /^Show all \d/ });
+        if (closed.length === 0) break;
+        await userEvent.click(closed[0]);
+      }
+      expect(within(dialog()).queryAllByRole("button", { name: /^Show all \d/ })).toHaveLength(0); // every list is open
+      const buttons = within(dialog()).getAllByRole("button", { name: "Show fewer" });
+      expect(buttons.length).toBeGreaterThanOrEqual(3); // estimated 8, assets nothing measures 20, later meters 7
+      const words = dialog().textContent!;
+      for (const own of ["Not counted", "Assets nothing measures", "Meters that started later", "7 meters gave their first reading after what was looked at.", "Show fewer"]) {
+        expect(words, own).toContain(own);
+      }
+      expect(words.length).toBeGreaterThan(3000);
+      expect(words.match(BANNED)?.[0] ?? null).toBeNull();
+    });
+
+    it("scans the loading label too", () => {
+      show({ status: "loading" });
+      const text = dialog().querySelector(".drawer-body")!.textContent!;
+      expect(text).toBe("Loading the month check");
+      expect(BANNED.test(text)).toBe(false);
     });
   });
 

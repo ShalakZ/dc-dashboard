@@ -10,7 +10,7 @@ import {
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
   useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
   useAddStarterKinds, useAssetKinds, useAssets, useBulkDeleteAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
-  loadMovePreview, useMoveAssets, useRemoveDiscoveredSources, useTidyLayout, useBillingMonths, useBillingMonthCheck, useCloseBillingMonth, useReopenBillingMonth,
+  loadMovePreview, useMoveAssets, useRemoveDiscoveredSources, useTidyLayout, useBillingMonths, useBillingMonthCheck, useCloseBillingMonth, useReopenBillingMonth, monthCheckRefetchMs,
 } from "./queries";
 import { ApiError } from "./client";
 import type { MoveBody, RangePreset, WidgetConfig } from "./types";
@@ -1322,7 +1322,7 @@ describe("the month check query (w21)", () => {
     expect(keys.billingMonthCheck("2026-09").slice(0, 1)).toEqual(keys.billing); // so every `keys.billing` invalidation reaches it
   });
 
-  it("is kept for five minutes and never polls", async () => {
+  it("is kept for five minutes, and re-read on a timer only through monthCheckRefetchMs (an open month)", async () => {
     const calls = mockFetch({ "GET /api/billing/month-check": { body: monthCheckBody } });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const shared = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
@@ -1330,10 +1330,24 @@ describe("the month check query (w21)", () => {
     await waitFor(() => expect(first.result.current.data?.month).toBe("2026-09"));
     const options = client.getQueryCache().find({ queryKey: keys.billingMonthCheck("2026-09") })?.observers[0].options;
     expect(options?.staleTime).toBe(5 * 60_000);
-    expect(options?.refetchInterval).toBeUndefined();
+    expect(typeof options?.refetchInterval).toBe("function"); // the interval follows the answer it holds
+    const query = client.getQueryCache().find({ queryKey: keys.billingMonthCheck("2026-09") })!;
+    expect((options!.refetchInterval as (q: typeof query) => unknown)(query)).toBe(false); // this answer is a finished month: no timer
     const second = renderHook(() => useBillingMonthCheck("2026-09"), { wrapper: shared }); // the drawer reading the same cache
     expect(second.result.current.data?.month).toBe("2026-09");
     expect(calls.filter((c) => c.path === "/api/billing/month-check")).toHaveLength(1);
+  });
+});
+
+describe("monthCheckRefetchMs (w21 review M8): an open month's count follows the table, nothing else polls", () => {
+  const answer = (state: "open" | "finished" | "not_begun") => ({ ...monthCheckBody, state }) as unknown as Parameters<typeof monthCheckRefetchMs>[0];
+
+  it("is a quarter of an hour for an open month", () => {
+    expect(monthCheckRefetchMs(answer("open"))).toBe(15 * 60_000);
+  });
+
+  it.each([["a finished month", answer("finished")], ["a month that has not begun", answer("not_begun")], ["no answer yet", undefined]])("is false for %s", (_name, data) => {
+    expect(monthCheckRefetchMs(data)).toBe(false);
   });
 });
 

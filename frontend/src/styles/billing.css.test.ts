@@ -148,8 +148,10 @@ describe("the toolbar (w20)", () => {
   const BAR = ".billing-page .billing-bar";
   const TOOLS = ".billing-page .billing-tools";
   const COUNT = ".billing-page .tools-count";
-  const containerRules = billing.filter((r) => r.at.some((a) => a.startsWith("@container")));
-  const containerAt = [...new Set(containerRules.flatMap((r) => r.at.filter((a) => a.startsWith("@container"))))];
+  // The toolbar's own query is a (min-width: Nrem) one; the page header's (max-width: 600px) rule has its own describe below (w21 review I1).
+  const isToolbarQuery = (a: string) => a.startsWith("@container (min-width");
+  const containerRules = billing.filter((r) => r.at.some(isToolbarQuery));
+  const containerAt = [...new Set(containerRules.flatMap((r) => r.at.filter(isToolbarQuery)))];
   const inWide = (selector: string) => {
     const found = containerRules.filter((r) => r.selector === selector);
     expect(found, `exactly one @container rule for "${selector}"`).toHaveLength(1);
@@ -176,7 +178,7 @@ describe("the toolbar (w20)", () => {
     expect(prop(bodyOf(billing, TOOLS), "flex-wrap")).toBe("wrap"); // the table group still wraps (measured: nowrap shrinks every item and wraps the Show levels label)
   });
 
-  it("there is exactly ONE container query in the file: (min-width: Nrem) with N at least 98, the room the two groups need (1558px, valid only with the filter's 10rem basis; w20.spec.ts measures the real switch at 99rem)", () => {
+  it("there is exactly ONE toolbar container query in the file: (min-width: Nrem) with N at least 98, the room the two groups need (1558px, valid only with the filter's 10rem basis; w20.spec.ts measures the real switch at 99rem)", () => {
     expect(containerAt).toHaveLength(1);
     const m = /^@container \(min-width: ([\d.]+)rem\)$/.exec(containerAt[0]);
     expect(m, "an unnamed (min-width: Nrem) query").not.toBeNull();
@@ -230,7 +232,7 @@ describe("the toolbar (w20)", () => {
 
   it("source order decides (the wide rules have the base rules' weight): base toolbar rules first, then the container block, and the short-window `max-height: none` after it", () => {
     const base = indexOfRule(BOX);
-    const firstWide = billing.findIndex((r) => r.at.some((a) => a.startsWith("@container")));
+    const firstWide = billing.findIndex((r) => r.at.some(isToolbarQuery));
     const media = indexOfRule(BOX, [LAYER, MEDIA]);
     expect(base).toBeGreaterThanOrEqual(0);
     expect(base).toBeLessThan(firstWide);
@@ -238,7 +240,7 @@ describe("the toolbar (w20)", () => {
     expect(indexOfRule(TOOLBAR)).toBeLessThan(firstWide);
     expect(indexOfRule(BAR)).toBeLessThan(firstWide);
     // the rules of the block stay together
-    const idx = billing.map((r, i) => (r.at.some((a) => a.startsWith("@container")) ? i : -1)).filter((i) => i >= 0);
+    const idx = billing.map((r, i) => (r.at.some(isToolbarQuery) ? i : -1)).filter((i) => i >= 0);
     expect(idx[idx.length - 1] - idx[0]).toBe(idx.length - 1);
   });
 
@@ -254,5 +256,34 @@ describe("the toolbar (w20)", () => {
     expect(prop(count, "font-size")).toBe("var(--fs-xs)"); // --fs-sm made the caption 39px tall instead of 38
     expect(prop(count, "white-space")).toBe("nowrap");
     expect(count).not.toMatch(/min-width|margin-left|color:/); // the 28ch room and the bar's grey are gone: the caption's muted colour applies
+  });
+});
+
+// w21 review I1: Close month…, Check month and Download CSV need about 475px beside the 90px title. With the sidebar open at 800px the header is 516px wide and the
+// buttons were drawn over the end of the title. The header is a size container (as on the asset page) and below 600px of its own width the actions go under the title.
+describe("the page header (w21 review I1)", () => {
+  const assets = read("src/styles/pages-assets.css");
+  const HEADER = ".billing-page .page-head";
+  const ACTIONS = ".billing-page .page-head > .actions";
+  const NARROW = "@container (max-width: 600px)";
+
+  it("is a size container on its inline size only (a plain `size` would collapse its height)", () => {
+    const body = bodyOf(billing, HEADER);
+    expect(prop(body, "container-type")).toBe("inline-size");
+    expect(body).not.toMatch(/(^|[;\s])(container-type:\s*(size|normal)|contain:|container:)/);
+  });
+
+  it("under 600px of its own width the actions leave the second column and sit under the title, at the left, 12px below it", () => {
+    const body = bodyOf(billing, ACTIONS, [LAYER, NARROW]);
+    expect(prop(body, "grid-column")).toBe("1");
+    expect(prop(body, "grid-row")).toBe("auto");
+    expect(prop(body, "justify-content")).toBe("flex-start");
+    expect(prop(body, "margin-top")).toBe("12px");
+  });
+
+  it("is the same rule the asset page uses (only the width differs), and the only container rule of the header", () => {
+    const asset = bodyOf(assets, ".asset-page .page-head > .actions", [LAYER, "@container (max-width: 580px)"]);
+    expect(bodyOf(billing, ACTIONS, [LAYER, NARROW]).trim()).toBe(asset.trim());
+    expect(billing.filter((r) => r.selector.includes(".page-head") && r.at.some((a) => a.startsWith("@container")))).toHaveLength(1);
   });
 });

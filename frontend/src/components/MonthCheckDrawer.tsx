@@ -2,7 +2,8 @@ import { useId, useState, type ReactNode } from "react";
 import type { MonthCheck } from "../api/types";
 import { monthLabel } from "../lib/billing";
 import {
-  GROUP_ORDER, groupIntro, groupTitle, headline, headlineReason, itemLines, laterLine, lookedAtLine, moreLine, stateNote, unmeteredIntro, unmeteredLines,
+  GROUP_ORDER, LATER_TITLE, LOADING_LABEL, NOT_COUNTED_TITLE, SHOW_FEWER, UNMETERED_TITLE, groupIntro, groupTitle, headline, headlineReason, itemLines, laterIntro,
+  laterLine, lookedAtLine, moreLine, showAllText, stateNote, unmeteredIntro, unmeteredLines,
   type CheckGroupKey, type CheckItems, type MonthCheckStatus,
 } from "../lib/monthCheck";
 import { Drawer } from "./Drawer";
@@ -12,12 +13,6 @@ import { Skeleton, SkeletonRegion } from "./Skeleton";
 const SHOWN = 5;
 
 const num = (n: number) => n.toLocaleString("en-US");
-
-/** What the meters that started after everything that was looked at are: information, never part of the number. */
-const laterIntro = (total: number) =>
-  total === 1
-    ? "1 meter gave its first reading after what was looked at. Until then its asset counts what the assets under it add up to. It is not part of the number at the top."
-    : `${num(total)} meters gave their first reading after what was looked at. Until then each asset counts what the assets under it add up to. They are not part of the number at the top.`;
 
 /**
  * A list that shows its first five rows; the rest wait behind `Show all N` / `Show fewer`. The button is one element whose words change, so the
@@ -34,7 +29,7 @@ function FoldedList({ rows, more, describedBy }: { rows: ReactNode[]; more: stri
       <ul id={listId} className="month-check-list">{open ? rows : rows.slice(0, SHOWN)}</ul>
       {long && (
         <button type="button" className="quiet month-check-show" aria-expanded={all} aria-controls={listId} aria-describedby={describedBy} onClick={() => setAll(!all)}>
-          {all ? "Show fewer" : `Show all ${num(rows.length)}`}
+          {all ? SHOW_FEWER : showAllText(rows.length)}
         </button>
       )}
       {open && more !== null && <p className="muted month-check-more">{more}</p>}
@@ -80,9 +75,9 @@ function InfoBlock({ check, timezone }: { check: MonthCheck; timezone: string })
   const cap = check.limits.cap;
   return (
     <div className="month-check-group month-check-info">
-      <h3 id={titleId}>Not counted</h3>
+      <h3 id={titleId}>{NOT_COUNTED_TITLE}</h3>
       <div className="month-check-sub">
-        <h4 id={unmeteredId}>Assets nothing measures</h4>
+        <h4 id={unmeteredId}>{UNMETERED_TITLE}</h4>
         <p className="muted month-check-intro">{unmeteredIntro(check)}</p>
         {unmetered.total > 0 && (
           <FoldedList
@@ -99,7 +94,7 @@ function InfoBlock({ check, timezone }: { check: MonthCheck; timezone: string })
       </div>
       {later.total > 0 && (
         <div className="month-check-sub">
-          <h4 id={laterId}>Meters that started later</h4>
+          <h4 id={laterId}>{LATER_TITLE}</h4>
           <p className="muted month-check-intro">{laterIntro(later.total)}</p>
           <FoldedList
             describedBy={laterId}
@@ -136,7 +131,7 @@ function CheckView({ check, timezone }: { check: MonthCheck; timezone: string })
 /** The same shape as the answer (a headline, a looked-at line, two groups of three lines), so nothing jumps when it arrives. One status region. */
 function CheckSkeleton() {
   return (
-    <SkeletonRegion label="Loading the month check" className="month-check-body">
+    <SkeletonRegion label={LOADING_LABEL} className="month-check-body">
       <p className="month-check-headline"><Skeleton width="16ch" /></p>
       <p className="muted month-check-looked"><Skeleton width="48ch" /></p>
       {[0, 1].map((group) => (
