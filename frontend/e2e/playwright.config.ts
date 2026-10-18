@@ -288,5 +288,17 @@ export default defineConfig({
       dependencies: ["w14"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // MEASURES the real pages (control heights on one line, the note box of the Close month and Reopen month dialogs, the remove dialogs) and needs nothing from the stack's own data. beforeAll
+    // makes what it needs through the API and afterAll takes it away again, also after a failed case: two assets `w18 <run>` and `w18 <run> b` (the first with one point mapped, so its page shows
+    // the "live" chip: a free point of any source, else a mapping moved over for the run and moved back), and a dashboard `w18 <run>`. Every Billing case answers GET /api/billing/costs, /months and
+    // /costs.csv through page.route from e2e/billingModel.ts and the remove dialogs get GET /api/assets/{id}/impact from page.route, so any other write the page tries is refused with a 500 and fails
+    // the case (the Close month, Reopen month and delete buttons are never pressed). Its cases set the admin's look (light navy-gold, dark desert-gold) through PUT /api/me/preferences and
+    // afterAll puts it back to light navy-gold. Each case that needs a window size sets it itself (1920, 1440, 1024, 800 wide).
+    {
+      name: "w18",
+      testMatch: "w18.spec.ts",
+      dependencies: ["w17"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });
