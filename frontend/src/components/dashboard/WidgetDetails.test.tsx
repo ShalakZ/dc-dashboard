@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { keys } from "../../api/queries";
-import type { Asset, WidgetConfig, WidgetData, WidgetType } from "../../api/types";
+import type { Asset, WidgetConfig, WidgetData, DataWidgetType } from "../../api/types";
 import { downloadCsv } from "../../lib/download";
 import type { LiveValue } from "../../lib/stream";
 import { parseRules, stripComments } from "../../test/cssTools";
@@ -25,7 +25,7 @@ const assetRecord = (id: number, name: string): Asset => ({ id, parent_id: null,
 
 interface Options { assets?: Asset[]; stream?: Map<number, LiveValue>; props?: Partial<WidgetDetailsProps> }
 /** The drawer for `data`, in the providers the dashboard gives it. The clock is fixed at NOW, only `Date` and the interval timer are faked. */
-function open(type: WidgetType, data: WidgetData, cfg: WidgetConfig, { assets, stream, props }: Options = {}) {
+function open(type: DataWidgetType, data: WidgetData, cfg: WidgetConfig, { assets, stream, props }: Options = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (assets) client.setQueryData(keys.assets, assets);
   const onClose = vi.fn();
@@ -181,7 +181,7 @@ describe("WidgetDetails: freshness", () => {
     expect(within(dialog()).getByText("No reading time recorded")).toBeInTheDocument();
   });
 
-  it.each<[string, WidgetType, WidgetConfig, WidgetData]>([
+  it.each<[string, DataWidgetType, WidgetConfig, WidgetData]>([
     ["an average (not a reading)", "stat", config({ aggregation: "avg" }), valuesData({ type: "stat" })],
     ["an energy total", "stat", config({ source: "energy", metric: null, aggregation: "sum" }), valuesData({ type: "stat", source: "energy", metric: null, unit: "kWh" })],
     ["a bar chart", "bar", LAST(), valuesData({ type: "bar", values: [valueRow({ ts: at(9) })] })],

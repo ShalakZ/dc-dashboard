@@ -1,4 +1,4 @@
-import type { RangePreset, SeriesTier, WidgetAggregation, WidgetConfig, WidgetData, WidgetPoint, WidgetSeries, WidgetType } from "../api/types";
+import type { RangePreset, SeriesTier, WidgetAggregation, WidgetConfig, WidgetData, WidgetPoint, WidgetSeries, DataWidgetType } from "../api/types";
 import { RANGE_LABELS, isRolling } from "./ranges";
 import { formatSiteClock, formatSiteDateTime, formatSiteTick, siteDay } from "./siteTime";
 import { flagsOf, hasNoReading, uniqueLabels } from "./widgetFormat";
@@ -105,7 +105,7 @@ export function figuresText(data: WidgetData, config: AggregationConfig): string
 }
 
 /** What one figure is, as a short phrase ("Total per hour", "Latest reading"). Same keys as `figuresText`; `type` is the widget's. */
-export function aggregationWords(type: WidgetType, data: WidgetData, config: AggregationConfig): string {
+export function aggregationWords(type: DataWidgetType, data: WidgetData, config: AggregationConfig): string {
   if (data.mode === "series") {
     if (data.source !== "metric") return `Total per ${bucketNoun(data.bucket)}`;
     if (type === "timeseries") return "Average of each bucket, with the lowest and highest as a band";
@@ -278,7 +278,7 @@ export function bucketStartText(iso: string, timezone: string, data: Pick<Widget
  * The accessible name of a chart (the canvas is a picture): type, assets, metric and unit, window. A gauge is a `meter`
  * and a stat or table is text, so they get "". The preset words need no time zone.
  */
-export function chartDescription(type: WidgetType, data: WidgetData): string {
+export function chartDescription(type: DataWidgetType, data: WidgetData): string {
   if (type !== "timeseries" && type !== "bar") return "";
   const kind = type === "timeseries" ? "Line chart" : "Bar chart";
   const rows = data.mode === "series" ? data.series : data.values;

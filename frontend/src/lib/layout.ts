@@ -1,18 +1,21 @@
-import type { Widget, WidgetType } from "../api/types";
+import type { DistributiveOmit, TextStyle, Widget, WidgetType } from "../api/types";
 
 export const GRID_COLS = 12;
 
 export interface GridItem { i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number }
 
 /** A widget being edited: no id yet for new ones, so it is keyed by a client-side `key` (String(id) for saved widgets). */
-export type DraftWidget = Omit<Widget, "id"> & { key: string };
+export type DraftWidget = DistributiveOmit<Widget, "id"> & { key: string };
 
 const SIZE: Record<WidgetType, { w: number; h: number }> = {
-  timeseries: { w: 6, h: 5 }, bar: { w: 6, h: 5 }, stat: { w: 3, h: 2 }, gauge: { w: 3, h: 3 }, table: { w: 6, h: 4 },
+  timeseries: { w: 6, h: 5 }, bar: { w: 6, h: 5 }, stat: { w: 3, h: 2 }, gauge: { w: 3, h: 3 }, table: { w: 6, h: 4 }, text: { w: 6, h: 2 },
 };
 const MIN: Record<WidgetType, { minW: number; minH: number }> = {
   timeseries: { minW: 3, minH: 3 }, bar: { minW: 3, minH: 3 }, stat: { minW: 2, minH: 2 }, gauge: { minW: 2, minH: 2 }, table: { minW: 3, minH: 3 },
+  text: { minW: 2, minH: 1 },
 };
+/** A divider is a rule across the whole row, one grid row high. */
+const DIVIDER_SIZE = { w: 12, h: 1 };
 
 /** The columns (end exclusive) the read-only grid really draws for a widget: it never spills past the last column. */
 export function columnsOf({ x, w }: { x: number; w: number }): { start: number; end: number } {
@@ -22,9 +25,10 @@ export function columnsOf({ x, w }: { x: number; w: number }): { start: number; 
 
 /** Saved rows are normalised once to the rectangle the grid draws (x/w inside the 12 columns, h at least 1, y at least 0); valid rows are unchanged. */
 export function toDrafts(widgets: Widget[]): DraftWidget[] {
-  return widgets.map((w) => {
-    const { start, end } = columnsOf(w);
-    return { key: String(w.id), type: w.type, title: w.title, config: w.config, x: start, y: Math.max(0, w.y), w: end - start, h: Math.max(1, w.h) };
+  return widgets.map((widget): DraftWidget => {
+    const { start, end } = columnsOf(widget);
+    const { id, ...rest } = widget; // the rest of a union keeps the union (type and config stay together)
+    return { ...rest, key: String(id), x: start, y: Math.max(0, widget.y), w: end - start, h: Math.max(1, widget.h) };
   });
 }
 
@@ -48,8 +52,9 @@ export function applyGrid(drafts: DraftWidget[], grid: readonly GridItem[]): Dra
   return changed ? next : drafts;
 }
 
-export function defaultSize(type: WidgetType): { w: number; h: number } {
-  return { ...SIZE[type] };
+/** The size a new widget starts with. `style` only matters for a text widget: a divider is a full-width rule. */
+export function defaultSize(type: WidgetType, style?: TextStyle): { w: number; h: number } {
+  return { ...(type === "text" && style === "divider" ? DIVIDER_SIZE : SIZE[type]) };
 }
 
 /** A new widget starts a fresh row at column 0 below everything; the editor then closes it up into any free space (compactVertical). */

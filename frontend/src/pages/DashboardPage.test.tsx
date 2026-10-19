@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useDefaultDashboard } from "../api/queries";
-import type { WidgetType } from "../api/types";
+import type { DataWidgetType } from "../api/types";
 import { downloadCsv } from "../lib/download";
 import { progress } from "../lib/progress";
 import { authed, config, dashboard, dataFor, valueRow, valuesData, widget, widgetDataRoute } from "../test/dashboardFixtures";
@@ -186,7 +186,7 @@ describe("DashboardPage (view)", () => {
     open("viewer", {
       "GET /api/dashboards/3": { body: dashboard({ widgets: [trend, energy, stat, gauge] }) },
       "POST /api/widget-data": ({ body }) => {
-        const { type } = body as { type: WidgetType };
+        const { type } = body as { type: DataWidgetType };
         return { body: type === "gauge" ? valuesData({ type: "gauge", values: [valueRow({ asset_id: 6, name: "LV Panel 2", value: 4, point_id: 8 })] }) : dataFor(type) };
       },
     });
@@ -222,7 +222,7 @@ describe("DashboardPage (view)", () => {
   it("shows a warning chip for removed assets and still draws the rest (Review Focus 5, UI side)", async () => {
     open("viewer", {
       "POST /api/widget-data": ({ body }) => {
-        const type = (body as { type: WidgetType }).type;
+        const type = (body as { type: DataWidgetType }).type;
         return { body: type === "stat" ? valuesData({ missing: [99] }) : dataFor(type) };
       },
     });
@@ -235,7 +235,7 @@ describe("DashboardPage (view)", () => {
   it("shows a failing widget's error inside that widget only", async () => {
     open("viewer", {
       "POST /api/widget-data": ({ body }) => {
-        const type = (body as { type: WidgetType }).type;
+        const type = (body as { type: DataWidgetType }).type;
         return type === "table" ? { status: 500, body: { detail: "query failed" } } : { body: dataFor(type) };
       },
     });

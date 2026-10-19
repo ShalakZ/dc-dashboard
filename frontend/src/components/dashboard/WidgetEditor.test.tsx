@@ -272,7 +272,7 @@ describe("the preview", () => {
     // The same stat config drawn once the way a dashboard draws it, once in the dialog's preview: the card has the same shape and text.
     const [draft] = toDrafts([widget(1, "stat", { title: "Hall power", config: config({ aggregation: "last" }) })]);
     mockFetch({ ...authed("operator"), "POST /api/widget-data": widgetDataRoute });
-    renderWithProviders(<WidgetView widgetKey="1" type="stat" title="Hall power" config={draft.config} dashboardRange="24h" timezone="Asia/Qatar" />);
+    renderWithProviders(<WidgetView widgetKey="1" type="stat" title="Hall power" config={config({ aggregation: "last" })} dashboardRange="24h" timezone="Asia/Qatar" />);
     const dashboardCard = await screen.findByRole("region", { name: "Hall power" });
     await within(dashboardCard).findByText("10.50");
     const shape = (card: HTMLElement) => {

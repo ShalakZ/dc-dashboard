@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Fragment } from "react";
 import { Link } from "react-router";
 import { keys } from "../../api/queries";
-import type { Asset, WidgetConfig, WidgetData, WidgetType } from "../../api/types";
+import type { Asset, WidgetConfig, WidgetData, DataWidgetType } from "../../api/types";
 import { useAuth } from "../../auth/AuthProvider";
 import { meets } from "../../auth/need";
 import { useNow } from "../../hooks/useNow";
@@ -22,7 +22,7 @@ import { useCsvExport, type CsvSource } from "./WidgetFrame";
 export interface WidgetDetailsProps {
   /** The widget's own title; the drawer is named "Details: <title>". */
   title: string;
-  type: WidgetType;
+  type: DataWidgetType;
   /** The answer the card shows: nothing here is fetched again. */
   data: WidgetData;
   config: WidgetConfig;

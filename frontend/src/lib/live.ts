@@ -1,11 +1,11 @@
-import type { RangePreset, WidgetConfig, WidgetData, WidgetType, WidgetValue } from "../api/types";
+import type { RangePreset, WidgetConfig, WidgetData, DataWidgetType, WidgetValue } from "../api/types";
 import { isRolling } from "./ranges";
 import type { LiveValue } from "./stream";
 
-const LIVE_TYPES: ReadonlySet<WidgetType> = new Set<WidgetType>(["stat", "gauge"]);
+const LIVE_TYPES: ReadonlySet<DataWidgetType> = new Set<DataWidgetType>(["stat", "gauge"]);
 
 /** A widget follows the stream when it shows the latest metric reading of a range that ends now (spec 10.5). */
-export function isLiveWidget(type: WidgetType, config: Pick<WidgetConfig, "source" | "aggregation">, preset: RangePreset): boolean {
+export function isLiveWidget(type: DataWidgetType, config: Pick<WidgetConfig, "source" | "aggregation">, preset: RangePreset): boolean {
   return LIVE_TYPES.has(type) && config.source === "metric" && config.aggregation === "last"
     && (isRolling(preset) || preset === "today" || preset === "this_month");
 }

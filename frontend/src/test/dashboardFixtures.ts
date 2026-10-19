@@ -1,4 +1,6 @@
-import type { Asset, Dashboard, Widget, WidgetConfig, WidgetData, WidgetPoint, WidgetType, WidgetValue } from "../api/types";
+import type {
+  Asset, Dashboard, DataWidget, DataWidgetType, TextStyle, TextWidget, WidgetConfig, WidgetData, WidgetPoint, WidgetValue,
+} from "../api/types";
 import { userFor } from "./users";
 
 export const SITE = { timezone: "Asia/Qatar", currency: "QAR" };
@@ -20,8 +22,12 @@ export const assetList: Asset[] = [
 export const config = (over: Partial<WidgetConfig> = {}): WidgetConfig => ({
   assets: [5], source: "metric", metric: "active_power_kw", aggregation: "avg", range: null, bars: "asset", min: 0, max: null, ...over,
 });
-export const widget = (id: number, type: WidgetType, over: Partial<Widget> = {}): Widget => ({
+/** A data widget (a type that fetches). A text widget is `textWidget`. */
+export const widget = (id: number, type: DataWidgetType, over: Partial<DataWidget> = {}): DataWidget => ({
   id, type, title: `Widget ${id}`, config: config(), x: 0, y: 0, w: 4, h: 3, ...over,
+});
+export const textWidget = (id: number, style: TextStyle, text: string, over: Partial<TextWidget> = {}): TextWidget => ({
+  id, type: "text", title: `Text ${id}`, config: { style, text }, x: 0, y: 0, w: 6, h: 2, ...over,
 });
 export const dashboard = (over: Partial<Dashboard> = {}): Dashboard => ({
   id: 3, name: "Hall A", range: "24h", updated_at: "2026-10-08T06:00:00+00:00", widgets: [], ...over,
@@ -66,7 +72,7 @@ export const valuesData = (over: Partial<WidgetData> = {}): WidgetData => ({
 });
 
 /** What the API answers for each widget type, so a page with one widget of each type can be mocked in one handler. */
-export function dataFor(type: WidgetType): WidgetData {
+export function dataFor(type: DataWidgetType): WidgetData {
   switch (type) {
     case "timeseries": return seriesData();
     case "bar": return valuesData({ type: "bar", source: "energy", metric: null, unit: "kWh" });
@@ -79,4 +85,4 @@ export function dataFor(type: WidgetType): WidgetData {
       });
   }
 }
-export const widgetDataRoute = ({ body }: { url: string; body: unknown }) => ({ body: dataFor((body as { type: WidgetType }).type) });
+export const widgetDataRoute = ({ body }: { url: string; body: unknown }) => ({ body: dataFor((body as { type: DataWidgetType }).type) });

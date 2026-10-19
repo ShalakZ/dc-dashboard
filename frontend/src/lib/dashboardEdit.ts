@@ -1,9 +1,10 @@
 import { ApiError } from "../api/client";
 import {
-  METRICS, type Dashboard, type DashboardSave, type GraphModel, type Metric, type RangePreset, type WidgetAggregation, type WidgetConfig,
-  type WidgetIn, type WidgetSource, type WidgetType,
+  METRICS, type Dashboard, type DashboardSave, type DataWidgetType, type GraphModel, type Metric, type RangePreset, type TextConfig,
+  type TextStyle, type WidgetAggregation, type WidgetConfig, type WidgetIn, type WidgetSource, type WidgetType,
 } from "../api/types";
 import { compactVertical, toDrafts, type DraftWidget } from "./layout";
+import { normalizeText } from "./textWidget";
 
 export const MAX_WIDGETS = 24;
 export const MAX_ASSETS = 20;
@@ -12,20 +13,20 @@ export const MAX_TEXT = 100;
 export type Aggregation = WidgetAggregation;
 export type WidgetMetric = Exclude<Metric, "custom">;
 
-export const TYPE_LABELS: Record<WidgetType, string> = { timeseries: "Time series", bar: "Bar chart", stat: "Stat", gauge: "Gauge", table: "Table" };
+export const TYPE_LABELS: Record<WidgetType, string> = { timeseries: "Time series", bar: "Bar chart", stat: "Stat", gauge: "Gauge", table: "Table", text: "Text" };
 export const SOURCE_LABELS: Record<WidgetSource, string> = { metric: "Metric", energy: "Energy (kWh)", cost: "Cost" };
 export const AGGREGATION_LABELS: Record<Aggregation, string> = { avg: "Average", min: "Minimum", max: "Maximum", last: "Latest", sum: "Total" };
 /** The API refuses `custom`: an asset can have several custom mappings and a widget names none of them. */
 export const WIDGET_METRICS: WidgetMetric[] = METRICS.filter((m): m is WidgetMetric => m !== "custom");
 
 export const isSingleAsset = (type: WidgetType): boolean => type === "stat" || type === "gauge";
-export const allowedSources = (type: WidgetType): WidgetSource[] => (type === "gauge" ? ["metric"] : ["metric", "energy", "cost"]);
+export const allowedSources = (type: DataWidgetType): WidgetSource[] => (type === "gauge" ? ["metric"] : ["metric", "energy", "cost"]);
 
 /**
  * `energy_kwh` is a cumulative meter reading, so only its latest value means anything (the API refuses the others); the kWh
  * used over a period is the `energy` source. `metric` matters only for the source `metric` and may be left out.
  */
-export function allowedAggregations(type: WidgetType, source: WidgetSource, metric?: WidgetMetric): Aggregation[] {
+export function allowedAggregations(type: DataWidgetType, source: WidgetSource, metric?: WidgetMetric): Aggregation[] {
   if (source !== "metric") return ["sum"];
   return type === "gauge" || metric === "energy_kwh" ? ["last"] : ["avg", "min", "max", "last"];
 }
@@ -36,10 +37,15 @@ export function defaultAggregation(source: WidgetSource, metric: WidgetMetric): 
   return metric === "energy_kwh" ? "last" : "avg";
 }
 
-/** What the widget dialog edits. Numbers stay text while typing; `range` "" means "use the dashboard range". */
+/**
+ * What the widget dialog edits. Numbers stay text while typing; `range` "" means "use the dashboard range". The form carries both field
+ * sets (the data fields and `style`/`text`), so switching Type back and forth loses neither; only the set of the chosen type is saved.
+ */
 export interface WidgetForm {
   type: WidgetType;
   title: string;
+  style: TextStyle;
+  text: string;
   source: WidgetSource;
   metric: WidgetMetric;
   aggregation: Aggregation;
@@ -52,14 +58,22 @@ export interface WidgetForm {
 
 export function blankForm(): WidgetForm {
   return {
-    type: "timeseries", title: "", source: "metric", metric: "active_power_kw", aggregation: "avg",
+    type: "timeseries", title: "", style: "heading", text: "", source: "metric", metric: "active_power_kw", aggregation: "avg",
     range: "", bars: "asset", gaugeMin: "0", gaugeMax: "", assets: [],
   };
 }
 
-export function formFromDraft(draft: Pick<DraftWidget, "type" | "title" | "config">): WidgetForm {
+/** What a widget dialog saves: a data widget (a type that fetches, with its data config) or a text widget (its style and text). */
+export type WidgetFields =
+  | { type: DataWidgetType; title: string; config: WidgetConfig }
+  | { type: "text"; title: string; config: TextConfig };
+
+export function formFromDraft(draft: WidgetFields): WidgetForm {
+  // A text draft keeps blankForm()'s data fields and a data draft keeps its blank style and text: each set is filled only by its own kind.
+  if (draft.type === "text") return { ...blankForm(), type: "text", title: draft.title, style: draft.config.style, text: draft.config.text };
   const c = draft.config;
   return {
+    ...blankForm(),
     type: draft.type,
     title: draft.title,
     source: c.source,
@@ -73,8 +87,12 @@ export function formFromDraft(draft: Pick<DraftWidget, "type" | "title" | "confi
   };
 }
 
-/** Change the type and repair what the new type does not allow: source, aggregation, and the asset count. */
+/**
+ * Change the type and repair what the new type does not allow: source, aggregation, and the asset count. A switch to text changes
+ * nothing else, so switching back to a data type finds the data fields as they were.
+ */
 export function withType(form: WidgetForm, type: WidgetType): WidgetForm {
+  if (type === "text") return { ...form, type };
   const next: WidgetForm = { ...form, type };
   if (!allowedSources(type).includes(next.source)) next.source = "metric";
   const aggregations = allowedAggregations(type, next.source, next.metric);
@@ -85,6 +103,7 @@ export function withType(form: WidgetForm, type: WidgetType): WidgetForm {
 
 export function withSource(form: WidgetForm, source: WidgetSource): WidgetForm {
   const next: WidgetForm = { ...form, source };
+  if (form.type === "text") return next; // a text widget has no data: the field is only kept for when the type changes back
   const aggregations = allowedAggregations(form.type, source, form.metric);
   if (!aggregations.includes(next.aggregation)) next.aggregation = aggregations[0];
   return next;
@@ -93,7 +112,7 @@ export function withSource(form: WidgetForm, source: WidgetSource): WidgetForm {
 /** Choose the metric of a metric source. `energy_kwh` only has its latest value, so that is selected for it. */
 export function withMetric(form: WidgetForm, metric: WidgetMetric): WidgetForm {
   const next: WidgetForm = { ...form, metric };
-  if (form.source === "metric" && !allowedAggregations(form.type, "metric", metric).includes(next.aggregation)) next.aggregation = "last";
+  if (form.type !== "text" && form.source === "metric" && !allowedAggregations(form.type, "metric", metric).includes(next.aggregation)) next.aggregation = "last";
   return next;
 }
 
@@ -122,7 +141,7 @@ export function metricAssetsOf(graph: GraphModel): Map<Metric, Set<number>> {
   return byMetric;
 }
 
-export interface FormIssues { title?: string; assets?: string; aggregation?: string; gauge?: string }
+export interface FormIssues { title?: string; text?: string; assets?: string; aggregation?: string; gauge?: string }
 
 const toNumber = (text: string): number => (text.trim() === "" ? NaN : Number(text));
 
@@ -132,6 +151,16 @@ export function formIssues(form: WidgetForm): FormIssues {
   const title = form.title.trim();
   if (title === "") issues.title = "Enter a title.";
   else if (title.length > MAX_TEXT) issues.title = `The title can be at most ${MAX_TEXT} characters.`;
+
+  if (form.type === "text") {
+    // The text rules are the server's (lib/textWidget). A divider holds no text, so none is checked even if the form still has some; the
+    // asset, aggregation and gauge rules do not apply to a widget without data.
+    if (form.style !== "divider") {
+      const result = normalizeText(form.style, form.text);
+      if (!result.ok) issues.text = result.message;
+    }
+    return issues;
+  }
 
   const count = form.assets.length;
   if (count === 0) issues.assets = isSingleAsset(form.type) ? "Choose an asset." : "Choose at least one asset.";
@@ -155,8 +184,16 @@ export function formIssues(form: WidgetForm): FormIssues {
   return issues;
 }
 
-/** The widget fields to store. Only meaningful when `formIssues` is empty. */
-export function formToFields(form: WidgetForm): { type: WidgetType; title: string; config: WidgetConfig } {
+/**
+ * The widget fields to store. Only meaningful when `formIssues` is empty. A text widget stores the NORMALIZED text ("" for a divider);
+ * the form itself keeps whatever was typed, so switching Style back to Heading brings it back. (With a text the rules refuse, the
+ * text as typed is returned, for a preview that wants something to draw.)
+ */
+export function formToFields(form: WidgetForm): WidgetFields {
+  if (form.type === "text") {
+    const result = form.style === "divider" ? null : normalizeText(form.style, form.text);
+    return { type: "text", title: form.title.trim(), config: { style: form.style, text: result === null ? "" : result.ok ? result.text : form.text } };
+  }
   const gauge = form.type === "gauge";
   return {
     type: form.type,
@@ -180,7 +217,10 @@ export type SaveBody = DashboardSave;
 export interface EditState { name: string; range: RangePreset; drafts: DraftWidget[] }
 
 /** A draft as the API takes it: no editor `key`, no id. */
-export const toWidgetBody = (d: DraftWidget): WidgetBody => ({ type: d.type, title: d.title, config: d.config, x: d.x, y: d.y, w: d.w, h: d.h });
+export const toWidgetBody = (d: DraftWidget): WidgetBody => {
+  const { key: _key, ...body } = d; // the rest of a union keeps the union (type and config stay together)
+  return body;
+};
 
 /**
  * The PUT body: the edited state with the `updated_at` that was loaded, so the API can refuse a stale save. `updated_at`

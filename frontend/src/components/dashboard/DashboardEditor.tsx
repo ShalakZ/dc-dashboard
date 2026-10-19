@@ -73,9 +73,11 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
     const key = newKey();
     if (!target) setRemoved(null);
     setDrafts((current) => {
-      if (target) return current.map((d) => (d.key === target.key ? { ...d, ...fields } : d));
-      const size = defaultSize(fields.type);
-      return compactVertical([...current, { key, ...fields, ...size, ...nextPosition(current, size) }]);
+      // Each branch spreads one member of the `fields` union, so the result is a draft of one kind (type and config stay together).
+      if (target) return current.map((d): DraftWidget => (d.key !== target.key ? d : fields.type === "text" ? { ...d, ...fields } : { ...d, ...fields }));
+      const size = defaultSize(fields.type, fields.type === "text" ? fields.config.style : undefined);
+      const placed = { key, ...size, ...nextPosition(current, size) };
+      return compactVertical<DraftWidget>([...current, fields.type === "text" ? { ...placed, ...fields } : { ...placed, ...fields }]);
     });
     setDialog(null);
   };
@@ -102,7 +104,8 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
     setRemoved(null);
   };
 
-  const renderWidget = (d: DraftWidget) => (
+  // T3b: WidgetCard (a text widget draws nothing until then)
+  const renderWidget = (d: DraftWidget) => d.type === "text" ? null : (
     <WidgetView
       widgetKey={d.key} type={d.type} title={d.title} config={d.config} dashboardRange={range} timezone={timezone}
       csv={false} details={false} live={false} dragHandle

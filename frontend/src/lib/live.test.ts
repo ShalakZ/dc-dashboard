@@ -1,4 +1,4 @@
-import type { RangePreset, WidgetType } from "../api/types";
+import type { RangePreset, DataWidgetType } from "../api/types";
 import { valueRow, valuesData } from "../test/dashboardFixtures";
 import { isLiveWidget, liveOrFetched, pointIdsOf } from "./live";
 
@@ -12,7 +12,7 @@ describe("isLiveWidget", () => {
     expect(isLiveWidget("stat", last, preset)).toBe(expected);
   });
   it("is live for a gauge too", () => expect(isLiveWidget("gauge", last, "24h")).toBe(true));
-  it.each<WidgetType>(["timeseries", "bar", "table"])("is never live for %s", (type) => {
+  it.each<DataWidgetType>(["timeseries", "bar", "table"])("is never live for %s", (type) => {
     expect(isLiveWidget(type, last, "24h")).toBe(false);
   });
   it("needs source metric and aggregation last", () => {

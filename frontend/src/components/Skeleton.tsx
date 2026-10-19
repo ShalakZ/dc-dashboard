@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import type { WidgetType } from "../api/types";
+import type { DataWidgetType } from "../api/types";
 import { CHART_HEIGHT } from "../lib/chartBox";
 
 // Loading skeletons: grey shapes in the layout the data will have, shown while a page has no data yet. A Suspense fallback uses these
@@ -409,7 +409,7 @@ export function CanvasSkeleton({ label }: { label: string }) {
  * `.widget-body` will be (the class `widget-sk` is how the stylesheet and the tests know it from the page's own region); without one it is a bare, hidden body:
  * the fallback of a lazy chart chunk, which is only ever drawn once the card holds its data, so the card has no second status.
  */
-export function WidgetSkeleton({ type, label }: { type?: WidgetType; label?: string }) {
+export function WidgetSkeleton({ type, label }: { type?: DataWidgetType; label?: string }) {
   const shapes = type === "stat" ? (
     <>
       <Skeleton variant="block" width="60%" height="var(--widget-figure)" />

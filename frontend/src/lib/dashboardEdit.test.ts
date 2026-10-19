@@ -1,6 +1,6 @@
 import { ApiError } from "../api/client";
 import type { Metric } from "../api/types";
-import { config, dashboard, widget } from "../test/dashboardFixtures";
+import { config, dashboard, textWidget, widget } from "../test/dashboardFixtures";
 import { model, point, source } from "../test/graphFixtures";
 import {
   allowedAggregations, allowedSources, blankForm, canonical, defaultAggregation, formFromDraft, formIssues, formToFields, isDirty,
@@ -10,6 +10,12 @@ import {
 import { compactVertical, toDrafts } from "./layout";
 
 const valid = (over: Partial<WidgetForm> = {}): WidgetForm => ({ ...blankForm(), title: "Hall power", assets: [5], ...over });
+/** `formToFields` of a form that must be a data widget, narrowed so its data config can be read. */
+function dataFields(form: WidgetForm) {
+  const fields = formToFields(form);
+  if (fields.type === "text") throw new Error("expected a data widget");
+  return fields;
+}
 
 describe("what each widget may show", () => {
   it("offers the eight non-custom metrics", () => {
@@ -142,19 +148,19 @@ describe("formToFields", () => {
     });
   });
   it("keeps bars only for bar widgets and min/max only for gauges", () => {
-    expect(formToFields(valid({ type: "bar", bars: "time" })).config.bars).toBe("time");
+    expect(dataFields(valid({ type: "bar", bars: "time" })).config.bars).toBe("time");
     expect(formToFields(valid({ type: "gauge", aggregation: "last", gaugeMin: "10", gaugeMax: "250.5" })).config).toMatchObject({ min: 10, max: 250.5, bars: "asset" });
-    expect(formToFields(valid({ type: "table", bars: "time", gaugeMax: "9" })).config).toMatchObject({ bars: "asset", min: 0, max: null });
+    expect(dataFields(valid({ type: "table", bars: "time", gaugeMax: "9" })).config).toMatchObject({ bars: "asset", min: 0, max: null });
   });
   it("round-trips a saved widget through the form", () => {
     const saved = widget(1, "gauge", { title: "Load", config: config({ aggregation: "last", min: 5, max: 90, range: "6h" }) });
     expect(formToFields(formFromDraft(saved))).toEqual({ type: "gauge", title: "Load", config: saved.config });
   });
   it("sends the default aggregation of a time series, whose chart ignores it and whose control is hidden", () => {
-    expect(formToFields(valid({ aggregation: "max" })).config.aggregation).toBe("avg");
-    expect(formToFields(valid({ metric: "energy_kwh", aggregation: "last" })).config.aggregation).toBe("last");
-    expect(formToFields(valid({ source: "cost", aggregation: "sum" })).config.aggregation).toBe("sum");
-    expect(formToFields(valid({ type: "table", aggregation: "max" })).config.aggregation).toBe("max"); // other types send the choice
+    expect(dataFields(valid({ aggregation: "max" })).config.aggregation).toBe("avg");
+    expect(dataFields(valid({ metric: "energy_kwh", aggregation: "last" })).config.aggregation).toBe("last");
+    expect(dataFields(valid({ source: "cost", aggregation: "sum" })).config.aggregation).toBe("sum");
+    expect(dataFields(valid({ type: "table", aggregation: "max" })).config.aggregation).toBe("max"); // other types send the choice
   });
 });
 
@@ -196,6 +202,7 @@ describe("save body and unsaved changes", () => {
 
   it("ignores key order inside a config and spaces around the name", () => {
     const [draft] = unchanged().drafts;
+    if (draft.type === "text") throw new Error("expected a data draft");
     const reordered = { ...draft, config: Object.fromEntries(Object.entries(draft.config).reverse()) as typeof draft.config };
     expect(isDirty(base, { ...unchanged(), name: " Hall A ", drafts: [reordered] })).toBe(false);
     expect(canonical({ b: 1, a: { d: 1, c: 2 } })).toBe(canonical({ a: { c: 2, d: 1 }, b: 1 }));
@@ -217,5 +224,131 @@ describe("save body and unsaved changes", () => {
     expect(isStaleConflict(new ApiError(409, "something else"))).toBe(false);
     expect(isStaleConflict(new ApiError(422, "dashboard changed since you loaded it"))).toBe(false);
     expect(isStaleConflict(new Error("x"))).toBe(false);
+  });
+});
+
+// The text widget (w22): the form carries both field sets, the rules are lib/textWidget's (the server's, pinned by the shared sample file).
+describe("a text widget in the form", () => {
+  const NUL = String.fromCharCode(0);
+  const LONE_SURROGATE = String.fromCharCode(0xd800);
+  const EMOJI = String.fromCodePoint(0x1f600);
+  const text = (over: Partial<WidgetForm> = {}): WidgetForm => valid({ type: "text", style: "paragraph", text: "Hello", assets: [], ...over });
+  const draftOf = (style: "heading" | "paragraph" | "divider", body: string, title = "Notes") => toDrafts([textWidget(1, style, body, { title })])[0];
+
+  describe("formFromDraft and formToFields", () => {
+    it("round-trips a text draft", () => {
+      const form = formFromDraft(draftOf("paragraph", "one\ntwo"));
+      expect(form).toMatchObject({ type: "text", title: "Notes", style: "paragraph", text: "one\ntwo" });
+      expect(formToFields(form)).toEqual({ type: "text", title: "Notes", config: { style: "paragraph", text: "one\ntwo" } });
+      expect(formToFields(formFromDraft(draftOf("divider", "")))).toEqual({ type: "text", title: "Notes", config: { style: "divider", text: "" } });
+    });
+
+    it("gives a text draft the blank data fields and a data draft a blank style and text", () => {
+      expect(formFromDraft(draftOf("heading", "Hall A"))).toEqual({ ...blankForm(), type: "text", title: "Notes", style: "heading", text: "Hall A" });
+      const gauge = toDrafts([widget(1, "gauge", { title: "Load", config: config({ aggregation: "last", max: 100 }) })])[0];
+      expect(formFromDraft(gauge)).toMatchObject({ type: "gauge", title: "Load", style: "heading", text: "", gaugeMax: "100" });
+    });
+
+    it("stores the normalized text: trimmed, with CRLF as LF", () => {
+      expect(formToFields(text({ text: "  one\r\ntwo  \n", title: "  Notes " }))).toEqual({
+        type: "text", title: "Notes", config: { style: "paragraph", text: "one\ntwo" },
+      });
+    });
+
+    it("sends no text for a divider while the form keeps what was typed, so switching Style back restores it", () => {
+      const divider = text({ style: "divider", text: "kept" });
+      expect(formToFields(divider)).toEqual({ type: "text", title: "Hall power", config: { style: "divider", text: "" } });
+      expect(divider.text).toBe("kept");
+      expect(formToFields({ ...divider, style: "heading" }).config).toEqual({ style: "heading", text: "kept" });
+    });
+
+    it("sends only a style and a text, never a data field", () => {
+      expect(Object.keys(formToFields(text({ source: "energy", assets: [5], range: "7d" })).config).sort()).toEqual(["style", "text"]);
+    });
+
+    it("saves what the text rules refuse as typed, for a preview that wants something to draw (formIssues blocks the Save)", () => {
+      expect(formToFields(text({ style: "heading", text: "a\nb" })).config).toEqual({ style: "heading", text: "a\nb" });
+    });
+  });
+
+  describe("withType", () => {
+    it("changes only the type when it switches to text, so switching back finds the data fields as they were", () => {
+      const gauge = valid({ type: "gauge", aggregation: "last", gaugeMin: "5", gaugeMax: "90", range: "6h", assets: [5] });
+      const asText = withType(gauge, "text");
+      expect(asText).toEqual({ ...gauge, type: "text" });
+      expect(withType(asText, "gauge")).toEqual(gauge);
+      expect(withType(withType(valid({ source: "energy", aggregation: "sum", assets: [5, 6] }), "text"), "stat"))
+        .toMatchObject({ type: "stat", source: "energy", aggregation: "sum", assets: [5] }); // the new type still repairs what it does not allow
+    });
+
+    it("switching a text draft's form to a data type starts from the blank data fields and keeps the style and text", () => {
+      const next = withType(formFromDraft(draftOf("heading", "Hall A")), "table");
+      expect(next).toMatchObject({
+        type: "table", source: "metric", metric: "active_power_kw", aggregation: "avg", range: "", gaugeMin: "0", gaugeMax: "", assets: [],
+        style: "heading", text: "Hall A",
+      });
+    });
+
+    it("leaves a text form alone when only its source or metric field changes", () => {
+      expect(withSource(text(), "energy")).toMatchObject({ type: "text", source: "energy", aggregation: "avg" });
+      expect(withMetric(text(), "energy_kwh")).toMatchObject({ type: "text", metric: "energy_kwh", aggregation: "avg" });
+    });
+  });
+
+  describe("formIssues", () => {
+    it("accepts a text widget with no assets, and ignores the asset, aggregation and gauge rules", () => {
+      expect(formIssues(text())).toEqual({});
+      expect(formIssues(text({ source: "energy", aggregation: "avg", gaugeMin: "x", gaugeMax: "", assets: Array.from({ length: 30 }, (_, i) => i + 1) }))).toEqual({});
+      expect(formIssues(text({ style: "heading", text: "Hall A" }))).toEqual({});
+    });
+
+    it.each<[string, WidgetForm, FormIssues]>([
+      ["an empty paragraph", text({ text: "" }), { text: "Enter the text." }],
+      ["a heading of spaces", text({ style: "heading", text: "  \n " }), { text: "Enter the text." }],
+      ["a heading of two lines", text({ style: "heading", text: "a\nb" }), { text: "A heading is one line." }],
+      ["a heading of 201 characters", text({ style: "heading", text: "a".repeat(201) }), { text: "The text can be at most 200 characters." }],
+      ["a paragraph of 2001 characters", text({ text: "a".repeat(2001) }), { text: "The text can be at most 2,000 characters." }],
+      ["a control character", text({ text: `a${NUL}b` }), { text: "The text has a control character that cannot be saved." }],
+      ["a lone surrogate", text({ text: `a${LONE_SURROGATE}b` }), { text: "The text has a character that cannot be saved." }],
+    ])("refuses %s", (_name, form, expected) => {
+      expect(formIssues(form)).toEqual(expected);
+    });
+
+    it("counts code points: 200 emoji are a full heading and 2000 a full paragraph", () => {
+      expect(formIssues(text({ style: "heading", text: EMOJI.repeat(200) }))).toEqual({});
+      expect(formIssues(text({ style: "heading", text: EMOJI.repeat(201) }))).toHaveProperty("text");
+      expect(formIssues(text({ text: EMOJI.repeat(2000) }))).toEqual({});
+      expect(formIssues(text({ text: EMOJI.repeat(2001) }))).toHaveProperty("text");
+    });
+
+    it("needs no text for a divider and checks none, even if the form still holds some", () => {
+      expect(formIssues(text({ style: "divider", text: "" }))).toEqual({});
+      expect(formIssues(text({ style: "divider", text: "left over" }))).toEqual({});
+      expect(formIssues(text({ style: "divider", text: `left${NUL}over` }))).toEqual({});
+    });
+
+    it("still requires a title, and reports it next to a text problem", () => {
+      expect(formIssues(text({ title: "  " }))).toEqual({ title: "Enter a title." });
+      expect(formIssues(text({ style: "divider", title: "" }))).toEqual({ title: "Enter a title." });
+      expect(formIssues(text({ title: "x".repeat(101), text: "" }))).toEqual({ title: "The title can be at most 100 characters.", text: "Enter the text." });
+    });
+  });
+
+  describe("the save body", () => {
+    const base = dashboard({ widgets: [textWidget(1, "heading", "Hall A", { title: "Title", x: 0, y: 0, w: 6, h: 2 })] });
+    const unchanged = () => ({ name: base.name, range: base.range, drafts: toDrafts(base.widgets) });
+
+    it("sends a text widget with exactly the keys of any other", () => {
+      expect(saveBody(base, unchanged()).widgets).toEqual([{ type: "text", title: "Title", config: { style: "heading", text: "Hall A" }, x: 0, y: 0, w: 6, h: 2 }]);
+      expect(Object.keys(toWidgetBody(unchanged().drafts[0])).sort()).toEqual(["config", "h", "title", "type", "w", "x", "y"]);
+    });
+
+    it("is not dirty until the text changes", () => {
+      expect(isDirty(base, unchanged())).toBe(false);
+      const [draft] = unchanged().drafts;
+      if (draft.type !== "text") throw new Error("expected a text draft");
+      expect(isDirty(base, { ...unchanged(), drafts: [{ ...draft, config: { style: "heading", text: "Hall B" } }] })).toBe(true);
+      expect(isDirty(base, { ...unchanged(), drafts: [{ ...draft, config: { style: "paragraph", text: "Hall A" } }] })).toBe(true);
+    });
   });
 });

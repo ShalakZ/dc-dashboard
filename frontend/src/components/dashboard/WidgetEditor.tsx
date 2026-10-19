@@ -1,18 +1,18 @@
 import { useId, useMemo, useRef, useState } from "react";
-import { WIDGET_TYPES, type Asset, type Metric, type RangePreset, type WidgetConfig, type WidgetSource, type WidgetType } from "../../api/types";
+import { WIDGET_TYPES, type Asset, type Metric, type RangePreset, type WidgetSource, type WidgetType } from "../../api/types";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
 import {
   AGGREGATION_LABELS, allowedAggregations, allowedSources, blankForm, formFromDraft, formIssues, formToFields, isSingleAsset,
   keepAssetsWithMetric, MAX_ASSETS, MAX_TEXT, SOURCE_LABELS, TYPE_LABELS, WIDGET_METRICS, withMetric, withSource, withType,
-  type Aggregation, type WidgetForm, type WidgetMetric,
+  type Aggregation, type WidgetFields, type WidgetForm, type WidgetMetric,
 } from "../../lib/dashboardEdit";
 import type { DraftWidget } from "../../lib/layout";
 import { RANGE_LABELS, RANGE_PRESETS } from "../../lib/ranges";
 import { AssetPicker } from "./AssetPicker";
 import { WidgetView } from "./WidgetView";
 
-export interface EditorFields { type: WidgetType; title: string; config: WidgetConfig }
+export type EditorFields = WidgetFields;
 
 /** How long the form must sit still before the preview asks the API about it (a keystroke in the gauge limits would otherwise blank it each time). */
 export const PREVIEW_DELAY_MS = 300;
@@ -41,7 +41,7 @@ export function WidgetEditor({ initial, assets, metricAssets, dashboardRange, ti
   const id = useId();
   const field = (name: string) => `${id}-${name}`;
   const known = useMemo(() => new Set(assets.map((a) => a.id)), [assets]);
-  const [dropped] = useState(() => (initial ? initial.config.assets.filter((a) => !known.has(a)).length : 0));
+  const [dropped] = useState(() => (initial && initial.type !== "text" ? initial.config.assets.filter((a) => !known.has(a)).length : 0));
   const [form, setForm] = useState<WidgetForm>(() => {
     if (!initial) return blankForm();
     const loaded = formFromDraft(initial);
@@ -102,7 +102,7 @@ export function WidgetEditor({ initial, assets, metricAssets, dashboardRange, ti
                 value={form.source}
                 onChange={(e) => setForm((f) => keepAssetsWithMetric(withSource(f, e.target.value as WidgetSource), metricAssets))}
               >
-                {allowedSources(form.type).map((s) => <option key={s} value={s}>{SOURCE_LABELS[s]}</option>)}
+                {(form.type === "text" ? [] : allowedSources(form.type)).map((s) => <option key={s} value={s}>{SOURCE_LABELS[s]}</option>)}
               </select>
             </div>
             {form.source === "metric" && (
@@ -117,7 +117,7 @@ export function WidgetEditor({ initial, assets, metricAssets, dashboardRange, ti
                 </select>
               </div>
             )}
-            {form.type !== "timeseries" && (
+            {form.type !== "timeseries" && form.type !== "text" && (
               <div className="field">
                 <label htmlFor={field("aggregation")}>Aggregation</label>
                 <select id={field("aggregation")} value={form.aggregation} onChange={(e) => patch({ aggregation: e.target.value as Aggregation })}>
@@ -169,10 +169,13 @@ export function WidgetEditor({ initial, assets, metricAssets, dashboardRange, ti
             ) : (
               // The real widget card, as a dashboard draws it, minus the buttons that act on a saved widget (Details, CSV) and the stream.
               <div className="widget-preview" data-type={settledFields.type}>
-                <WidgetView
-                  widgetKey={PREVIEW_KEY} type={settledFields.type} title={settledFields.title} config={settledFields.config}
-                  dashboardRange={dashboardRange} timezone={timezone} csv={false} details={false} live={false}
-                />
+                {/* T3b: WidgetCard draws a text widget here */}
+                {settledFields.type === "text" ? null : (
+                  <WidgetView
+                    widgetKey={PREVIEW_KEY} type={settledFields.type} title={settledFields.title} config={settledFields.config}
+                    dashboardRange={dashboardRange} timezone={timezone} csv={false} details={false} live={false}
+                  />
+                )}
               </div>
             )}
           </div>

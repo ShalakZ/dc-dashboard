@@ -32,7 +32,8 @@ export function DashboardViewer({ dashboard, timezone, onEdit }: { dashboard: Da
       ) : (
         <StaticGrid
           items={items}
-          render={(w) => <WidgetView widgetKey={w.key} type={w.type} title={w.title} config={w.config} dashboardRange={range} timezone={timezone} />}
+          // T3b: WidgetCard (a text widget draws nothing until then)
+          render={(w) => (w.type === "text" ? null : <WidgetView widgetKey={w.key} type={w.type} title={w.title} config={w.config} dashboardRange={range} timezone={timezone} />)}
         />
       )}
     </>
