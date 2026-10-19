@@ -1,15 +1,22 @@
 import { Fragment, useId, useMemo, useRef, useState } from "react";
-import { TEXT_STYLES, WIDGET_TYPES, type Asset, type Metric, type RangePreset, type TextStyle, type WidgetSource, type WidgetType } from "../../api/types";
+import { useAuth } from "../../auth/AuthProvider";
+import { useAssetKinds } from "../../api/queries";
+import {
+  TEXT_STYLES, WIDGET_TYPES, type Asset, type Metric, type RangePreset, type TextStyle, type WidgetBars, type WidgetSource, type WidgetType,
+} from "../../api/types";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
 import {
-  AGGREGATION_LABELS, allowedAggregations, allowedSources, blankForm, formFromDraft, formIssues, formToFields, isSingleAsset,
-  keepAssetsWithMetric, MAX_ASSETS, MAX_TEXT, SOURCE_LABELS, TYPE_LABELS, WIDGET_METRICS, withMetric, withSource, withType,
+  AGGREGATION_LABELS, allowedAggregations, allowedSources, blankForm, compareAllowed, formFromDraft, formIssues, formToFields, isCompareOn,
+  isKindMode, keepAssetsWithMetric, MAX_ASSETS, MAX_TEXT, MAX_TOP, MIN_TOP, singleAssetForm, SOURCE_LABELS, TYPE_LABELS, WIDGET_METRICS,
+  withBars, withCompare, withMetric, withSource, withType,
   type Aggregation, type WidgetFields, type WidgetForm, type WidgetMetric,
 } from "../../lib/dashboardEdit";
 import type { DraftWidget } from "../../lib/layout";
+import { assetLabels } from "../../lib/pickerRows";
 import { RANGE_LABELS, RANGE_PRESETS } from "../../lib/ranges";
 import { autoTitle, TEXT_LIMITS, TEXT_STYLE_LABELS, textLength } from "../../lib/textWidget";
+import { InfoTip } from "../InfoTip";
 import { AssetPicker } from "./AssetPicker";
 import { WidgetCard } from "./WidgetCard";
 
@@ -19,6 +26,9 @@ export type EditorFields = WidgetFields;
 export const PREVIEW_DELAY_MS = 300;
 /** The preview's name in the live-values registry. Dashboard widgets are registered as `String(id)` or `new-N`, so it never collides with one. */
 const PREVIEW_KEY = "widget-editor-preview";
+
+const COMPARE_TIP = "Only complete days count: this month from the 1st up to yesterday, against the same number of days from the 1st of last month, so both sides cover the same number of days. On the 1st there is nothing to compare yet, and the card says so.";
+const KIND_TIP = "Choose the level that carries the meters, for example Panels or Racks. Each bar is that asset's own reading. If two levels both have meters (racks and the panels that feed them), a total over both counts the same energy twice.";
 
 interface Props {
   /** The widget being edited, or null to add a new one. */
@@ -34,6 +44,57 @@ interface Props {
   onClose: () => void;
 }
 
+interface KindBarsProps {
+  assets: Asset[];
+  root: number | null;
+  kind: string;
+  top: string;
+  /** The asset the saved widget looked under no longer exists: it is shown as the whole site, with a note. */
+  rootGone: boolean;
+  patch: (changes: Partial<WidgetForm>) => void;
+  /** The ids of the two text fields and of the list of suggestions. */
+  ids: { kind: string; top: string; list: string };
+}
+
+/**
+ * The asset field of a bar chart with one bar per asset of a kind (it replaces the Assets picker): where to look (a single pick over the whole
+ * tree, or the whole site), the kind to draw a bar for (the registry's kinds as suggestions) and how many bars to draw. The three labels are
+ * exactly "Look under", "One bar for each" and "Bars to show": the picker has its own "Filter by kind", and a lookup by substring must not
+ * find two of them. The kinds are asked for only here, so a dialog that never gets to this mode sends no request for them.
+ */
+function KindBars({ assets, root, kind, top, rootGone, patch, ids }: KindBarsProps) {
+  const { can } = useAuth();
+  const { data: kinds } = useAssetKinds(can("assets.view"));
+  const labels = useMemo(() => assetLabels(assets), [assets]);
+  const picked = useMemo(() => (root === null ? [] : [root]), [root]);
+  return (
+    <>
+      <AssetPicker
+        key="look-under" label="Look under" assets={assets} selected={picked} single max={1}
+        onChange={(chosen) => patch({ root: chosen[0] ?? null })}
+      />
+      {/* The button is never disabled: a disabled button that has the focus drops it to the page. It does nothing while the whole site is already chosen. */}
+      <div className="row">
+        <p className="spacer" aria-live="polite">{`Under: ${root === null ? "Whole site" : labels.get(root) ?? `Asset #${root}`}`}</p>
+        <button type="button" className="quiet" aria-disabled={root === null ? true : undefined} onClick={() => { if (root !== null) patch({ root: null }); }}>
+          Whole site
+        </button>
+      </div>
+      {rootGone && <p className="muted">The asset this widget looked under was removed, so it now looks at the whole site.</p>}
+      <div className="field has-tip">
+        <label htmlFor={ids.kind}>One bar for each</label>
+        <InfoTip>{KIND_TIP}</InfoTip>
+        <input id={ids.kind} list={ids.list} value={kind} autoComplete="off" spellCheck={false} onChange={(e) => patch({ kind: e.target.value })} />
+        <datalist id={ids.list}>{(kinds ?? []).map((k) => <option key={k.id} value={k.name} />)}</datalist>
+      </div>
+      <div className="field">
+        <label htmlFor={ids.top}>Bars to show</label>
+        <input id={ids.top} type="number" min={MIN_TOP} max={MAX_TOP} step={1} value={top} onChange={(e) => patch({ top: e.target.value })} />
+      </div>
+    </>
+  );
+}
+
 /**
  * Add or edit one widget. Nothing leaves the dialog until "Save widget"; Save stays disabled until the form follows the
  * API's rules, and the preview (the real widget, via POST /api/widget-data) appears once it does and has stopped changing.
@@ -46,17 +107,30 @@ export function WidgetEditor({ initial, assets, metricAssets, dashboardRange, ti
   const field = (name: string) => `${id}-${name}`;
   const known = useMemo(() => new Set(assets.map((a) => a.id)), [assets]);
   const [dropped] = useState(() => (initial && initial.type !== "text" ? initial.config.assets.filter((a) => !known.has(a)).length : 0));
+  // A saved breakdown whose root was deleted since: it is shown as the whole site, with a note (like the dropped assets above).
+  const [rootGone] = useState(() => initial !== null && initial.type !== "text" && initial.config.root != null && !known.has(initial.config.root));
   const [form, setForm] = useState<WidgetForm>(() => {
     if (!initial) return blankForm();
     const loaded = formFromDraft(initial);
-    return { ...loaded, assets: loaded.assets.filter((a) => known.has(a)) };
+    return { ...loaded, assets: loaded.assets.filter((a) => known.has(a)), root: loaded.root !== null && known.has(loaded.root) ? loaded.root : null };
   });
+  // The range the form had before the comparison box was ticked: unticking the box gives it back (an automatic untick, from a change of type or
+  // source, leaves the range alone). A widget that opens with the box ticked has only this month to go back to.
+  const [rangeBefore, setRangeBefore] = useState<RangePreset | "">(form.range);
   // True once the title is the person's own: a widget that already exists has one, and so has a new one after they type in Title.
   // Until then a text widget's title follows its style and text (autoTitle), and a data type's title stays empty.
   const [titleEdited, setTitleEdited] = useState(initial !== null);
   useDialogFocus(root, onClose, { initial: titleInput });
 
   const patch = (changes: Partial<WidgetForm>) => setForm((current) => ({ ...current, ...changes }));
+  const comparable = compareAllowed(form);
+  const comparing = isCompareOn(form);
+  const kindMode = isKindMode(form);
+  const compareNote = field("compare-note");
+  const onCompare = (on: boolean) => {
+    if (on) setRangeBefore(form.range);
+    setForm((current) => withCompare(current, on, rangeBefore));
+  };
   /** The form with the automatic title applied when it still applies (a text widget whose title was never typed). */
   const retitled = (f: WidgetForm): WidgetForm => (titleEdited || f.type !== "text" ? f : { ...f, title: autoTitle(f.style, f.text, otherTitles) });
   const messages = Object.values(formIssues(form)).filter((m): m is string => m !== undefined);
@@ -171,17 +245,36 @@ export function WidgetEditor({ initial, assets, metricAssets, dashboardRange, ti
                 )}
                 <div className="field">
                   <label htmlFor={field("range")}>Widget range</label>
-                  <select id={field("range")} value={form.range} onChange={(e) => patch({ range: e.target.value as RangePreset | "" })}>
+                  <select
+                    id={field("range")} value={form.range} disabled={comparing} aria-describedby={comparing ? compareNote : undefined}
+                    onChange={(e) => patch({ range: e.target.value as RangePreset | "" })}
+                  >
                     <option value="">Use dashboard range</option>
                     {RANGE_PRESETS.map((p) => <option key={p} value={p}>{RANGE_LABELS[p]}</option>)}
                   </select>
+                  {/* Where a comparison is possible the sentence's two lines are always here, hidden until the box is ticked, so ticking it moves nothing. */}
+                  {comparable && (
+                    <p id={compareNote} className="muted field-help" style={{ visibility: comparing ? "visible" : "hidden" }}>
+                      A comparison always looks at this month so far, against the same days of last month.
+                    </p>
+                  )}
                 </div>
+                {comparable && (
+                  <div className="has-tip">
+                    <label className="inline">
+                      <input type="checkbox" checked={comparing} onChange={(e) => onCompare(e.target.checked)} />
+                      Compare with the same days of last month
+                    </label>
+                    <InfoTip>{COMPARE_TIP}</InfoTip>
+                  </div>
+                )}
                 {form.type === "bar" && (
                   <div className="field">
                     <label htmlFor={field("bars")}>Bars</label>
-                    <select id={field("bars")} value={form.bars} onChange={(e) => patch({ bars: e.target.value as "asset" | "time" })}>
+                    <select id={field("bars")} value={form.bars} onChange={(e) => setForm((f) => withBars(f, e.target.value as WidgetBars))}>
                       <option value="asset">One bar per asset</option>
                       <option value="time">One bar per time bucket</option>
+                      {form.source !== "metric" && <option value="kind">One bar per asset of a kind</option>}
                     </select>
                   </div>
                 )}
@@ -201,11 +294,18 @@ export function WidgetEditor({ initial, assets, metricAssets, dashboardRange, ti
             )}
           </div>
           <div>
-            {form.type !== "text" && (
+            {kindMode && (
+              <KindBars
+                assets={assets} root={form.root} kind={form.kind} top={form.top} rootGone={rootGone} patch={patch}
+                ids={{ kind: field("kind"), top: field("top"), list: field("kinds") }}
+              />
+            )}
+            {form.type !== "text" && !kindMode && (
               <>
                 <AssetPicker
+                  key="assets"
                   assets={offered} tree={assets} notes={notes} selected={form.assets} onChange={(ids) => patch({ assets: ids })}
-                  single={isSingleAsset(form.type)} max={MAX_ASSETS}
+                  single={singleAssetForm(form)} max={MAX_ASSETS}
                   empty={assets.length > 0 ? `No asset has a mapping for ${form.metric}; choose another metric.` : undefined}
                 />
                 {dropped > 0 && <p className="muted">{dropped} removed asset{dropped === 1 ? " was" : "s were"} dropped from this widget.</p>}

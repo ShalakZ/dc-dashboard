@@ -3,9 +3,9 @@ import type { Metric } from "../api/types";
 import { config, dashboard, textWidget, widget } from "../test/dashboardFixtures";
 import { model, point, source } from "../test/graphFixtures";
 import {
-  allowedAggregations, allowedSources, blankForm, canonical, defaultAggregation, formFromDraft, formIssues, formToFields, isDirty,
-  isSingleAsset, isStaleConflict, keepAssetsWithMetric, metricAssetsOf, newest, saveBody, toWidgetBody, WIDGET_METRICS, withMetric,
-  withSource, withType, type FormIssues, type WidgetForm,
+  allowedAggregations, allowedSources, blankForm, canonical, compareAllowed, defaultAggregation, formFromDraft, formIssues, formToFields, isCompareOn,
+  isDirty, isKindMode, isSingleAsset, isStaleConflict, keepAssetsWithMetric, metricAssetsOf, newest, saveBody, singleAssetForm, toWidgetBody,
+  WIDGET_METRICS, withBars, withCompare, withMetric, withSource, withType, type FormIssues, type WidgetForm,
 } from "./dashboardEdit";
 import { compactVertical, toDrafts } from "./layout";
 
@@ -374,5 +374,176 @@ describe("a text widget in the form", () => {
       expect(isDirty(base, { ...unchanged(), drafts: [{ ...draft, config: { style: "heading", text: "Hall B" } }] })).toBe(true);
       expect(isDirty(base, { ...unchanged(), drafts: [{ ...draft, config: { style: "paragraph", text: "Hall A" } }] })).toBe(true);
     });
+  });
+});
+
+// The comparison and the breakdown by kind (w24): new keys that are written only where the widget uses them and not at their default.
+describe("the comparison (w24)", () => {
+  const stat = (over: Partial<WidgetForm> = {}): WidgetForm => valid({ type: "stat", source: "energy", aggregation: "sum", ...over });
+  const series = (over: Partial<WidgetForm> = {}): WidgetForm => valid({ type: "timeseries", source: "cost", aggregation: "sum", ...over });
+
+  it("is allowed for a stat or a time series on energy or cost, and for nothing else", () => {
+    expect(compareAllowed(stat())).toBe(true);
+    expect(compareAllowed(series())).toBe(true);
+    expect(compareAllowed(stat({ source: "metric" }))).toBe(false);
+    for (const type of ["bar", "gauge", "table", "text"] as const) expect(compareAllowed(valid({ type, source: "energy" })), type).toBe(false);
+  });
+
+  it("ticks to this month and the first asset, and gives the old range back when it is unticked", () => {
+    const ticked = withCompare(series({ assets: [5, 6, 7], range: "7d" }), true);
+    expect(ticked).toMatchObject({ compare: true, range: "this_month", assets: [5] });
+    expect(withCompare(ticked, false, "7d")).toMatchObject({ compare: false, range: "7d", assets: [5] });
+    expect(withCompare(ticked, false, "")).toMatchObject({ compare: false, range: "" });
+    expect(withCompare(stat({ range: "" }), true).range).toBe("this_month");
+  });
+
+  it("refuses to tick where it is not allowed", () => {
+    const form = valid({ type: "gauge", aggregation: "last", gaugeMax: "100" });
+    expect(withCompare(form, true)).toBe(form);
+  });
+
+  it("makes a time series that compares a single-asset picker, and a stat or a gauge always one", () => {
+    expect(singleAssetForm(series())).toBe(false);
+    expect(singleAssetForm(series({ compare: true, range: "this_month" }))).toBe(true);
+    expect(singleAssetForm(stat())).toBe(true);
+    expect(singleAssetForm(valid({ type: "gauge" }))).toBe(true);
+    expect(singleAssetForm(valid({ type: "table" }))).toBe(false);
+    expect(isCompareOn(series({ compare: true }))).toBe(true);
+    expect(isCompareOn(valid({ type: "table", compare: true }))).toBe(false); // a stray tick on a type that cannot compare is not a comparison
+  });
+
+  it("is unticked by a type or a source that cannot compare, and the range stays as it was", () => {
+    const on = series({ compare: true, range: "this_month" });
+    expect(withType(on, "stat")).toMatchObject({ compare: true, range: "this_month" }); // a stat compares too
+    expect(withType(on, "stat").assets).toEqual([5]);
+    for (const type of ["bar", "gauge", "table"] as const) expect(withType(on, type), type).toMatchObject({ compare: false, range: "this_month" });
+    expect(withSource(on, "energy")).toMatchObject({ compare: true, source: "energy" });
+    expect(withSource(on, "metric")).toMatchObject({ compare: false, range: "this_month", source: "metric" });
+  });
+
+  it("keeps the tick through a text widget and drops it when the type that comes back cannot compare", () => {
+    const on = stat({ compare: true, range: "this_month" });
+    const text = withType(on, "text");
+    expect(text.compare).toBe(true);
+    expect(withType(text, "stat").compare).toBe(true);
+    expect(withType(text, "timeseries").compare).toBe(true);
+    expect(withType(text, "bar").compare).toBe(false);
+  });
+
+  it("is written as 'same_days_last_month' only for a comparing widget, and the key is absent otherwise", () => {
+    const on = stat({ compare: true, range: "this_month" });
+    expect(formToFields(on)).toEqual({
+      type: "stat", title: "Hall power",
+      config: { assets: [5], source: "energy", metric: null, aggregation: "sum", range: "this_month", bars: "asset", min: 0, max: null, compare: "same_days_last_month" },
+    });
+    expect(Object.keys(dataFields(stat()).config)).not.toContain("compare");
+    expect(Object.keys(dataFields(stat({ range: "this_month" })).config)).not.toContain("compare"); // this month alone is not a comparison
+    // a stray tick the type or source cannot honour is not sent
+    expect(Object.keys(dataFields(valid({ type: "table", compare: true })).config)).not.toContain("compare");
+    expect(Object.keys(dataFields(stat({ source: "metric", aggregation: "last", compare: true })).config)).not.toContain("compare");
+  });
+
+  it("round-trips a saved comparison through the form, and reads an absent key as no comparison", () => {
+    const saved = widget(1, "timeseries", { title: "MTD", config: config({ assets: [5], source: "cost", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" }) });
+    expect(formFromDraft(toDrafts([saved])[0])).toMatchObject({ compare: true, range: "this_month" });
+    expect(formToFields(formFromDraft(toDrafts([saved])[0]))).toEqual({ type: "timeseries", title: "MTD", config: saved.config });
+    expect(formFromDraft(toDrafts([widget(2, "stat")])[0]).compare).toBe(false);
+  });
+
+  it("asks for exactly one asset, in one sentence, and does not also say 'choose an asset'", () => {
+    expect(formIssues(stat({ compare: true, range: "this_month" }))).toEqual({});
+    expect(formIssues(stat({ compare: true, range: "this_month", assets: [] }))).toEqual({ compare: "A comparison needs exactly one asset." });
+    expect(formIssues(series({ compare: true, range: "this_month", assets: [5, 6] }))).toEqual({ compare: "A comparison needs exactly one asset." });
+    expect(formIssues(stat({ assets: [] }))).toEqual({ assets: "Choose an asset." }); // without the tick the old sentence stays
+  });
+
+  it("mirrors the server's range rule for a form built by hand", () => {
+    expect(formIssues(stat({ compare: true, range: "7d" }))).toEqual({ compare: "A comparison looks at this month, so the widget range must be This month." });
+  });
+});
+
+describe("one bar per asset of a kind (w24)", () => {
+  const kindBars = (over: Partial<WidgetForm> = {}): WidgetForm =>
+    valid({ type: "bar", bars: "kind", source: "energy", aggregation: "sum", assets: [], kind: "Rack", ...over });
+
+  it("is a bar chart on energy or cost only", () => {
+    expect(isKindMode(kindBars())).toBe(true);
+    expect(isKindMode(kindBars({ type: "table" }))).toBe(false);
+    expect(isKindMode(valid({ type: "bar", bars: "asset" }))).toBe(false);
+  });
+
+  it("switches a metric source to energy (a total) and clears the assets when chosen", () => {
+    const from = valid({ type: "bar", assets: [5, 6], metric: "voltage_v", aggregation: "max" });
+    expect(withBars(from, "kind")).toMatchObject({ bars: "kind", source: "energy", aggregation: "sum", assets: [] });
+    const cost = withBars(valid({ type: "bar", source: "cost", aggregation: "sum", assets: [5] }), "kind");
+    expect(cost).toMatchObject({ bars: "kind", source: "cost", aggregation: "sum", assets: [] });
+  });
+
+  it("goes back to one bar per asset when the source becomes a metric again, and keeps the kind, root and top for later", () => {
+    const form = kindBars({ root: 2, kind: "Panel", top: "20" });
+    expect(withSource(form, "metric")).toMatchObject({ bars: "asset", root: 2, kind: "Panel", top: "20" });
+    expect(withSource(form, "cost")).toMatchObject({ bars: "kind", source: "cost" });
+    expect(withBars(form, "time")).toMatchObject({ bars: "time", root: 2, kind: "Panel", top: "20" });
+  });
+
+  it("does not come back with a metric source after a gauge (the gauge forces the source without going through withSource)", () => {
+    const gauge = withType(kindBars(), "gauge");
+    expect(gauge).toMatchObject({ type: "gauge", source: "metric", bars: "asset" });
+    expect(isKindMode(withType(gauge, "bar"))).toBe(false);
+    expect(withType(kindBars(), "stat")).toMatchObject({ bars: "kind", source: "energy" }); // a stat keeps energy; the mode only counts for a bar chart
+  });
+
+  it("sends no assets and the kind, trimmed; root and top only when they are not the defaults", () => {
+    expect(formToFields(kindBars({ kind: "  Rack " }))).toEqual({
+      type: "bar", title: "Hall power",
+      config: { assets: [], source: "energy", metric: null, aggregation: "sum", range: null, bars: "kind", min: 0, max: null, kind: "Rack" },
+    });
+    expect(dataFields(kindBars({ root: 2, top: "25" })).config).toMatchObject({ kind: "Rack", root: 2, top: 25 });
+    expect(Object.keys(dataFields(kindBars({ top: "10" })).config)).not.toContain("top");
+    expect(Object.keys(dataFields(kindBars({ root: null })).config)).not.toContain("root");
+    expect(dataFields(kindBars({ source: "cost", assets: [5, 6] })).config).toMatchObject({ source: "cost", assets: [] }); // stale assets never travel
+  });
+
+  it("sends none of the three keys for any other widget, even when the form still holds them", () => {
+    const stale = { kind: "Rack", root: 2, top: "25" };
+    for (const form of [valid(stale), valid({ type: "bar", bars: "asset", ...stale }), valid({ type: "bar", bars: "time", ...stale }), valid({ type: "stat", ...stale })]) {
+      const keys = Object.keys(dataFields(form).config);
+      for (const key of ["kind", "root", "top"]) expect(keys, `${form.type}/${form.bars}`).not.toContain(key);
+    }
+  });
+
+  it("round-trips a saved breakdown, and reads absent keys as the defaults", () => {
+    const saved = widget(1, "bar", {
+      title: "Racks", config: config({ assets: [], source: "energy", metric: null, aggregation: "sum", range: "this_month", bars: "kind", kind: "Rack", root: 2, top: 25 }),
+    });
+    expect(formFromDraft(toDrafts([saved])[0])).toMatchObject({ bars: "kind", kind: "Rack", root: 2, top: "25", assets: [] });
+    expect(formToFields(formFromDraft(toDrafts([saved])[0]))).toEqual({ type: "bar", title: "Racks", config: saved.config });
+    const bare = widget(2, "bar", { config: config({ assets: [], source: "energy", metric: null, aggregation: "sum", bars: "kind", kind: "Rack" }) });
+    expect(formFromDraft(toDrafts([bare])[0])).toMatchObject({ root: null, top: "10", kind: "Rack" });
+    expect(formFromDraft(toDrafts([widget(3, "bar")])[0])).toMatchObject({ root: null, kind: "", top: "10", compare: false });
+  });
+
+  it("asks for the kind instead of assets, and checks its length and the number of bars", () => {
+    expect(formIssues(kindBars())).toEqual({});
+    expect(formIssues(kindBars({ kind: "" }))).toEqual({ bars: "Enter the kind of asset to draw one bar for." });
+    expect(formIssues(kindBars({ kind: "   " }))).toEqual({ bars: "Enter the kind of asset to draw one bar for." });
+    expect(formIssues(kindBars({ kind: "x".repeat(100) }))).toEqual({});
+    expect(formIssues(kindBars({ kind: "x".repeat(101) }))).toEqual({ bars: "The kind can be at most 100 characters." });
+    expect(formIssues(kindBars({ kind: `  ${"x".repeat(100)}  ` }))).toEqual({}); // the trimmed kind counts
+    expect(formIssues(kindBars({ kind: "😀".repeat(100) }))).toEqual({}); // characters, not UTF-16 units
+  });
+
+  it.each(["2", "51", "", "abc", "7.5", "-3"])("refuses %j bars to show", (top) => {
+    expect(formIssues(kindBars({ top }))).toEqual({ top: "Bars to show must be a whole number from 3 to 50." });
+  });
+  it.each(["3", "10", "50", " 12 "])("accepts %j bars to show", (top) => {
+    expect(formIssues(kindBars({ top }))).toEqual({});
+  });
+
+  it("reports the kind and the number together, and never asks for assets in this mode", () => {
+    expect(formIssues(kindBars({ kind: "", top: "1", assets: [] }))).toEqual({
+      bars: "Enter the kind of asset to draw one bar for.", top: "Bars to show must be a whole number from 3 to 50.",
+    });
+    expect(formIssues(kindBars({ assets: [5, 6, 7] }))).toEqual({}); // stale picks are not sent
   });
 });
