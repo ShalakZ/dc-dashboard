@@ -1,7 +1,7 @@
 import { ApiError } from "../api/client";
 import {
   METRICS, type Dashboard, type DashboardSave, type DataWidgetType, type GraphModel, type Metric, type RangePreset, type TextConfig,
-  type TextStyle, type WidgetAggregation, type WidgetConfig, type WidgetIn, type WidgetSource, type WidgetType,
+  type TextStyle, type WidgetAggregation, type WidgetBars, type WidgetConfig, type WidgetIn, type WidgetSource, type WidgetType,
 } from "../api/types";
 import { compactVertical, toDrafts, type DraftWidget } from "./layout";
 import { normalizeText } from "./textWidget";
@@ -21,6 +21,15 @@ export const WIDGET_METRICS: WidgetMetric[] = METRICS.filter((m): m is WidgetMet
 
 export const isSingleAsset = (type: WidgetType): boolean => type === "stat" || type === "gauge";
 export const allowedSources = (type: DataWidgetType): WidgetSource[] => (type === "gauge" ? ["metric"] : ["metric", "energy", "cost"]);
+
+/** The one value `compare` can take besides "none": this month so far against the same days of last month. */
+export const COMPARE_MODE = "same_days_last_month" as const;
+/** `top` (how many bars a breakdown draws): its default, which is left out of the stored config, and its limits. The form keeps it as text. */
+export const DEFAULT_TOP = 10;
+export const MIN_TOP = 3;
+export const MAX_TOP = 50;
+/** The longest kind a breakdown can name (the server's limit, in characters). */
+export const MAX_KIND = 100;
 
 /**
  * `energy_kwh` is a cumulative meter reading, so only its latest value means anything (the API refuses the others); the kWh
@@ -50,18 +59,34 @@ export interface WidgetForm {
   metric: WidgetMetric;
   aggregation: Aggregation;
   range: RangePreset | "";
-  bars: "asset" | "time";
+  bars: WidgetBars;
   gaugeMin: string;
   gaugeMax: string;
   assets: number[];
+  /** Month to date against the same days of last month: stat and time series, energy or cost, one asset, the range this month (see `withCompare`). */
+  compare: boolean;
+  /** `bars: "kind"` only: the asset the breakdown looks under (null: the whole site), the kind drawn one bar for, and how many bars (text, like `gaugeMin`). */
+  root: number | null;
+  kind: string;
+  top: string;
 }
 
 export function blankForm(): WidgetForm {
   return {
     type: "timeseries", title: "", style: "heading", text: "", source: "metric", metric: "active_power_kw", aggregation: "avg",
-    range: "", bars: "asset", gaugeMin: "0", gaugeMax: "", assets: [],
+    range: "", bars: "asset", gaugeMin: "0", gaugeMax: "", assets: [], compare: false, root: null, kind: "", top: String(DEFAULT_TOP),
   };
 }
+
+/** A data widget with a bar per asset of a kind (the Bars choice "kind"). */
+export const isKindMode = (form: WidgetForm): boolean => form.type === "bar" && form.bars === "kind";
+/** Whether the type and source allow the comparison (stat or time series, energy or cost); not whether the box is ticked. */
+export const compareAllowed = (form: Pick<WidgetForm, "type" | "source">): boolean =>
+  (form.type === "stat" || form.type === "timeseries") && (form.source === "energy" || form.source === "cost");
+/** The comparison is on: the box is ticked AND the type and source still allow it. */
+export const isCompareOn = (form: WidgetForm): boolean => form.compare && compareAllowed(form);
+/** The asset field takes one asset: a stat, a gauge, or a time series that compares (its chart draws one asset against its own last month). */
+export const singleAssetForm = (form: WidgetForm): boolean => isSingleAsset(form.type) || (form.type === "timeseries" && isCompareOn(form));
 
 /** What a widget dialog saves: a data widget (a type that fetches, with its data config) or a text widget (its style and text). */
 export type WidgetFields =
@@ -84,7 +109,20 @@ export function formFromDraft(draft: WidgetFields): WidgetForm {
     gaugeMin: String(c.min),
     gaugeMax: c.max === null ? "" : String(c.max),
     assets: [...c.assets],
+    compare: c.compare === COMPARE_MODE,
+    root: c.root ?? null,
+    kind: c.kind ?? "",
+    top: String(c.top ?? DEFAULT_TOP),
   };
+}
+
+/** Put back what the form's modes need after a type or source change: a metric source has no bars of a kind and no comparison, and the comparison needs its type. */
+function repaired(form: WidgetForm): WidgetForm {
+  const next = { ...form };
+  if (next.source === "metric" && next.bars === "kind") next.bars = "asset";
+  if (next.compare && !compareAllowed(next)) next.compare = false; // the range stays as it is: only an explicit untick gives the old one back
+  if (singleAssetForm(next)) next.assets = next.assets.slice(0, 1);
+  return next;
 }
 
 /**
@@ -97,8 +135,7 @@ export function withType(form: WidgetForm, type: WidgetType): WidgetForm {
   if (!allowedSources(type).includes(next.source)) next.source = "metric";
   const aggregations = allowedAggregations(type, next.source, next.metric);
   if (!aggregations.includes(next.aggregation)) next.aggregation = aggregations[0];
-  if (isSingleAsset(type)) next.assets = next.assets.slice(0, 1);
-  return next;
+  return repaired(next);
 }
 
 export function withSource(form: WidgetForm, source: WidgetSource): WidgetForm {
@@ -106,7 +143,32 @@ export function withSource(form: WidgetForm, source: WidgetSource): WidgetForm {
   if (form.type === "text") return next; // a text widget has no data: the field is only kept for when the type changes back
   const aggregations = allowedAggregations(form.type, source, form.metric);
   if (!aggregations.includes(next.aggregation)) next.aggregation = aggregations[0];
+  return repaired(next);
+}
+
+/**
+ * Choose what a bar chart draws a bar for. "kind" (one bar per asset of a kind) takes energy or cost and no assets: from a metric source it
+ * switches to energy and clears the assets. The other choices leave the form as it is (the kind, root and top are kept for when "kind" comes back).
+ */
+export function withBars(form: WidgetForm, bars: WidgetBars): WidgetForm {
+  if (bars !== "kind") return { ...form, bars };
+  const next: WidgetForm = { ...form, bars, assets: [] };
+  if (next.source === "metric") {
+    next.source = "energy";
+    const aggregations = allowedAggregations("bar", "energy");
+    if (!aggregations.includes(next.aggregation)) next.aggregation = aggregations[0];
+  }
   return next;
+}
+
+/**
+ * Tick or untick the comparison. Ticking (only where `compareAllowed`) sets the widget range to this month and keeps the first asset only;
+ * unticking gives `restoreRange` back (the range the form had before the tick, which the editor remembers).
+ */
+export function withCompare(form: WidgetForm, on: boolean, restoreRange: RangePreset | "" = form.range): WidgetForm {
+  if (!on) return { ...form, compare: false, range: restoreRange };
+  if (!compareAllowed(form)) return form;
+  return { ...form, compare: true, range: "this_month", assets: form.assets.slice(0, 1) };
 }
 
 /** Choose the metric of a metric source. `energy_kwh` only has its latest value, so that is selected for it. */
@@ -141,7 +203,8 @@ export function metricAssetsOf(graph: GraphModel): Map<Metric, Set<number>> {
   return byMetric;
 }
 
-export interface FormIssues { title?: string; text?: string; assets?: string; aggregation?: string; gauge?: string }
+/** `compare`: the comparison's rules (one asset). `bars`: a breakdown by kind without a usable kind. `top`: the number of bars of a breakdown. */
+export interface FormIssues { title?: string; text?: string; assets?: string; aggregation?: string; gauge?: string; compare?: string; bars?: string; top?: string }
 
 const toNumber = (text: string): number => (text.trim() === "" ? NaN : Number(text));
 
@@ -167,7 +230,19 @@ export function formIssues(form: WidgetForm): FormIssues {
   }
 
   const count = form.assets.length;
-  if (count === 0) issues.assets = isSingleAsset(form.type) ? "Choose an asset." : "Choose at least one asset.";
+  if (isKindMode(form)) {
+    // One bar per asset of a kind has no assets of its own (the form sends none); it asks for the kind and the number of bars instead.
+    const kind = form.kind.trim();
+    if (kind === "") issues.bars = "Enter the kind of asset to draw one bar for.";
+    else if ([...kind].length > MAX_KIND) issues.bars = `The kind can be at most ${MAX_KIND} characters.`;
+    const top = toNumber(form.top);
+    if (!Number.isInteger(top) || top < MIN_TOP || top > MAX_TOP) issues.top = `Bars to show must be a whole number from ${MIN_TOP} to ${MAX_TOP}.`;
+  } else if (isCompareOn(form)) {
+    // One message for a missing or extra asset: the comparison is of one asset, whatever the type would say about it. The type and the source
+    // cannot be wrong here (isCompareOn), and the editor locks the range to this month; the range rule is the server's, kept for a form built by hand.
+    if (count !== 1) issues.compare = "A comparison needs exactly one asset.";
+    else if (form.range !== "this_month") issues.compare = "A comparison looks at this month, so the widget range must be This month.";
+  } else if (count === 0) issues.assets = isSingleAsset(form.type) ? "Choose an asset." : "Choose at least one asset.";
   else if (isSingleAsset(form.type) && count > 1) issues.assets = `A ${form.type} shows one asset.`;
   else if (count > MAX_ASSETS) issues.assets = `At most ${MAX_ASSETS} assets.`;
 
@@ -199,11 +274,13 @@ export function formToFields(form: WidgetForm): WidgetFields {
     return { type: "text", title: form.title.trim(), config: { style: form.style, text: result === null ? "" : result.ok ? result.text : form.text } };
   }
   const gauge = form.type === "gauge";
+  const kindMode = isKindMode(form);
+  const top = toNumber(form.top);
   return {
     type: form.type,
     title: form.title.trim(),
     config: {
-      assets: [...form.assets],
+      assets: kindMode ? [] : [...form.assets],
       source: form.source,
       metric: form.source === "metric" ? form.metric : null,
       // A time series draws the average whatever it is told, and the dialog hides the control: always send the plain default.
@@ -212,6 +289,12 @@ export function formToFields(form: WidgetForm): WidgetFields {
       bars: form.type === "bar" ? form.bars : "asset",
       min: gauge ? toNumber(form.gaugeMin) : 0,
       max: gauge ? toNumber(form.gaugeMax) : null,
+      // The keys of w24 are written only where the widget uses them AND they are not their default, so the stored config of every other
+      // widget stays exactly as it was (the server leaves the same keys out of its own dump).
+      ...(isCompareOn(form) ? { compare: COMPARE_MODE } : {}),
+      ...(kindMode ? { kind: form.kind.trim() } : {}),
+      ...(kindMode && form.root !== null ? { root: form.root } : {}),
+      ...(kindMode && Number.isInteger(top) && top !== DEFAULT_TOP ? { top } : {}),
     },
   };
 }

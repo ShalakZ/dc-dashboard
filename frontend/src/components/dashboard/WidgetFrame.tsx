@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import type { RangePreset, WidgetConfig, DataWidgetType } from "../../api/types";
 import { downloadCsv } from "../../lib/download";
-import { noMetricText, removedText } from "../../lib/widgetFormat";
+import { noMetricText, removedText, type SkeletonShape } from "../../lib/widgetFormat";
 import { Icon } from "../Icon";
 import { WidgetSkeleton } from "../Skeleton";
 
@@ -25,6 +25,8 @@ interface Props {
   details?: (opener: HTMLElement) => void;
   /** The widget's type: the shape of the loading skeleton. */
   type?: DataWidgetType;
+  /** The skeleton's variant when the loaded card has more rows than its type's plain shape (a comparison, a breakdown by kind). */
+  shape?: SkeletonShape;
   /** Keep the footer line's room while loading, for a widget whose "since" line is known before its data (rolling energy and cost). */
   footSpace?: boolean;
   /** Extra header buttons (the editor's Edit and Delete); the caller wraps them in `.widget-actions`. */
@@ -67,7 +69,7 @@ export function useCsvExport(csv: CsvSource | undefined): { busy: boolean; error
 }
 
 /** The box around every widget: title, Details and CSV buttons, the warning chips, the footer line, and the loading and error states. */
-export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint = "", since = "", csv, details, type, footSpace = false, actions, dragHandle = false, children }: Props) {
+export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint = "", since = "", csv, details, type, shape, footSpace = false, actions, dragHandle = false, children }: Props) {
   const { busy, error: csvError, run: exportCsv } = useCsvExport(csv);
   return (
     <section className="widget-frame" aria-label={title}>
@@ -101,7 +103,7 @@ export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint
       {csvError && <p className="error" role="alert">CSV export failed: {csvError}</p>}
       {loading ? (
         <>
-          <WidgetSkeleton type={type} label={`Loading ${title}`} />
+          <WidgetSkeleton type={type} shape={shape} label={`Loading ${title}`} />
           {footSpace && <p className="widget-foot" aria-hidden="true" />}
         </>
       ) : (

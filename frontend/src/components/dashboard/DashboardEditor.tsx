@@ -5,7 +5,7 @@ import type { Dashboard, RangePreset } from "../../api/types";
 import { useAction } from "../../hooks/useAction";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
 import { isDirty, isStaleConflict, MAX_TEXT, MAX_WIDGETS, metricAssetsOf, saveBody } from "../../lib/dashboardEdit";
-import { compactVertical, defaultSize, newKey, nextPosition, toDrafts, type DraftWidget } from "../../lib/layout";
+import { compactVertical, compareStatSize, defaultSize, newKey, nextPosition, toDrafts, type DraftWidget } from "../../lib/layout";
 import { RANGE_LABELS, RANGE_PRESETS } from "../../lib/ranges";
 import { Icon } from "../Icon";
 import { TrashButton } from "../TrashButton";
@@ -74,8 +74,19 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
     if (!target) setRemoved(null);
     setDrafts((current) => {
       // Each branch spreads one member of the `fields` union, so the result is a draft of one kind (type and config stay together).
-      if (target) return current.map((d): DraftWidget => (d.key !== target.key ? d : fields.type === "text" ? { ...d, ...fields } : { ...d, ...fields }));
-      const size = defaultSize(fields.type, fields.type === "text" ? fields.config.style : undefined);
+      if (target) {
+        let grew = false;
+        const next = current.map((d): DraftWidget => {
+          if (d.key !== target.key) return d;
+          if (fields.type === "text") return { ...d, ...fields };
+          const room = compareStatSize(fields.type, fields.config); // a stat that now compares needs its 3 x 3 (it never shrinks one)
+          const w = Math.max(d.w, room?.w ?? 0), h = Math.max(d.h, room?.h ?? 0);
+          grew = w !== d.w || h !== d.h;
+          return { ...d, ...fields, w, h };
+        });
+        return grew ? compactVertical<DraftWidget>(next) : next; // only a card that grew moves the cards below it
+      }
+      const size = defaultSize(fields.type, fields.type === "text" ? fields.config.style : undefined, fields.type === "text" ? undefined : fields.config);
       const placed = { key, ...size, ...nextPosition(current, size) };
       return compactVertical<DraftWidget>([...current, fields.type === "text" ? { ...placed, ...fields } : { ...placed, ...fields }]);
     });

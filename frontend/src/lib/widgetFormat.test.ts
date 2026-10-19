@@ -1,7 +1,9 @@
-import { seriesData, seriesPoint, valueRow, valuesData } from "../test/dashboardFixtures";
+import {
+  breakdownBlock, breakdownData, compareAsset, compareBlock, compareChange, compareSeriesData, compareSide, compareStatData, seriesData, seriesPoint, valueRow, valuesData,
+} from "../test/dashboardFixtures";
 import {
   ageText, chartLabels, escapeHtml, figureOrNoData, figureText, flagsOf, formatValue, labelBucket, markerHint, noMetricText, removedText, shortLabel,
-  shortLabels, sinceText, uniqueLabels, unitSuffix,
+  shortLabels, sinceText, skeletonShape, uniqueLabels, unitSuffix,
 } from "./widgetFormat";
 
 const none = { estimated: false, partial: false };
@@ -200,5 +202,118 @@ describe("shortLabels", () => {
     expect(short.get(third)).toBe(shortLabel(third, 18));
     expect(Array.from(short.get(third)!)).toHaveLength(18);
     expect(short.get("Hall A")).toBe("Hall A");
+  });
+});
+
+describe("flagsOf, a comparison and a breakdown (w24)", () => {
+  const withSides = (source: "energy" | "cost", this_: Partial<ReturnType<typeof compareSide>>, last: Partial<ReturnType<typeof compareSide>>) =>
+    compareStatData({ source, compare: compareBlock({ assets: [compareAsset({ this: compareSide(this_), last: compareSide(last) })] }) });
+
+  it("has no marker for a plain comparison", () => {
+    expect(flagsOf(compareStatData())).toEqual({ estimated: false, partial: false, noRate: false });
+  });
+
+  it("finds an estimate on either side, so the footer explains the ~ the card draws", () => {
+    expect(flagsOf(withSides("energy", { estimated: true }, {})).estimated).toBe(true);
+    expect(flagsOf(withSides("energy", {}, { estimated: true })).estimated).toBe(true);
+  });
+
+  it("counts a partial side only on a cost widget (an energy card draws no star)", () => {
+    expect(flagsOf(withSides("cost", { partial: true }, {})).partial).toBe(true);
+    expect(flagsOf(withSides("energy", { partial: true }, { partial: true })).partial).toBe(false);
+  });
+
+  it("finds a missing rate on a cost side that had readings, not on one with none", () => {
+    expect(flagsOf(withSides("cost", { cost: null }, {})).noRate).toBe(true);
+    expect(flagsOf(withSides("cost", { cost: null, no_data_days: 17 }, {})).noRate).toBe(false);
+    expect(flagsOf(withSides("energy", { cost: null }, {})).noRate).toBe(false);
+  });
+
+  describe("a currency change after a close is not a missing rate (w24 review C-1)", () => {
+    const currency = { cost: compareChange({ why_none: "currency" }) };
+    const withAsset = (source: "energy" | "cost", over: Parameters<typeof compareAsset>[0]) =>
+      compareStatData({ source, compare: compareBlock({ assets: [compareAsset(over)] }) });
+    const gone = { last: compareSide({ cost: null }), ...currency };
+
+    it("raises no noRate flag for last month's side that was taken away, and the footer and the markers say nothing of a rate", () => {
+      const data = withAsset("cost", gone);
+      expect(flagsOf(data)).toEqual({ estimated: false, partial: false, noRate: false });
+      expect(markerHint(flagsOf(data))).toBe("");
+    });
+
+    it("raises none for last month's daily points that were taken away either (value null, not no_data)", () => {
+      const data = compareSeriesData(2, 2, { source: "cost" });
+      data.compare!.assets[0] = { ...data.compare!.assets[0], ...gone, last_points: data.compare!.assets[0].last_points.map((p) => ({ ...p, value: null, no_data: false })) };
+      expect(flagsOf(data).noRate).toBe(false);
+      expect(markerHint(flagsOf(data))).not.toContain("no rate");
+    });
+
+    it("leaves the marks of the removed side out too: a dash carries none, and the footer's partial words speak of a rate", () => {
+      const data = withAsset("cost", { last: compareSide({ cost: null, estimated: true, partial: true }), ...currency });
+      expect(flagsOf(data)).toEqual({ estimated: false, partial: false, noRate: false });
+    });
+
+    it("keeps the kWh marks of last month on an energy widget (its kWh are real)", () => {
+      expect(flagsOf(withAsset("energy", { last: compareSide({ estimated: true }), ...currency })).estimated).toBe(true);
+    });
+
+    it("still raises noRate for a side whose cost lacks a rate (why_none no_cost)", () => {
+      const data = withAsset("cost", { last: compareSide({ cost: null }), cost: compareChange({ why_none: "no_cost" }) });
+      expect(flagsOf(data).noRate).toBe(true);
+      expect(markerHint(flagsOf(data))).toBe("— no rate");
+    });
+
+    it("still raises it for last month's points of a cost with no rate (no_cost), and for this month's side or points when the currency changed too", () => {
+      const series = compareSeriesData(2, 2, { source: "cost" });
+      series.compare!.assets[0] = { ...series.compare!.assets[0], cost: compareChange({ why_none: "no_cost" }) };
+      series.compare!.assets[0].last_points[0] = seriesPoint({ ts: "2026-09-01T00:00:00+03:00", value: null });
+      expect(flagsOf(series).noRate).toBe(true);
+
+      const both = withAsset("cost", { this: compareSide({ cost: null }), ...gone });
+      expect(flagsOf(both).noRate).toBe(true); // this month has readings but no cost: that rate really is missing
+      const bothSeries = compareSeriesData(2, 2, { source: "cost" });
+      bothSeries.compare!.assets[0] = { ...bothSeries.compare!.assets[0], ...gone, last_points: bothSeries.compare!.assets[0].last_points.map((p) => ({ ...p, value: null, no_data: false })) };
+      expect(flagsOf(bothSeries).noRate).toBe(false);
+      bothSeries.series[0].points[1] = seriesPoint({ ts: "2026-10-02T00:00:00+03:00", value: null });
+      expect(flagsOf(bothSeries).noRate).toBe(true);
+    });
+  });
+
+  it("reads last month's daily points too", () => {
+    const data = compareSeriesData(2, 2);
+    data.compare!.assets[0].last_points[1] = seriesPoint({ ts: "2026-09-02T00:00:00+03:00", value: 5, estimated: true });
+    expect(flagsOf(data).estimated).toBe(true);
+    const cost = compareSeriesData(2, 2, { source: "cost" });
+    cost.compare!.assets[0].last_points[0] = seriesPoint({ ts: "2026-09-01T00:00:00+03:00", value: null });
+    expect(flagsOf(cost).noRate).toBe(true);
+  });
+
+  it("a cost breakdown's bar that recorded nothing is no data, not a missing rate (a plain cost widget keeps its rule)", () => {
+    const silent = valueRow({ asset_id: 90, name: "Electrical", value: null, no_data: true, point_id: null });
+    const cost = breakdownData(2, { source: "cost", unit: "USD" });
+    cost.values.push(silent);
+    expect(flagsOf(cost).noRate).toBe(false);
+    cost.values.push(valueRow({ asset_id: 91, name: "Unrated", value: null, no_data: false, point_id: null })); // readings, no rate: still a missing rate
+    expect(flagsOf(cost).noRate).toBe(true);
+    const plain = valuesData({ source: "cost", unit: "USD", values: [silent] });
+    expect(flagsOf(plain).noRate).toBe(true); // without a breakdown the existing rule stands
+  });
+
+  it("finds the marks of the bars a breakdown left out", () => {
+    expect(flagsOf(breakdownData())).toEqual({ estimated: false, partial: false, noRate: false });
+    const more = { count: 4, with_value: 4, value: 9, estimated: true, partial: true };
+    expect(flagsOf(breakdownData(3, { breakdown: breakdownBlock({ more }) }))).toEqual({ estimated: true, partial: true, noRate: false });
+  });
+});
+
+describe("skeletonShape", () => {
+  it("is a comparing stat, a comparing chart, or a breakdown by kind, and nothing for a plain widget", () => {
+    expect(skeletonShape("stat", { compare: "same_days_last_month", bars: "asset" })).toBe("compare-stat");
+    expect(skeletonShape("timeseries", { compare: "same_days_last_month", bars: "asset" })).toBe("compare-chart");
+    expect(skeletonShape("bar", { bars: "kind" })).toBe("kind-bars");
+    expect(skeletonShape("stat", { bars: "asset" })).toBeUndefined();
+    expect(skeletonShape("stat", { compare: "none", bars: "asset" })).toBeUndefined();
+    expect(skeletonShape("bar", { bars: "asset" })).toBeUndefined();
+    expect(skeletonShape("table", { compare: "same_days_last_month", bars: "asset" })).toBeUndefined();
   });
 });

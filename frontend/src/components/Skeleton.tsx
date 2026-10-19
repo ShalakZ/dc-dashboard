@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { DataWidgetType } from "../api/types";
 import { CHART_HEIGHT } from "../lib/chartBox";
+import type { SkeletonShape } from "../lib/widgetFormat";
 
 // Loading skeletons: grey shapes in the layout the data will have, shown while a page has no data yet. A Suspense fallback uses these
 // shapes, so this file imports nothing from TrendChart, DashboardsPage or DashboardPage (that would pull their chunks into the main bundle).
@@ -403,14 +404,43 @@ export function CanvasSkeleton({ label }: { label: string }) {
   );
 }
 
+/** The height of a line of the small text (--fs-sm at the document's 1.4), as the comparing stat's name, "Same days last month" and change rows are. */
+const SM_LINE = "calc(var(--fs-sm) * 1.4)";
+
 /**
  * A widget's body while its data loads, in the shapes the data will have: a stat is a figure and a name, a gauge the dial and two lines, a table a head and
  * four rows, a chart one block that fills the body (widgets.css sizes them by `data-type`). Given a `label` it is the one region of the card and stands where
  * `.widget-body` will be (the class `widget-sk` is how the stylesheet and the tests know it from the page's own region); without one it is a bare, hidden body:
  * the fallback of a lazy chart chunk, which is only ever drawn once the card holds its data, so the card has no second status.
+ * `shape` (w24) is for the card that draws more rows than its type's plain shape, so it does not move when the data lands: a stat that compares with last month
+ * (the figure, the name, the window, "Same days last month" with its figure, the window, the change and the one reserved note line: seven rows) and a breakdown
+ * by kind (the bars, the one reserved line under them and the "Split by" row). A comparing chart is the plain chart box.
  */
-export function WidgetSkeleton({ type, label }: { type?: DataWidgetType; label?: string }) {
-  const shapes = type === "stat" ? (
+export function WidgetSkeleton({ type, label, shape }: { type?: DataWidgetType; label?: string; shape?: SkeletonShape }) {
+  const className = shape === "compare-stat" ? "widget-sk widget-sk-compare" : shape === "kind-bars" ? "widget-sk widget-sk-kind" : "widget-sk";
+  const shapes = shape === "compare-stat" ? (
+    <>
+      <Skeleton variant="block" width="60%" height="calc(var(--widget-figure) * 1.15)" />
+      <Skeleton variant="block" width="40%" height={SM_LINE} />
+      <Skeleton variant="block" width="25%" height={16} />
+      <div className="sk-compare-last">
+        <Skeleton variant="block" width="50%" height={SM_LINE} />
+        <Skeleton variant="block" width="25%" height={SM_LINE} />
+      </div>
+      <Skeleton variant="block" width="25%" height={16} />
+      <Skeleton variant="block" width="55%" height={SM_LINE} />
+      <Skeleton variant="block" width="85%" height={16} />
+    </>
+  ) : shape === "kind-bars" ? (
+    <>
+      <Skeleton variant="block" />
+      <Skeleton variant="block" width="70%" height={16} />
+      <div className="sk-split">
+        <Skeleton variant="block" width={56} height={16} />
+        <Skeleton variant="block" width={120} height={28} />
+      </div>
+    </>
+  ) : type === "stat" ? (
     <>
       <Skeleton variant="block" width="60%" height="var(--widget-figure)" />
       <Skeleton variant="block" width="40%" height={14} />
@@ -429,6 +459,6 @@ export function WidgetSkeleton({ type, label }: { type?: DataWidgetType; label?:
   ) : (
     <Skeleton variant="block" />
   );
-  if (label) return <SkeletonRegion label={label} className="widget-sk" dataType={type}>{shapes}</SkeletonRegion>;
-  return <div className="widget-sk" data-type={type} aria-hidden="true">{shapes}</div>;
+  if (label) return <SkeletonRegion label={label} className={className} dataType={type}>{shapes}</SkeletonRegion>;
+  return <div className={className} data-type={type} aria-hidden="true">{shapes}</div>;
 }

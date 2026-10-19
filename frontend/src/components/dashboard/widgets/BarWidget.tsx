@@ -1,7 +1,8 @@
 import type { EChartsOption } from "echarts";
 import ReactECharts from "echarts-for-react";
-import { memo, useLayoutEffect, useState } from "react";
+import { memo, useId, useLayoutEffect, useState } from "react";
 import type { WidgetData } from "../../../api/types";
+import { breakdownDescription, breakdownLine, emptyBreakdownText, hasNoBars, isNoDataBar, kindOptions, selectedKind } from "../../../lib/breakdown";
 import { chartDescription } from "../../../lib/widgetDetails";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
 import { chartLabels, figureText, hasNoReading, labelBucket, NO_DATA, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
@@ -84,8 +85,12 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
     const layout = barAxisLayout(labels, chartWidth);
     // A metric that recorded nothing is "no data", with no dash mark: the dash means a missing rate and nothing else. A cost
     // without a rate keeps its dash whether or not anything was recorded, like the stat, the table and Billing.
+    // A breakdown by kind (w24) is the exception: there a bar that recorded nothing (no figure, or the zero of a meter silent for the whole range,
+    // a cost too) is an empty slot among bars that have figures, so it gets the dash mark and the words "no data" in its tooltip, never a bar.
     const noReading = (v: WidgetData["values"][number]) => hasNoReading(v.value, v.no_data, data.source);
+    const silent = (v: WidgetData["values"][number]) => data.breakdown != null && isNoDataBar(v);
     const cells = data.values.map((v): TipCell => {
+      if (silent(v)) return { text: NO_DATA, state: "" };
       if (v.value === null) return noReading(v) ? { text: NO_DATA, state: "" } : { text: DASH, state: stateOf(v, data.source === "cost") };
       return { text: `${figureText(v.value, v)}${unit}${v.no_data ? ` (${NO_DATA})` : ""}`, state: stateOf(v, false) };
     });
@@ -108,8 +113,8 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
       },
       yAxis: { type: "value", name: data.unit ?? undefined, ...axis },
       series: [{
-        type: "bar", color: theme.accent, data: data.values.map((v) => v.value),
-        ...dashMarks(data.values.flatMap((v, i) => (v.value === null && !noReading(v) ? [i] : [])), theme),
+        type: "bar", color: theme.accent, data: data.values.map((v) => (silent(v) ? null : v.value)),
+        ...dashMarks(data.values.flatMap((v, i) => (silent(v) || (v.value === null && !noReading(v)) ? [i] : [])), theme),
       }],
     } as EChartsOption;
   }
@@ -151,8 +156,36 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
   } as EChartsOption;
 }
 
-/** Bars per asset (the aggregation over the range) or per time bucket, grouped by asset. Memoised for the reason given at TimeSeriesWidget. */
-export const BarWidget = memo(function BarWidget({ data, timezone }: { data: WidgetData; timezone: string }) {
+/**
+ * The row under a breakdown's chart: "Split by" and the kinds present under the root, as "Rack (117)". `current` is the kind shown (the viewer's choice
+ * for this visit, which the card already holds while a new answer loads); one the list does not hold is added first. It is `disabled` (still shown, so the
+ * card keeps its shape) where the card is not a live one: the editor's grid and its preview.
+ */
+function SplitBy({ data, current, onKind, disabled }: { data: WidgetData; current: string; onKind?: (kind: string) => void; disabled: boolean }) {
+  const id = useId();
+  const options = kindOptions(data.breakdown!, current);
+  return (
+    <div className="bars-split">
+      <label htmlFor={id}>Split by</label>
+      <select id={id} value={selectedKind(options, current)} disabled={disabled} onChange={(e) => onKind?.(e.target.value)}>
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </div>
+  );
+}
+
+interface BarWidgetProps {
+  data: WidgetData;
+  timezone: string;
+  /** A breakdown by kind: the kind being shown (the visit's choice, else the stored one), and what the "Split by" select calls when the viewer picks another. Keep `onKind` stable (the card is memoised). */
+  kind?: string;
+  onKind?: (kind: string) => void;
+  /** The select is shown but cannot be used (the editor's grid and preview). */
+  splitDisabled?: boolean;
+}
+
+/** Bars per asset (the aggregation over the range) or per time bucket, grouped by asset. Memoised for the reason given at TimeSeriesWidget. A breakdown by kind (`data.breakdown`) adds its line and the "Split by" select. */
+export const BarWidget = memo(function BarWidget({ data, timezone, kind, onKind, splitDisabled = false }: BarWidgetProps) {
   const legend = useLegendSelection();
   const theme = useChartTheme();
   // The width of the chart's box, in steps of 8 px, for the axis layout. The box is held in state (a callback ref) so that the observer follows it
@@ -167,6 +200,26 @@ export const BarWidget = memo(function BarWidget({ data, timezone }: { data: Wid
     observer.observe(box);
     return () => observer.disconnect();
   }, [box]);
+  const breakdown = data.mode === "values" ? data.breakdown : null;
+  if (breakdown) {
+    // The chart (or the sentence that stands in its place), the one reserved line, and the select: the same three children in every state, so the select
+    // never remounts (it keeps the focus the viewer gave it) and a line appearing moves nothing.
+    const sentence = hasNoBars(data.values) ? emptyBreakdownText(breakdown, data.source) : null;
+    const line = breakdownLine(breakdown, data.unit);
+    return (
+      <div className="widget-bars">
+        {sentence !== null ? (
+          <p className="widget-empty">{sentence}</p>
+        ) : (
+          <div ref={setBox} className="widget-chart" role="img" aria-label={breakdownDescription(data, breakdown)}>
+            <ReactECharts option={barOption(data, timezone, theme, chartWidth)} style={{ height: "100%", width: "100%", minHeight: 120 }} notMerge />
+          </div>
+        )}
+        <p className="bars-note" title={line}>{line}</p>
+        <SplitBy data={data} current={kind ?? breakdown.kind} onKind={onKind} disabled={splitDisabled} />
+      </div>
+    );
+  }
   // Nothing to draw: no assets, or (metric) every asset recorded nothing, which would be empty axes without even a dash.
   const empty = data.mode === "values"
     ? data.values.every((v) => hasNoReading(v.value, v.no_data, data.source))

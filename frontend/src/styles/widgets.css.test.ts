@@ -534,3 +534,76 @@ describe("the files that load the stylesheet", () => {
     }
   });
 });
+
+describe("styles/widgets.css, the comparison and the breakdown (w24)", () => {
+  const prop = (body: string, name: string) => new RegExp(`(?:^|[;\\s])${name}\\s*:\\s*([^;]+)`).exec(body)?.[1].trim();
+
+  it("styles every class the new cards draw", () => {
+    const named = new Set(rules.flatMap((r) => [...r.selector.matchAll(/\.([A-Za-z_][\w-]*)/g)].map((m) => m[1])));
+    for (const cls of [
+      "stat-compare", "stat-window", "stat-last", "stat-last-label", "stat-last-fig", "stat-change", "stat-note", "stat-nothing",
+      "widget-bars", "bars-note", "bars-split", "widget-sk-compare", "widget-sk-kind", "sk-compare-last", "sk-split",
+    ]) expect(named.has(cls), `.${cls}`).toBe(true);
+  });
+
+  it("keeps one line of room for the stat's note and the breakdown's line, measured at the size and height of the text they hold (LESSONS front end 1)", () => {
+    for (const selector of [".stat-note", ".bars-note"]) {
+      const body = bodyOf(selector);
+      expect(prop(body, "min-height"), `${selector} min-height`).toBe("1lh");
+      expect(prop(body, "font-size"), `${selector} font-size`).toBe("var(--fs-xs)");
+      expect(prop(body, "line-height"), `${selector} line-height`).toBe("16px");
+      expect(prop(body, "white-space"), `${selector} is one line`).toBe("nowrap");
+      expect(prop(body, "text-overflow"), `${selector} ellipsis`).toBe("ellipsis");
+      expect(prop(body, "overflow"), `${selector} overflow`).toBe("hidden");
+    }
+  });
+
+  it("makes every row of the comparing stat one line with an ellipsis, so it fits a 3 x 3 card at any width", () => {
+    for (const selector of [".stat-window", ".stat-change", ".stat-note"]) {
+      expect(prop(bodyOf(selector), "white-space"), selector).toBe("nowrap");
+      expect(prop(bodyOf(selector), "text-overflow"), selector).toBe("ellipsis");
+    }
+    expect(prop(bodyOf(".stat-last-fig"), "white-space")).toBe("nowrap");
+  });
+
+  it("lets the figure of 'Same days last month' wrap under its label instead of cutting the label (w24 review m1: at 1440 a 3 wide card read 'Same days last m...')", () => {
+    const row = bodyOf(".stat-last");
+    expect(prop(row, "display")).toBe("flex");
+    expect(prop(row, "flex-wrap")).toBe("wrap");
+    expect(prop(row, "gap"), "no row gap: an unwrapped row stays as tall as the skeleton's").toBe("0 8px");
+    const label = bodyOf(".stat-last-label");
+    expect(prop(label, "white-space")).toBe("nowrap"); // one word group, never split inside
+    expect(prop(label, "overflow"), "the label is never clipped").toBeUndefined();
+    expect(prop(label, "text-overflow"), "the label never ends in an ellipsis").toBeUndefined();
+    const fig = bodyOf(".stat-last-fig");
+    expect(prop(fig, "max-width"), "alone on its line the figure may take the whole row").toBe("100%");
+    expect(prop(fig, "flex"), "the figure is not pinned to its size beside the label").toBeUndefined();
+  });
+
+  it("makes the Split by select a 28px control at the small size, in a row of its own, with its label not the app's bold grid", () => {
+    expect(prop(bodyOf(".bars-split select"), "min-height")).toBe("28px");
+    expect(prop(bodyOf(".bars-split select"), "font-size")).toBe("var(--fs-xs)");
+    expect(prop(bodyOf(".bars-split label"), "display")).toBe("block");
+    expect(prop(bodyOf(".bars-split label"), "font-weight")).toBe("400");
+    expect(prop(bodyOf(".bars-split"), "flex")).toBe("none");
+  });
+
+  it("lets the chart or the sentence take what the note and the select leave, in a column that fills the body", () => {
+    expect(prop(bodyOf(".widget-bars"), "display")).toBe("flex");
+    expect(prop(bodyOf(".widget-bars"), "flex-direction")).toBe("column");
+    expect(prop(bodyOf(".widget-bars"), "height")).toBe("100%");
+    expect(prop(bodyOf(".widget-bars > .widget-chart"), "flex")).toBe("1 1 0");
+    expect(prop(bodyOf(".widget-bars > .widget-empty"), "flex")).toBe("1 1 0");
+  });
+
+  it("keeps the blocks of the breakdown skeleton (the note, the select) from being stretched by the chart's rule", () => {
+    const stretch = rules.filter((r) => r.selector.includes('.widget-sk[data-type="bar"] .sk-block') && !r.selector.includes("sk-split")).map((r) => r.body).join(" ");
+    expect(prop(stretch, "flex")).toBe("1");
+    const keep = rules.filter((r) => r.selector.includes(".sk-split .sk-block")).map((r) => r.body).join(" ");
+    expect(prop(keep, "flex")).toBe("none");
+  });
+
+  it("styles the comparison table's caption in the Details panel", () => {
+    expect(detailsCss).toMatch(/\.wd-table caption\s*\{[^}]*text-align:\s*left/);
+  });
+});

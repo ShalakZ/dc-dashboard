@@ -4,6 +4,7 @@ and an undo sentence of its own, and its layout and series are pure functions of
 These tests do not touch the old layout's figures (`test_seed_history.py` pins those and runs unmodified). The first group needs no
 database: it checks the plan arithmetic, the batch writer's checks and the undo texts of `dcdash.seed.history`."""
 import asyncio
+import hashlib
 import math
 import random
 import re
@@ -1512,3 +1513,309 @@ async def test_slices_still_report_days_not_slices(site, allowed, monkeypatch, c
     assert await seed_pilot(["--days", "11", "--interval-minutes", "60"]) == 0
     lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("written ")]
     assert lines == [f"written 5 of {days} days", f"written 10 of {days} days"]
+
+
+# ---- --metering panels / --panel-unit (w24 T4): the panels-only case ------------------------------------------------------------
+
+# Pinned on the code BEFORE the option existed (sha256 of the repr of the pieces; the `small` fixture is 3 days at 60 minutes): the
+# default layout and its series are today's, byte for byte.
+DEFAULT_LAYOUT_SHA = "086fbd49986129de6e6adcac9605a81581149b74f5208185a620aed5b317f93b"
+DEFAULT_SAMPLES_SHA = "911bd85f20deec371ad39186e5546f8aea212e4f24b2c3bc11888859a75ec3fa"
+PANELS = [f"elec/p{number}{letter}" for number in "1234" for letter in "ab"]
+
+
+def _sha(value: object) -> str:
+    return hashlib.sha256(repr(value).encode()).hexdigest()
+
+
+def _energy_nodes(layout: pilot_hall.Layout) -> set[str]:
+    """The nodes that carry energy, as a counter (kWh) or as power only (kW), which is all the engine turns into energy."""
+    return {meter.node for meter in layout.meters if meter.metric in (Metric.ENERGY_KWH, Metric.ACTIVE_POWER_KW)}
+
+
+def _panel_energy(layout: pilot_hall.Layout) -> list[pilot_hall.Meter]:
+    return [meter for meter in layout.meters if meter.kind in ("panel_counter", "panel_power")]
+
+
+def _no_energy_above_or_below_another(layout: pilot_hall.Layout) -> None:
+    parent = {node.key: node.parent for node in layout.nodes}
+    nodes = _energy_nodes(layout)
+    for key in nodes:
+        up = parent[key]
+        while up is not None:
+            assert up not in nodes, f"{up} and {key} both carry energy: the Site would count it twice"
+            up = parent[up]
+
+
+def test_the_default_metering_is_exactly_the_old_layout_and_series(layout, small):
+    explicit = pilot_hall.build_layout(history.DEFAULT_SEED, "feeds", "kwh")
+    assert explicit == layout == pilot_hall.build_layout(metering="feeds")
+    assert (layout.metering, layout.panel_unit, layout.hidden) == ("feeds", "kwh", ())
+    assert len(layout.meters) == 442 and Counter(meter.kind for meter in layout.meters) == {
+        "counter": 209, "power": 217, "voltage": 8, "current": 8,
+    }
+    assert _sha((layout.seed, layout.nodes, layout.racks, layout.meters)) == DEFAULT_LAYOUT_SHA
+    assert _sha(small[2]) == DEFAULT_SAMPLES_SHA and len(small[2]) == 73 and sum(len(values) for _ts, values in small[2]) == 32254
+
+
+def test_a_metering_the_layout_cannot_build_is_refused():
+    for metering, unit in (("feeds", "kw"), ("nope", "kwh"), ("panels", "mwh")):
+        with pytest.raises(ValueError):
+            pilot_hall.build_layout(metering=metering, panel_unit=unit)
+    assert pilot_hall.build_layout(metering="panels", panel_unit="kw").panel_unit == "kw"
+
+
+@pytest.mark.parametrize("unit", ["kwh", "kw"])
+def test_panels_metering_has_one_energy_meter_per_panel_and_none_on_the_feeds(layout, unit):
+    panels = pilot_hall.build_layout(metering="panels", panel_unit=unit)
+    assert (panels.metering, panels.panel_unit) == ("panels", unit)
+    assert panels.nodes == layout.nodes and panels.racks == layout.racks and panels.seed == layout.seed  # the same tree and load
+    assert len(panels.meters) == 24 and len({meter.id for meter in panels.meters}) == 24
+    assert Counter(meter.kind for meter in panels.meters) == Counter({"voltage": 8, "current": 8, ("panel_counter" if unit == "kwh" else "panel_power"): 8})
+    assert {meter.node for meter in panels.meters} == set(PANELS)
+    assert not {meter.node for meter in panels.meters} & {node.key for node in panels.nodes if node.role in ("feed", "rack")}
+    # the energy meter follows its panel's voltage and current, and carries the feeds the current carries
+    for first in range(0, 24, 3):
+        voltage, current, energy = panels.meters[first:first + 3]
+        assert (voltage.kind, current.kind) == ("voltage", "current") and energy.node == current.node == voltage.node
+        assert energy.feeds == current.feeds and energy.feeds
+        assert not energy.gap and not energy.resets
+    wanted = (Metric.ENERGY_KWH, "panel_counter") if unit == "kwh" else (Metric.ACTIVE_POWER_KW, "panel_power")
+    assert {(meter.metric, meter.kind) for meter in _panel_energy(panels)} == {wanted}
+    if unit == "kwh":
+        assert all(2000 <= meter.counter_base <= 90000 and meter.counter_base == round(meter.counter_base, 3) for meter in _panel_energy(panels))
+        assert len({meter.counter_base for meter in _panel_energy(panels)}) == 8
+    else:
+        assert all(meter.counter_base is None for meter in _panel_energy(panels))
+    # the feeds' meters are not written, but they run: exactly the default layout's 426 feed meters, and the panels carry the same feeds
+    assert panels.hidden == layout.meters[:426]
+    assert [meter.feeds for meter in panels.meters if meter.kind == "current"] == [meter.feeds for meter in layout.meters[426:] if meter.kind == "current"]
+    assert not any(meter.node in {node.key for node in panels.nodes if node.role == "feed"} for meter in panels.meters)
+
+
+@pytest.mark.parametrize("metering, unit", [("feeds", "kwh"), ("panels", "kwh"), ("panels", "kw")])
+def test_only_one_level_is_measured_for_energy(metering, unit):
+    layout = pilot_hall.build_layout(metering=metering, panel_unit=unit)
+    _no_energy_above_or_below_another(layout)  # no asset has a metered ancestor or descendant that is also metered
+    nodes = _energy_nodes(layout)
+    roles = {node.role for node in layout.nodes if node.key in nodes}
+    assert roles == ({"feed"} if metering == "feeds" else {"panel"})
+    if metering == "panels":
+        assert nodes == set(PANELS)  # and no rack, row, pod, hall or Site carries a meter either
+        assert {meter.node for meter in layout.meters} == set(PANELS)
+    else:
+        assert not nodes & set(PANELS)  # the default: a panel carries voltage and current only
+
+
+def test_the_panels_energy_is_the_sum_of_what_the_feeds_would_have_shown(small):
+    plan, base, feeds_frames = small
+    for unit in ("kwh", "kw"):
+        panels = pilot_hall.build_layout(metering="panels", panel_unit=unit)
+        frames = list(pilot_hall.samples(plan, panels))
+        assert len(frames) == len(feeds_frames) == 73
+        assert all(len(values) == 24 for _ts, values in frames)  # nothing of a feed, a rack or a gap is written
+        step_hours = plan.step_seconds / 3600
+        # the voltage is drawn after every feed: the same series as the default mode's, so no draw (the reset's included, which is
+        # inside the range) was lost or added in the hidden feeds
+        assert plan.reset_index is not None and 0 < plan.reset_index < len(frames)
+        for meter in base.meters[426:]:
+            if meter.kind in ("voltage", "current"):
+                assert [values[meter.id] for _ts, values in frames] == [values[meter.id] for _ts, values in feeds_frames], meter.id
+        for meter in _panel_energy(panels):
+            checked = 0
+            for index, (_ts, values) in enumerate(feeds_frames):
+                # what each carried feed shows in the default mode, as power: its kW point (the twin of a counter, or the
+                # power-only meter); the gap feed has no value inside its hole, and such an instant is not compared
+                power = [values.get(f"{feed}|active_power_kw") for feed in meter.feeds]
+                if None in power:
+                    continue
+                expected = sum(power)
+                if unit == "kw":
+                    assert frames[index][1][meter.id] == pytest.approx(expected, abs=0.01 + 0.0005 * len(power)), (meter.id, index)
+                elif index + 1 < len(frames):
+                    rise = frames[index + 1][1][meter.id] - frames[index][1][meter.id]
+                    assert rise == pytest.approx(expected * step_hours, rel=1e-3), (meter.id, index)
+                checked += 1
+            assert checked > 60, meter.id  # all but the few instants of the gap
+
+
+def test_panel_counters_only_rise_and_start_at_their_base(small):
+    plan = small[0]
+    panels = pilot_hall.build_layout(metering="panels")
+    frames = list(pilot_hall.samples(plan, panels))
+    for meter in _panel_energy(panels):
+        series = [values[meter.id] for _ts, values in frames]
+        assert series[0] == meter.counter_base and all(after > before for before, after in zip(series, series[1:])), meter.id
+
+
+def test_the_panels_series_is_deterministic_and_the_seed_moves_it(small):
+    plan = small[0]
+    panels = pilot_hall.build_layout(metering="panels")
+    again = list(pilot_hall.samples(plan, pilot_hall.build_layout(metering="panels")))
+    assert list(pilot_hall.samples(plan, panels)) == again
+    other = history.make_plan(NOW, ZONE, 3, 1, 30, step_seconds=HOUR)
+    assert list(pilot_hall.samples(other, pilot_hall.build_layout(1, "panels"))) != again
+
+
+async def test_a_panel_unit_of_kw_needs_panels(site, capsys):
+    before = await counts(site)
+    for argv in (
+        ["--layout", "pilot-hall", "--panel-unit", "kw"],
+        ["--layout", "pilot-hall", "--metering", "feeds", "--panel-unit", "kw"],
+        ["--yes", "--layout", "pilot-hall", "--panel-unit", "kw"],
+    ):
+        with pytest.raises(SystemExit) as caught:
+            await history.amain(argv)
+        assert caught.value.code == 2
+        assert "--panel-unit kw needs --metering panels" in capsys.readouterr().err
+    for argv in (["--metering", "panels"], ["--layout", "three-panels", "--panel-unit", "kwh"], ["--yes", "--metering", "feeds"]):
+        with pytest.raises(SystemExit) as caught:  # these options belong to the pilot hall
+            await history.amain(argv)
+        assert caught.value.code == 2
+        assert "--metering and --panel-unit only apply to --layout pilot-hall" in capsys.readouterr().err
+    for argv in (["--metering", "rack"], ["--panel-unit", "mwh"]):
+        with pytest.raises(SystemExit) as caught:  # not an offered value
+            await history.amain(["--layout", "pilot-hall", *argv])
+        assert caught.value.code == 2
+    assert await counts(site) == before
+    assert await history.amain(["--layout", "pilot-hall", "--metering", "feeds", "--panel-unit", "kwh"]) == 0  # kwh is the default
+    assert await history.amain(["--layout", "pilot-hall", "--metering", "panels", "--panel-unit", "kw"]) == 0
+
+
+async def test_the_default_dry_run_says_nothing_of_the_metering(site, capsys):
+    out = await dry_output(capsys, ["--days", "3", "--interval-minutes", "60"])
+    assert "metering" not in out and "panel energy" not in out and "points   442," in out
+    assert await dry_output(capsys, ["--days", "3", "--interval-minutes", "60", "--metering", "feeds"]) == out
+
+
+async def test_the_dry_run_of_panels_with_kwh_names_the_mode_and_the_points(site, capsys):
+    plan = history.make_plan(NOW, ZONE, 3, raw_retention_days=30, step_seconds=HOUR)
+    out = await dry_output(capsys, ["--days", "3", "--interval-minutes", "60", "--metering", "panels"])
+    assert f"{DRY}metering panels (--panel-unit kwh): each of the 8 panels has an energy counter (kWh)" in out
+    assert "no feed has an energy or power point" in out and "one measured level" in out
+    assert f"{DRY}assets   370 (site 1, halls 2, pods 4, rows 8, racks 117, feeds 229, electrical 1, panels 8)" in out  # the tree is the same
+    assert (
+        f"{DRY}points   24, each mapped with an interval of 3600 seconds: 8 panel energy counters (kWh), 8 panel voltages (V) "
+        "and 8 panel currents (A)\n"
+    ) in out
+    assert f"{DRY}readings {24 * plan.count} (24 points x {plan.count} samples)" in out
+    assert f"{DRY}gap      none (a panel meter has no gap in this mode)" in out
+    assert f"{DRY}reset    none (a panel meter never resets in this mode)" in out
+    assert "power    " not in out and "442" not in out and "energy counters (kWh) each with" not in out
+    assert "would be refused" not in out and "clamped" not in out
+    capsys.readouterr()
+    clamped = await dry_output(capsys, ["--metering", "panels"])  # no --days: the raw retention still cuts the range back
+    assert "clamped" in clamped and "points   24, each mapped with an interval of 1800 seconds" in clamped
+
+
+async def test_the_dry_run_of_panels_with_kw_says_the_energy_is_estimated(site, capsys):
+    out = await dry_output(capsys, ["--days", "3", "--interval-minutes", "60", "--metering", "panels", "--panel-unit", "kw"])
+    assert f"{DRY}metering panels (--panel-unit kw): each of the 8 panels has a power point (kW) only, so its energy is estimated" in out
+    assert (
+        f"{DRY}points   24, each mapped with an interval of 3600 seconds: 8 panel power points (kW), 8 panel voltages (V) "
+        "and 8 panel currents (A)\n"
+    ) in out
+    assert f"{DRY}power    8 panels report kW instead of a kWh counter, so their energy is estimated and Electrical, the Site" in out
+    assert "show ~" in out
+
+
+@pytest.mark.parametrize("args", [["--metering", "panels"], ["--metering", "panels", "--panel-unit", "kw"]])
+async def test_the_dry_run_estimate_of_panels_equals_the_real_count(site, capsys, args):
+    plan = history.make_plan(NOW, ZONE, 3, raw_retention_days=30, step_seconds=HOUR)
+    layout = pilot_hall.build_layout(metering="panels", panel_unit="kw" if "kw" in args else "kwh")
+    real = sum(len(values) for _ts, values in pilot_hall.samples(plan, layout))
+    out = await dry_output(capsys, ["--days", "3", "--interval-minutes", "60", *args])
+    printed = re.search(rf"{DRY}readings (\d+) ", out)
+    assert printed is not None and int(printed.group(1)) == real == 24 * plan.count
+
+
+async def test_a_panels_run_makes_the_same_tree_with_24_points_and_counts_each_kwh_once(site, allowed, capsys):
+    before = await counts(site)
+    layout = pilot_hall.build_layout(metering="panels")
+    plan = history.make_plan(NOW, ZONE, 2, raw_retention_days=30, step_seconds=HOUR)
+    frames = list(pilot_hall.samples(plan, layout))
+    expected = sum(len(values) for _ts, values in frames)
+    assert expected == 24 * plan.count
+
+    assert await seed_pilot([*TWO_DAYS, "--metering", "panels"]) == 0
+    out = capsys.readouterr().out
+    assert "assets    370 (site 1, halls 2, pods 4, rows 8, racks 117, feeds 229, electrical 1, panels 8)" in out
+    assert "points    24" in out and "  metering  panels (--panel-unit kwh): each of the 8 panels has an energy counter" in out
+    assert f"readings  {expected}" in out
+    after = await counts(site)
+    assert after["assets"] == before["assets"] + 370
+    assert after["points"] == after["mappings"] == after["point_latest"] == 24 and after["readings"] == expected
+    for table in UNTOUCHED:
+        assert after[table] == before[table], table
+
+    rows = await asset_rows(site)
+    metrics = Counter()
+    mapped = set()
+    for row in await site.fetch("SELECT a.id, m.metric FROM mappings m JOIN assets a ON a.id = m.asset_id"):
+        metrics[row["metric"]] += 1
+        mapped.add(row["id"])
+    assert metrics == {"energy_kwh": 8, "voltage_v": 8, "current_a": 8}  # no power mapping anywhere
+    assert mapped == {rows[pilot_hall.path(layout, panel)]["id"] for panel in PANELS}  # not a feed, a rack, a row, a pod, a hall
+
+    figures = await month_figures("2026-10")
+
+    def total(key: str) -> dict | None:
+        return figures[rows[pilot_hall.path(layout, key)]["id"]]["total"]
+
+    for panel in PANELS:
+        assert total(panel)["kwh"] > 0 and total(panel)["estimated"] is False, panel  # a counter: exact
+    assert all(total(node.key) is None for node in layout.nodes if node.role in ("feed", "rack", "row", "pod", "hall"))
+    assert total("elec")["kwh"] == pytest.approx(sum(total(panel)["kwh"] for panel in PANELS), rel=1e-9)
+    assert total("site")["kwh"] == pytest.approx(total("elec")["kwh"], rel=1e-9) and total("site")["estimated"] is False
+    # a panel's figure for the one complete local day is the generator's (the counter's rises)
+    zone = ZoneInfo(ZONE)
+    meter = _panel_energy(layout)[0]
+    rise: dict[date, float] = defaultdict(float)
+    series = [(ts, values[meter.id]) for ts, values in frames]
+    for (_, earlier), (when, later) in zip(series, series[1:]):
+        rise[when.astimezone(zone).date()] += later - earlier
+    complete = date(2026, 10, 14)
+    assert figures[rows[pilot_hall.path(layout, meter.node)]["id"]]["days"][complete.day - 1]["kwh"] == pytest.approx(rise[complete], rel=1e-6)
+    assert rise[complete] > 500  # a panel carries a dozen feeds: hundreds of kWh in a day
+
+
+async def test_a_panels_run_with_power_only_shows_estimates(site, allowed, capsys):
+    layout = pilot_hall.build_layout(metering="panels", panel_unit="kw")
+    assert await seed_pilot([*TWO_DAYS, "--metering", "panels", "--panel-unit", "kw"]) == 0
+    out = capsys.readouterr().out
+    assert "points    24" in out and "has a power point (kW) only" in out
+    metrics = Counter(row["metric"] for row in await site.fetch("SELECT metric FROM mappings"))
+    assert metrics == {"active_power_kw": 8, "voltage_v": 8, "current_a": 8}
+    rows = await asset_rows(site)
+    figures = await month_figures("2026-10")
+
+    def total(key: str) -> dict | None:
+        return figures[rows[pilot_hall.path(layout, key)]["id"]]["total"]
+
+    for panel in PANELS:
+        assert total(panel)["kwh"] > 0 and total(panel)["estimated"] is True, panel  # power only: the engine estimates, flagged ~
+    assert all(total(node.key) is None for node in layout.nodes if node.role in ("feed", "rack", "row", "pod", "hall"))
+    assert total("elec")["estimated"] is True and total("site")["estimated"] is True
+    assert total("site")["kwh"] == pytest.approx(total("elec")["kwh"], rel=1e-9)
+
+
+@pytest.mark.parametrize("extra", [["--metering", "panels"], ["--metering", "panels", "--panel-unit", "kw"]])
+async def test_a_failed_panels_run_takes_everything_back(site, allowed, monkeypatch, capsys, extra):
+    real = history.Writer.flush
+    calls: list[int] = []
+
+    async def first_then_nothing(self):
+        calls.append(self.pending)
+        return await real(self) if len(calls) == 1 else 0  # what Writer.flush does when the database is unavailable
+
+    monkeypatch.setattr(history.Writer, "flush", first_then_nothing)
+    before = await counts(site)
+    assert await seed_pilot([*QUICK, *extra]) == 1
+    err = capsys.readouterr().err
+    assert len(calls) == 2 and "Failed, and what it had made was removed" in err
+    assert await counts(site) == before
+    for table in ("readings", "readings_1m", "readings_1h"):
+        assert await site.fetchval(f"SELECT count(*) FROM {table}") == 0, table
+    capsys.readouterr()
+    monkeypatch.setattr(history.Writer, "flush", real)
+    assert await seed_pilot([*QUICK, *extra]) == 0  # nothing was left behind to refuse the next run

@@ -2,9 +2,10 @@ import type { EChartsOption } from "echarts";
 import ReactECharts from "echarts-for-react";
 import { memo } from "react";
 import type { WidgetData } from "../../../api/types";
+import { compareChartDescription, compareLineNames, dayOfMonthLabel, measureOf, NOTHING_YET } from "../../../lib/compare";
 import { chartDescription } from "../../../lib/widgetDetails";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
-import { chartLabels, figureText, formatValue, labelBucket, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
+import { chartLabels, figureText, formatValue, labelBucket, lastCostGone, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
 import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, type ChartTheme } from "./chartTheme";
 import { useLegendSelection } from "./legendSelection";
 
@@ -79,6 +80,9 @@ function stateWords(data: WidgetData, point: Point): string {
   if (data.source === "cost" && point.value === null && !point.no_data) words.push("no rate");
   return words.join(", ");
 }
+
+/** What a day of last month says when its cost was taken away because the currency changed since the close: no figure, and why, not "no rate" (no tariff is missing). */
+const OTHER_CURRENCY = "other currency";
 
 /**
  * Axis tooltip: the time, then one row per asset (average with its min and max, the state in words), without the helper series
@@ -181,6 +185,84 @@ export function timeSeriesOption(data: WidgetData, timezone: string, theme: Char
   } as EChartsOption;
 }
 
+/** The values of a list of day points on a category axis: day i is slot i; a day with no readings is a gap (null), never a zero. */
+function dayValues(points: readonly Point[], length: number): (number | null)[] {
+  return Array.from({ length }, (_, i) => {
+    const point = points[i];
+    return point && !point.no_data ? point.value : null;
+  });
+}
+
+type DayItem = number | null | { value: number; symbol: string; symbolSize: number };
+
+/** A day whose neighbours both have no figure (the 2nd of the month has ONE day) would have no segment to be drawn as: it gets a dot, as `markIsolated` does on a time axis. */
+function markIsolatedDays(values: readonly (number | null)[]): DayItem[] {
+  return values.map((value, i) => {
+    if (value === null) return null;
+    const alone = (values[i - 1] ?? null) === null && (values[i + 1] ?? null) === null;
+    return alone ? { value, symbol: "circle", symbolSize: 6 } : value;
+  });
+}
+
+const dot = (color: string): string => `<span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:${color};"></span>`;
+
+/**
+ * The chart of a comparison (w24): this month's days 1 to N and last month's days 1 to D as two lines on a CATEGORY axis by day of the month (a time
+ * axis cannot put the 17th of two months on one slot). The lines are named by their months, with the side's `~` / `*`; last month's is dashed, so
+ * colour is not the only difference. The tooltip names BOTH dates of the day, each with its figure, marks and state in words; a day with no readings is a
+ * gap with no row. Day labels come from the windows' months and the slot number, never from a timestamp, so no time zone is involved.
+ */
+export function compareOption(data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART): EChartsOption {
+  void timezone; // the labels are site-local dates already; kept in the signature so the two option builders are called alike
+  const compare = data.compare!;
+  const asset = compare.assets[0];
+  const measure = measureOf(data.source);
+  const now = data.series[0]?.points ?? [];
+  const before = asset?.last_points ?? [];
+  const days = Math.max(now.length, before.length);
+  const names = compareLineNames(compare, asset, measure);
+  const sides = [now, before];
+  const months = [compare.this_window?.from ?? "", compare.last_month.month];
+  const labels = months.map((month) => Array.from({ length: days }, (_, i) => dayOfMonthLabel(month, i + 1)));
+  const unit = unitSuffix(data.unit);
+  const otherCurrency = measure === "cost" && asset !== undefined && lastCostGone(asset); // last month's days have no cost: they are in another currency
+  const cells = sides.map((points, side) => Array.from({ length: days }, (_, i) => {
+    const point = points[i];
+    if (!point || point.no_data) return null;
+    if (side === 1 && otherCurrency && point.value === null) return { text: "—", state: OTHER_CURRENCY };
+    const figure = point.value === null ? "—" : `${figureText(point.value, point)}${unit}`;
+    return { text: figure, state: stateWords(data, point) };
+  }));
+  const colors = [0, 1].map((i) => seriesLook(theme, i, 2).color);
+  const base = chartBase(theme);
+  const axis = axisParts(theme);
+  return {
+    ...base,
+    tooltip: {
+      ...base.tooltip,
+      formatter: (params: unknown): string => {
+        const items = (Array.isArray(params) ? params : [params]) as { dataIndex?: number; seriesIndex?: number; marker?: string }[];
+        const index = items[0]?.dataIndex ?? -1;
+        return [0, 1].flatMap((i) => {
+          const cell = cells[i][index];
+          if (!cell) return [];
+          const marker = items.find((item) => item.seriesIndex === i)?.marker ?? dot(colors[i]);
+          return [tipRow(marker, labels[i][index], cell.text, cell.state, theme)];
+        }).join("");
+      },
+    },
+    legend: { ...legendParts(theme, "line"), show: true, data: names },
+    grid: { left: 60, right: 20, top: 30, bottom: 50 },
+    xAxis: { type: "category", data: Array.from({ length: days }, (_, i) => String(i + 1)), ...axis },
+    yAxis: { type: "value", name: data.unit ?? undefined, ...axis },
+    series: [0, 1].map((i) => ({
+      id: i === 0 ? "this-month" : "last-month", name: names[i], type: "line" as const, color: colors[i], z: i === 0 ? 3 : 2, symbol: "none",
+      lineStyle: { width: 2, type: i === 0 ? "solid" as const : "dashed" as const }, connectNulls: false,
+      data: markIsolatedDays(dayValues(sides[i], days)),
+    })),
+  } as EChartsOption;
+}
+
 /**
  * One line per asset (average, with a min-max band for metrics); gaps are drawn as gaps. Memoised on its props: a
  * stream batch re-renders every widget of the dashboard, and a new option object (its formatters are new closures)
@@ -189,6 +271,18 @@ export function timeSeriesOption(data: WidgetData, timezone: string, theme: Char
 export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone }: { data: WidgetData; timezone: string }) {
   const legend = useLegendSelection();
   const theme = useChartTheme();
+  const compare = data.compare;
+  if (compare?.state === "nothing_yet") return <p className="widget-empty">{NOTHING_YET}</p>;
+  if (compare && compare.assets.length > 0) {
+    const days = [...(data.series[0]?.points ?? []), ...compare.assets[0].last_points];
+    if (days.every((p) => p.no_data)) return <p className="widget-empty">No data in this range.</p>;
+    return (
+      <div className="widget-chart" role="img" aria-label={compareChartDescription(data, compare)}>
+        {/* Two lines, one legend entry each: the viewer's choice is kept by the entry's place (0 this month, 1 last month), not by an asset. */}
+        <ReactECharts option={legend.apply(compareOption(data, timezone, theme), [0, 1])} onEvents={legend.onEvents} style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge />
+      </div>
+    );
+  }
   if (data.series.every((s) => s.points.every((p) => p.no_data))) return <p className="widget-empty">No data in this range.</p>;
   // The canvas is a picture: the box around it is the chart's text alternative (the figures themselves are in the Details panel).
   return (

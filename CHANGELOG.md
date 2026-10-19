@@ -15,6 +15,15 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w24 (2026-10-19, MERGE)
+
+w24 adds two things to dashboard widgets. A stat or a time series of energy or cost for one asset can **compare this month so far with the
+same days of last month** (complete days only, the same number on both sides; each figure names its window and equals the sum of Billing's
+day cells; a closed last month is read from its closed figures; no percentage against zero, missing days or a partial cost). A bar chart can
+draw **one bar per asset of a kind**, with "and N more" and a Split by choice. No migration, no new permission; the widget API takes the new
+config keys `compare`, `kind`, `root` and `top`. The dev seeder gains `--metering panels`. Rules and limits:
+[Dashboards and billing](docs/dashboards-and-billing.md). Nothing to do when you upgrade; the code to go back to is `075db5f`.
+
 ## w23 (2026-10-19, 83acfa4)
 
 w23 rebuilds the asset picker of the widget editor (Edit, Add widget): a **Search assets** box (part of a name or a kind), a **Filter by kind**

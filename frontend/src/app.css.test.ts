@@ -968,9 +968,23 @@ describe("the row menu, the trash button and the info tip (W7b)", () => {
   it("a tip never covers its label and sits on the label's first line: the label keeps 28px free, the field gives them back, the tip box is one label line high", () => {
     const reserved = /padding-right:\s*(\d+)px/.exec(only(".has-tip > label").body)?.[1];
     expect(Number(reserved), "room reserved at the right of the label").toBeGreaterThanOrEqual(24 + 4); // the 24px button and a 4px gap
-    expect(only(".has-tip > label > :is(input, select, textarea)").body).toMatch(new RegExp(`margin-right:\\s*-${reserved}px`));
+    expect(only(".has-tip > label:not(.inline) > :is(input, select, textarea)").body).toMatch(new RegExp(`margin-right:\\s*-${reserved}px`));
     expect(only(".has-tip > .tip").body).toMatch(/height:\s*calc\(var\(--fs-sm\)\s*\*\s*1\.4\)/); // the label's font size at the 1.4 line height of the page
     expect(only("label").body).toMatch(/font-size:\s*var\(--fs-sm\)/);
+  });
+
+  it("a label.inline (a checkbox beside its words) never takes the field's negative margin: it would pull the words under the box (w24 whole-wave review I-1)", () => {
+    expect(css).not.toMatch(/\.has-tip\s*>\s*label\s*>\s*:is\(input, select, textarea\)/); // the rule names the label it leaves out
+    expect(only(".has-tip > label:not(.inline) > :is(input, select, textarea)").selector).toContain(":not(.inline)");
+    expect(only(".dialog label.inline").body).toMatch(/display:\s*flex;\s*gap:\s*6px/); // the box and its words side by side, 6px apart
+    expect(only(".editor-cols .compare-field").body).toMatch(/width:\s*fit-content/); // the compare box's tip follows its words
+  });
+
+  it("Whole site in the widget editor, when the whole site is chosen, looks disabled (its own class: the picker's Clear all keeps its own look) and takes the hover wash back, and is never a native :disabled", () => {
+    const look = only('.editor-cols .whole-site[aria-disabled="true"]').body;
+    expect(look).toMatch(/opacity:\s*0\.55/);
+    expect(look).toMatch(/cursor:\s*not-allowed/);
+    expect(only('.editor-cols .whole-site[aria-disabled="true"]:hover').body).toMatch(/background:\s*none/);
   });
 
   it("the tip and menu buttons keep a hit area of 24px or more", () => {

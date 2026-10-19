@@ -23,6 +23,7 @@ KWH_START = datetime(2026, 3, 9, 20, 30, tzinfo=UTC)  # 15 hourly counter readin
 TODAY = ("2026-03-10T00:00:00+03:00", "2026-03-10T13:30:00+03:00")  # preset `today` in Asia/Qatar at NOW
 TOP_KEYS = {
     "type", "mode", "source", "metric", "unit", "range", "tier", "bucket", "series", "values", "missing", "no_metric",
+    "compare", "breakdown",
 }
 SERIES_KEYS = {"asset_id", "name", "points", "estimated", "partial"}
 POINT_KEYS = {"ts", "value", "min", "max", "estimated", "partial", "no_data"}

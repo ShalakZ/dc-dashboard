@@ -1,5 +1,5 @@
 import type { WidgetConfig, WidgetData, WidgetPoint, WidgetSeries } from "../api/types";
-import { config, seriesData, seriesPoint, valueRow, valuesData } from "../test/dashboardFixtures";
+import { breakdownBlock, config, seriesData, seriesPoint, valueRow, valuesData } from "../test/dashboardFixtures";
 import {
   aggregationWords, assetRows, bucketStartText, chartDescription, figuresText, freshnessLine, hasNoRate, isLatestReading, markerMeanings,
   noMetricIds, preciseAge, rangeWords, removedCount, seriesSummary, sourceWords, windowText,
@@ -525,5 +525,16 @@ describe("no helper calls a series total or a mean of buckets an average", () =>
     const summary = seriesSummary(timeseries(), cfg())!;
     expect(summary.columns.filter((col) => /average|mean/i.test(col.heading)).map((col) => col.key)).toEqual(["last"]);
     expect(summary.columns.map((col) => col.key).join(" ")).not.toMatch(/avg|average|mean/i);
+  });
+});
+
+describe("assetRows, a cost breakdown (w24)", () => {
+  it("says no data, not no rate, for a bar that recorded nothing; a bar with readings and no rate is still no rate", () => {
+    const silent = valueRow({ asset_id: 90, name: "Electrical", value: null, no_data: true, point_id: null });
+    const unrated = valueRow({ asset_id: 91, name: "Unrated", value: null, no_data: false, point_id: null });
+    const breakdown = valuesData({ source: "cost", metric: null, unit: "USD", values: [silent, unrated], breakdown: breakdownBlock() });
+    expect(assetRows(breakdown).map((r) => r.states)).toEqual([["no data"], ["no rate"]]);
+    const plain = valuesData({ source: "cost", metric: null, unit: "USD", values: [silent, unrated] });
+    expect(assetRows(plain).map((r) => r.states)).toEqual([["no rate"], ["no rate"]]); // the plain cost rule is unchanged: a null cost is a missing rate
   });
 });

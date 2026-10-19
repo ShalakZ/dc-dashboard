@@ -8,8 +8,9 @@ it would create and exits 0; with `--yes` but no variable it exits 2; if a sourc
 named "Seeded demo") exists, or one of the safety checks below fails, it exits 1. In all of these nothing is written. Never run
 it against a production database.
 
-`--layout pilot-hall` (with `--interval-minutes`) makes a made-up data-centre hall instead, see dcdash/seed/pilot_hall.py; it shares
-the switches, the range rules and the clean-up below. Everything else here describes the default layout, `three-panels`.
+`--layout pilot-hall` (with `--interval-minutes`, `--metering` and `--panel-unit`) makes a made-up data-centre hall instead, see
+dcdash/seed/pilot_hall.py; it shares the switches, the range rules and the clean-up below. Everything else here describes the
+default layout, `three-panels`.
 
 What it makes, and nothing else (no other row is read-modified, no audit row is written, no asset kind is registered):
   - a source `seeded-history`, a DISABLED simulator source (the scheduler polls only enabled sources), pointing at a host that
@@ -74,6 +75,8 @@ STEP = timedelta(minutes=5)
 STEP_SECONDS = int(STEP.total_seconds())
 STEP_HOURS = STEP.total_seconds() / 3600
 INTERVAL_CHOICES = (5, 10, 15, 30, 60)  # minutes: the sample spacings the pilot-hall layout may use (each divides an hour)
+METERING_CHOICES = ("feeds", "panels")  # pilot-hall only: what carries the energy, the feeds (default) or just the panels
+PANEL_UNIT_CHOICES = ("kwh", "kw")  # pilot-hall --metering panels only: an energy counter (default) or power only (estimated energy)
 LAYOUTS = ("three-panels", "pilot-hall")  # three-panels (this file) is the default; pilot-hall lives in dcdash.seed.pilot_hall
 JITTER = 0.03  # +-3 % on the power
 GAP_HOURS = 6
@@ -465,6 +468,14 @@ def _parser() -> argparse.ArgumentParser:
         "--interval-minutes", type=int, choices=INTERVAL_CHOICES,
         help="minutes between samples; only for --layout pilot-hall (more minutes: fewer readings, a faster run)",
     )
+    parser.add_argument(
+        "--metering", choices=METERING_CHOICES,
+        help="only for --layout pilot-hall: feeds (default) meters every feed; panels meters only the 8 panels (energy of their feeds)",
+    )
+    parser.add_argument(
+        "--panel-unit", choices=PANEL_UNIT_CHOICES,
+        help="only for --metering panels: kwh (default) gives each panel an energy counter; kw gives it power only (estimated energy)",
+    )
     return parser
 
 
@@ -575,6 +586,11 @@ async def amain(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.layout == "three-panels" and args.interval_minutes is not None:
         parser.error("--interval-minutes only applies to --layout pilot-hall")
+    if args.layout == "three-panels" and (args.metering is not None or args.panel_unit is not None):
+        parser.error("--metering and --panel-unit only apply to --layout pilot-hall")
+    args.metering, args.panel_unit = args.metering or METERING_CHOICES[0], args.panel_unit or PANEL_UNIT_CHOICES[0]
+    if args.panel_unit == "kw" and args.metering == "feeds":
+        parser.error("--panel-unit kw needs --metering panels (with --metering feeds the panels carry no energy)")
     if args.layout == "pilot-hall":
         # Imported here, not at the top: pilot_hall imports this module, and `python -m dcdash.seed.history` runs it as __main__.
         from dcdash.seed import pilot_hall

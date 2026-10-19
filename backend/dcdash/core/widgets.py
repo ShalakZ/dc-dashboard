@@ -7,26 +7,39 @@ field ("assets: at most 20 assets per widget (got 21)") so the editor can show t
 """
 import bisect
 import math
+import re
 from collections.abc import Iterable
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from dataclasses import asdict, dataclass, field, replace
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal, Self
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel, ConfigDict, SerializerFunctionWrapHandler, ValidationError, field_validator, model_serializer,
+    model_validator,
+)
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.settings import current_timezone
+from dcdash.core.asset_kinds import _BLANKS as KIND_BLANKS
+from dcdash.core.breakdown import Bar, candidates, common_spelling, kinds_present, top_and_more, trim_kind
+from dcdash.core.breakdown import order as order_bars
+from dcdash.core.compare import (
+    Side, change, contributing_meters, rate_change, side_from_entries, snapshot_entries, snapshot_status, windows,
+)
 from dcdash.core.cost import HourCost, cost_by_hour, load_tariffs, no_data, rate_at, summarize
+from dcdash.core.daycost import day_entries
 from dcdash.core.energy import HourEnergy, hourly_energy
 from dcdash.core.metrics import Metric, unit_for
+from dcdash.core.models import Asset, BillingClose
 from dcdash.core.series import (
     DEFAULT_BUCKETS, combine_hours, first_mappings, last_rollup_value, latest_values, metric_aggregate, metric_hours,
     metric_series, series_tier,
 )
 from dcdash.core.settings_store import get_currency
 from dcdash.core.timeutil import (
-    RANGE_PRESETS, ROLLING, day_start, local_days, resolve_range, validate_whole_hour_zone,
+    RANGE_PRESETS, ROLLING, day_start, local_days, month_bounds, resolve_range, validate_whole_hour_zone,
 )
 from dcdash.core.tree import AssetTree
 
@@ -42,6 +55,9 @@ TRIM_SET = "".join(
     chr(code) for code in (0x09, 0x0A, 0x20, 0xA0, 0x1680, *range(0x2000, 0x200B), 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF)
 )
 MAX_ASSETS = 20
+KIND_MAX = 100  # characters of the kind a breakdown looks for, after trimming
+TOP_DEFAULT, TOP_MIN, TOP_MAX = 10, 3, 50  # bars a kind breakdown draws
+KIND_ENDS = re.compile(rf"\A(?:{KIND_BLANKS.pattern})|(?:{KIND_BLANKS.pattern})\Z")  # white space at either end of a kind
 METRIC_AGGREGATIONS = ("avg", "min", "max", "last")
 SINGLE_ASSET_TYPES = ("stat", "gauge")
 
@@ -58,15 +74,28 @@ class WidgetConfig(BaseModel):
     metric: Metric | None = None
     aggregation: Literal["avg", "min", "max", "last", "sum"]
     range: str | None = None
-    bars: Literal["asset", "time"] = "asset"
+    bars: Literal["asset", "time", "kind"] = "asset"
     min: float = 0.0
     max: float | None = None
+    # w24. A key at its default is left out of the stored dump (see `_without_defaults`), so every widget saved before w24
+    # keeps exactly the config it has.
+    compare: Literal["none", "same_days_last_month"] = "none"
+    kind: str | None = None  # bars "kind": the kind of asset that gets a bar (matched with kind_key)
+    root: int | None = None  # bars "kind": the asset the breakdown looks under; None is the whole site
+    top: int = TOP_DEFAULT  # bars "kind": how many bars are drawn
+
+    @model_serializer(mode="wrap")
+    def _without_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        for key, default in (("compare", "none"), ("kind", None), ("root", None), ("top", TOP_DEFAULT)):
+            if key in data and data[key] == default:
+                del data[key]
+        return data
 
     @field_validator("assets")
     @classmethod
     def _assets(cls, value: list[int]) -> list[int]:
-        if not value:
-            raise ValueError("choose at least one asset")
+        # An empty list is judged by `_check_type_rules`: a breakdown by kind has no assets of its own.
         if len(value) > MAX_ASSETS:
             raise ValueError(f"at most {MAX_ASSETS} assets per widget (got {len(value)})")
         if len(set(value)) != len(value):
@@ -81,6 +110,18 @@ class WidgetConfig(BaseModel):
                 f"{value!r} is not a range preset; use one of {', '.join(RANGE_PRESETS)}, "
                 "or leave it empty to follow the dashboard"
             )
+        return value
+
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, value: str | None) -> str | None:
+        return None if value is None else KIND_ENDS.sub("", value)  # trimmed with the white space kind_key ignores
+
+    @field_validator("top")
+    @classmethod
+    def _top(cls, value: int) -> int:
+        if not TOP_MIN <= value <= TOP_MAX:
+            raise ValueError(f"must be between {TOP_MIN} and {TOP_MAX} (got {value})")
         return value
 
     @field_validator("min", "max")
@@ -125,9 +166,38 @@ def _readable(error: ValidationError) -> str:
 
 
 def _check_type_rules(widget_type: str, config: WidgetConfig) -> None:
-    """Rules that depend on the widget type, which the config model does not know."""
+    """Rules that depend on the widget type, which the config model does not know. Every message starts with the field
+    it is about. The empty-assets rule is first (a breakdown by kind is the one widget that holds no assets of its own)."""
+    kind_mode = config.bars == "kind"
+    if not config.assets and not kind_mode:
+        raise ValueError("assets: choose at least one asset")
     if config.bars == "time" and widget_type != "bar":
         raise ValueError(f"bars: 'time' only applies to bar widgets, not to a {widget_type}")
+    if kind_mode:
+        if widget_type != "bar":
+            raise ValueError(f"bars: 'kind' only applies to bar widgets, not to a {widget_type}")
+        if config.source == "metric":
+            raise ValueError("bars: 'kind' needs the source 'energy' or 'cost', not 'metric'")
+        if config.assets:
+            raise ValueError("assets: leave the assets empty for one bar per asset of a kind; 'root' says where to look")
+        if not config.kind:
+            raise ValueError("kind: choose the kind of asset that gets a bar")
+        if len(config.kind) > KIND_MAX:
+            raise ValueError(f"kind: at most {KIND_MAX} characters (got {len(config.kind)})")
+    else:
+        stray = (("kind", config.kind is not None), ("root", config.root is not None), ("top", config.top != TOP_DEFAULT))
+        for name, given in stray:
+            if given:
+                raise ValueError(f"{name}: only applies when the bars are one per asset of a kind")
+    if config.compare != "none":
+        if widget_type not in ("stat", "timeseries"):
+            raise ValueError(f"compare: only a stat or a time series can compare, not a {widget_type}")
+        if config.source == "metric":
+            raise ValueError("compare: a comparison needs the source 'energy' or 'cost', not 'metric'")
+        if len(config.assets) != 1:
+            raise ValueError(f"assets: a comparison shows exactly one asset (got {len(config.assets)})")
+        if config.range != "this_month":
+            raise ValueError("range: a comparison needs the range this month")
     if widget_type in SINGLE_ASSET_TYPES and len(config.assets) != 1:
         raise ValueError(f"assets: a {widget_type} shows exactly one asset (got {len(config.assets)})")
     if widget_type == "gauge":
@@ -271,6 +341,13 @@ class _Value:
     stale: bool = False  # `last` only: a live reading older than three polling intervals
 
 
+def _point_json(p: _Point) -> dict[str, Any]:
+    return {
+        "ts": p.ts.isoformat(), "value": p.value, "min": p.min, "max": p.max,
+        "estimated": p.estimated, "partial": p.partial, "no_data": p.no_data,
+    }
+
+
 @dataclass
 class WidgetResult:
     type: str
@@ -287,6 +364,11 @@ class WidgetResult:
     values: list[_Value] = field(default_factory=list)
     missing: list[int] = field(default_factory=list)  # assets that no longer exist
     no_metric: list[int] = field(default_factory=list)  # assets with no mapping of their own for the metric
+    compare: dict[str, Any] | None = None  # w24: the month-to-date comparison block (a compare widget only), else None
+    breakdown: dict[str, Any] | None = None  # w24: the breakdown by kind block (a bar widget with bars "kind"), else None
+    compare_rows: list[tuple[str, _Point]] = field(default_factory=list)  # (path, point): the last window's CSV rows
+    # w24: a breakdown by kind keeps every bar here, in order (`values` holds only the first `top`); the CSV lists all of them.
+    breakdown_values: list[_Value] | None = None
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -296,13 +378,7 @@ class WidgetResult:
             "series": [
                 {
                     "asset_id": s.asset_id, "name": s.name,
-                    "points": [
-                        {
-                            "ts": p.ts.isoformat(), "value": p.value, "min": p.min, "max": p.max,
-                            "estimated": p.estimated, "partial": p.partial, "no_data": p.no_data,
-                        }
-                        for p in s.points
-                    ],
+                    "points": [_point_json(p) for p in s.points],
                     "estimated": any(p.estimated for p in s.points), "partial": any(p.partial for p in s.points),
                 }
                 for s in self.series
@@ -317,6 +393,8 @@ class WidgetResult:
             ],
             "missing": self.missing,
             "no_metric": self.no_metric,
+            "compare": self.compare,
+            "breakdown": self.breakdown,
         }
 
     def csv_rows(self) -> list[list[object]]:
@@ -330,11 +408,15 @@ class WidgetResult:
                     "true" if estimated else "false", "true" if partial else "false", "true" if no_data else "false"]
 
         rows = [row(s.path, p.ts, p.value, p.estimated, p.partial, p.no_data) for s in self.series for p in s.points]
-        rows += [row(v.path, self.start, v.value, v.estimated, v.partial, v.no_data) for v in self.values]
+        listed = self.values if self.breakdown_values is None else self.breakdown_values
+        rows += [row(v.path, self.start, v.value, v.estimated, v.partial, v.no_data) for v in listed]
+        rows += [row(path, p.ts, p.value, p.estimated, p.partial, p.no_data) for path, p in self.compare_rows]
         return rows
 
 
 def _mode(widget_type: str, config: WidgetConfig) -> str:
+    if config.bars == "kind":  # one bar per asset of a kind: values, whatever the type says
+        return "values"
     return "series" if widget_type == "timeseries" or (widget_type == "bar" and config.bars == "time") else "values"
 
 
@@ -501,6 +583,189 @@ async def _fill_billing(
             ))
 
 
+async def _active_close_figures(db: AsyncSession, month: str) -> dict[str, Any] | None:
+    """The frozen figures of `month` while its close is active (not reopened), else None: what Billing shows for it."""
+    return await db.scalar(
+        select(BillingClose.figures).where(BillingClose.month == month, BillingClose.reopened_at.is_(None))
+    )
+
+
+def _entry_point(label: datetime, entry: dict[str, Any] | None, cost: bool, *, with_cost: bool = True) -> _Point:
+    """One day of a compare chart, from the very entry Billing shows for that day. A day without readings is a gap; a day
+    with readings but no rate has no cost (value None, no_data False: the dash of a cost with no rate). `with_cost` False
+    (a closed month in another currency) takes the cost away."""
+    if entry is None or entry["no_data"]:
+        return _Point(label, None, no_data=True)
+    if not cost:
+        return _Point(label, entry["kwh"], estimated=entry["estimated"])
+    return _Point(label, entry["cost"] if with_cost else None, estimated=entry["estimated"], partial=entry["partial"])
+
+
+def _window_json(first: date | None, last: date | None) -> dict[str, str] | None:
+    return None if first is None or last is None else {"from": first.isoformat(), "to": last.isoformat()}
+
+
+async def _fill_compare(
+    db: AsyncSession, result: WidgetResult, tree: AssetTree, config: WidgetConfig, asset_id: int, now: datetime,
+    tz_name: str, zone: ZoneInfo,
+) -> None:
+    """The month to date against the same days of last month, for ONE asset (spec w24, core/compare.py).
+
+    Every figure is a sum of the day entries Billing's own calculation (core/daycost.py) gives for that day. The energy is
+    read exactly as `month_costs` reads it, a whole month at a time, so the estimated placeholder hours of a silent
+    power-only meter, and with them the `~` marks, are Billing's. A closed last month is read from its stored snapshot."""
+    cost, chart = config.source == "cost", result.type == "timeseries"
+    win = windows(now, tz_name)
+    currency = await get_currency(db)
+    result.unit = currency if cost else "kWh"
+    result.bucket = "day" if chart else None
+    month_start = month_bounds(win.this_month, tz_name)[0].astimezone(zone)
+    shown = win.this_days if chart else win.this_days[: win.days]  # the span the figures cover
+    result.start = shown[0][1].astimezone(zone) if shown else month_start
+    result.end = shown[-1][2].astimezone(zone) if shown else month_start
+    block: dict[str, Any] = {
+        "mode": config.compare, "state": win.state, "elapsed_days": win.elapsed, "days": win.days,
+        "this_window": _window_json(win.this_first, win.this_last),
+        "last_window": _window_json(win.last_first, win.last_last),
+        "left_out_days": [day.isoformat() for day in win.left_out],
+        "last_month": {"month": win.last_month, "closed": False},
+        "currency": currency, "assets": [],
+    }
+    result.compare = block
+    if asset_id not in tree.nodes:  # the asset is gone: `missing` already says so
+        return
+    name, path = tree.nodes[asset_id].name, tree.path(asset_id)
+
+    def finish(
+        this: Side | None, last: Side | None, last_state: str, same_currency: bool, rate_date: date | None,
+        last_points: list[_Point],
+    ) -> None:
+        block["assets"].append({
+            "asset_id": asset_id, "name": name,
+            "this": None if this is None else asdict(this), "last": None if last is None else asdict(last),
+            "last_state": last_state,
+            "kwh": asdict(change(this, last, "kwh", days=win.days, last_state=last_state)),
+            "cost": asdict(change(this, last, "cost", days=win.days, last_state=last_state, same_currency=same_currency)),
+            "rate_change": None if rate_date is None else {"date": rate_date.isoformat()},
+            "last_points": [_point_json(p) for p in last_points] if chart else [],
+        })
+
+    if win.state == "nothing_yet":  # the 1st: no complete day yet, so no figure and no energy query
+        if chart:
+            result.series.append(_Series(asset_id, name, path, []))
+        else:
+            result.values.append(_Value(asset_id, name, path, None, no_data=True))
+        finish(None, None, "no_readings", True, None, [])
+        return
+
+    tariffs = await load_tariffs(db)
+    reads = []  # (start of the read, its energy, the energy priced), last month first
+    for month in (win.last_month, win.this_month):
+        lo, hi = (bound.astimezone(timezone.utc) for bound in month_bounds(month, tz_name))
+        energy = await hourly_energy(db, tree, lo, hi)
+        reads.append((lo, energy, cost_by_hour(energy, tariffs, tree, tz_name)))
+    (_, _, last_priced), (_, this_energy, this_priced) = reads
+
+    def rate_on(day: date) -> bool:
+        return rate_at(tariffs, tree, asset_id, day) is not None
+
+    this_entries = day_entries(this_priced.get(asset_id), win.this_days, now=now, rate_on=rate_on)
+    this = side_from_entries(this_entries[: win.days])
+
+    last_entries: list[dict[str, Any] | None] | None  # None: nothing of last month can be set against this month
+    figures = await _active_close_figures(db, win.last_month)
+    same_zone, same_currency, last_state = True, True, "ok"
+    if figures is None:
+        last_entries = day_entries(last_priced.get(asset_id), win.last_days, now=now, rate_on=rate_on)
+    else:
+        block["last_month"]["closed"] = True
+        same_zone, same_currency = snapshot_status(figures, tz_name, currency)
+        last_entries = snapshot_entries(figures, asset_id, win.days) if same_zone else None
+        if not same_zone:
+            last_state = "other_zone"
+        elif last_entries is None:
+            last_state = "not_in_closed"
+    last = None if last_entries is None else side_from_entries(last_entries)
+    if last_state == "ok" and (last is None or last.no_data_days >= win.days):
+        last_state = "no_readings"
+    if last is not None and not same_currency:
+        last = replace(last, cost=None)  # another currency: its cost is not a number to set against today's
+
+    # The rate note: a price change somewhere between the first day of last month's window and the last of this month's.
+    partial_owns = {
+        owner for start, energy, _ in reads for owner in energy.own
+        if energy.own_from.get(owner) is not None and energy.own_from[owner] > start
+    }
+    meters = contributing_meters(tree, this_energy.own, asset_id, partial_owns)
+    rate_date = None
+    if win.last_first is not None and win.this_last is not None:  # always, once the state is "ok"
+        rate_date = rate_change(tariffs, tree, meters, after=win.last_first, up_to=win.this_last)
+
+    last_points: list[_Point] = []
+    if chart and last_entries is not None:
+        last_points = [
+            _entry_point(label.astimezone(zone), entry, cost, with_cost=same_currency)
+            for (_, label, _), entry in zip(win.last_days, last_entries)
+        ]
+    if chart:
+        points = [
+            _entry_point(label.astimezone(zone), entry, cost) for (_, label, _), entry in zip(win.this_days, this_entries)
+        ]
+        result.series.append(_Series(asset_id, name, path, points))
+        result.compare_rows = [(path, point) for point in last_points]
+    else:
+        measured = None if this is None else (this.cost if cost else this.kwh)
+        result.values.append(_Value(
+            asset_id, name, path, measured, False if this is None else this.estimated,
+            cost and this is not None and this.partial,
+            no_data=this is None or this.no_data_days >= win.days,
+        ))
+        # The last window's own CSV row, dated at its first day: the figure of the widget's measure, with its marks.
+        gone = last is None or last.no_data_days >= win.days
+        figure_of_last = None if last is None else (last.cost if cost else last.kwh)
+        result.compare_rows = [(path, _Point(
+            win.last_days[0][1].astimezone(zone), figure_of_last,
+            estimated=last is not None and last.estimated, partial=cost and last is not None and last.partial, no_data=gone,
+        ))]
+    finish(this, last, last_state, same_currency, rate_date, last_points)
+
+
+async def _fill_breakdown(
+    db: AsyncSession, result: WidgetResult, tree: AssetTree, config: WidgetConfig,
+    first: datetime, last: datetime, end: datetime, tz_name: str, zone: ZoneInfo,
+) -> None:
+    """One bar per asset of a kind (spec w24, core/breakdown.py).
+
+    The figures are `_fill_billing`'s own, asked for the outer candidates, so a bar is exactly what a plain bar widget on that
+    asset would draw. `result.values` keeps the first `top` in order and `result.breakdown_values` every bar (the CSV)."""
+    kind, root = config.kind or "", config.root
+    kinds = {  # only assets of the tree go on: an id the tree does not hold is not a candidate
+        asset_id: text for asset_id, text in (await db.execute(select(Asset.id, Asset.kind))).all() if asset_id in tree.nodes
+    }
+    gone = root is not None and root not in tree.nodes  # the asset to look under was deleted
+    outer, nested = ([], 0) if gone else candidates(tree, kinds, root, kind)
+    await _fill_billing(db, result, tree, config, outer, first, last, end, tz_name, zone)
+    by_id = {value.asset_id: value for value in result.values}
+    ordered = order_bars(
+        Bar(value.asset_id, value.path, value.value, value.no_data, value.estimated, value.partial)
+        for value in result.values
+    )
+    shown, more = top_and_more(ordered, config.top)
+    result.breakdown_values = [by_id[bar.asset_id] for bar in ordered]
+    result.values = [by_id[bar.asset_id] for bar in shown]
+    if gone:
+        result.missing = [root] if root is not None else []
+    result.breakdown = {
+        "kind": common_spelling(kinds[asset_id] for asset_id in outer) if outer else trim_kind(kind),
+        "root": None if root is None or gone else {"id": root, "name": tree.nodes[root].name},
+        "count": len(outer), "shown": len(shown), "more": asdict(more),
+        "no_data": sum(1 for value in result.breakdown_values if value.no_data), "inside_others": nested,
+        "kinds": [  # the whole tree's kinds when the root is gone, else the kinds under the root (before the nested rule)
+            {"kind": text, "count": count} for text, count in kinds_present(tree, kinds, None if gone else root, kind)
+        ],
+    }
+
+
 async def compute_widget(
     db: AsyncSession, widget_type: str, config: WidgetConfig, preset: str, now: datetime
 ) -> WidgetResult:
@@ -521,7 +786,11 @@ async def compute_widget(
         preset=preset, start=first.astimezone(zone), end=end.astimezone(zone),
         missing=[asset_id for asset_id in config.assets if asset_id not in tree.nodes],
     )
-    if billing:
+    if config.bars == "kind":  # validate_data_config made it a bar widget on energy or cost with no assets of its own
+        await _fill_breakdown(db, result, tree, config, first, last, end, tz_name, zone)
+    elif config.compare != "none":  # a comparison replaces the plain billing figures (validate_data_config made it one asset)
+        await _fill_compare(db, result, tree, config, config.assets[0], now, tz_name, zone)
+    elif billing:
         await _fill_billing(db, result, tree, config, asset_ids, first, last, end, tz_name, zone)
     else:
         await _fill_metric(db, result, tree, config, asset_ids, start, end, now, tz_name, zone)

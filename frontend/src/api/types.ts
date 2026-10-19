@@ -420,9 +420,17 @@ export type WidgetType = (typeof WIDGET_TYPES)[number];
 export type DataWidgetType = Exclude<WidgetType, "text">;
 export type WidgetSource = "metric" | "energy" | "cost";
 export type WidgetAggregation = "avg" | "min" | "max" | "last" | "sum";
+export type WidgetBars = "asset" | "time" | "kind";
+export type WidgetCompareMode = "none" | "same_days_last_month";
+/**
+ * `compare`, `kind`, `root` and `top` are written to a stored config only when they are not their default (`"none"`, no kind, no root, 10), so the
+ * config of every widget made before w24 reads exactly as it did: an absent key means the default. `bars: "kind"` draws one bar for each asset of
+ * the kind `kind` below the asset `root` (null: anywhere on the site), with `assets` empty; `top` is how many bars it draws (3 to 50).
+ */
 export interface WidgetConfig {
   assets: number[]; source: WidgetSource; metric: Metric | null; aggregation: WidgetAggregation;
-  range: RangePreset | null; bars: "asset" | "time"; min: number; max: number | null;
+  range: RangePreset | null; bars: WidgetBars; min: number; max: number | null;
+  compare?: WidgetCompareMode; kind?: string; root?: number | null; top?: number;
 }
 /** What a text widget shows: a heading, a paragraph or a divider, plain text only (a divider holds no text). */
 export const TEXT_STYLES = ["heading", "paragraph", "divider"] as const;
@@ -457,10 +465,40 @@ export interface WidgetValue {
   asset_id: number; name: string; value: number | null; estimated: boolean; partial: boolean; point_id: number | null;
   no_data: boolean; ts: string | null; stale: boolean;
 }
+/** One side (this month's days 1 to D, or last month's) of a comparison: the sums of Billing's day cells; `cost` is null when no day has a rate. */
+export interface CompareSide { kwh: number; cost: number | null; estimated: boolean; partial: boolean; no_data_days: number }
+export type CompareWhyNone = "currency" | "no_cost" | "no_previous" | "no_current" | "missing_days" | "partial" | "previous_zero";
+/** The change of one measure: `abs` when both sides have a number, `percent` only when it is safe to show (otherwise `why_none` says why). */
+export interface CompareChange { abs: number | null; percent: number | null; why_none: CompareWhyNone | null }
+export interface CompareAsset {
+  asset_id: number; name: string; this: CompareSide | null; last: CompareSide | null;
+  last_state: "ok" | "no_readings" | "not_in_closed" | "other_zone";
+  kwh: CompareChange; cost: CompareChange;
+  rate_change: { date: string } | null;
+  /** A time series only: last month's days 1 to D (empty for a stat). */
+  last_points: WidgetPoint[];
+}
+/** Month to date against the same days of last month. Dates are the site's local dates (`YYYY-MM-DD`); D = min(elapsed days, the length of last month). */
+export interface WidgetCompare {
+  mode: "same_days_last_month"; state: "ok" | "nothing_yet"; elapsed_days: number; days: number;
+  this_window: { from: string; to: string } | null; last_window: { from: string; to: string } | null;
+  left_out_days: string[]; last_month: { month: string; closed: boolean }; currency: string | null;
+  assets: CompareAsset[];
+}
+/** `bars: "kind"`: the bars drawn are the first `shown` of `count`; `more` sums the rest (never an "Other" bar). */
+export interface WidgetBreakdown {
+  kind: string; root: { id: number; name: string } | null;
+  count: number; shown: number;
+  more: { count: number; with_value: number; value: number | null; estimated: boolean; partial: boolean };
+  no_data: number; inside_others: number;
+  kinds: { kind: string; count: number }[];
+}
 export interface WidgetData {
   type: DataWidgetType; mode: "series" | "values"; source: WidgetSource; metric: Metric | null; unit: string | null;
   range: { preset: RangePreset; start: string; end: string }; tier: SeriesTier | null; bucket: "hour" | "day" | null;
   series: WidgetSeries[]; values: WidgetValue[]; missing: number[]; no_metric: number[];
+  /** Always sent by the server (null when unused); optional here so a test fixture that predates w24 still compiles. */
+  compare?: WidgetCompare | null; breakdown?: WidgetBreakdown | null;
 }
 
 /** One step of a connection check (backend diagnostics/check.py `Step.to_json`). `ok: null` = skipped (a step it needs failed). */

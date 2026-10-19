@@ -220,7 +220,8 @@ describe("editing", () => {
     await userEvent.selectOptions(screen.getByLabelText("Metric"), "voltage_v");
     expect(screen.getAllByRole("checkbox").map((box) => box.parentElement?.textContent)).toEqual(["MV2"]);
     await userEvent.selectOptions(screen.getByLabelText("Source"), "energy");
-    expect(screen.getAllByRole("checkbox")).toHaveLength(4);
+    // (the comparison box is a checkbox too: count the picker's)
+    expect(within(screen.getByRole("group", { name: "Assets" })).getAllByRole("checkbox")).toHaveLength(4);
   });
 
   it("edits a widget in place", async () => {

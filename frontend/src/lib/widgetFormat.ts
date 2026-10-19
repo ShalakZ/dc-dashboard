@@ -1,4 +1,4 @@
-import type { WidgetData } from "../api/types";
+import type { CompareAsset, CompareSide, DataWidgetType, WidgetConfig, WidgetData } from "../api/types";
 import { formatSiteTick } from "./siteTime";
 
 export interface Flags { estimated: boolean; partial: boolean }
@@ -40,21 +40,51 @@ export function markerHint(flags: HintFlags): string {
 }
 
 /**
+ * After a close and a change of the site currency the server cannot set last month's cost against today's: it takes the last side's cost and the cost of
+ * last month's daily points away and says `cost.why_none === "currency"`. Those nulls are not a missing rate (nothing in Tariffs is wrong), and a dash
+ * carries no marks, so on a cost card the last side is left out of every flag; this month's side is not (it can lack a rate on its own).
+ */
+export const lastCostGone = (asset: Pick<CompareAsset, "cost">): boolean => asset.cost.why_none === "currency";
+
+/**
  * Which markers a response uses anywhere: the series-level flags of a series response, the per-asset flags of a values
  * one. `noRate` is a cost without a rate: a value row with `value === null` (a bar per asset, stat or table draws the dash
  * whether or not the asset also recorded nothing), or a series bucket with `value === null && !no_data` (a silent bucket is
  * a gap, not a missing rate). A line with no rate is not drawn at all, so a chart whose every bucket lacks one would
  * otherwise look like one with no data.
+ * A comparison (w24) adds its two sides and last month's daily points; its sides carry one `estimated` for kWh and cost, but their `partial` is a COST
+ * mark, so it counts only on a cost widget (an energy card never draws a `*`). On a cost card the last side and last month's points of an asset whose
+ * currency changed (`lastCostGone`) count for nothing: they are dashes because of the currency, not because a rate is missing. A breakdown adds the sum of
+ * the bars it left out.
  */
-export function flagsOf(data: Pick<WidgetData, "series" | "values" | "source">): Required<HintFlags> {
-  const rows = [...data.series, ...data.values];
-  const noRate = data.source === "cost"
-    && (data.values.some((v) => v.value === null) || data.series.some((s) => s.points.some((p) => p.value === null && !p.no_data)));
+export function flagsOf(data: Pick<WidgetData, "series" | "values" | "source"> & Partial<Pick<WidgetData, "compare" | "breakdown">>): Required<HintFlags> {
+  const cost = data.source === "cost";
+  const assets = data.compare?.assets ?? [];
+  const sides = assets.flatMap((a) => [a.this, cost && lastCostGone(a) ? null : a.last].filter((s): s is CompareSide => s !== null));
+  const lastPoints = assets.flatMap((a) => (cost && lastCostGone(a) ? [] : a.last_points));
+  const rows = [...data.series, ...data.values, ...lastPoints];
+  const noRate = cost
+    && (data.values.some((v) => v.value === null && !(data.breakdown && v.no_data)) // a breakdown's bar that recorded nothing is "no data", not a missing rate
+      || data.series.some((s) => s.points.some((p) => p.value === null && !p.no_data))
+      || lastPoints.some((p) => p.value === null && !p.no_data)
+      || sides.some((s) => s.cost === null && s.no_data_days < (data.compare?.days ?? 0))); // some day had readings, yet no cost: the rate is missing
   return {
-    estimated: rows.some((r) => r.estimated),
-    partial: rows.some((r) => r.partial),
+    estimated: rows.some((r) => r.estimated) || sides.some((s) => s.estimated) || (data.breakdown?.more.estimated ?? false),
+    partial: rows.some((r) => r.partial) || (cost && sides.some((s) => s.partial)) || (data.breakdown?.more.partial ?? false),
     noRate,
   };
+}
+
+/**
+ * The loading skeleton's variant for a widget: the loaded card has more rows than its type's plain shape when the config says it compares with last month
+ * (a stat's extra rows, a chart that is the same box) or draws a breakdown by kind (the line under the chart and the "Split by" row), and the skeleton draws
+ * the same rows so nothing moves when the data lands. Undefined for every other widget.
+ */
+export type SkeletonShape = "compare-stat" | "compare-chart" | "kind-bars";
+export function skeletonShape(type: DataWidgetType, config: Pick<WidgetConfig, "compare" | "bars">): SkeletonShape | undefined {
+  if (type === "bar" && config.bars === "kind") return "kind-bars";
+  if (config.compare !== "same_days_last_month") return undefined;
+  return type === "stat" ? "compare-stat" : type === "timeseries" ? "compare-chart" : undefined;
 }
 
 const plural = (count: number): string => (count === 1 ? "" : "s");

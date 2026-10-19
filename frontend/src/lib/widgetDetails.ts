@@ -167,8 +167,9 @@ export function assetRows(data: WidgetData): AssetRow[] {
     if (v.estimated) states.push("estimated");
     if (v.partial) states.push("partial");
     // A cost with a dash is "no rate" whether or not it also recorded nothing: the card shows the same dash and hint.
-    if (data.source === "cost" && v.value === null) states.push("no rate");
-    if (hasNoReading(v.value, v.no_data, data.source)) states.push("no data");
+    const silentBar = Boolean(data.breakdown) && v.value === null && v.no_data; // a breakdown's bar that recorded nothing is "no data", never a missing rate
+    if (data.source === "cost" && v.value === null && !silentBar) states.push("no rate");
+    if (hasNoReading(v.value, v.no_data, data.source) || silentBar) states.push("no data");
     if (v.stale) states.push("stale");
     return { assetId: v.asset_id, name: names[i], states };
   });

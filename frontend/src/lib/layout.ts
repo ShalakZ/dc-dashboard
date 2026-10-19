@@ -1,4 +1,4 @@
-import type { DistributiveOmit, TextStyle, Widget, WidgetType } from "../api/types";
+import type { DistributiveOmit, TextStyle, Widget, WidgetConfig, WidgetType } from "../api/types";
 
 export const GRID_COLS = 12;
 
@@ -32,8 +32,23 @@ export function toDrafts(widgets: Widget[]): DraftWidget[] {
   });
 }
 
+/** A stat that compares with last month draws seven rows (the window, last month's same days, the change and a note line), so it starts 3 wide and 3 high (w24). */
+const COMPARE_STAT_SIZE = { w: 3, h: 3 };
+const isCompareStat = (type: WidgetType, config: Partial<WidgetConfig> | undefined): boolean =>
+  type === "stat" && config?.compare === "same_days_last_month";
+
+/**
+ * What a card may shrink to. A comparing stat may not go below 3 x 3 - but never above the size it already has: a 3 x 2 one saved before this rule is not
+ * pushed to a size nobody gave it (the grid would record that as an edit).
+ */
+function minOf(d: DraftWidget): { minW: number; minH: number } {
+  const min = MIN[d.type];
+  if (d.type === "text" || !isCompareStat(d.type, d.config)) return min;
+  return { minW: Math.max(min.minW, Math.min(COMPARE_STAT_SIZE.w, d.w)), minH: Math.max(min.minH, Math.min(COMPARE_STAT_SIZE.h, d.h)) };
+}
+
 export function toGrid(drafts: DraftWidget[]): GridItem[] {
-  return drafts.map((d) => ({ i: d.key, x: d.x, y: d.y, w: d.w, h: d.h, ...MIN[d.type] }));
+  return drafts.map((d) => ({ i: d.key, x: d.x, y: d.y, w: d.w, h: d.h, ...minOf(d) }));
 }
 
 /**
@@ -52,9 +67,18 @@ export function applyGrid(drafts: DraftWidget[], grid: readonly GridItem[]): Dra
   return changed ? next : drafts;
 }
 
-/** The size a new widget starts with. `style` only matters for a text widget: a divider is a full-width rule. */
-export function defaultSize(type: WidgetType, style?: TextStyle): { w: number; h: number } {
+/**
+ * The size a new widget starts with. `style` only matters for a text widget: a divider is a full-width rule. `config` only matters for a stat: one that
+ * compares with last month starts 3 x 3.
+ */
+export function defaultSize(type: WidgetType, style?: TextStyle, config?: Partial<WidgetConfig>): { w: number; h: number } {
+  if (isCompareStat(type, config)) return { ...COMPARE_STAT_SIZE };
   return { ...(type === "text" && style === "divider" ? DIVIDER_SIZE : SIZE[type]) };
+}
+
+/** The room a stat needs once it compares with last month (w24): 3 x 3, or null for any other widget. An existing card that gains the comparison grows to it. */
+export function compareStatSize(type: WidgetType, config: Partial<WidgetConfig> | undefined): { w: number; h: number } | null {
+  return isCompareStat(type, config) ? { ...COMPARE_STAT_SIZE } : null;
 }
 
 /** A new widget starts a fresh row at column 0 below everything; the editor then closes it up into any free space (compactVertical). */
