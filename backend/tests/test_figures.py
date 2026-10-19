@@ -6,8 +6,10 @@ tuples, compared with `==` and with `repr` (so `-0.0` counts). The second half u
 card against the cache off, a request whose tree differs from the value's, a close that must not use an entry inside its TTL,
 and the compute thread.
 """
+import copy
 import dataclasses
 import json
+import logging
 import random
 import threading
 from collections import Counter
@@ -24,7 +26,7 @@ from dcdash.core import cost, energy, figure_cache, figures
 from dcdash.core import widgets as widgets_module
 from dcdash.core.db import get_sessionmaker
 from dcdash.core.energy import hourly_energy
-from dcdash.core.timeutil import local_days, month_bounds
+from dcdash.core.timeutil import local_days, month_bounds, resolve_range
 from dcdash.core.tree import AssetNode, AssetTree
 from dcdash.core.widgets import validate_config, widget_data
 from helpers import insert_readings, login_as, make_asset, settle_rollups
@@ -502,3 +504,192 @@ async def test_a_close_right_after_late_readings_freezes_them_even_with_a_long_t
     assert total_kwh(frozen, ids["Pump"]) == pytest.approx(before + 16.0, abs=2.5) and total_kwh(frozen, ids["Pump"]) > before
     assert figure_cache.stats()["computes"] == computes + 1  # the close computed on its own, and replaced the stored entry
     assert total_kwh(await billing.month_costs(session, MONTH), ids["Pump"]) == total_kwh(frozen, ids["Pump"])
+
+
+# ---- a prefix of the month is what the comparison asks for ----------------------------------------------------------------------
+
+
+def prefix_lengths(n: int) -> dict[int, str]:
+    """Prefix lengths 1, 2, 5, half, n - 1 and n (those that fit in n days), each with the name it was asked for."""
+    found: dict[int, str] = {}
+    for k, label in ((1, "1"), (2, "2"), (5, "5"), (n // 2, "half"), (n - 1, "n-1"), (n, "n")):
+        if 1 <= k <= n:
+            found.setdefault(k, label)  # a short window can ask for the same length twice: the first name stays
+    return found
+
+
+def check_prefixes(tree, meters, rows, baselines, first_buckets, tariffs, zone, start, end, reached: Counter) -> int:
+    """`entries_at(md, a, now)[:k]` against the old call the comparison made, `day_entries(priced, days[:k], now, rate_on)`: the
+    window's days are a prefix of the month's. Returns how many comparisons were made; `reached` counts the prefix names tried."""
+    meters_, read, tariffs_ = live_inputs(meters, rows, baselines, first_buckets, tariffs)
+    md = figures._build_month_days("fp", zone, start, end, tree, tariffs_, meters_, read)
+    _, priced = ref_priced(tree, meters, rows, baselines, first_buckets, tariffs, zone, start, end)
+    old_tariffs = [ref.TariffRow(*t) for t in tariffs]
+    days = local_days(start, end, zone)
+    compared = 0
+    for now in probes(days)[::2]:
+        for asset_id in tree.preorder():
+            shared = figures.entries_at(md, asset_id, now)
+            for k, label in prefix_lengths(len(days)).items():
+                old = ref.day_entries(
+                    priced.get(asset_id), days[:k], now=now,
+                    rate_on=lambda day, a=asset_id: ref.rate_at(old_tariffs, tree, a, day) is not None,
+                )
+                new = shared[:k]
+                assert new == old and repr(new) == repr(old), (asset_id, now, k)
+                compared += 1
+                reached[label] += 1
+    return compared
+
+
+def test_a_prefix_of_the_masked_entries_equals_day_entries_of_that_prefix_of_the_days_on_random_worlds():
+    compared, reached = 0, Counter()
+    for seed in range(60):
+        world: World = gen_world(seed, "gaps" if seed % 4 == 3 else "general")
+        compared += check_prefixes(
+            world.tree, world.meters, world.rows, world.baselines, world.first_buckets, world.tariffs, world.zone, *world.span,
+            reached,
+        )
+    assert compared > 5000 and reached["1"] and reached["2"] and reached["n-1"] and reached["n"]
+
+
+@pytest.mark.parametrize("zone", ["UTC", "Europe/London"])
+@pytest.mark.parametrize("month", ["2026-03", "2026-10"])  # a month of 30 or 31 local days, with a clock change
+def test_a_prefix_of_the_masked_entries_equals_day_entries_of_that_prefix_across_a_month(zone, month):
+    start, end = month_bounds(month, zone)
+    hrs = hours_in(start.astimezone(UTC), end.astimezone(UTC))
+    rng, feats, reached = random.Random(11), Counter(), Counter()
+    meters = {2: (100, 1.0, 60, True), 4: (101, 3.7, 60, False), 5: (102, 1.0, 60, True), 6: (103, 0.001, 900, False)}
+    rows, baselines = {}, {100: 250.0, 102: 4000.0}
+    rows[100], _ = gen_rows(rng, hrs, True, 60, "gaps", 250.0, feats)
+    rows[101], _ = gen_rows(rng, hrs, False, 60, "dense", None, feats)
+    rows[102], _ = gen_rows(rng, hrs, True, 60, "late", 4000.0, feats)
+    rows[103], _ = gen_rows(rng, hrs, False, 900, "single", None, feats)
+    first_buckets = {100: hrs[0] - HOUR * 7, 101: rows[101][0][0], 102: hrs[0] - HOUR * 3, 103: rows[103][0][0]}
+    check_prefixes(MONTH_TREE, meters, rows, baselines, first_buckets, MONTH_TARIFFS, zone, start, end, reached)
+    assert set(reached) == {"1", "2", "5", "half", "n-1", "n"}  # a whole month has room for every length, 5 and half before n
+
+
+# ---- the comparison gives up on agreement: once, in the log, with the values' own rates ---------------------------------------------
+
+
+async def test_a_comparison_that_never_gets_two_months_of_one_configuration_logs_once_and_goes_on_with_this_months_value(
+    db, session, monkeypatch, caplog
+):
+    ids = await build(db)
+    expected = await compare_card(session, ids["Pump"], "cost")
+    assert expected["compare"]["assets"][0]["rate_change"] == {"date": "2026-04-03"}  # Hall A's rate rises inside the windows
+    real, calls = widgets_module.month_days, []
+
+    async def disagreeing(db_, tz_name, start, end):
+        value = await real(db_, tz_name, start, end)
+        calls.append(start)
+        if start.month == 3:  # last month's value: its own configuration
+            return dataclasses.replace(value, config_fp="aaaaaaaa-last-month")
+        # this month's value: another configuration, one without Hall A's rate (so the note can only come from THIS value)
+        site_only = [t for t in value.tariffs if t.asset_id is None]
+        assert len(site_only) < len(value.tariffs)
+        return dataclasses.replace(value, config_fp="bbbbbbbb-this-month", tariffs=site_only)
+
+    monkeypatch.setattr(widgets_module, "month_days", disagreeing)
+    with caplog.at_level(logging.WARNING, logger="dcdash.core.widgets"):
+        card = await compare_card(session, ids["Pump"], "cost")
+    warnings = [r for r in caplog.records if r.name == "dcdash.core.widgets" and r.levelno == logging.WARNING]
+
+    assert len(calls) == 6  # (last, this) three times, then it went on
+    assert len(warnings) == 1  # one line for the whole give-up, not one per try
+    text = warnings[0].getMessage()
+    assert "aaaaaaaa" in text and "bbbbbbbb" in text  # the two short fingerprints, 8 characters each
+    assert "last-month" not in text and "this-month" not in text  # and no more than those 8 characters of each
+    assert all(name not in text for name in ("Pump", "Hall", "Fan", "Site", "Annex", "Fx"))  # no data in the message
+    # the answer is built from this month's value: with its tariffs the rate note is gone, with last month's it would stay
+    assert card["compare"]["assets"][0]["rate_change"] is None
+    card["compare"]["assets"][0]["rate_change"] = expected["compare"]["assets"][0]["rate_change"]
+    assert card == expected  # nothing else of the answer moved: the entries come from each value as computed
+
+    calls.clear()
+    caplog.clear()
+
+    async def agreeing(db_, tz_name, start, end):
+        calls.append(start)
+        return await real(db_, tz_name, start, end)
+
+    monkeypatch.setattr(widgets_module, "month_days", agreeing)
+    with caplog.at_level(logging.WARNING, logger="dcdash.core.widgets"):
+        assert await compare_card(session, ids["Pump"], "cost") == expected
+    assert len(calls) == 2 and not [r for r in caplog.records if r.name == "dcdash.core.widgets"]  # agreement: silent
+
+
+# ---- nothing a reader does changes a shared value ------------------------------------------------------------------------------
+
+
+def tree_snapshot(tree: AssetTree) -> tuple:
+    return (tree.nodes, tree.preorder(), tree.roots(), {asset_id: tree.children(asset_id) for asset_id in tree.nodes})
+
+
+def month_snapshot(md: figures.MonthDays) -> tuple:
+    return (
+        md.config_fp, md.tz_name, md.start, md.end, tree_snapshot(md.tree), md.tariffs, md.days, md.entries, sorted(md.own),
+        md.own_from, md.start_utc,
+    )
+
+
+def window_snapshot(value: figures.WindowValues) -> tuple:
+    return value.config_fp, value.tz_name, tree_snapshot(value.tree), value.tariffs, value.values
+
+
+def same_snapshot(before: tuple, after: tuple) -> bool:
+    """`==` and the same `repr` (every float to the last digit, every dict in the same order; `-0.0` counts)."""
+    return before == after and repr(before) == repr(after)
+
+
+async def test_no_reader_changes_a_shared_value(client, db, session):
+    ids = await build(db)
+    await db.execute("UPDATE assets SET kind = 'Hall' WHERE name IN ('Hall A', 'Hall B')")
+    await login_as(client, db, "admin")
+    months = {m: month_bounds(m, "UTC") for m in (MONTH, "2026-04")}
+    start, end = resolve_range("this_month", NOW, "UTC")
+    first, last = widgets_module._hour_window("this_month", start, end)
+
+    async def values() -> dict[str, object]:
+        found = {m: await figures.month_days(session, "UTC", *bounds) for m, bounds in months.items()}
+        found |= {f"window-{as_cost}": await figures.window_values(session, first, last, end, "UTC", as_cost) for as_cost in (False, True)}
+        return found
+
+    async def everything() -> None:
+        for month in months:
+            assert (await client.get("/api/billing/costs", params={"month": month})).status_code == 200
+            assert (await client.get("/api/billing/costs.csv", params={"month": month})).status_code == 200
+            await billing.month_costs(session, month)
+        await compare_card(session, ids["Pump"], "cost")
+        await compare_card(session, ids["Hall A"], "energy", "timeseries")
+        await compare_card(session, ids["Fx"], "cost", "timeseries")
+        bars = validate_config("bar", {"assets": [], "source": "cost", "aggregation": "sum", "bars": "kind", "kind": "Hall"})
+        assert (await widget_data(session, "bar", bars, "this_month", NOW))["breakdown"]["count"] == 2
+        await plain_card(session, [ids["Site"], ids["Fx"]], "energy", "this_month")
+
+    held = await values()  # the values the readers below are given (the first ask computes them)
+    snapshot = {name: (month_snapshot if isinstance(v, figures.MonthDays) else window_snapshot)(copy.deepcopy(v)) for name, v in held.items()}
+    assert any(e is not None for md in held.values() if isinstance(md, figures.MonthDays) for es in md.entries.values() for e in es)
+    computes = figure_cache.stats()["computes"]
+
+    await everything()
+    await everything()  # twice: the second pass reads what the first left behind
+
+    after = await values()
+    assert all(after[name] is held[name] for name in held)  # the very same objects: nothing was recomputed behind the test's back
+    assert figure_cache.stats()["computes"] == computes  # every reader found the stored values (the plain card and the bars share a window)
+    for name, value in after.items():
+        now = (month_snapshot if isinstance(value, figures.MonthDays) else window_snapshot)(value)
+        assert same_snapshot(snapshot[name], now), name
+
+    # the check has teeth: a scribble on an entry, a tariff or a tree is seen by the same comparison
+    md = held[MONTH]
+    asset = next(a for a, es in md.entries.items() if any(e is not None for e in es))
+    index = next(i for i, e in enumerate(md.entries[asset]) if e is not None)
+    scribbled = copy.deepcopy(md)
+    scribbled.entries[asset][index]["estimated"] = not scribbled.entries[asset][index]["estimated"]
+    assert not same_snapshot(month_snapshot(scribbled), month_snapshot(md))
+    renamed = copy.deepcopy(md)
+    renamed.tree.nodes[asset] = dataclasses.replace(renamed.tree.nodes[asset], name="scribble")
+    assert not same_snapshot(month_snapshot(renamed), month_snapshot(md))

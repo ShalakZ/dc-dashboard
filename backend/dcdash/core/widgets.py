@@ -6,6 +6,7 @@ field ("assets: at most 20 assets per widget (got 21)") so the editor can show t
 `compute_widget` answers POST /api/widget-data and its CSV export for a validated data config.
 """
 import bisect
+import logging
 import math
 import re
 from collections.abc import Iterable
@@ -43,7 +44,9 @@ from dcdash.core.timeutil import (
 )
 from dcdash.core.tree import AssetTree
 
-WIDGET_TYPES = ("timeseries", "bar", "stat", "gauge", "table", "text")
+log = logging.getLogger(__name__)
+
+WIDGET_TYPES =("timeseries", "bar", "stat", "gauge", "table", "text")
 DATA_WIDGET_TYPES = tuple(widget_type for widget_type in WIDGET_TYPES if widget_type != "text")  # the ones that draw figures
 TEXT_STYLES = ("heading", "paragraph", "divider")
 TEXT_LIMITS = {"heading": 200, "paragraph": 2000}  # in Unicode code points; a divider holds no text
@@ -674,12 +677,17 @@ async def _fill_compare(
     # figure side below (rates, the contributing meters, the rate note) uses the values' own tree and tariffs, never the
     # request's, so a configuration edit that lands between the request's load and the values' snapshot cannot mix two
     # configurations. The two values must agree on the configuration; if an edit landed between them, ask again (a few times,
-    # then go on).
+    # then go on, and say so once in the log: the card then prices last month with its tariffs and takes the rest from this month).
     for _ in range(3):
         md_last = await month_days(db, tz_name, *month_bounds(win.last_month, tz_name))
         md_this = await month_days(db, tz_name, *month_bounds(win.this_month, tz_name))
         if md_last.config_fp == md_this.config_fp:
             break
+    else:
+        log.warning(
+            "the comparison went on with two configurations: last month %s, this month %s (three tries)",
+            md_last.config_fp[:8], md_this.config_fp[:8],
+        )
 
     # The windows' days are prefixes of the months' local days (core/compare.py `windows`): same entries, by position.
     this_entries = entries_at(md_this, asset_id, now)[: len(win.this_days)]
