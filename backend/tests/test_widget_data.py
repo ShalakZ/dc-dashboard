@@ -23,7 +23,7 @@ KWH_START = datetime(2026, 3, 9, 20, 30, tzinfo=UTC)  # 15 hourly counter readin
 TODAY = ("2026-03-10T00:00:00+03:00", "2026-03-10T13:30:00+03:00")  # preset `today` in Asia/Qatar at NOW
 TOP_KEYS = {
     "type", "mode", "source", "metric", "unit", "range", "tier", "bucket", "series", "values", "missing", "no_metric",
-    "compare", "breakdown",
+    "compare", "breakdown", "focus",
 }
 SERIES_KEYS = {"asset_id", "name", "points", "estimated", "partial"}
 POINT_KEYS = {"ts", "value", "min", "max", "estimated", "partial", "no_data"}
@@ -163,7 +163,7 @@ async def test_response_shape_for_every_type_and_source(client, db, widget_type,
     response = await client.post("/api/widget-data", json=widget_body(widget_type, [asset], source, aggregation, **extra))
     assert response.status_code == 200, response.text
     data = response.json()
-    assert set(data) == TOP_KEYS
+    assert set(data) == TOP_KEYS and data["focus"] is None  # w25: a widget that does not follow the focus has no block
     assert (data["type"], data["mode"], data["source"]) == (widget_type, mode, source)
     assert data["metric"] == ("active_power_kw" if source == "metric" else None)
     assert data["unit"] == {"metric": "kW", "energy": "kWh", "cost": "QAR"}[source]

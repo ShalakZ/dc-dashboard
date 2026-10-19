@@ -219,7 +219,8 @@ def test_the_new_keys_are_left_out_of_the_dump_while_they_hold_their_defaults():
     assert set(plain) == {"assets", "source", "metric", "aggregation", "range", "bars", "min", "max"}
     assert (validate_config("stat", make(aggregation="last")).compare, validate_config("bar", KIND).top) == ("none", 10)
     # A key given at its default is as good as absent, so a client may send it.
-    assert validate_config("stat", {**make(aggregation="last"), "compare": "none", "top": 10}).model_dump(mode="json") == plain
+    given = {**make(aggregation="last"), "compare": "none", "top": 10, "scope": "fixed"}  # w25: scope too
+    assert validate_config("stat", given).model_dump(mode="json") == plain
     assert "root" not in validate_config("bar", {**KIND, "root": None}).model_dump(mode="json")
 
 
