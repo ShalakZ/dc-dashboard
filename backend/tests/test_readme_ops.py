@@ -42,7 +42,7 @@ def test_the_runbook_headings_exist(name, level, title):
         ("Scheduled backups", "docs/scheduled-backups.md"),
         ("Upgrading and going back", "docs/upgrading.md"),
         ("Release notes", "CHANGELOG.md"),
-        ("Upgrading an existing database to Phase 3", "CHANGELOG.md"),
+        ("Upgrading an existing database to Phase 3", "docs/changelog-archive.md"),
     ],
 )
 def test_the_readme_keeps_the_old_section_names(old_name, new_path):
@@ -109,15 +109,15 @@ def test_the_feature_lists_name_delete_unblock_the_sign_in_protection_and_what_i
 
 
 def test_the_release_specific_upgrade_sections_are_no_longer_top_level():
-    for text in (README, page("CHANGELOG"), CORPUS):  # they were `##` sections of the README once; they are `###` entries of the CHANGELOG now
+    for text in (README, page("CHANGELOG"), page("changelog-archive"), CORPUS):  # they were `##` sections of the README once; they are `###` entries of the CHANGELOG now
         assert not re.search(r"^## Upgrading an existing database to Phase 3", text, flags=re.M)
         assert not re.search(r"^## Upgrading to W1a", text, flags=re.M)
 
 
 def test_the_release_notes_keep_the_names_and_steps_that_the_migration_points_to():
     # backend/migrations/versions/0004_billing_dashboards.py tells the operator to read this section, "step 4" (the retention SQL) and
-    # "step 6" (going back). Moving the text must not break those pointers. The notes are the whole CHANGELOG.md now.
-    notes = page("CHANGELOG")
+    # "step 6" (going back). Moving the text must not break those pointers. Those two notes are in docs/changelog-archive.md now.
+    notes = page("changelog-archive")
     assert re.search(r"^### Upgrading an existing database to Phase 3", notes, flags=re.M)
     assert re.search(r"^### Upgrading to W1a \(migration 0005\)", notes, flags=re.M)
     phase3 = section(notes, 3, "Upgrading an existing database to Phase 3")

@@ -1704,7 +1704,7 @@ def test_an_api_that_stops_or_keeps_restarting_is_text_c_with_the_way_back(scene
     # M3: the order is spelled out (stop the retries, and only then think about going back); M2: some old installs restart once by themselves
     stop = "First stop the retries (docker compose stop api collector), and only then think about going back."
     wait = ("If the log shows the migration starting again by itself and finishing, wait: some old installs restart once on their own "
-            "(CHANGELOG.md, 'Upgrading an existing database to Phase 3').")
+            "(docs/changelog-archive.md, 'Upgrading an existing database to Phase 3').")
     assert stop in res.said and wait in res.said, res.said
     assert res.said.index(stop) < res.said.index("To go back:") and res.said.index(wait) < res.said.index("To go back:")
     _failure_block(res, scene, "api")

@@ -85,7 +85,7 @@ uses, so the first update after it reports that the api still runs the old versi
      under another name (`before-upgrade.dump` and `before-upgrade.dump.version`); `--keep` never touches other names.
    - Keep a copy of `.env` and `certs/` as well (see
      [What the backup does not contain](backup-and-restore.md#what-the-backup-does-not-contain)).
-2. **Read the release notes** in [CHANGELOG.md](../CHANGELOG.md). Its entries are newest first: read every entry between the version
+2. **Read the release notes** in [CHANGELOG.md](../CHANGELOG.md) (releases up to W7j are in the [changelog archive](changelog-archive.md)). Its entries are newest first: read every entry between the version
    you run and the new one, starting at the oldest entry you have not applied. Each entry says what it changes, which pre-checks it
    names, how to verify it, whether its downgrade is lossless and which commit to go back to. Each heading carries the wave's date and
    merge commit; [Migrations in order](#migrations-in-order) lists which entry brings which migration.
@@ -154,11 +154,11 @@ migration says how to apply it, how to verify it and the commit to go back to.
 | `0001` | the initial schema | before the release notes; its downgrade drops every table | none |
 | `0002` | storage tiers: compression, the 1-minute and 1-hour rollups, retention, the storage settings | before the release notes; its downgrade drops the rollups and the policies | none |
 | `0003` | discovery: scan scopes, scans, findings, the graph layout, `sources.origin` | before the release notes; its downgrade drops those tables and the column | none |
-| `0004` | billing and dashboards: tariffs, dashboards, widgets, the billing setting, 7-day rollup refresh windows, minutes in the hourly rollup | **not lossless**: option b only | [Phase 3](../CHANGELOG.md#upgrading-an-existing-database-to-phase-3) |
-| `0005` | the audit actor: who did an entry survives the deletion of the account | lossless except the names of accounts deleted after the upgrade | [W1a](../CHANGELOG.md#upgrading-to-w1a-migration-0005) |
-| `0006` | the diagnostic event journal behind the field-diagnostics report (`diag_events`) | lossless except the journal itself | [W8](../CHANGELOG.md#upgrading-to-w8-migration-0006) |
-| `0007` | per-account appearance (`users.preferences`) | lossless except the display choices | [W7d](../CHANGELOG.md#upgrading-to-w7d-migration-0007) |
-| `0008` | a chosen icon per asset (`assets.icon`) | lossless except the icon choices | [W7g](../CHANGELOG.md#upgrading-to-w7g-migration-0008) |
+| `0004` | billing and dashboards: tariffs, dashboards, widgets, the billing setting, 7-day rollup refresh windows, minutes in the hourly rollup | **not lossless**: option b only | [Phase 3](changelog-archive.md#upgrading-an-existing-database-to-phase-3) |
+| `0005` | the audit actor: who did an entry survives the deletion of the account | lossless except the names of accounts deleted after the upgrade | [W1a](changelog-archive.md#upgrading-to-w1a-migration-0005) |
+| `0006` | the diagnostic event journal behind the field-diagnostics report (`diag_events`) | lossless except the journal itself | [W8](changelog-archive.md#upgrading-to-w8-migration-0006) |
+| `0007` | per-account appearance (`users.preferences`) | lossless except the display choices | [W7d](changelog-archive.md#upgrading-to-w7d-migration-0007) |
+| `0008` | a chosen icon per asset (`assets.icon`) | lossless except the icon choices | [W7g](changelog-archive.md#upgrading-to-w7g-migration-0008) |
 | `0009` | roles and permissions: the `roles` table, `users.role_id` in place of `users.role` | lossless for accounts that hold Viewer, Operator or Admin; custom roles are lost and their accounts come back as Viewers | [W9a](../CHANGELOG.md#upgrading-to-w9a-migration-0009) |
 | `0010` | the asset kinds registry (`asset_kinds`), seeded from the kinds assets already use | lossless except the registry (icons go back to the keyword guess) | [W7m](../CHANGELOG.md#upgrading-to-w7m-migration-0010) |
 | `0011` | data only: the permission Manage asset kinds (`assets.kinds`) for the custom roles that could change kinds | lossless for the data; only which permissions a custom role lists changes | [W7o](../CHANGELOG.md#upgrading-to-w7o-migration-0011) |

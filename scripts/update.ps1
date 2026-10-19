@@ -939,7 +939,7 @@ try {
                 if ($script:ApiVerdict -eq "restarting") { $Now = "the api is restarting over and over" }
                 Stop-AfterBackup 4 @("STOPPED: the api keeps restarting or has stopped ($Now), so the new version cannot start.",
                     "No readings are being collected. Docker keeps retrying the database migration because the container is set to restart (restart: unless-stopped).") `
-                    @("If the log shows the migration starting again by itself and finishing, wait: some old installs restart once on their own (CHANGELOG.md, 'Upgrading an existing database to Phase 3').",
+                    @("If the log shows the migration starting again by itself and finishing, wait: some old installs restart once on their own (docs/changelog-archive.md, 'Upgrading an existing database to Phase 3').",
                       "Fix: First stop the retries (docker compose$ProfileText stop api collector), and only then think about going back.",
                       "Then read the api log above. Your data is in the backup; going back is explained in docs/upgrading.md.") -GoingBack
             }

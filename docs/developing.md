@@ -171,7 +171,8 @@ of the panels-only case below: `--metering feeds|panels` (default `feeds`) and `
 - A database change is a new Alembic migration in `backend/migrations/versions/` (the next number), with a downgrade, an entry in
   [CHANGELOG.md](../CHANGELOG.md) and a row in [Migrations in order](upgrading.md#migrations-in-order).
 - Documentation: a new feature gets a section in its topic page under `docs/`; an upgrade note goes into `CHANGELOG.md` (newest
-  entry at the top); `README.md` stays a short front door. `docs/superpowers/` holds plans, specs and the backlog: history, not
+  entry at the top, under about 900 bytes; when the page passes about 70,000 bytes its oldest releases move to
+  [the changelog archive](changelog-archive.md), and every link and test that points at them moves with them); `README.md` stays a short front door. `docs/superpowers/` holds plans, specs and the backlog: history, not
   user documentation.
 - `scripts/*.ps1` are ASCII with CRLF line ends (`.gitattributes`) and must run on Windows PowerShell 5.1; everything else is LF.
 - Control heights are tokens (`frontend/src/app.css`, the `:root` block): `--ctl-h` 34 px for every control with a visible edge (buttons,

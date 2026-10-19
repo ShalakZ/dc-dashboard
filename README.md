@@ -101,7 +101,7 @@ name the old README sections; this is where each one is now:
 - "Scheduled backups": [docs/scheduled-backups.md](docs/scheduled-backups.md).
 - "Upgrading and going back" (steps 1 to 6, step 6 is going back): [docs/upgrading.md](docs/upgrading.md).
 - "Release notes": [CHANGELOG.md](CHANGELOG.md), newest first.
-- "Upgrading an existing database to Phase 3" (its steps 4 and 6): the Phase 3 entry near the bottom of [CHANGELOG.md](CHANGELOG.md#upgrading-an-existing-database-to-phase-3).
+- "Upgrading an existing database to Phase 3" (its steps 4 and 6): the Phase 3 entry near the bottom of [changelog archive](docs/changelog-archive.md#upgrading-an-existing-database-to-phase-3).
 
 ## Where everything is
 
@@ -123,6 +123,7 @@ name the old README sections; this is where each one is now:
 | Adding a connector | [docs/adding-a-connector.md](docs/adding-a-connector.md) | How a new kind of source is added to the code |
 | Field debugging | [docs/field-debugging.md](docs/field-debugging.md) | Connecting to a real SCADA and debugging it by copy and paste |
 | Release notes | [CHANGELOG.md](CHANGELOG.md) | What each release changed and its upgrade notes, newest first |
+| Changelog archive | [docs/changelog-archive.md](docs/changelog-archive.md) | The release notes of the older releases (up to W7j), with the upgrade notes of migrations 0004 to 0008 |
 
 ## Getting help
 
