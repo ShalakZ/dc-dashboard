@@ -748,12 +748,13 @@ async def test_the_list_counts_a_dashboard_of_text_widgets_only(client, db):
 
 
 # What a title may hold. Probe (w22): a NUL in a title answered with an uncaught database error (a 500 in production); a lone
-# surrogate was already a 422 from the request model; a TAB or a line feed was stored. A title is one line: all are refused now.
+# surrogate was already a 422 from the request model; a TAB or a line feed was stored. A title is one line: a line feed and every
+# other control character is refused now, but a TAB stays allowed (a title pasted from a spreadsheet cell may hold one, review W1).
 
 BAD_TITLES = {
     "a NUL": ("a" + chr(0) + "b", "contains a control character (U+0000)"),
     "a BEL": ("a" + chr(7) + "b", "contains a control character (U+0007)"),
-    "a TAB": ("a\tb", "contains a control character (U+0009)"),
+    "a TAB next to a BEL": ("a\t" + chr(7), "contains a control character (U+0007)"),
     "a line feed": ("a\nb", "contains a control character (U+000A)"),
     "DEL": ("a" + chr(0x7F), "contains a control character (U+007F)"),
     "a C1 control": ("a" + chr(0x85) + "b", "contains a control character (U+0085)"),
@@ -769,10 +770,22 @@ async def test_a_title_with_a_control_character_is_a_422_not_a_crash(client, db,
     bad = widget(title) if kind == "data" else text_widget(title, "heading", "Hall A")
     response = await save_raw(client, dash, [widget("Fine"), {**bad, "y": 3}])
     assert response.status_code == 422, response.text
-    shown = "".join(chr(0xFFFD) if ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F else c for c in title)
+    shown = "".join(chr(0xFFFD) if (ord(c) < 0x20 and c != "\t") or 0x7F <= ord(c) <= 0x9F else c for c in title)
     assert response.json()["detail"] == f'widget 2 ("{shown}"): title: {reason}'
     assert await fetch(client, dash) == dash
     assert await db.fetchval("SELECT count(*) FROM widgets") == 0
+
+
+@pytest.mark.parametrize("kind", ["data", "text"])
+async def test_a_title_with_a_tab_is_saved_and_comes_back_unchanged(client, db, kind):
+    await login_as(client, db, "operator")
+    dash = await create(client)
+    title = "Hall\tA"
+    tabbed = widget(title) if kind == "data" else text_widget(title, "heading", "Hall A")
+    saved = await save_raw(client, dash, [tabbed])
+    assert saved.status_code == 200, saved.text
+    assert [w["title"] for w in saved.json()["widgets"]] == [title]
+    assert [w["title"] for w in (await fetch(client, dash))["widgets"]] == [title]
 
 
 @pytest.mark.parametrize("kind", ["data", "text"])

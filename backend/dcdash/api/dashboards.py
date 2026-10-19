@@ -151,9 +151,11 @@ async def name_taken(db: AsyncSession, name: str, except_id: int | None = None) 
 
 
 def _title_char_problem(char: str) -> str | None:
-    """A title is one line of plain text: no control character at all (TAB and LF included), no lone surrogate. The database
+    """A title is one line of plain text: a TAB is allowed, no other control character, no lone surrogate. The database
     cannot store a NUL, and an answer that echoes a lone surrogate cannot be encoded."""
     code = ord(char)
+    if code == 0x09:
+        return None
     if code <= 0x1F or 0x7F <= code <= 0x9F:
         return f"contains a control character (U+{code:04X})"
     if 0xD800 <= code <= 0xDFFF:

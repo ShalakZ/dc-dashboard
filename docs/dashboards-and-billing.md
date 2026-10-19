@@ -42,7 +42,7 @@ Dashboards are shared by everyone.
     and the server apply the same rules; the server is the judge.
   - **API.** `PUT /api/dashboards/{id}` accepts `type: "text"` with `config: {"style": "heading"|"paragraph"|"divider", "text": "..."}`
     (any other key is refused). `POST /api/widget-data` and `/api/widget-data/csv` answer 422 `a text widget has no data` for it. A
-    widget title with a control character is refused with a 422. The 24-widget cap and the dashboard list's widget count include text
+    widget title with a control character other than a tab is refused with a 422. The 24-widget cap and the dashboard list's widget count include text
     widgets.
   - **Audit.** The dashboard-save audit row holds only the widget count and a short digest of the widgets, never the words.
 - **Look.** Widgets follow the theme like the rest of the app: Light, Dark or Match my device, and each Theme colour, in the profile

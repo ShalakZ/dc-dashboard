@@ -21,7 +21,7 @@ w22 adds a sixth dashboard widget, **Text**: a heading, a paragraph or a divider
 Type: Text, then Style and Text. The viewer draws a heading as a heading, a paragraph as a card and a divider as a plain line; in edit mode
 it keeps the usual title bar. Plain text only (no HTML, markdown or links); a heading holds 200 characters on one line, a paragraph 2,000.
 Migration `0013`, no new permission, no new route. `POST /api/widget-data` and its CSV answer 422 for a text widget, and a widget title
-with a control character is refused with a 422 (a NUL was a server error). The save's audit row keeps a digest of the widgets, never the
+with a control character other than a tab is refused with a 422 (a NUL was a server error). The save's audit row keeps a digest of the widgets, never the
 words. Rules and limits: [Dashboards and billing](docs/dashboards-and-billing.md).
 
 ### Upgrading to w22 (migration 0013)
