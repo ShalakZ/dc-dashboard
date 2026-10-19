@@ -1,6 +1,7 @@
 import { breakdownBlock, breakdownData, valueRow } from "../test/dashboardFixtures";
 import {
-  breakdownDescription, breakdownLine, emptyBreakdownText, hasNoBars, insideOthersText, isNoDataBar, kindNoun, kindOptions, moreFigure, moreText, pluralKind, selectedKind,
+  breakdownDescription, breakdownLine, drillAction, drillTip, emptyBreakdownText, hasNoBars, insideOthersText, isNoDataBar, kindNoun, kindOptions, moreFigure, moreText,
+  narrowLabel, parentIds, pluralKind, selectedKind,
 } from "./breakdown";
 
 const more = (over: Partial<ReturnType<typeof breakdownBlock>["more"]> = {}) => breakdownBlock({ more: { count: 107, with_value: 107, value: 1234.5, estimated: false, partial: false, ...over } });
@@ -85,8 +86,61 @@ describe("a chart with nothing to draw", () => {
     expect(emptyBreakdownText(panels({ count: 1 }), "energy")).toBe("The Panel under Seeded pilot hall has no energy readings.");
   });
 
-  it("says there are none of the kind at all", () => {
-    expect(emptyBreakdownText(panels({ count: 0, root: { id: 2, name: "Hall 1" } }), "energy")).toBe("No Panels under Hall 1.");
+  it("says there are none of the kind at all, and under an asset points to Split by when the asset holds other kinds (w25)", () => {
+    const under = panels({ count: 0, root: { id: 2, name: "Hall 1" }, kinds: [{ kind: "Rack", count: 117 }] });
+    expect(emptyBreakdownText(under, "energy")).toBe("No Panels under Hall 1. Choose another kind in Split by.");
+    expect(emptyBreakdownText({ ...under, kind: "rack", kinds: [{ kind: "Rack", count: 117 }, { kind: "Row", count: 3 }] }, "energy")).toBe("No racks under Hall 1. Choose another kind in Split by.");
+  });
+
+  it("keeps the plain sentence with no root, and where the root holds no other kind (nothing to choose)", () => {
+    expect(emptyBreakdownText(panels({ count: 0, root: null, kinds: [{ kind: "Rack", count: 117 }] }), "energy")).toBe("No Panels under the site.");
+    expect(emptyBreakdownText(panels({ count: 0, root: { id: 2, name: "Hall 1" }, kinds: [] }), "energy")).toBe("No Panels under Hall 1.");
+    expect(emptyBreakdownText(panels({ count: 0, root: { id: 2, name: "Hall 1" }, kinds: [{ kind: "panel", count: 0 }] }), "energy"), "the same kind spelled otherwise is not another kind").toBe("No Panels under Hall 1.");
+  });
+
+  it("leaves the sentences of assets that have no readings as they are, under an asset too", () => {
+    const kinds = [{ kind: "Panel", count: 8 }, { kind: "Rack", count: 117 }];
+    expect(emptyBreakdownText(panels({ kinds }), "energy")).toBe("None of the 8 Panels under Seeded pilot hall has energy readings.");
+    expect(emptyBreakdownText(panels({ count: 1, kinds }), "cost")).toBe("The Panel under Seeded pilot hall has no cost figures.");
+  });
+});
+
+describe("drill-through on a breakdown (w25, R10)", () => {
+  const assets = [
+    { id: 1, parent_id: null, name: "Site", kind: "site", sort_order: 0 },
+    { id: 2, parent_id: 1, name: "Hall 1", kind: "hall", sort_order: 0 },
+    { id: 3, parent_id: 2, name: "Rack 05", kind: "rack", sort_order: 0 },
+    { id: 4, parent_id: 3, name: "Feed A", kind: "feed", sort_order: 0 },
+  ];
+
+  it("knows which assets have children: those that are some asset's parent", () => {
+    expect([...parentIds(assets)].sort()).toEqual([1, 2, 3]);
+    expect(parentIds([]).size).toBe(0);
+  });
+
+  it("narrows to an asset with children and opens the page of one without", () => {
+    const parents = parentIds(assets);
+    expect(drillAction(3, parents)).toBe("narrow");
+    expect(drillAction(4, parents)).toBe("open");
+    expect(drillAction(99, parents), "an asset the list does not know has no children there").toBe("open");
+  });
+
+  it("opens the page of an asset with children too where nothing on the dashboard follows the focus (W2)", () => {
+    const parents = parentIds(assets);
+    expect(drillAction(3, parents, false)).toBe("open");
+    expect(drillAction(3, parents, true)).toBe("narrow");
+  });
+
+  it("words the tooltip's line and the button", () => {
+    expect(drillTip("narrow", "Rack 05")).toBe("Click to narrow the dashboard to Rack 05");
+    expect(drillTip("open", "Feed A")).toBe("Click to open Feed A's page");
+    expect(narrowLabel("Rack 05")).toBe("Narrow to Rack 05");
+  });
+
+  it("says that only the name answers on a bar with no shape (W8)", () => {
+    expect(drillTip("narrow", "Rack 07", true)).toBe("Click its name to narrow the dashboard to Rack 07");
+    expect(drillTip("open", "Rack 07", true)).toBe("Click its name to open Rack 07's page");
+    expect(drillTip("open", "Rack 07", false)).toBe("Click to open Rack 07's page");
   });
 });
 

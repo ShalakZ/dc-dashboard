@@ -1,11 +1,16 @@
 import type { EChartsOption } from "echarts";
 import ReactECharts from "echarts-for-react";
-import { memo, useId, useLayoutEffect, useState } from "react";
+import { memo, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router";
+import { useAssets } from "../../../api/queries";
 import type { WidgetData } from "../../../api/types";
-import { breakdownDescription, breakdownLine, emptyBreakdownText, hasNoBars, isNoDataBar, kindOptions, selectedKind } from "../../../lib/breakdown";
+import {
+  breakdownDescription, breakdownLine, drillAction, drillTip, emptyBreakdownText, hasNoBars, isNoDataBar, kindOptions, parentIds, selectedKind, type DrillAction,
+} from "../../../lib/breakdown";
 import { chartDescription } from "../../../lib/widgetDetails";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
-import { chartLabels, figureText, hasNoReading, labelBucket, NO_DATA, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
+import { chartLabels, escapeHtml, figureText, hasNoReading, labelBucket, NO_DATA, shortLabel, shortLabels, uniqueLabels, unitSuffix } from "../../../lib/widgetFormat";
+import { useFocus } from "../FocusContext";
 import { AXIS_CHARS, barAxisLayout, DEFAULT_CHART_WIDTH, LABEL_LINE_PX, steppedWidth } from "./barAxis";
 import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, type ChartTheme } from "./chartTheme";
 import { useLegendSelection } from "./legendSelection";
@@ -56,8 +61,11 @@ const stateOf = (flags: { estimated: boolean; partial: boolean }, noRate: boolea
 /**
  * Axis tooltip from precomputed text: `cells[series][category]` is the figure as shown (null = nothing recorded, no
  * row), `headers[category]` the heading. Names are user-typed and ECharts renders tooltips as HTML, so they are escaped.
+ * `notes[category]`, when given, is one last line under the rows (what a click on this category does, w25).
  */
-function tooltipFor(cells: readonly (readonly (TipCell | null)[])[], headers: readonly string[], named: boolean, theme: ChartTheme, colors: readonly string[] = []) {
+function tooltipFor(
+  cells: readonly (readonly (TipCell | null)[])[], headers: readonly string[], named: boolean, theme: ChartTheme, colors: readonly string[] = [], notes?: readonly string[],
+) {
   return (params: unknown): string => {
     const items = (Array.isArray(params) ? params : [params]) as TipItem[];
     const rows = items.flatMap((item) => {
@@ -68,15 +76,19 @@ function tooltipFor(cells: readonly (readonly (TipCell | null)[])[], headers: re
       return [tipRow(marker, named ? String(item.seriesName ?? "") : "", cell.text, cell.state, theme)];
     });
     if (rows.length === 0) return "";
-    return tipHead(headers[items[0]?.dataIndex ?? -1] ?? String(items[0]?.name ?? ""), theme) + rows.join("");
+    const note = notes?.[items[0]?.dataIndex ?? -1];
+    const tail = note ? `<div style="color:${theme.axisText};margin-top:4px">${escapeHtml(note)}</div>` : "";
+    return tipHead(headers[items[0]?.dataIndex ?? -1] ?? String(items[0]?.name ?? ""), theme) + rows.join("") + tail;
   };
 }
 
 /**
  * `chartWidth` is the width of the chart's box in px (BarWidget measures it); the value-mode category axis is laid out for it (barAxis.ts): the
  * names wrap inside their slots, or turn by 40 degrees when the slots are too narrow to hold a wrapped name.
+ * `drill` (w25) is what a click on each bar of a breakdown by kind does, in the bars' order: it adds the last line of the tooltip, makes the axis names emit
+ * events and gives the bars the pointer. With none, a breakdown's bars say with their cursor that a click does nothing.
  */
-export function barOption(data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART, chartWidth: number = DEFAULT_CHART_WIDTH): EChartsOption {
+export function barOption(data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART, chartWidth: number = DEFAULT_CHART_WIDTH, drill?: readonly DrillAction[]): EChartsOption {
   const unit = unitSuffix(data.unit);
   const base = chartBase(theme);
   const axis = axisParts(theme);
@@ -94,16 +106,18 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
       if (v.value === null) return noReading(v) ? { text: NO_DATA, state: "" } : { text: DASH, state: stateOf(v, data.source === "cost") };
       return { text: `${figureText(v.value, v)}${unit}${v.no_data ? ` (${NO_DATA})` : ""}`, state: stateOf(v, false) };
     });
+    const names = uniqueLabels(data.values);
+    const notes = drill && data.breakdown ? drill.map((action, i) => drillTip(action, names[i], isNoDataBar(data.values[i]))) : undefined;
     return {
       ...base,
-      tooltip: { ...base.tooltip, formatter: tooltipFor([cells], labels, false, theme) },
+      tooltip: { ...base.tooltip, formatter: tooltipFor([cells], labels, false, theme, [], notes) },
       // Wrapped: every name is drawn in its own slot, in as many lines as the layout found (grid.bottom is their room); the width and the
       // truncation only catch a line that is wider than the estimate. Rotated (a crowded axis): hideOverlap may still drop some names (the
       // tooltip and the Details panel have every one), and containLabel keeps the first rotated name from being cut at the left edge. With
       // containLabel the names and the y numbers sit INSIDE the rectangle that left and bottom describe, so those two are plain margins there.
       grid: { left: layout.left, right: 20, top: 30, bottom: layout.bottom, ...(layout.mode === "rotate" ? { containLabel: true } : {}) },
       xAxis: {
-        type: "category", data: labels, ...axis,
+        type: "category", data: labels, ...axis, ...(notes ? { triggerEvent: true } : {}),
         axisLabel: {
           ...axis.axisLabel, interval: 0, formatter: (v: string) => layout.labels.get(String(v)) ?? shortLabel(String(v), AXIS_CHARS),
           ...(layout.mode === "wrap"
@@ -114,6 +128,8 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
       yAxis: { type: "value", name: data.unit ?? undefined, ...axis },
       series: [{
         type: "bar", color: theme.accent, data: data.values.map((v) => (silent(v) ? null : v.value)),
+        // A bar shows the pointer (zrender's default for every shape) only when a click on it does something.
+        ...(data.breakdown ? { cursor: notes ? "pointer" : "default" } : {}),
         ...dashMarks(data.values.flatMap((v, i) => (silent(v) || (v.value === null && !noReading(v)) ? [i] : [])), theme),
       }],
     } as EChartsOption;
@@ -174,6 +190,66 @@ function SplitBy({ data, current, onKind, disabled }: { data: WidgetData; curren
   );
 }
 
+interface BarsProps { data: WidgetData; timezone: string; theme: ChartTheme; chartWidth: number }
+const BREAKDOWN_CHART_STYLE = { height: "100%", width: "100%", minHeight: 120 };
+
+/**
+ * The chart of a breakdown by kind where a click does nothing: the editor's grid and preview, a role without the Assets Tree, or no signed-in user yet.
+ * Memoised on its own because BreakdownBars, its parent, re-renders whenever the dashboard's focus changes (it reads the focus context), and a fresh option
+ * would make echarts-for-react set it again (see TimeSeriesWidget).
+ */
+const PlainBars = memo(function PlainBars({ data, timezone, theme, chartWidth }: BarsProps) {
+  return <ReactECharts option={barOption(data, timezone, theme, chartWidth)} style={BREAKDOWN_CHART_STYLE} notMerge />;
+});
+
+/** What ECharts hands a click handler: the part that was clicked and, for a bar, its index, for an axis name, the category as it was given (not as it is drawn). */
+interface ClickParams { componentType?: string; dataIndex?: number; value?: unknown }
+
+/**
+ * The index of the bar a click was on, or -1. A click on a bar reports its index; a click on an axis name reports the whole category text (`labels`, the
+ * list the axis was given), never the wrapped or shortened text that is drawn, so a name that is cut or turned still maps.
+ */
+export function clickedBar(params: ClickParams, labels: readonly string[]): number {
+  if (params.componentType === "series") return params.dataIndex ?? -1;
+  if (params.componentType === "xAxis") return labels.indexOf(String(params.value));
+  return -1;
+}
+
+/**
+ * The chart of a breakdown by kind in the viewer (w25, R10): a click on a bar, or on its name, narrows the dashboard to an asset that has children and opens the
+ * page of one that has none; the tooltip says which. Where no card follows the focus (`anyFollowing`) narrowing would change nothing, so every click opens the page.
+ * It waits for the asset list (children are read from it), and until then behaves like PlainBars. Only this component asks for the list and for the router, so a
+ * card that cannot drill needs neither.
+ */
+const DrillBars = memo(function DrillBars({ data, timezone, theme, chartWidth }: BarsProps) {
+  const assets = useAssets().data;
+  const { setFocus, anyFollowing } = useFocus();
+  const navigate = useNavigate();
+  const actions = useMemo(() => {
+    if (!assets) return undefined;
+    const parents = parentIds(assets);
+    return data.values.map((bar) => drillAction(bar.asset_id, parents, anyFollowing));
+  }, [assets, data.values, anyFollowing]);
+  const option = useMemo(() => barOption(data, timezone, theme, chartWidth, actions), [data, timezone, theme, chartWidth, actions]);
+  // The handler ECharts holds never changes (a new one would be bound again on every refetch); it calls whatever the latest render decided.
+  const click = useRef<(params: ClickParams) => void>(() => {});
+  click.current = (params) => {
+    const index = clickedBar(params, chartLabels(data.values));
+    const bar = data.values[index];
+    if (!bar || !actions) return;
+    if (actions[index] === "narrow") setFocus(bar.asset_id);
+    else navigate(`/assets/${bar.asset_id}`);
+  };
+  const onEvents = useMemo(() => ({ click: (params: ClickParams) => click.current(params) }), []);
+  return <ReactECharts option={option} onEvents={actions ? onEvents : undefined} style={BREAKDOWN_CHART_STYLE} notMerge />;
+});
+
+/** The breakdown's chart: one that drills where the viewer can open assets and the card is a live one, else the plain one. */
+function BreakdownBars({ splitDisabled, ...bars }: BarsProps & { splitDisabled: boolean }) {
+  const { allowed } = useFocus();
+  return allowed && !splitDisabled ? <DrillBars {...bars} /> : <PlainBars {...bars} />;
+}
+
 interface BarWidgetProps {
   data: WidgetData;
   timezone: string;
@@ -212,7 +288,7 @@ export const BarWidget = memo(function BarWidget({ data, timezone, kind, onKind,
           <p className="widget-empty">{sentence}</p>
         ) : (
           <div ref={setBox} className="widget-chart" role="img" aria-label={breakdownDescription(data, breakdown)}>
-            <ReactECharts option={barOption(data, timezone, theme, chartWidth)} style={{ height: "100%", width: "100%", minHeight: 120 }} notMerge />
+            <BreakdownBars data={data} timezone={timezone} theme={theme} chartWidth={chartWidth} splitDisabled={splitDisabled} />
           </div>
         )}
         <p className="bars-note" title={line}>{line}</p>

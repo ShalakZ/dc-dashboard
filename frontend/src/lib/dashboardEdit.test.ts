@@ -4,8 +4,8 @@ import { config, dashboard, textWidget, widget } from "../test/dashboardFixtures
 import { model, point, source } from "../test/graphFixtures";
 import {
   allowedAggregations, allowedSources, blankForm, canonical, compareAllowed, defaultAggregation, formFromDraft, formIssues, formToFields, isCompareOn,
-  isDirty, isKindMode, isSingleAsset, isStaleConflict, keepAssetsWithMetric, metricAssetsOf, newest, saveBody, singleAssetForm, toWidgetBody,
-  WIDGET_METRICS, withBars, withCompare, withMetric, withSource, withType, type FormIssues, type WidgetForm,
+  isDirty, isKindMode, isSingleAsset, isStaleConflict, keepAssetsWithMetric, metricAssetsOf, newest, saveBody, scopeAllowed, singleAssetForm, toWidgetBody,
+  WIDGET_METRICS, withBars, withCompare, withMetric, withRoot, withScope, withSource, withType, type FormIssues, type WidgetForm,
 } from "./dashboardEdit";
 import { compactVertical, toDrafts } from "./layout";
 
@@ -545,5 +545,206 @@ describe("one bar per asset of a kind (w24)", () => {
       bars: "Enter the kind of asset to draw one bar for.", top: "Bars to show must be a whole number from 3 to 50.",
     });
     expect(formIssues(kindBars({ assets: [5, 6, 7] }))).toEqual({}); // stale picks are not sent
+  });
+});
+
+// w25: what a widget follows. `scope` is "fixed" (its own assets, the default), "focus" (the dashboard's focus asset) or "children" (that asset's children).
+describe("what a widget follows (w25)", () => {
+  const follows = (scope: "focus" | "children", over: Partial<WidgetForm> = {}): WidgetForm => valid({ scope, assets: [], ...over });
+  const energyStat = (over: Partial<WidgetForm> = {}): WidgetForm => valid({ type: "stat", source: "energy", aggregation: "sum", ...over });
+  const kindBars = (over: Partial<WidgetForm> = {}): WidgetForm =>
+    valid({ type: "bar", bars: "kind", source: "energy", aggregation: "sum", assets: [], kind: "Rack", ...over });
+
+  it("starts fixed, and reads an absent key as fixed", () => {
+    expect(blankForm().scope).toBe("fixed");
+    expect(formFromDraft(toDrafts([widget(1, "stat")])[0]).scope).toBe("fixed");
+    expect(formFromDraft(toDrafts([widget(2, "table", { config: config({ assets: [], scope: "children" }) })])[0]).scope).toBe("children");
+  });
+
+  describe("scopeAllowed", () => {
+    it.each<[string, WidgetForm, boolean]>([
+      ["a time series", valid({ type: "timeseries" }), true],
+      ["a table", valid({ type: "table" }), true],
+      ["a bar chart with a bar per asset", valid({ type: "bar", bars: "asset" }), true],
+      ["a bar chart with a bar per time bucket", valid({ type: "bar", bars: "time" }), true],
+      ["a bar chart with a bar per asset of a kind", kindBars(), false],
+      ["a stat", valid({ type: "stat" }), false],
+      ["a gauge", valid({ type: "gauge" }), false],
+      ["a time series that compares", valid({ type: "timeseries", source: "energy", aggregation: "sum", compare: true, range: "this_month" }), false],
+      ["a time series with the tick left over from a metric source (not a comparison)", valid({ type: "timeseries", source: "metric", compare: true }), true],
+      ["a table with a stray tick", valid({ type: "table", source: "energy", aggregation: "sum", compare: true }), true],
+      ["a table with the bars choice left over from a bar chart", valid({ type: "table", bars: "kind" }), true],
+    ])("children: %s", (_name, form, expected) => {
+      expect(scopeAllowed(form, "children")).toBe(expected);
+    });
+    it("always allows the chosen assets and the focus asset", () => {
+      for (const form of [valid({ type: "stat" }), valid({ type: "gauge" }), valid({ type: "table" }), kindBars(), energyStat({ compare: true })]) {
+        expect(scopeAllowed(form, "fixed")).toBe(true);
+        expect(scopeAllowed(form, "focus")).toBe(true);
+      }
+    });
+    it("never lets the children of a text widget in", () => {
+      expect(scopeAllowed(valid({ type: "text" }), "children")).toBe(false);
+    });
+  });
+
+  describe("the repair when a change makes the scope invalid", () => {
+    it("turns children into focus when the type becomes a stat or a gauge, and keeps it for a table and a bar chart", () => {
+      const children = follows("children");
+      expect(withType(children, "stat").scope).toBe("focus");
+      expect(withType(children, "gauge").scope).toBe("focus");
+      expect(withType(children, "table").scope).toBe("children");
+      expect(withType(children, "bar").scope).toBe("children");
+      expect(withType(children, "timeseries").scope).toBe("children");
+    });
+    it("leaves focus and fixed alone when the type changes", () => {
+      for (const type of ["stat", "gauge", "table", "bar"] as const) {
+        expect(withType(follows("focus"), type).scope, type).toBe("focus");
+        expect(withType(valid(), type).scope, type).toBe("fixed");
+      }
+    });
+    it("turns children into focus when a bar chart gets one bar per asset of a kind, and not for the other choices", () => {
+      const children = follows("children", { type: "bar", source: "energy", aggregation: "sum" });
+      expect(withBars(children, "kind")).toMatchObject({ bars: "kind", scope: "focus", assets: [] });
+      expect(withBars(children, "time").scope).toBe("children");
+      expect(withBars(children, "asset").scope).toBe("children");
+    });
+    it("turns children into focus when the comparison is ticked, and does not turn it back when it is unticked", () => {
+      const children = follows("children", { source: "energy", aggregation: "sum" });
+      const ticked = withCompare(children, true);
+      expect(ticked).toMatchObject({ compare: true, range: "this_month", scope: "focus" });
+      expect(withCompare(ticked, false, "7d")).toMatchObject({ compare: false, range: "7d", scope: "focus" });
+    });
+    it("keeps the scope when the comparison cannot be ticked", () => {
+      const children = follows("children");
+      expect(withCompare(children, true)).toBe(children); // a metric source: refused as before
+    });
+    it("keeps focus when a source change drops the comparison or the breakdown", () => {
+      const on = follows("focus", { source: "energy", aggregation: "sum", compare: true, range: "this_month" });
+      expect(withSource(on, "metric")).toMatchObject({ compare: false, scope: "focus" });
+      // a bar chart by kind went back to one bar per asset: the scope focus is still valid
+      expect(withSource(follows("focus", { type: "bar", bars: "kind", source: "energy", aggregation: "sum" }), "metric")).toMatchObject({ bars: "asset", scope: "focus" });
+    });
+    it("keeps the assets picked for the chosen-here scope while the widget follows, and finds them again", () => {
+      const own = valid({ assets: [5, 6] });
+      const away = withScope(own, "focus");
+      expect(away).toMatchObject({ scope: "focus", assets: [5, 6] });
+      expect(withScope(withScope(away, "children"), "fixed")).toMatchObject({ scope: "fixed", assets: [5, 6] });
+    });
+    it("refuses a scope the form cannot have, and returns the same form", () => {
+      const stat = valid({ type: "stat", assets: [5] });
+      expect(withScope(stat, "children")).toBe(stat);
+      const bars = kindBars();
+      expect(withScope(bars, "children")).toBe(bars);
+    });
+    it("looks under the focus (no root) once a breakdown by kind follows it, and a pick or Whole site brings the root back to a fixed widget", () => {
+      const picked = kindBars({ root: 2 });
+      expect(withScope(picked, "focus")).toMatchObject({ scope: "focus", root: null });
+      expect(withRoot(withScope(picked, "focus"), 5)).toMatchObject({ scope: "fixed", root: 5 });
+      expect(withRoot(withScope(picked, "focus"), null)).toMatchObject({ scope: "fixed", root: null });
+      expect(withRoot(picked, null)).toMatchObject({ scope: "fixed", root: null });
+    });
+  });
+
+  describe("formToFields", () => {
+    it("leaves the key out of a fixed widget, whose config stays exactly what it was", () => {
+      expect(formToFields(valid({ assets: [5, 6], range: "7d" }))).toEqual({
+        type: "timeseries", title: "Hall power",
+        config: { assets: [5, 6], source: "metric", metric: "active_power_kw", aggregation: "avg", range: "7d", bars: "asset", min: 0, max: null },
+      });
+      for (const form of [valid(), valid({ type: "stat" }), valid({ type: "table" }), kindBars(), energyStat({ compare: true, range: "this_month" })]) {
+        expect(Object.keys(dataFields(form).config), form.type).not.toContain("scope");
+      }
+    });
+    it("writes the scope and no assets for a widget that follows, even when the form still holds some", () => {
+      expect(formToFields(valid({ scope: "focus", assets: [5, 6] }))).toEqual({
+        type: "timeseries", title: "Hall power",
+        config: { assets: [], source: "metric", metric: "active_power_kw", aggregation: "avg", range: null, bars: "asset", min: 0, max: null, scope: "focus" },
+      });
+      expect(dataFields(valid({ type: "table", scope: "children", assets: [5] })).config).toMatchObject({ assets: [], scope: "children" });
+      expect(dataFields(valid({ type: "stat", scope: "focus", assets: [5] })).config).toMatchObject({ assets: [], scope: "focus" });
+    });
+    it("sends no root for a breakdown that looks under the focus, and keeps kind and top", () => {
+      const config = dataFields(kindBars({ scope: "focus", root: 2, top: "25" })).config;
+      expect(config).toMatchObject({ assets: [], bars: "kind", kind: "Rack", top: 25, scope: "focus" });
+      expect(Object.keys(config)).not.toContain("root");
+      expect(dataFields(kindBars({ scope: "fixed", root: 2 })).config).toMatchObject({ root: 2 });
+    });
+    it("writes the scope with the comparison", () => {
+      expect(formToFields(energyStat({ scope: "focus", assets: [], compare: true, range: "this_month" }))).toEqual({
+        type: "stat", title: "Hall power",
+        config: { assets: [], source: "energy", metric: null, aggregation: "sum", range: "this_month", bars: "asset", min: 0, max: null, compare: "same_days_last_month", scope: "focus" },
+      });
+    });
+    it("writes no scope for a text widget, whatever the form holds", () => {
+      const fields = formToFields({ ...valid({ type: "text", style: "heading", text: "Power" }), scope: "focus" });
+      expect(fields).toEqual({ type: "text", title: "Hall power", config: { style: "heading", text: "Power" } });
+    });
+    it("round-trips a saved widget of every type and scope, byte for byte", () => {
+      const own = { assets: [] as number[], range: null, min: 0, max: null, bars: "asset" as const };
+      const saved = [
+        widget(1, "stat", { title: "Energy", config: config({ ...own, source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month", scope: "focus" }) }),
+        widget(2, "timeseries", { title: "Per child", config: config({ ...own, scope: "children" }) }),
+        widget(3, "table", { title: "Table", config: config({ ...own, aggregation: "max", scope: "children" }) }),
+        widget(4, "bar", { title: "Bars", config: config({ ...own, source: "cost", metric: null, aggregation: "sum", bars: "time", scope: "children" }) }),
+        widget(5, "bar", { title: "Racks", config: config({ ...own, source: "energy", metric: null, aggregation: "sum", bars: "kind", kind: "Rack", top: 5, scope: "focus" }) }),
+        widget(6, "gauge", { title: "Gauge", config: config({ ...own, aggregation: "last", min: 0, max: 100, scope: "focus" }) }),
+        widget(7, "timeseries", { title: "Series", config: config({ ...own, scope: "focus" }) }),
+      ];
+      for (const w of saved) {
+        expect(formToFields(formFromDraft(toDrafts([w])[0])), w.title).toEqual({ type: w.type, title: w.title, config: w.config });
+      }
+    });
+    it("keeps the stored config of a fixed widget, whatever the scope key does around it", () => {
+      const fixed = widget(1, "timeseries", { title: "Own", config: config({ assets: [5, 6] }) });
+      const again = formToFields(formFromDraft(toDrafts([fixed])[0]));
+      expect(again).toEqual({ type: "timeseries", title: "Own", config: fixed.config });
+      expect(canonical(again.config)).toBe(canonical(fixed.config));
+    });
+  });
+
+  describe("formIssues", () => {
+    it("asks for no asset of a widget that follows", () => {
+      expect(formIssues(follows("focus"))).toEqual({});
+      expect(formIssues(follows("focus", { type: "stat" }))).toEqual({});
+      expect(formIssues(follows("focus", { type: "gauge", aggregation: "last", gaugeMax: "100" }))).toEqual({});
+      expect(formIssues(follows("children", { type: "table" }))).toEqual({});
+      expect(formIssues(follows("children", { type: "bar" }))).toEqual({});
+    });
+    it("does not count the assets a following widget keeps for later", () => {
+      expect(formIssues(follows("focus", { type: "stat", assets: [5, 6] }))).toEqual({});
+      expect(formIssues(follows("children", { assets: Array.from({ length: 21 }, (_, i) => i + 1) }))).toEqual({});
+    });
+    it("keeps the fixed messages exactly", () => {
+      expect(formIssues(valid({ assets: [] }))).toEqual({ assets: "Choose at least one asset." });
+      expect(formIssues(valid({ type: "stat", assets: [] }))).toEqual({ assets: "Choose an asset." });
+      expect(formIssues(valid({ type: "stat", assets: [5, 6] }))).toEqual({ assets: "A stat shows one asset." });
+      expect(formIssues(valid({ scope: "fixed", assets: Array.from({ length: 21 }, (_, i) => i + 1) }))).toEqual({ assets: "At most 20 assets." });
+      expect(formIssues(energyStat({ compare: true, range: "this_month", assets: [] }))).toEqual({ compare: "A comparison needs exactly one asset." });
+    });
+    it("keeps the title and the other rules for a widget that follows", () => {
+      expect(formIssues(follows("focus", { title: "" }))).toEqual({ title: "Enter a title." });
+      expect(formIssues(follows("focus", { type: "gauge", aggregation: "last", gaugeMax: "" }))).toEqual({ gauge: "Enter a number for the gauge minimum and maximum." });
+      expect(formIssues(follows("focus", { source: "energy", aggregation: "avg" }))).toEqual({ aggregation: "Energy and cost are totals; choose total." });
+    });
+    it("keeps the comparison's range rule but not its asset count for a widget that follows", () => {
+      expect(formIssues(follows("focus", { type: "stat", source: "energy", aggregation: "sum", compare: true, range: "this_month" }))).toEqual({});
+      expect(formIssues(follows("focus", { type: "stat", source: "energy", aggregation: "sum", compare: true, range: "7d" })))
+        .toEqual({ compare: "A comparison looks at this month, so the widget range must be This month." });
+      expect(formIssues(follows("focus", { type: "timeseries", source: "cost", aggregation: "sum", compare: true, range: "" })))
+        .toEqual({ compare: "A comparison looks at this month, so the widget range must be This month." });
+    });
+    it("needs no root for a breakdown under the focus, and still asks for the kind and the number of bars", () => {
+      expect(formIssues(kindBars({ scope: "focus", root: null }))).toEqual({});
+      expect(formIssues(kindBars({ scope: "focus", kind: "" }))).toEqual({ bars: "Enter the kind of asset to draw one bar for." });
+      expect(formIssues(kindBars({ scope: "focus", top: "2" }))).toEqual({ top: "Bars to show must be a whole number from 3 to 50." });
+    });
+    it("refuses the children where they are not shown, for a form built by hand", () => {
+      const message = "Only a time series, a table or a bar chart per asset or per time bucket can show the children of the focus asset, and not with the comparison.";
+      expect(formIssues(follows("children", { type: "stat" }))).toEqual({ scope: message });
+      expect(formIssues(follows("children", { type: "gauge", aggregation: "last", gaugeMax: "100" }))).toEqual({ scope: message });
+      expect(formIssues(kindBars({ scope: "children" }))).toEqual({ scope: message });
+      expect(formIssues(follows("children", { source: "energy", aggregation: "sum", compare: true, range: "this_month" }))).toEqual({ scope: message });
+    });
   });
 });

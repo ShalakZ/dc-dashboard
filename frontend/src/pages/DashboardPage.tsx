@@ -1,17 +1,20 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useState } from "react";
-import { useLocation, useNavigate, useParams } from "react-router";
+import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent } from "react";
+import { useHref, useLocation, useNavigate, useParams } from "react-router";
 import { ApiError } from "../api/client";
 import { keys, useDashboard, useSite } from "../api/queries";
 import type { Dashboard } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { Crumbs } from "../components/Crumbs";
 import { DashboardViewer } from "../components/dashboard/DashboardViewer";
+import { FocusNotice, FocusProvider, useFocus } from "../components/dashboard/FocusContext";
 import { LiveValuesProvider } from "../components/dashboard/LiveValuesContext";
 import { Pending } from "../components/Pending";
 import { DashboardSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { newest } from "../lib/dashboardEdit";
+import { anyWidgetFollows, withFocus } from "../lib/focus";
+import { focusTrail } from "../lib/focusTrail";
 
 // The editor brings react-grid-layout with it: it loads only when someone starts editing (spec 10.8).
 const DashboardEditor = lazy(() => import("../components/dashboard/DashboardEditor").then((m) => ({ default: m.DashboardEditor })));
@@ -20,6 +23,55 @@ export function DashboardPage() {
   const id = Number(useParams().id);
   // Keyed by id so moving from one dashboard to another starts from a clean slate.
   return <DashboardScreen key={id} id={id} />;
+}
+
+/**
+ * The one trail of the page (R7). Without a focus, or before the asset list is here, it is Dashboards / name with the name as the current page. With
+ * a focus it goes on through the focus asset's ancestors: the name then links to the whole site, each ancestor to the dashboard at that asset, and the
+ * focus asset is the current page. The links only change `?asset=`, so in edit mode the editor stays mounted. It sits inside the focus provider.
+ * The link that was just used is replaced by plain text (the crumb it led to is now the current page), which would drop keyboard focus to the page body: after a
+ * plain click or an Enter on a crumb that stays on this dashboard, focus goes to the new current crumb. Back, Forward and the Focus dialog change the focus without moving it,
+ * and so does "Dashboards", which leaves the page (the editor's unsaved-changes guard may refuse it, and then no link was replaced).
+ */
+function DashboardCrumbs({ id, name }: { id: number; name: string }) {
+  const { focus, assets } = useFocus();
+  const { search } = useLocation();
+  const path = `/dashboards/${id}`;
+  const stays = useHref(path);
+  const current = useRef<HTMLSpanElement>(null);
+  // Set by a click on a crumb that stays here, with the focus it was clicked at; the next change of the focus reads it once, and every other case clears it.
+  const followed = useRef<{ from: number | null } | null>(null);
+  useEffect(() => {
+    const armed = followed.current;
+    followed.current = null;
+    if (armed && armed.from !== focus) current.current?.focus();
+  }, [focus]);
+  // A crumb whose navigation did not happen (refused, or cancelled by something else) replaced no link and changed no focus, so its flag must not wait for a later change
+  // that has nothing to do with it. Whatever takes keyboard focus after the click (a dialog, a button) ends the wait; a navigation that did happen is read before that.
+  useEffect(() => {
+    const clear = () => { followed.current = null; };
+    document.addEventListener("focusin", clear, true);
+    return () => document.removeEventListener("focusin", clear, true);
+  }, []);
+  // A click that opens a new tab or window (a modifier key) changes nothing here, nor does one that something else already cancelled.
+  const onFollow = (event: MouseEvent<HTMLAnchorElement>) => {
+    const plain = event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.defaultPrevented;
+    followed.current = plain && event.currentTarget.pathname === stays ? { from: focus } : null;
+  };
+  const chain = focus !== null && assets ? focusTrail(assets, focus) : [];
+  if (chain.length === 0) return <Crumbs trail={[{ label: "Dashboards", to: "/dashboards" }, { label: name }]} currentRef={current} onFollow={onFollow} />;
+  const at = (asset: number | null) => path + withFocus(search, asset);
+  return (
+    <Crumbs
+      currentRef={current}
+      onFollow={onFollow}
+      trail={[
+        { label: "Dashboards", to: "/dashboards" },
+        { label: name, to: at(null) },
+        ...chain.map((asset, i) => (i === chain.length - 1 ? { label: asset.name } : { label: asset.name, to: at(asset.id) })),
+      ]}
+    />
+  );
 }
 
 function DashboardScreen({ id }: { id: number }) {
@@ -43,7 +95,7 @@ function DashboardScreen({ id }: { id: number }) {
     if (loadError instanceof ApiError && loadError.status === 404) void queryClient.invalidateQueries({ queryKey: keys.defaultDashboard });
   }, [loadError, queryClient]);
 
-  if (query.isLoading || site.isLoading) return <DashboardSkeleton label="Loading the dashboard" canEdit={canEdit} />;
+  if (query.isLoading || site.isLoading) return <DashboardSkeleton label="Loading the dashboard" canEdit={canEdit} canFocus={can("assets.view")} />;
   const failure = query.error ?? site.error;
   // Block the page only when there is nothing to show. React Query keeps the last data when a refetch fails and still sets
   // `error`; replacing the screen then would unmount the editor and silently throw away unsaved edits (and a failed Reload
@@ -51,7 +103,9 @@ function DashboardScreen({ id }: { id: number }) {
   if (!dashboard || !site.data) return <p className="error" role="alert">{failure?.message ?? "not found"}</p>;
   const timezone = site.data.timezone;
   const notice = failure ? <p className="error" role="alert">Could not refresh this page: {failure.message}</p> : null;
-  const crumbs = <Crumbs trail={[{ label: "Dashboards", to: "/dashboards" }, { label: dashboard.name }]} />;
+  const crumbs = <DashboardCrumbs id={id} name={dashboard.name} />;
+  // Whether choosing a focus changes anything here: only then may a click on a bar of a breakdown narrow the dashboard (W2).
+  const anyFollowing = anyWidgetFollows(dashboard.widgets);
 
   const leaveEdit = () => {
     setWantsEdit(false);
@@ -60,10 +114,12 @@ function DashboardScreen({ id }: { id: number }) {
   };
 
   if (canEdit && wantsEdit) {
+    // The focus provider is the outermost element of both branches, at the same place, so Edit and View share one instance and what it remembers.
     return (
-      <>
+      <FocusProvider anyFollowing={anyFollowing}>
         {notice}
         {crumbs}
+        <FocusNotice />
         <Suspense fallback={<><Pending /><p className="muted">loading editor…</p></>}>
           <DashboardEditor
             key={epoch}
@@ -79,16 +135,17 @@ function DashboardScreen({ id }: { id: number }) {
             }}
           />
         </Suspense>
-      </>
+      </FocusProvider>
     );
   }
   return (
-    <>
+    <FocusProvider anyFollowing={anyFollowing}>
       {notice}
       {crumbs}
+      <FocusNotice />
       <LiveValuesProvider>
         <DashboardViewer dashboard={dashboard} timezone={timezone} onEdit={canEdit ? () => setWantsEdit(true) : undefined} />
       </LiveValuesProvider>
-    </>
+    </FocusProvider>
   );
 }

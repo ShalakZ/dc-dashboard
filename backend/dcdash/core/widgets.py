@@ -83,11 +83,16 @@ class WidgetConfig(BaseModel):
     kind: str | None = None  # bars "kind": the kind of asset that gets a bar (matched with kind_key)
     root: int | None = None  # bars "kind": the asset the breakdown looks under; None is the whole site
     top: int = TOP_DEFAULT  # bars "kind": how many bars are drawn
+    # w25. Which assets the widget shows: "fixed" the ones in `assets`; "focus" the dashboard's focus asset; "children" the
+    # focus asset's direct children. A following scope leaves `assets` empty (`_resolve_focus` fills them in per request).
+    scope: Literal["fixed", "focus", "children"] = "fixed"
 
     @model_serializer(mode="wrap")
     def _without_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         data = handler(self)
-        for key, default in (("compare", "none"), ("kind", None), ("root", None), ("top", TOP_DEFAULT)):
+        for key, default in (
+            ("compare", "none"), ("kind", None), ("root", None), ("top", TOP_DEFAULT), ("scope", "fixed"),
+        ):
             if key in data and data[key] == default:
                 del data[key]
         return data
@@ -169,8 +174,19 @@ def _check_type_rules(widget_type: str, config: WidgetConfig) -> None:
     """Rules that depend on the widget type, which the config model does not know. Every message starts with the field
     it is about. The empty-assets rule is first (a breakdown by kind is the one widget that holds no assets of its own)."""
     kind_mode = config.bars == "kind"
-    if not config.assets and not kind_mode:
+    following = config.scope != "fixed"  # w25: the dashboard's focus chooses the assets, so the rules about them step aside
+    if following:
+        if config.assets:
+            raise ValueError("assets: leave the assets empty; the focus chooses them")
+    elif not config.assets and not kind_mode:
         raise ValueError("assets: choose at least one asset")
+    if config.scope == "children":
+        if widget_type not in ("timeseries", "bar", "table"):
+            raise ValueError(f"scope: 'children' only applies to a time series, a bar chart or a table, not to a {widget_type}")
+        if kind_mode:
+            raise ValueError("scope: 'children' does not apply to a breakdown by kind")
+        if config.compare != "none":
+            raise ValueError("scope: 'children' cannot be compared with last month")
     if config.bars == "time" and widget_type != "bar":
         raise ValueError(f"bars: 'time' only applies to bar widgets, not to a {widget_type}")
     if kind_mode:
@@ -184,6 +200,8 @@ def _check_type_rules(widget_type: str, config: WidgetConfig) -> None:
             raise ValueError("kind: choose the kind of asset that gets a bar")
         if len(config.kind) > KIND_MAX:
             raise ValueError(f"kind: at most {KIND_MAX} characters (got {len(config.kind)})")
+        if config.scope == "focus" and config.root is not None:
+            raise ValueError("root: leave it empty; a breakdown that follows the focus looks under the focus")
     else:
         stray = (("kind", config.kind is not None), ("root", config.root is not None), ("top", config.top != TOP_DEFAULT))
         for name, given in stray:
@@ -194,11 +212,11 @@ def _check_type_rules(widget_type: str, config: WidgetConfig) -> None:
             raise ValueError(f"compare: only a stat or a time series can compare, not a {widget_type}")
         if config.source == "metric":
             raise ValueError("compare: a comparison needs the source 'energy' or 'cost', not 'metric'")
-        if len(config.assets) != 1:
+        if not following and len(config.assets) != 1:  # a following widget gets exactly one asset from the focus
             raise ValueError(f"assets: a comparison shows exactly one asset (got {len(config.assets)})")
         if config.range != "this_month":
             raise ValueError("range: a comparison needs the range this month")
-    if widget_type in SINGLE_ASSET_TYPES and len(config.assets) != 1:
+    if widget_type in SINGLE_ASSET_TYPES and not following and len(config.assets) != 1:
         raise ValueError(f"assets: a {widget_type} shows exactly one asset (got {len(config.assets)})")
     if widget_type == "gauge":
         if config.source != "metric":
@@ -366,6 +384,7 @@ class WidgetResult:
     no_metric: list[int] = field(default_factory=list)  # assets with no mapping of their own for the metric
     compare: dict[str, Any] | None = None  # w24: the month-to-date comparison block (a compare widget only), else None
     breakdown: dict[str, Any] | None = None  # w24: the breakdown by kind block (a bar widget with bars "kind"), else None
+    focus: dict[str, Any] | None = None  # w25: what a widget that follows the focus resolved to (see _resolve_focus), else None
     compare_rows: list[tuple[str, _Point]] = field(default_factory=list)  # (path, point): the last window's CSV rows
     # w24: a breakdown by kind keeps every bar here, in order (`values` holds only the first `top`); the CSV lists all of them.
     breakdown_values: list[_Value] | None = None
@@ -395,6 +414,7 @@ class WidgetResult:
             "no_metric": self.no_metric,
             "compare": self.compare,
             "breakdown": self.breakdown,
+            "focus": self.focus,
         }
 
     def csv_rows(self) -> list[list[object]]:
@@ -766,8 +786,64 @@ async def _fill_breakdown(
     }
 
 
+@dataclass
+class _Resolved:
+    """A config after the focus is applied: what to compute, and what to tell the client about the focus."""
+
+    config: WidgetConfig  # always scope "fixed", with `assets` (or, for a breakdown, `root`) filled in from the focus
+    block: dict[str, Any] | None  # the answer's `focus` block; None for a fixed widget
+    empty: bool  # nothing to compute: the answer carries only the block
+    missing: list[int]  # the focus itself when it is not in the tree
+
+
+def _focus_block(
+    tree: AssetTree, asset: int | None, state: str, children: dict[str, int] | None, top_level: int | None
+) -> dict[str, Any]:
+    named = None if asset is None else {"id": asset, "name": tree.nodes[asset].name, "path": tree.path(asset)}
+    return {"asset": named, "state": state, "children": children, "top_level": top_level}
+
+
+def _resolve_focus(tree: AssetTree, config: WidgetConfig, focus: int | None) -> _Resolved:
+    """Turn a widget that follows the dashboard's focus into the plain widget it stands for, over the tree already loaded.
+
+    `scope` "fixed" is returned as it is, whatever `focus` says. A `focus` that is not in the tree (deleted, or never an
+    asset: the two look the same) resolves to nothing, with the id in `missing`. With no `focus`, a site with ONE top-level
+    asset means that asset; with none or several, a breakdown looks at the whole site, a "children" widget lists the
+    top-level assets, and any other widget asks for a focus (state "choose"). A stat, a gauge and a comparison therefore
+    never see more than one asset, and a "children" widget never more than MAX_ASSETS."""
+    if config.scope == "fixed":
+        return _Resolved(config, None, False, [])
+    following = config.model_copy(update={"scope": "fixed"})
+    breakdown = config.bars == "kind"
+    roots = tree.roots()
+    if focus is not None and focus not in tree.nodes:
+        return _Resolved(following, _focus_block(tree, None, "gone", None, None), True, [focus])
+    target = focus if focus is not None else (roots[0] if len(roots) == 1 else None)
+    top_level = len(roots) if focus is None else None
+    if target is None:  # no focus, and the site has no single top-level asset to stand for it
+        if config.scope == "children":
+            shown = roots[:MAX_ASSETS]
+            counted = {"shown": len(shown), "count": len(roots)}
+            return _Resolved(
+                following.model_copy(update={"assets": shown}), _focus_block(tree, None, "ok", counted, top_level),
+                not shown, [],
+            )
+        if breakdown:  # the whole site: `root` stays unset
+            return _Resolved(following, _focus_block(tree, None, "ok", None, top_level), False, [])
+        return _Resolved(following, _focus_block(tree, None, "choose", None, top_level), True, [])
+    if config.scope == "focus":
+        chosen = {"root": target} if breakdown else {"assets": [target]}
+        return _Resolved(following.model_copy(update=chosen), _focus_block(tree, target, "ok", None, top_level), False, [])
+    kids = tree.children(target)
+    shown = kids[:MAX_ASSETS]
+    counted = {"shown": len(shown), "count": len(kids)}
+    return _Resolved(
+        following.model_copy(update={"assets": shown}), _focus_block(tree, target, "ok", counted, top_level), not shown, []
+    )
+
+
 async def compute_widget(
-    db: AsyncSession, widget_type: str, config: WidgetConfig, preset: str, now: datetime
+    db: AsyncSession, widget_type: str, config: WidgetConfig, preset: str, now: datetime, *, focus: int | None = None
 ) -> WidgetResult:
     tz_name = await current_timezone(db)
     try:
@@ -779,13 +855,18 @@ async def compute_widget(
     billing = config.source != "metric"
     first, last = _hour_window(preset, start, end) if billing else (start, end)
     tree = await AssetTree.load(db)
+    resolved = _resolve_focus(tree, config, focus)  # w25: from here on the plain widget a following one stands for
+    config = resolved.config
     # Only ids in the tree go on to SQL: a deleted asset, or an id no integer column can hold, is just missing.
     asset_ids = [asset_id for asset_id in config.assets if asset_id in tree.nodes]
     result = WidgetResult(
         type=widget_type, mode=_mode(widget_type, config), source=config.source, metric=None, unit=None,
         preset=preset, start=first.astimezone(zone), end=end.astimezone(zone),
-        missing=[asset_id for asset_id in config.assets if asset_id not in tree.nodes],
+        missing=[asset_id for asset_id in config.assets if asset_id not in tree.nodes] + resolved.missing,
+        focus=resolved.block,
     )
+    if resolved.empty:  # a focus that is gone, none to follow, or no children: the block says why, nothing is computed
+        return result
     if config.bars == "kind":  # validate_data_config made it a bar widget on energy or cost with no assets of its own
         await _fill_breakdown(db, result, tree, config, first, last, end, tz_name, zone)
     elif config.compare != "none":  # a comparison replaces the plain billing figures (validate_data_config made it one asset)
@@ -798,7 +879,7 @@ async def compute_widget(
 
 
 async def widget_data(
-    db: AsyncSession, widget_type: str, config: WidgetConfig, preset: str, now: datetime
+    db: AsyncSession, widget_type: str, config: WidgetConfig, preset: str, now: datetime, *, focus: int | None = None
 ) -> dict[str, Any]:
     """The figures a widget draws, as the JSON body of POST /api/widget-data. `preset` is the effective range."""
-    return (await compute_widget(db, widget_type, config, preset, now)).as_json()
+    return (await compute_widget(db, widget_type, config, preset, now, focus=focus)).as_json()

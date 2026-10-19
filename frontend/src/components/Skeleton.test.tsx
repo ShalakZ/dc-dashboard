@@ -614,6 +614,14 @@ describe("DashboardSkeleton", () => {
     expect(blocks.map((b) => [b.style.width, b.style.height])).toEqual([["142px", `${CTL_H}px`], ["55px", "34px"]]);
   });
 
+  it("with canFocus adds the Focus button's block, 64x34, between the select and Edit's", () => {
+    const { container } = render(<DashboardSkeleton label="Loading the dashboard" canFocus />);
+    const widths = (node: HTMLElement) => [...node.querySelectorAll<HTMLElement>(".dash-head > .sk-block")].map((b) => [b.style.width, b.style.height]);
+    expect(widths(container)).toEqual([["142px", `${CTL_H}px`], ["64px", "34px"]]);
+    const both = render(<DashboardSkeleton label="Loading the dashboard" canFocus canEdit />);
+    expect(widths(both.container)).toEqual([["142px", `${CTL_H}px`], ["64px", "34px"], ["55px", "34px"]]);
+  });
+
   it("ends in four 240px blocks in a two-column grid", () => {
     const { container } = render(<DashboardSkeleton label="Loading the dashboard" />);
     const blocks = [...container.querySelectorAll<HTMLElement>(".sk-quad > .sk-block")];

@@ -703,17 +703,20 @@ export const widgetRefetchMs = (config: WidgetConfig): number => (config.compare
  * belongs to another kind of widget, so nothing is shown until the new one arrives. The one exception is the `kind` of a breakdown
  * by kind (w24): the viewer's "Split by" changes it, and the card keeps the previous bars (it does not swap to a skeleton, so the select stays
  * where it is and keeps its focus) until the new answer lands.
+ * `focus` (w25) is the dashboard's focus asset, passed only by a widget that follows it: with none (`null`) the key and the request body are exactly
+ * what they always were; with one it is appended at the END of the key and sent as `focus`, so `before[1]` and `before[2]` below keep their meaning and a
+ * following card keeps its previous answer across a change of focus (the card dims it, see `WidgetView`). A focus seen earlier is its own cache entry.
  */
-export const useWidgetData = (type: DataWidgetType, config: WidgetConfig, preset: RangePreset, enabled = true) =>
+export const useWidgetData = (type: DataWidgetType, config: WidgetConfig, preset: RangePreset, enabled = true, focus: number | null = null) =>
   useQuery({
-    queryKey: [...keys.widgetData, type, config, preset] as const,
+    queryKey: focus === null ? ([...keys.widgetData, type, config, preset] as const) : ([...keys.widgetData, type, config, preset, focus] as const),
     enabled,
     refetchInterval: widgetRefetchMs(config),
     placeholderData: (previous, previousQuery) => {
       const before = previousQuery?.queryKey; // [..keys.widgetData, type, config, preset]
       return before && before[1] === type && withoutKind(before[2] as WidgetConfig) === withoutKind(config) ? previous : undefined;
     },
-    queryFn: () => api.post<WidgetData>("/api/widget-data", { type, config, range: preset }),
+    queryFn: () => api.post<WidgetData>("/api/widget-data", focus === null ? { type, config, range: preset } : { type, config, range: preset, focus }),
   });
 
 /**

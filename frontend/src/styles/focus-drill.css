@@ -1,0 +1,9 @@
+@layer w6 {
+  /* w25: drill-through on a breakdown by kind (components/dashboard/widgets/BarWidget.tsx, WidgetDetails.tsx). Tokens only; every rule is scoped by a class this
+     piece owns. The pointer over a bar that a click can narrow or open is the chart's own option (BarWidget.tsx), not a rule here: zrender writes the cursor on
+     the canvas box itself. */
+
+  /* The Details panel's trailing cell of "Per asset": the quiet "Narrow" button of a bar whose asset has children (the name is in its accessible name). The cell trims
+     its padding so a row with the button is as tall as one without (the button's box is --ctl-h-sm); the base rule is widgets-details.css's, which comes first. */
+  td.drill-cell { padding-block: 3px; text-align: right; white-space: nowrap; }
+}

@@ -362,5 +362,19 @@ export default defineConfig({
       dependencies: ["w23"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // The focus asset of a dashboard (`?asset=<id>`), the cards that follow it, drill-through on the breakdown and the starter Power dashboard. It MAKES ITS OWN DATA in beforeAll through the API:
+    // `W25 Site` > `W25 Hall 1` > `W25 Row 1` > three racks, `W25 Hall 2` (with one asset of a very long name) and a Panel beside the halls, and the dashboards `w25 <run> follow`, `... edit`, `... drill`
+    // (its breakdown follows the focus), `... plain` (the same breakdown with a root of its own: nothing follows the focus) and one with a very long name; afterAll deletes them (and the role `w25-dash-only`, its account and any "Power" it made), each step on its own, also after a failed case, and puts the account's
+    // own look back. Cases that depend on how many top-level assets the stack holds read that number from GET /api/assets first (case 5 makes a second root and removes it; its last case runs only
+    // when the stack has at most one top-level asset besides this spec's own, and removes `W25 Site` first when there is one). Most cases talk to the real server; the drill-through cases answer the
+    // breakdown's POST /api/widget-data in the page with bars that are real asset ids and click the chart's canvas (the bars are found by their pixels). Its cases set the admin's look (light
+    // navy-gold, dark desert-gold) through PUT /api/me/preferences before a page opens. Each case that needs a window size sets it itself (1440, 1024 with the sidebar minimised and expanded,
+    // and 1440 x 900, 1024 x 640, 800 x 600 for the Focus dialog). No timing is asserted. The cases are serial.
+    {
+      name: "w25",
+      testMatch: "w25.spec.ts",
+      dependencies: ["w24"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

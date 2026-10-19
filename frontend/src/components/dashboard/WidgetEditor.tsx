@@ -2,14 +2,14 @@ import { Fragment, useId, useMemo, useRef, useState } from "react";
 import { useAuth } from "../../auth/AuthProvider";
 import { useAssetKinds } from "../../api/queries";
 import {
-  TEXT_STYLES, WIDGET_TYPES, type Asset, type Metric, type RangePreset, type TextStyle, type WidgetBars, type WidgetSource, type WidgetType,
+  TEXT_STYLES, WIDGET_TYPES, type Asset, type Metric, type RangePreset, type TextStyle, type WidgetBars, type WidgetScope, type WidgetSource, type WidgetType,
 } from "../../api/types";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
 import {
   AGGREGATION_LABELS, allowedAggregations, allowedSources, blankForm, compareAllowed, formFromDraft, formIssues, formToFields, isCompareOn,
-  isKindMode, keepAssetsWithMetric, MAX_ASSETS, MAX_TEXT, MAX_TOP, MIN_TOP, singleAssetForm, SOURCE_LABELS, TYPE_LABELS, WIDGET_METRICS,
-  withBars, withCompare, withMetric, withSource, withType,
+  isKindMode, keepAssetsWithMetric, MAX_ASSETS, MAX_TEXT, MAX_TOP, MIN_TOP, scopeAllowed, singleAssetForm, SOURCE_LABELS, TYPE_LABELS, WIDGET_METRICS,
+  withBars, withCompare, withMetric, withRoot, withScope, withSource, withType,
   type Aggregation, type WidgetFields, type WidgetForm, type WidgetMetric,
 } from "../../lib/dashboardEdit";
 import type { DraftWidget } from "../../lib/layout";
@@ -44,13 +44,64 @@ interface Props {
   onClose: () => void;
 }
 
+/** The scope choices in the order they are drawn: the widget's own assets (the default), the dashboard's focus asset, the focus asset's children. */
+const SCOPE_OPTIONS: ReadonlyArray<{ scope: WidgetScope; label: string }> = [
+  { scope: "fixed", label: "Assets chosen here" },
+  { scope: "focus", label: "The focus asset" },
+  { scope: "children", label: "The children of the focus asset" },
+];
+
+/** What a widget that follows the focus shows, in plain words: it stands where the asset picker would be. */
+function followNote(form: WidgetForm): string {
+  if (form.scope === "children") {
+    const each = form.type === "bar" ? "bar" : form.type === "table" ? "row" : "line";
+    return `Shows the children of the focus asset, one ${each} each. With no focus it shows the top-level assets.`;
+  }
+  return "Shows the asset chosen as the dashboard's focus. With no focus it shows the site's only top-level asset, or asks for a focus when there are several.";
+}
+
+interface ScopeChoiceProps {
+  form: WidgetForm;
+  /** The radios' shared name, and the id of the sentence that describes a scope that follows. */
+  name: string;
+  noteId: string;
+  onChoose: (scope: WidgetScope) => void;
+}
+
+/**
+ * What the widget draws, as a radio group (so one Tab stop and the arrow keys): the assets chosen in this dialog, the dashboard's focus asset, or the
+ * focus asset's children where the widget can draw them. The legend is "Show" and holds no "assets": the picker's legend ("Assets") stays the only
+ * group a lookup by that name finds. A bar chart by kind has no such group; its Look under controls carry the focus instead (see KindBars). The
+ * labels are plain (no `inline`): app.css lays a label that wraps a radio out as [radio] text, and `label.inline` is the comparison box's alone (e2e).
+ */
+function ScopeChoice({ form, name, noteId, onChoose }: ScopeChoiceProps) {
+  const offered = SCOPE_OPTIONS.filter((o) => o.scope !== "children" || form.scope === "children" || scopeAllowed(form, "children"));
+  return (
+    <fieldset aria-describedby={form.scope === "fixed" ? undefined : noteId}>
+      <legend>Show</legend>
+      {offered.map((o) => (
+        <label key={o.scope}>
+          <input type="radio" name={name} checked={form.scope === o.scope} onChange={() => onChoose(o.scope)} />
+          {o.label}
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 interface KindBarsProps {
   assets: Asset[];
   root: number | null;
+  /** "focus": the breakdown looks under the dashboard's focus asset, which has no place of its own here. */
+  scope: WidgetScope;
   kind: string;
   top: string;
   /** The asset the saved widget looked under no longer exists: it is shown as the whole site, with a note. */
   rootGone: boolean;
+  /** A place picked in the tree, or null for the whole site: either way the widget has a place of its own again. */
+  onRoot: (root: number | null) => void;
+  /** The quiet button The focus asset. */
+  onFocus: () => void;
   patch: (changes: Partial<WidgetForm>) => void;
   /** The ids of the two text fields and of the list of suggestions. */
   ids: { kind: string; top: string; list: string };
@@ -58,30 +109,36 @@ interface KindBarsProps {
 
 /**
  * The asset field of a bar chart with one bar per asset of a kind (it replaces the Assets picker): where to look (a single pick over the whole
- * tree, or the whole site), the kind to draw a bar for (the registry's kinds as suggestions) and how many bars to draw. The three labels are
- * exactly "Look under", "One bar for each" and "Bars to show": the picker has its own "Filter by kind", and a lookup by substring must not
- * find two of them. The kinds are asked for only here, so a dialog that never gets to this mode sends no request for them.
+ * tree, the whole site, or the dashboard's focus asset), the kind to draw a bar for (the registry's kinds as suggestions) and how many bars to draw.
+ * The three labels are exactly "Look under", "One bar for each" and "Bars to show": the picker has its own "Filter by kind", and a lookup by
+ * substring must not find two of them. The kinds are asked for only here, so a dialog that never gets to this mode sends no request for them.
  */
-function KindBars({ assets, root, kind, top, rootGone, patch, ids }: KindBarsProps) {
+function KindBars({ assets, root, scope, kind, top, rootGone, onRoot, onFocus, patch, ids }: KindBarsProps) {
   const { can } = useAuth();
   const { data: kinds } = useAssetKinds(can("assets.view"));
   const labels = useMemo(() => assetLabels(assets), [assets]);
-  const picked = useMemo(() => (root === null ? [] : [root]), [root]);
+  const underFocus = scope === "focus";
+  const wholeSite = !underFocus && root === null;
+  const picked = useMemo(() => (underFocus || root === null ? [] : [root]), [underFocus, root]);
   return (
     <>
       <AssetPicker
         key="look-under" label="Look under" assets={assets} selected={picked} single max={1}
-        onChange={(chosen) => patch({ root: chosen[0] ?? null })}
+        onChange={(chosen) => onRoot(chosen[0] ?? null)}
       />
-      {/* The button is never disabled: a disabled button that has the focus drops it to the page. It does nothing while the whole site is already chosen. */}
+      {/* The buttons are never disabled: a disabled button that has the focus drops it to the page. Each does nothing while its place is already chosen. */}
       <div className="row">
-        <p className="spacer" aria-live="polite">{`Under: ${root === null ? "Whole site" : labels.get(root) ?? `Asset #${root}`}`}</p>
-        <button type="button" className="quiet whole-site" aria-disabled={root === null ? true : undefined} onClick={() => { if (root !== null) patch({ root: null }); }}>
+        <p className="spacer" aria-live="polite">{`Under: ${underFocus ? "The focus asset" : root === null ? "Whole site" : labels.get(root) ?? `Asset #${root}`}`}</p>
+        <button type="button" className="quiet whole-site" aria-disabled={wholeSite ? true : undefined} onClick={() => { if (!wholeSite) onRoot(null); }}>
           Whole site
+        </button>
+        {/* The same class: it is the editor's one look for a quiet button that does nothing right now. */}
+        <button type="button" className="quiet whole-site" aria-disabled={underFocus ? true : undefined} onClick={() => { if (!underFocus) onFocus(); }}>
+          The focus asset
         </button>
       </div>
       {/* The sentence is true only while the form still looks at the whole site: a new pick hides it (visibility, so the line keeps its room and nothing below moves). */}
-      {rootGone && <p className="muted" style={{ visibility: root === null ? "visible" : "hidden" }}>The asset this widget looked under was removed, so it now looks at the whole site.</p>}
+      {rootGone && <p className="muted" style={{ visibility: wholeSite ? "visible" : "hidden" }}>The asset this widget looked under was removed, so it now looks at the whole site.</p>}
       <div className="field has-tip">
         <label htmlFor={ids.kind}>One bar for each</label>
         <InfoTip>{KIND_TIP}</InfoTip>
@@ -297,19 +354,28 @@ export function WidgetEditor({ initial, assets, metricAssets, dashboardRange, ti
           <div>
             {kindMode && (
               <KindBars
-                assets={assets} root={form.root} kind={form.kind} top={form.top} rootGone={rootGone} patch={patch}
+                assets={assets} root={form.root} scope={form.scope} kind={form.kind} top={form.top} rootGone={rootGone} patch={patch}
+                onRoot={(chosen) => setForm((f) => withRoot(f, chosen))} onFocus={() => setForm((f) => withScope(f, "focus"))}
                 ids={{ kind: field("kind"), top: field("top"), list: field("kinds") }}
               />
             )}
             {form.type !== "text" && !kindMode && (
               <>
-                <AssetPicker
-                  key="assets"
-                  assets={offered} tree={assets} notes={notes} selected={form.assets} onChange={(ids) => patch({ assets: ids })}
-                  single={singleAssetForm(form)} max={MAX_ASSETS}
-                  empty={assets.length > 0 ? `No asset has a mapping for ${form.metric}; choose another metric.` : undefined}
-                />
-                {dropped > 0 && <p className="muted">{dropped} removed asset{dropped === 1 ? " was" : "s were"} dropped from this widget.</p>}
+                <ScopeChoice form={form} name={field("scope")} noteId={field("scope-note")} onChoose={(scope) => setForm((f) => withScope(f, scope))} />
+                {form.scope === "fixed" ? (
+                  <>
+                    <AssetPicker
+                      key="assets"
+                      assets={offered} tree={assets} notes={notes} selected={form.assets} onChange={(ids) => patch({ assets: ids })}
+                      single={singleAssetForm(form)} max={MAX_ASSETS}
+                      empty={assets.length > 0 ? `No asset has a mapping for ${form.metric}; choose another metric.` : undefined}
+                    />
+                    {dropped > 0 && <p className="muted">{dropped} removed asset{dropped === 1 ? " was" : "s were"} dropped from this widget.</p>}
+                  </>
+                ) : (
+                  // The picker is not in the page at all: the focus chooses the assets, and the assets picked for the other choice wait in the form.
+                  <p id={field("scope-note")} className="muted">{followNote(form)}</p>
+                )}
               </>
             )}
             <h3>Preview</h3>

@@ -28,7 +28,11 @@ lacks says "No access".
   the same days of last month, and a bar chart can draw one bar for each asset of a kind, with a **Split by** choice on the card (see
   [Comparing with last month and Breakdown by kind](dashboards-and-billing.md#dashboards)); the information button on a card opens
   **Details**, a panel with what the card shows, its time window and freshness, what its markers mean and its figures as text (where a
-  figure says "no rate", a person who may open Tariffs gets a link to it there).
+  figure says "no rate", a person who may open Tariffs gets a link to it there). With `assets.view` as well, a dashboard can be pointed at
+  one asset with the **Focus** button (held in the address as `?asset=<id>` and shown in the trail; the cards set to follow it show that
+  asset), and a click on a bar of a breakdown narrows it further or opens the asset's page; **New dashboard** can **Start from**
+  Power, a starter with this month's energy and cost against last month (see
+  [A focus asset, Drill-through and The Power starter](dashboards-and-billing.md#dashboards)).
   An admin (`dashboards.default`) can mark one as the default, and the sidebar entry and the
   first page after signing in then open it. See [Dashboards and billing](dashboards-and-billing.md).
 - **Billing** (everyone): needs `billing.view`. Energy and cost per asset per day and per month, picked with the Year and Month

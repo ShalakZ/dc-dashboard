@@ -16,6 +16,15 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w25 (2026-10-19, merge pending)
+
+w25 lets a dashboard follow **one focus asset**. The Focus button (needs See the Assets Tree) or the address `?asset=<id>` points it at a hall,
+row or rack: widgets set to follow it show that asset or its children, the others keep their own assets and say so, the trail climbs back up, and
+a link to a deleted asset falls back to the whole site. In view mode a click on a breakdown bar narrows the dashboard to that asset or opens its
+page. **New dashboard > Start from Power** builds a starter: energy and cost this month against last month, a daily chart and a breakdown by the
+kind that has meters. No migration, no new permission; the widget API takes an optional `focus` and the config key `scope`, `POST /api/dashboards`
+an optional `recipe`. Rules: [Dashboards and billing](docs/dashboards-and-billing.md). Nothing to do when you upgrade; the code to go back to is `c43a903`.
+
 ## w24 (2026-10-19, 9874792)
 
 w24 adds two things to dashboard widgets. A stat or a time series of energy or cost for one asset can **compare this month so far with the

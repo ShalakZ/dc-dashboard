@@ -17,7 +17,7 @@ import { expect, test, type APIRequestContext, type Browser, type Locator, type 
 //   3   the compare DAILY CHART: read through its text alternative (the legend is canvas) and the hover tooltip, which names both dates of a day and leaves out a day with no readings; light and
 //       dark; the Details table.
 //   4   the BREAKDOWN: "and 107 more Racks: 1234.50 kWh in all", the marks (`~`, "with no data", "inside other Racks"), "Split by" (accessible name, "Rack (117)"), a choice sends a request whose
-//       config has that kind, keeps the focus, saves nothing; "None of the 8 Panels under W24 Hall 1 has energy readings."; "No Racks under W24 Hall 1.".
+//       config has that kind, keeps the focus, saves nothing; "None of the 8 Panels under W24 Hall 1 has energy readings."; "No Racks under W24 Hall 1. Choose another kind in Split by.".
 //   5   the EDITOR: the comparison box locks Widget range and turns the picker single; Bars gains "One bar per asset of a kind" with Look under, One bar for each, Bars to show and Whole site; the
 //       saved configs hold compare, kind, root and top only when they are not the default (read back with GET /api/dashboards/<id>); keyboard only; Escape closes the innermost layer.
 //   6   PLACEMENT at 1440 x 900, 1024 x 640 and 800 x 600, light and dark: the card's new parts and the editor's new fields do not overlap, nothing scrolls, Save widget stays inside the window;
@@ -945,7 +945,7 @@ test("4. no Racks at all, and one Rack without a figure: a sentence in the chart
   stub.breakdown = () => ({ block: breakdownBlock({ count: 0, shown: 0, ...none, kinds: [{ kind: "Panel", count: 8 }] }), noData: false });
   await openCards(page);
   const b = barsOf(frameOf(page, T_BARS));
-  await expect(b.empty).toHaveText(`No Racks under ${HALL}.`);
+  await expect(b.empty, "under a hall that holds other kinds, the sentence says where to choose one (w25)").toHaveText(`No Racks under ${HALL}. Choose another kind in Split by.`);
   await expect(b.chart).toHaveCount(0);
   await expect(b.split.locator("option"), "the kind being shown is listed even with none under the root").toHaveText(["Rack (0)", "Panel (8)"]);
   await expect(b.split).toHaveValue("Rack");
@@ -1207,14 +1207,14 @@ test("5. by keyboard: Tab runs through the comparison box and its tip, Space tic
   await fieldOf(dialog, "Source").selectOption("energy");
   await settled(page);
 
-  // Tab from Title through the fields to the comparison box, its tip and the picker.
+  // Tab from Title through the fields to the comparison box, its tip, the scope radios (one stop: the checked one) and the picker.
   await fieldOf(dialog, "Title").focus();
   const seen: string[] = [];
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 7; i++) {
     await page.keyboard.press("Tab");
     seen.push(await focusedName(page));
   }
-  expect(seen, "the Tab order").toEqual(["Source", "Aggregation", "Widget range", COMPARE_LABEL, "What does this mean?", "Search assets"]);
+  expect(seen, "the Tab order").toEqual(["Source", "Aggregation", "Widget range", COMPARE_LABEL, "What does this mean?", "Assets chosen here", "Search assets"]);
 
   // Space on the box ticks it; the focus stays on the box; unticking by Space restores the range.
   await compareBox(dialog).focus();

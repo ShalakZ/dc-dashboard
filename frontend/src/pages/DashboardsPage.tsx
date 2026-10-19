@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { useDashboards, useDefaultDashboard, useDeleteDashboard, usePutDefaultDashboard, useSite } from "../api/queries";
 import type { DashboardListItem } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
-import { CreateDashboardDialog } from "../components/dashboard/CreateDashboardDialog";
+import { CreateDashboardDialog, type StartFrom } from "../components/dashboard/CreateDashboardDialog";
 import { PageHeader } from "../components/PageHeader";
 import { RowActions } from "../components/RowActions";
 import { TableSkeleton } from "../components/Skeleton";
@@ -26,7 +26,7 @@ export function DashboardsPage() {
   const { run, error: actionError } = useAction();
   const [ask, confirmDialog] = useConfirm();
   const toast = useToast();
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState<StartFrom | null>(null); // what the open New dashboard dialog starts from
 
   const failure = list.error ?? site.error;
   const timezone = site.data?.timezone;
@@ -53,7 +53,7 @@ export function DashboardsPage() {
     <>
       <PageHeader
         title="Dashboards"
-        actions={canEdit ? <button type="button" className="primary" onClick={() => setCreating(true)}>New dashboard</button> : undefined}
+        actions={canEdit ? <button type="button" className="primary" onClick={() => setCreating("blank")}>New dashboard</button> : undefined}
       />
       {actionError && <p className="error" role="alert">{actionError}</p>}
       {confirmDialog}
@@ -65,6 +65,12 @@ export function DashboardsPage() {
             <svg className="i" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="9" rx="1.5" /><rect x="13.5" y="3" width="7.5" height="5" rx="1.5" /><rect x="13.5" y="11" width="7.5" height="10" rx="1.5" /><rect x="3" y="15" width="7.5" height="6" rx="1.5" /></svg>
           </span>
           <p>No dashboards yet.{canEdit ? " Create one to get started." : ""}</p>
+          {canEdit && (
+            <div className="row start-from-buttons">
+              <button type="button" onClick={() => setCreating("blank")}>Start blank</button>
+              <button type="button" onClick={() => setCreating("power")}>Start from Power</button>
+            </div>
+          )}
         </div>
       )}
       {list.data && timezone !== undefined && list.data.length > 0 && (
@@ -103,7 +109,7 @@ export function DashboardsPage() {
           </table>
         </div>
       )}
-      {creating && <CreateDashboardDialog onClose={() => setCreating(false)} />}
+      {creating && <CreateDashboardDialog initialStart={creating} onClose={() => setCreating(null)} />}
     </>
   );
 }

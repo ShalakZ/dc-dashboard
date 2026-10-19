@@ -1,7 +1,7 @@
 import { ApiError } from "../api/client";
 import {
   METRICS, type Dashboard, type DashboardSave, type DataWidgetType, type GraphModel, type Metric, type RangePreset, type TextConfig,
-  type TextStyle, type WidgetAggregation, type WidgetBars, type WidgetConfig, type WidgetIn, type WidgetSource, type WidgetType,
+  type TextStyle, type WidgetAggregation, type WidgetBars, type WidgetConfig, type WidgetIn, type WidgetScope, type WidgetSource, type WidgetType,
 } from "../api/types";
 import { compactVertical, toDrafts, type DraftWidget } from "./layout";
 import { normalizeText } from "./textWidget";
@@ -69,12 +69,17 @@ export interface WidgetForm {
   root: number | null;
   kind: string;
   top: string;
+  /**
+   * What the widget draws: its own `assets` ("fixed"), the dashboard's focus asset ("focus") or that asset's children ("children"). A widget that follows
+   * sends no assets, but the form keeps the ones picked, so choosing "fixed" again finds them.
+   */
+  scope: WidgetScope;
 }
 
 export function blankForm(): WidgetForm {
   return {
     type: "timeseries", title: "", style: "heading", text: "", source: "metric", metric: "active_power_kw", aggregation: "avg",
-    range: "", bars: "asset", gaugeMin: "0", gaugeMax: "", assets: [], compare: false, root: null, kind: "", top: String(DEFAULT_TOP),
+    range: "", bars: "asset", gaugeMin: "0", gaugeMax: "", assets: [], compare: false, root: null, kind: "", top: String(DEFAULT_TOP), scope: "fixed",
   };
 }
 
@@ -87,6 +92,33 @@ export const compareAllowed = (form: Pick<WidgetForm, "type" | "source">): boole
 export const isCompareOn = (form: WidgetForm): boolean => form.compare && compareAllowed(form);
 /** The asset field takes one asset: a stat, a gauge, or a time series that compares (its chart draws one asset against its own last month). */
 export const singleAssetForm = (form: WidgetForm): boolean => isSingleAsset(form.type) || (form.type === "timeseries" && isCompareOn(form));
+
+/**
+ * Whether the widget may have this scope. The chosen assets and the focus asset suit every data widget; the children of the focus asset are many
+ * assets, so only a time series, a table and a bar chart with a bar per asset or per time bucket can draw them, and not with the comparison (one asset).
+ */
+export function scopeAllowed(form: WidgetForm, scope: WidgetScope): boolean {
+  if (scope !== "children") return true;
+  const draws = form.type === "timeseries" || form.type === "table" || (form.type === "bar" && !isKindMode(form));
+  return draws && !isCompareOn(form);
+}
+
+/** The scope a change left invalid, put right: the children of the focus become the focus itself (one asset, which every widget can show). */
+function repairedScope(form: WidgetForm): WidgetForm {
+  return form.scope === "children" && !scopeAllowed(form, "children") ? { ...form, scope: "focus" } : form;
+}
+
+/**
+ * Choose what the widget draws. A scope the widget cannot have returns the same form. The assets picked for the chosen-here scope stay in the form;
+ * a breakdown that looks under the focus has no place of its own (the form drops it, and Look under shows nothing picked).
+ */
+export function withScope(form: WidgetForm, scope: WidgetScope): WidgetForm {
+  if (!scopeAllowed(form, scope)) return form;
+  return scope === "focus" && isKindMode(form) ? { ...form, scope, root: null } : { ...form, scope };
+}
+
+/** Choose the place a breakdown by kind looks under (null: the whole site). A place of its own means the widget no longer follows the focus. */
+export const withRoot = (form: WidgetForm, root: number | null): WidgetForm => ({ ...form, root, scope: "fixed" });
 
 /** What a widget dialog saves: a data widget (a type that fetches, with its data config) or a text widget (its style and text). */
 export type WidgetFields =
@@ -113,16 +145,20 @@ export function formFromDraft(draft: WidgetFields): WidgetForm {
     root: c.root ?? null,
     kind: c.kind ?? "",
     top: String(c.top ?? DEFAULT_TOP),
+    scope: c.scope ?? "fixed",
   };
 }
 
-/** Put back what the form's modes need after a type or source change: a metric source has no bars of a kind and no comparison, and the comparison needs its type. */
+/**
+ * Put back what the form's modes need after a type or source change: a metric source has no bars of a kind and no comparison, the comparison needs
+ * its type, and the children of the focus need a widget that can draw many assets (the scope comes last: it depends on the other two).
+ */
 function repaired(form: WidgetForm): WidgetForm {
   const next = { ...form };
   if (next.source === "metric" && next.bars === "kind") next.bars = "asset";
   if (next.compare && !compareAllowed(next)) next.compare = false; // the range stays as it is: only an explicit untick gives the old one back
   if (singleAssetForm(next)) next.assets = next.assets.slice(0, 1);
-  return next;
+  return repairedScope(next);
 }
 
 /**
@@ -158,7 +194,7 @@ export function withBars(form: WidgetForm, bars: WidgetBars): WidgetForm {
     const aggregations = allowedAggregations("bar", "energy");
     if (!aggregations.includes(next.aggregation)) next.aggregation = aggregations[0];
   }
-  return next;
+  return repairedScope(next); // a breakdown cannot follow the children: it looks under the focus instead
 }
 
 /**
@@ -168,7 +204,7 @@ export function withBars(form: WidgetForm, bars: WidgetBars): WidgetForm {
 export function withCompare(form: WidgetForm, on: boolean, restoreRange: RangePreset | "" = form.range): WidgetForm {
   if (!on) return { ...form, compare: false, range: restoreRange };
   if (!compareAllowed(form)) return form;
-  return { ...form, compare: true, range: "this_month", assets: form.assets.slice(0, 1) };
+  return repairedScope({ ...form, compare: true, range: "this_month", assets: form.assets.slice(0, 1) });
 }
 
 /** Choose the metric of a metric source. `energy_kwh` only has its latest value, so that is selected for it. */
@@ -203,8 +239,11 @@ export function metricAssetsOf(graph: GraphModel): Map<Metric, Set<number>> {
   return byMetric;
 }
 
-/** `compare`: the comparison's rules (one asset). `bars`: a breakdown by kind without a usable kind. `top`: the number of bars of a breakdown. */
-export interface FormIssues { title?: string; text?: string; assets?: string; aggregation?: string; gauge?: string; compare?: string; bars?: string; top?: string }
+/**
+ * `compare`: the comparison's rules (one asset). `bars`: a breakdown by kind without a usable kind. `top`: the number of bars of a breakdown.
+ * `scope`: the children of the focus asked of a widget that cannot draw them (the dialog never builds one; a form made by hand can).
+ */
+export interface FormIssues { title?: string; text?: string; assets?: string; aggregation?: string; gauge?: string; compare?: string; bars?: string; top?: string; scope?: string }
 
 const toNumber = (text: string): number => (text.trim() === "" ? NaN : Number(text));
 
@@ -230,6 +269,8 @@ export function formIssues(form: WidgetForm): FormIssues {
   }
 
   const count = form.assets.length;
+  const follows = form.scope !== "fixed"; // the focus chooses the assets: none are counted, and a breakdown needs no place
+  if (!scopeAllowed(form, form.scope)) issues.scope = "Only a time series, a table or a bar chart per asset or per time bucket can show the children of the focus asset, and not with the comparison.";
   if (isKindMode(form)) {
     // One bar per asset of a kind has no assets of its own (the form sends none); it asks for the kind and the number of bars instead.
     const kind = form.kind.trim();
@@ -238,13 +279,16 @@ export function formIssues(form: WidgetForm): FormIssues {
     const top = toNumber(form.top);
     if (!Number.isInteger(top) || top < MIN_TOP || top > MAX_TOP) issues.top = `Bars to show must be a whole number from ${MIN_TOP} to ${MAX_TOP}.`;
   } else if (isCompareOn(form)) {
-    // One message for a missing or extra asset: the comparison is of one asset, whatever the type would say about it. The type and the source
-    // cannot be wrong here (isCompareOn), and the editor locks the range to this month; the range rule is the server's, kept for a form built by hand.
-    if (count !== 1) issues.compare = "A comparison needs exactly one asset.";
+    // One message for a missing or extra asset: the comparison is of one asset, whatever the type would say about it (a widget that follows has none
+    // to count). The type and the source cannot be wrong here (isCompareOn), and the editor locks the range to this month; the range rule is the
+    // server's, kept for a form built by hand.
+    if (!follows && count !== 1) issues.compare = "A comparison needs exactly one asset.";
     else if (form.range !== "this_month") issues.compare = "A comparison looks at this month, so the widget range must be This month.";
-  } else if (count === 0) issues.assets = isSingleAsset(form.type) ? "Choose an asset." : "Choose at least one asset.";
-  else if (isSingleAsset(form.type) && count > 1) issues.assets = `A ${form.type} shows one asset.`;
-  else if (count > MAX_ASSETS) issues.assets = `At most ${MAX_ASSETS} assets.`;
+  } else if (!follows) {
+    if (count === 0) issues.assets = isSingleAsset(form.type) ? "Choose an asset." : "Choose at least one asset.";
+    else if (isSingleAsset(form.type) && count > 1) issues.assets = `A ${form.type} shows one asset.`;
+    else if (count > MAX_ASSETS) issues.assets = `At most ${MAX_ASSETS} assets.`;
+  }
 
   if (form.type === "gauge") {
     const min = toNumber(form.gaugeMin);
@@ -276,11 +320,12 @@ export function formToFields(form: WidgetForm): WidgetFields {
   const gauge = form.type === "gauge";
   const kindMode = isKindMode(form);
   const top = toNumber(form.top);
+  const follows = form.scope !== "fixed";
   return {
     type: form.type,
     title: form.title.trim(),
     config: {
-      assets: kindMode ? [] : [...form.assets],
+      assets: kindMode || follows ? [] : [...form.assets], // a widget that follows has no assets of its own, whatever the form still holds
       source: form.source,
       metric: form.source === "metric" ? form.metric : null,
       // A time series draws the average whatever it is told, and the dialog hides the control: always send the plain default.
@@ -293,8 +338,9 @@ export function formToFields(form: WidgetForm): WidgetFields {
       // widget stays exactly as it was (the server leaves the same keys out of its own dump).
       ...(isCompareOn(form) ? { compare: COMPARE_MODE } : {}),
       ...(kindMode ? { kind: form.kind.trim() } : {}),
-      ...(kindMode && form.root !== null ? { root: form.root } : {}),
+      ...(kindMode && !follows && form.root !== null ? { root: form.root } : {}), // under the focus there is no place of its own
       ...(kindMode && Number.isInteger(top) && top !== DEFAULT_TOP ? { top } : {}),
+      ...(follows ? { scope: form.scope } : {}), // w25: absent for "fixed", like the keys above
     },
   };
 }

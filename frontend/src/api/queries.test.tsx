@@ -434,6 +434,85 @@ describe("phase 3 queries", () => {
   });
 });
 
+describe("useWidgetData and the focus (w25)", () => {
+  const follow: WidgetConfig = { assets: [], source: "energy", metric: null, aggregation: "sum", range: "this_month", bars: "asset", min: 0, max: null, scope: "focus" };
+  const reply = (focus: number | null) => ({
+    type: "stat", mode: "values", source: "energy", metric: null, unit: "kWh", range: { preset: "this_month", start: "s", end: "e" }, tier: null, bucket: null,
+    series: [], values: [], missing: [], no_metric: [], focus: focus === null ? null : { asset: { id: focus, name: `Asset ${focus}`, path: `Asset ${focus}` }, state: "ok", children: null, top_level: null },
+  });
+  const asked = (calls: { path: string; body: unknown }[]) => calls.filter((c) => c.path === "/api/widget-data");
+
+  it("without a focus the body and the key are exactly what they were before the focus existed", async () => {
+    const calls = mockFetch({ "POST /api/widget-data": () => ({ body: reply(null) }) });
+    const { result } = renderHook(() => useWidgetData("stat", follow, "this_month"), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    const body = asked(calls)[0].body as Record<string, unknown>;
+    expect(Object.keys(body)).toEqual(["type", "config", "range"]);
+    expect(body).toEqual({ type: "stat", config: follow, range: "this_month" });
+    // an explicit null is the same as leaving it out
+    const again = renderHook(() => useWidgetData("stat", follow, "this_month", true, null), { wrapper: stableWrapper() });
+    await waitFor(() => expect(again.result.current.data).toBeDefined());
+    expect(Object.keys(asked(calls)[1].body as object)).toEqual(["type", "config", "range"]);
+  });
+
+  it("with a focus the request carries it, and the cache key ends with it", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const calls = mockFetch({ "POST /api/widget-data": ({ body }) => ({ body: reply((body as { focus?: number }).focus ?? null) }) });
+    const { result } = renderHook(() => useWidgetData("stat", follow, "this_month", true, 7), {
+      wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+    });
+    await waitFor(() => expect(result.current.data?.focus?.asset?.id).toBe(7));
+    expect(asked(calls)[0].body).toEqual({ type: "stat", config: follow, range: "this_month", focus: 7 });
+    expect(client.getQueryCache().getAll().map((q) => q.queryKey)).toEqual([[...keys.widgetData, "stat", follow, "this_month", 7]]);
+  });
+
+  it("a change of focus keeps the previous answer (as a placeholder) while the new one loads, then shows the new one", async () => {
+    const calls = mockFetch({ "POST /api/widget-data": ({ body }) => ({ body: reply((body as { focus?: number }).focus ?? null) }) });
+    const { result, rerender } = renderHook(({ focus }: { focus: number | null }) => useWidgetData("stat", follow, "this_month", true, focus), {
+      wrapper: stableWrapper(), initialProps: { focus: 7 as number | null },
+    });
+    await waitFor(() => expect(result.current.data?.focus?.asset?.id).toBe(7));
+    expect(result.current.isPlaceholderData).toBe(false);
+    const held = holdFetch((method, path) => method === "POST" && path === "/api/widget-data");
+    rerender({ focus: 9 });
+    expect(result.current.isPlaceholderData).toBe(true);
+    expect(result.current.data?.focus?.asset?.id).toBe(7);
+    held.release();
+    await waitFor(() => expect(result.current.data?.focus?.asset?.id).toBe(9));
+    expect(result.current.isPlaceholderData).toBe(false);
+    // and from a focus to none: the same rule, the request carries no focus key
+    rerender({ focus: null });
+    expect(result.current.isPlaceholderData).toBe(true);
+    await waitFor(() => expect(result.current.isPlaceholderData).toBe(false));
+    expect(asked(calls).map((c) => (c.body as { focus?: number }).focus)).toEqual([7, 9, undefined]);
+    expect(Object.keys(asked(calls)[2].body as object)).toEqual(["type", "config", "range"]);
+  });
+
+  it("a focus seen earlier is shown from the cache at once (not as a placeholder); it may be read again in the background", async () => {
+    mockFetch({ "POST /api/widget-data": ({ body }) => ({ body: reply((body as { focus?: number }).focus ?? null) }) });
+    const { result, rerender } = renderHook(({ focus }: { focus: number }) => useWidgetData("stat", follow, "this_month", true, focus), {
+      wrapper: stableWrapper(), initialProps: { focus: 7 },
+    });
+    await waitFor(() => expect(result.current.data?.focus?.asset?.id).toBe(7));
+    rerender({ focus: 9 });
+    await waitFor(() => expect(result.current.data?.focus?.asset?.id).toBe(9));
+    rerender({ focus: 7 });
+    expect(result.current.data?.focus?.asset?.id).toBe(7); // its own answer, in the same render
+    expect(result.current.isPlaceholderData).toBe(false);
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+  });
+
+  it("a different config is still another widget: nothing is kept across it, focus or not", async () => {
+    mockFetch({ "POST /api/widget-data": ({ body }) => ({ body: reply((body as { focus?: number }).focus ?? null) }) });
+    const { result, rerender } = renderHook(({ config, focus }: { config: WidgetConfig; focus: number }) => useWidgetData("stat", config, "this_month", true, focus), {
+      wrapper: stableWrapper(), initialProps: { config: follow, focus: 7 },
+    });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    rerender({ config: { ...follow, source: "cost" }, focus: 9 });
+    expect(result.current.data).toBeUndefined();
+  });
+});
+
 describe("useWidgetData refetching (w24)", () => {
   afterEach(() => vi.useRealTimers());
   const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));

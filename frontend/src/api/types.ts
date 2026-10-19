@@ -431,7 +431,13 @@ export interface WidgetConfig {
   assets: number[]; source: WidgetSource; metric: Metric | null; aggregation: WidgetAggregation;
   range: RangePreset | null; bars: WidgetBars; min: number; max: number | null;
   compare?: WidgetCompareMode; kind?: string; root?: number | null; top?: number;
+  scope?: WidgetScope;
 }
+/**
+ * w25. What a widget draws: its own `assets` ("fixed", the default; the key is left out of a stored config), the dashboard's focus asset ("focus"; `assets` is
+ * empty, and a breakdown by kind looks under the focus) or the focus asset's direct children ("children": time series, bars per asset or time, table).
+ */
+export type WidgetScope = "fixed" | "focus" | "children";
 /** What a text widget shows: a heading, a paragraph or a divider, plain text only (a divider holds no text). */
 export const TEXT_STYLES = ["heading", "paragraph", "divider"] as const;
 export type TextStyle = (typeof TEXT_STYLES)[number];
@@ -448,7 +454,8 @@ export interface Dashboard { id: number; name: string; range: RangePreset; updat
 export interface DashboardListItem { id: number; name: string; range: RangePreset; widget_count: number; updated_at: string }
 /** The dashboard people land on; `null` when none is set. */
 export interface DefaultDashboard { dashboard_id: number | null }
-export interface DashboardIn { name: string; range?: RangePreset }
+/** `recipe` (w25): "power" makes the server fill the new dashboard with the starter Power widgets; Blank sends no key. */
+export interface DashboardIn { name: string; range?: RangePreset; recipe?: "power" }
 export interface DashboardSave { name: string; range: RangePreset; updated_at: string; widgets: WidgetIn[] }
 
 /**
@@ -499,6 +506,20 @@ export interface WidgetData {
   series: WidgetSeries[]; values: WidgetValue[]; missing: number[]; no_metric: number[];
   /** Always sent by the server (null when unused); optional here so a test fixture that predates w24 still compiles. */
   compare?: WidgetCompare | null; breakdown?: WidgetBreakdown | null;
+  /** w25: null for a widget that does not follow the focus. */
+  focus?: WidgetFocus | null;
+}
+
+/**
+ * w25. What a widget that follows the focus was asked about. `asset` is the focus asset (null: none, or gone); `state` "gone" is an id that is not in
+ * the tree (no figures), "choose" a site with other than one top-level asset and no focus (a widget that shows one asset draws nothing); `children` is
+ * how many of the focus asset's children a "children" widget shows of how many it has; `top_level` is the number of top-level assets (only when no focus was sent).
+ */
+export interface WidgetFocus {
+  asset: { id: number; name: string; path: string } | null;
+  state: "ok" | "gone" | "choose";
+  children: { shown: number; count: number } | null;
+  top_level: number | null;
 }
 
 /** One step of a connection check (backend diagnostics/check.py `Step.to_json`). `ok: null` = skipped (a step it needs failed). */

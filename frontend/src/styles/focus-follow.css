@@ -1,0 +1,17 @@
+@layer w6 {
+  /* w25: a dashboard card that follows the focus asset (components/dashboard/WidgetView.tsx, WidgetFrame.tsx). Tokens only; every rule is scoped by a class this
+     file owns, because widgets.css owns .widget-body and .widget-foot. The quiet line "Widgets that follow the focus show ..." joins this file in task T4. */
+
+  /* While the answer for a new focus loads, the card keeps its last figures (never undimmed under a new trail) and shows them dimmed: its body and its footer line.
+     No transition: nothing waits for an end event, so reduced motion needs no second rule. aria-busy="true" on the body says the same to a screen reader. */
+  .follow-stale { opacity: 0.55; }
+
+  /* The footer's last sentence ("Its own assets, not Hall 1", "20 of 34 children of Hall 1 shown"). It shrinks with an ellipsis like the others. */
+  /* The sentence gives way first (W5): it has no room of its own to start from (basis 0) and takes only what the "since" line and the marker hint leave over, so on a
+     narrow card w24's words ("no rate", the hint, "since ...") stay whole until nothing is left of it. Its title carries the whole sentence. */
+  .follow-note { flex: 1 1 0; min-width: 0; }
+  /* The dot before it, when the "since" line or the hint comes first, is the sentence's own ::before: inside the clipped box, so a sentence squeezed to nothing takes its
+     dot with it and no dot is left at the end of the line. It is not .widget-dot: the narrow card hides that one whenever a marker hint is present (widgets.css), and
+     the sentence must stay apart from the hint. The space inside the string is the gap to the words. */
+  .follow-note-after::before { content: "· "; }
+}

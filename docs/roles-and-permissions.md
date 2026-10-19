@@ -61,6 +61,16 @@ in it are shown only to a person who also holds See sources, and a point's addre
 interval (`interval_seconds`, the polling the mapping states) and, for a counter that went back, the size of the fall in the meter's own
 units.
 
+`assets.view` also decides who may use a dashboard's focus ([A focus asset](dashboards-and-billing.md#dashboards)): choosing one with
+the **Focus** button, the **Open <name> page** link, and the click on a bar of a breakdown that narrows the dashboard or opens an
+asset's page all need See the Assets Tree. A role with only `dashboards.view` sees the whole site: the controls are not there, a link
+with `?asset=<id>` is ignored (the page says "This link opens the dashboard on one asset. Your role cannot open assets, so it shows the
+whole site."), and the server refuses a `POST /api/widget-data` or `/api/widget-data/csv` that carries a `focus` with a 403
+(`INSUFFICIENT_PERMISSION`). A request without `focus` is unchanged. **Change dashboards** lists See the Assets Tree under "Also needs"
+(the widget form picks assets), so a role with both sees the Focus button when it views a dashboard; starting a
+dashboard from Power needs only `dashboards.edit`. There is no per-asset visibility, so See the Assets Tree opens the whole tree and a
+focus can name any asset in it.
+
 `assets.edit` also lets a person move assets in the Assets Tree ([Moving assets](assets-and-kinds.md#moving-assets)); deleting the picked
 assets from the tree's pick bar needs `assets.delete` as well ([Deleting several assets](assets-and-kinds.md#deleting-several-assets)).
 

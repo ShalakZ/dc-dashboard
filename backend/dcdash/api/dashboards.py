@@ -10,7 +10,7 @@ import json
 import math
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import (
@@ -22,9 +22,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import current_user, get_db, require_permission
 from dcdash.core.audit import audit, audit_change
-from dcdash.core.models import Dashboard, User, Widget
+from dcdash.core.energy import load_meters
+from dcdash.core.models import Asset, Dashboard, User, Widget
+from dcdash.core.recipes import power_widgets
 from dcdash.core.settings_store import DEFAULT_DASHBOARD_KEY, get_setting, set_setting
 from dcdash.core.timeutil import RANGE_PRESETS
+from dcdash.core.tree import AssetTree
 from dcdash.core.widgets import validate_config
 
 router = APIRouter(prefix="/api", tags=["dashboards"])
@@ -37,6 +40,7 @@ MAX_ID = 2_147_483_647  # dashboards.id is a 4-byte SERIAL; the driver raises on
 GRID_COLUMNS = 12
 MAX_ROWS = 1000
 DEFAULT_RANGE = "24h"
+RECIPE_RANGE = "this_month"  # a recipe's dashboard starts here unless the body names a range: its comparisons are of this month
 NAME_TAKEN = "a dashboard with this name already exists"
 STALE = "dashboard changed since you loaded it"
 
@@ -54,6 +58,7 @@ Preset = Annotated[str, AfterValidator(_preset)]
 class DashboardIn(BaseModel):
     name: Name
     range: Preset = DEFAULT_RANGE
+    recipe: Literal["power"] | None = None  # w25: a starter dashboard with its widgets; left out, the dashboard is blank
 
 
 class WidgetIn(BaseModel):
@@ -204,6 +209,15 @@ async def list_dashboards(db: AsyncSession = Depends(get_db)) -> list[DashboardL
     ]
 
 
+async def _recipe_widgets(db: AsyncSession) -> list[dict[str, Any]]:
+    """The widgets of the "power" starter, built from the site as it is now: its asset tree, each asset's kind and which
+    assets have a meter of their own (what decides the kind of the breakdown)."""
+    tree = await AssetTree.load(db)
+    rows = (await db.execute(select(Asset.id, Asset.kind))).all()
+    kinds = {asset_id: kind for asset_id, kind in rows if asset_id in tree.nodes}  # an asset made since the tree was read is left out
+    return power_widgets(tree, kinds, set(await load_meters(db, tree)))
+
+
 @router.post(
     "/dashboards", response_model=DashboardOut, status_code=201, dependencies=[Depends(require_permission("dashboards.edit"))]
 )
@@ -216,19 +230,32 @@ async def create_dashboard(
         raise HTTPException(422, f"at most {MAX_DASHBOARDS} dashboards")
     if await name_taken(db, body.name):
         raise HTTPException(409, NAME_TAKEN)
+    recipe_widgets = await _recipe_widgets(db) if body.recipe == "power" else []
+    configs = checked_configs([WidgetIn(**widget) for widget in recipe_widgets])  # the checks a save runs, before any write
+    # A recipe that is given a range the body does not name starts on this month; a body that names one keeps it.
+    range_ = RECIPE_RANGE if body.recipe and "range" not in body.model_fields_set else body.range
     now = datetime.now(UTC)
-    dashboard = Dashboard(name=body.name, range=body.range, created_by=user.id, created_at=now, updated_at=now)
+    dashboard = Dashboard(name=body.name, range=range_, created_by=user.id, created_at=now, updated_at=now)
     try:
         db.add(dashboard)
         await db.flush()
-        await audit(
-            db, user.id, "dashboard.created", {"dashboard_id": dashboard.id, "name": dashboard.name, "widgets": 0}
-        )
+        widgets = [
+            Widget(
+                dashboard_id=dashboard.id, type=w["type"], title=w["title"], config=config, x=w["x"], y=w["y"], w=w["w"], h=w["h"]
+            )
+            for w, config in zip(recipe_widgets, configs, strict=True)
+        ]
+        db.add_all(widgets)
+        await db.flush()
+        detail = {"dashboard_id": dashboard.id, "name": dashboard.name, "widgets": len(widgets)}
+        if body.recipe:
+            detail["recipe"] = body.recipe
+        await audit(db, user.id, "dashboard.created", detail)
         await db.commit()
     except IntegrityError:  # two creates with the same name raced; the UNIQUE constraint decided
         await db.rollback()
         raise HTTPException(409, NAME_TAKEN) from None
-    return dashboard_out(dashboard, [])
+    return dashboard_out(dashboard, widgets)
 
 
 async def default_dashboard(db: AsyncSession) -> Dashboard | None:

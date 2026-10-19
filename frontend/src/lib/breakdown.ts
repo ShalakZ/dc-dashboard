@@ -1,4 +1,4 @@
-import type { WidgetBreakdown, WidgetData } from "../api/types";
+import type { Asset, WidgetBreakdown, WidgetData } from "../api/types";
 import { kindKey } from "./kinds";
 import { figureText, unitSuffix } from "./widgetFormat";
 
@@ -57,13 +57,21 @@ export const isNoDataBar = (bar: { value: number | null; no_data: boolean }): bo
 /** True when no bar has a figure (or only a silent meter's zero), or there is no bar: the chart has nothing to draw. */
 export const hasNoBars = (values: WidgetData["values"]): boolean => values.every((v) => v.value === null || isNoDataBar(v));
 
+/** The end of the "none of this kind" sentence under an asset. */
+const CHOOSE_KIND = "Choose another kind in Split by.";
+
 /**
  * The sentence that stands in the chart's place when it has nothing to draw: no asset of the kind under the root, or none of them has a figure.
  * `source` decides the noun ("energy readings", "cost figures").
  */
 export function emptyBreakdownText(breakdown: WidgetBreakdown, source: WidgetData["source"]): string {
   const where = breakdown.root?.name ?? "the site";
-  if (breakdown.count === 0) return `No ${pluralKind(breakdown.kind)} under ${where}.`;
+  if (breakdown.count === 0) {
+    const none = `No ${pluralKind(breakdown.kind)} under ${where}.`;
+    // Looking under an asset (the dashboard was narrowed to it, w25), the asset may hold other kinds than this one: say where to change it.
+    const key = kindKey(breakdown.kind);
+    return breakdown.root !== null && breakdown.kinds.some((k) => kindKey(k.kind) !== key) ? `${none} ${CHOOSE_KIND}` : none;
+  }
   const what = source === "cost" ? "cost figures" : "energy readings";
   if (breakdown.count === 1) return `The ${breakdown.kind} under ${where} has no ${what}.`;
   return `None of the ${breakdown.count} ${pluralKind(breakdown.kind)} under ${where} has ${what}.`;
@@ -84,6 +92,29 @@ export function selectedKind(options: readonly KindOption[], current: string): s
   const key = kindKey(current);
   return options.find((o) => kindKey(o.value) === key)?.value ?? current;
 }
+
+/** The ids of the assets that have a child in `assets` (a child's `parent_id` is the asset). */
+export const parentIds = (assets: readonly Asset[]): Set<number> =>
+  new Set(assets.flatMap((asset) => (asset.parent_id === null ? [] : [asset.parent_id])));
+
+/**
+ * What a click on a bar of a breakdown does (w25, R10): narrow the dashboard to an asset that has children, open the page of one that has none. Where no card of the
+ * dashboard follows the focus (`narrowing` false) narrowing would change nothing on the page, so an asset with children opens its page like a leaf (W2).
+ */
+export type DrillAction = "narrow" | "open";
+export const drillAction = (id: number, parents: ReadonlySet<number>, narrowing = true): DrillAction => (narrowing && parents.has(id) ? "narrow" : "open");
+
+/**
+ * The last line of a bar's tooltip when a click does something; `name` is the bar's name as the chart shows it. A bar with no shape (`nameOnly`: no data) cannot be
+ * clicked, only its name can, and the line says so.
+ */
+export const drillTip = (action: DrillAction, name: string, nameOnly = false): string => {
+  const click = nameOnly ? "Click its name to" : "Click to";
+  return action === "narrow" ? `${click} narrow the dashboard to ${name}` : `${click} open ${name}'s page`;
+};
+
+/** The name of the Details panel's keyboard route to the same narrowing. */
+export const narrowLabel = (name: string): string => `Narrow to ${name}`;
 
 /** The accessible name of the breakdown chart (the canvas is a picture). */
 export function breakdownDescription(data: WidgetData, breakdown: WidgetBreakdown): string {
