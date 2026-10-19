@@ -1,0 +1,4 @@
+@layer w6 {
+  /* w25: drill-through on a breakdown by kind (components/dashboard/widgets/BarWidget.tsx, WidgetDetails.tsx): the pointer over a bar that can be narrowed to
+     or opened, and the "Narrow to" buttons in the Details panel. Tokens only; every rule is scoped by a class this piece owns. Filled in by task T5. */
+}

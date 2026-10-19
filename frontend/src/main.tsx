@@ -34,6 +34,7 @@ import "./styles/month-check.css";
 import "./styles/asset-picker.css";
 import "./styles/focus-follow.css";
 import "./styles/focus-header.css";
+import "./styles/focus-drill.css";
 import "./styles/start-from.css";
 import { App } from "./App";
 import { AppearanceProvider } from "./auth/AppearanceProvider";
