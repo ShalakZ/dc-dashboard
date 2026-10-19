@@ -3,8 +3,9 @@ import { Link, NavLink } from "react-router";
 import { Icon } from "./Icon";
 import { Skeleton, SkeletonRegion, TreeSkeleton } from "./Skeleton";
 import { assetIcon } from "../lib/assetIcons";
+import { matchingIds } from "../lib/assetMatch";
 import { focusAfterDelete } from "../lib/assetsBulk";
-import { FOLD_ROW_LIMIT, fixedLevelFold, flattenTree, foldModel } from "../lib/foldLevels";
+import { FOLD_ROW_LIMIT, TREE_DEFAULT_LEVEL, fixedLevelFold, flattenTree, foldModel } from "../lib/foldLevels";
 import { pickLine, type PickEvent } from "../lib/moveText";
 import { readStored, writeStored } from "../lib/sidebarState";
 import { ancestorIds, type TreeNode } from "../lib/tree";
@@ -20,8 +21,6 @@ export type { DropTarget };
 const KEY = "dcdash.assetTree";
 type ColumnState = "expanded" | "minimized";
 const DEFAULT_WIDTH = 280; // --tree-w, for a column with no layout to measure (jsdom)
-/** Above FOLD_ROW_LIMIT (60) nodes, with nothing remembered, the tree opens folded to this level: level 2 shows the top level and the one below it. */
-const TREE_DEFAULT_LEVEL = 2;
 
 // Inline SVG, 24-unit viewBox, drawn with the 1.7 stroke of `svg.i`; decoration only (the button's own label is its name).
 function Svg({ children }: { children: ReactNode }) {
@@ -34,19 +33,6 @@ const ChevronLeft = () => <Svg><path d="m15 6-6 6 6 6" /></Svg>;
 const ChevronsIn = () => <Svg><path d="m7 5 5 5 5-5" /><path d="m7 19 5-5 5 5" /></Svg>;
 const ChevronsOut = () => <Svg><path d="m7 10 5-5 5 5" /><path d="m7 14 5 5 5-5" /></Svg>;
 const Search = () => <Svg><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4-4" /></Svg>;
-
-/** The ids to show while filtering: what matches by name or kind, and the ancestors of a match (a match's own children only if they match too). */
-function matchingIds(nodes: TreeNode[], needle: string): Set<number> {
-  const out = new Set<number>();
-  const walk = (node: TreeNode): boolean => {
-    let hit = node.name.toLowerCase().includes(needle) || node.kind.toLowerCase().includes(needle);
-    for (const child of node.children) if (walk(child)) hit = true; // every child, no short-circuit: each needs its own verdict
-    if (hit) out.add(node.id);
-    return hit;
-  };
-  nodes.forEach(walk);
-  return out;
-}
 
 const only = (list: TreeNode[], visible: ReadonlySet<number> | null) => (visible ? list.filter((node) => visible.has(node.id)) : list);
 

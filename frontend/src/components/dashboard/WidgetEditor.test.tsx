@@ -172,6 +172,28 @@ describe("WidgetEditor", () => {
       outside.remove();
     }
   });
+
+  it("clears a typed search on Escape and keeps the dialog open; a second Escape closes it", async () => {
+    const { onClose } = open();
+    const box = screen.getByLabelText("Search assets");
+    await userEvent.type(box, "Panel");
+    expect(box).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(box).toHaveValue("");
+    expect(onClose).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("narrows the checkboxes to what is typed in Search assets", async () => {
+    open();
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    await userEvent.type(screen.getByLabelText("Search assets"), "Panel 1");
+    expect(screen.getAllByRole("checkbox").map((box) => box.parentElement?.textContent)).toEqual(["LV Panel 1"]);
+    // Energy offers every asset, so the site and MV2 stay as ordinary rows on the way to the match.
+    await userEvent.selectOptions(screen.getByLabelText("Source"), "energy");
+    expect(screen.getAllByRole("checkbox").map((box) => box.parentElement?.textContent)).toEqual(["Site", "MV2", "LV Panel 1"]);
+  });
 });
 
 describe("which assets a metric widget may list", () => {

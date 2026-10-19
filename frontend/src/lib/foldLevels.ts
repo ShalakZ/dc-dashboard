@@ -6,6 +6,9 @@ export interface FoldItem { id: number; parent_id: number | null }
 /** A list of at most this many rows opens as it is; a longer one opens folded to a level. */
 export const FOLD_ROW_LIMIT = 60;
 
+/** Above FOLD_ROW_LIMIT (60) nodes, with nothing remembered, a tree opens folded to this level: level 2 shows the top level and the one below it. The asset picker opens the same way. */
+export const TREE_DEFAULT_LEVEL = 2;
+
 export interface FoldModel {
   /** ids with no parent in the list, list order */
   roots: readonly number[];

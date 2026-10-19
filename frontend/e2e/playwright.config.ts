@@ -335,5 +335,17 @@ export default defineConfig({
       dependencies: ["w21"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // The asset picker of the widget editor (search, kind filter, folded tree, chips, Pick all under). It MAKES ITS OWN DATA through the API in beforeAll: the assets `W23 Site` > `W23 Hall 1` and
+    // `W23 Hall 2` > 3 rows each > 10 racks each (69 assets, so with the other specs' assets the energy source offers more than 60 and the picker opens folded), and a dashboard `w23 <run>`
+    // (the dialog is only opened and cancelled; nothing is saved). afterAll deletes the dashboard and the whole `W23 Site` subtree, also after a failed case, and sweeps what an earlier run left.
+    // Its cases find a rack by typing, pick it and see it as a chip, filter by kind, Pick all under a row within and over the maximum of 20, remove chips from the keyboard, clear a search with
+    // Escape without closing the dialog, check that a stat and a gauge pick one asset, that the list does not move at 1024 x 640 and 800 x 600, and the chips in the dark look. They set the admin's
+    // look (light navy-gold, dark desert-gold) through PUT /api/me/preferences before a page opens, and afterAll puts it back to light navy-gold. The cases are serial.
+    {
+      name: "w23",
+      testMatch: "w23.spec.ts",
+      dependencies: ["w22"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

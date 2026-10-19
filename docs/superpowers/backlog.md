@@ -1125,3 +1125,19 @@ Parked on purpose (the rulings; the owner may overrule any):
 - **A long text scrolls inside its card in view mode** (no clipping, reachable by Tab as a scroller); headless Chromium draws no scrollbar, so the look of the scrollbar on a real screen was not seen.
 - **The end-to-end spec counts exactly one `/api/widget-data` request for a stat widget** (the preview and the edit-mode card share one query key); a change to the default stale time would make it two.
 - **Owner's likely tweaks:** the heading size (an `h2` at the card title scale), the 2,000-character cap and the 200 of a heading, whether a divider wants a label, whether a heading card should lose its card chrome in view mode like the divider, and the default sizes (6 by 2, a divider 12 by 1).
+
+## BG. W23 leftovers (plan review, the whole-wave review and its scoped re-review, the controller's measurements and looks, 2026-10-19; none of these blocks)
+
+Found by the reviews and fixed inside the wave (so they are not open): the plan review's two Criticals (a fold worked out from the live picks would have folded a branch under the focus on every untick; the new spec needed its own Playwright project) and six Important (the page rules scoped against the CSS clash guards, the row's DOM pinned so accessible names stay the label, the speed script's source, what a search draws over a metric source, a chip box of fixed height, a row text without the repeated path); the whole-wave review's Critical (the focus fell to the page after "Show N more") and four Important (chips that cut off the end of the path, a wrong Tab order in the docs, a scrollbar gutter, a title on Pick all under).
+
+Parked on purpose (the rulings; the owner may overrule any):
+
+- **The dialog re-centres by 10 px when its issues list disappears** (the first valid pick, at 1440 and 1920 wide): older than this wave; a fixed top for the dialog or a reserved issues block would stop it.
+- **A refused "Pick all under" does not say how to narrow it** ("44 assets under Row 1 (...), room for 20: nothing was picked"): on the pilot hall a row holds 29 to 44 assets; a longer sentence would break the one-line reserved slot.
+- **Searches that can surprise** (each follows from "what is inside a match is a match" and from folding a list of more than 60 rows): "hall 1" on a metric source says "108 match" and draws two rows with Hall 1 folded; "r" and "e" match every feed through the kind "Circuit"; the path is not searched ("Hall 1 / Rack" finds nothing).
+- **The gauge half of the e2e spec's case 5 is conditional** on what the stack offers (the one-asset rule is the same code as the stat's, and the unit tests pin it).
+- **A long list stops at 200 rows** with "Show 200 more"; a pick beyond the rows drawn is a tag but not drawn in place until more rows are shown.
+- **The tag box is two rows high and scrolls**: with many long tags the rest are behind the scroll (the count line says how many; no "+N more" cue is drawn).
+- **The look of the picker's scrollbars on a real Windows screen** was checked with classic scrollbars in Chromium, not on the work laptop.
+- **Owner's likely tweaks:** whether typing should also match the path, the fold level (2) and the 60-row limit, where the tags sit and how many rows their box shows, the 200-row step.
+- **A tag's text counts path segments by splitting the label on " / "** (the scoped re-review): an asset name that itself contains " / " counts as two segments, so "the last two" can be one name or a fragment; the text is still a true end of the path. Passing the parent path segments from `pickerRows` would make it exact.
