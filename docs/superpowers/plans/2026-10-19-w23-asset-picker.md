@@ -110,21 +110,21 @@ button: pick-all and clear-all are `aria-disabled`), 4, 5 (measure in the page),
 - `WidgetEditor.tsx` is expected to need no change (same props); if the dialog layout needs one, it is a class in `asset-picker.css`.
 
 ## Tasks (one commit each, `git add` named files only; every implementer brief says: "Edit files with the Edit tool or an anchored sed, never with a script that rewrites a whole file")
-- [ ] **T0 Baseline (parallel with the plan review; touches only `.waves/w23/`).** Screenshots of Add widget on the pilot-hall look stack (built from main) at 1440x900 and 1024x640, light and dark, into
+- [x] **T0 Baseline (parallel with the plan review; touches only `.waves/w23/`).** Screenshots of Add widget on the pilot-hall look stack (built from main) at 1440x900 and 1024x640, light and dark, into
   `.waves/w23/baseline/`; `speed.mjs` run against TODAY's picker at 370 and 2,000 assets (open time, a checkbox toggle time); numbers in `.waves/w23/speed-baseline.md`. No commit.
-- [ ] **T1 Extraction.** `lib/assetMatch.ts` (+ unit tests); `lib/pickerRows.ts` (helpers moved verbatim) with re-exports from `AssetPicker.tsx`; `TREE_DEFAULT_LEVEL` exported from `foldLevels.ts`;
+- [x] **T1 Extraction.** `lib/assetMatch.ts` (+ unit tests); `lib/pickerRows.ts` (helpers moved verbatim) with re-exports from `AssetPicker.tsx`; `TREE_DEFAULT_LEVEL` exported from `foldLevels.ts`;
   `AssetTree.tsx` imports both. Targeted: `AssetTree.test.tsx`, `AssetPicker.test.tsx`, `assetMatch.test.ts`, the 9 importers' tests, `npm run typecheck`.
-- [ ] **T2 Model.** `lib/pickerModel.ts` with `buildPickerModel`, `filterPicker`, `visibleNodes`, `ancestorsOf`, `pickAllUnder`, `pendingBelow` and unit tests (context rows and labels, kinds, default fold,
+- [x] **T2 Model.** `lib/pickerModel.ts` with `buildPickerModel`, `filterPicker`, `visibleNodes`, `ancestorsOf`, `pickAllUnder`, `pendingBelow` and unit tests (context rows and labels, kinds, default fold,
   search inside-match, kind, both, counts, fold flags, pick-all add/none/refuse, tree order, no input mutated).
-- [ ] **T3 Component + styles.** The new `AssetPicker` on the model; `asset-picker.css`; `main.tsx`; `app.css` loses the three rules; `app.css.test.ts` list; component tests (search, Escape, kind, chips + focus, fold,
+- [x] **T3 Component + styles.** The new `AssetPicker` on the model; `asset-picker.css`; `main.tsx`; `app.css` loses the three rules; `app.css.test.ts` list; component tests (search, Escape, kind, chips + focus, fold,
   picked branch open, pick-all within and over the maximum, clear all, single mode, notes, empty, the live line, no role=status) and two `WidgetEditor.test.tsx` cases (Escape in the search box keeps the dialog,
   a second Escape closes it; typing in Search narrows the checkboxes). Targeted tests + typecheck + the CSS guards (`app.css.test.ts`).
-- [ ] **T4 Speed.** Run `speed.mjs` on a look stack REBUILT from the T3 commit: 370 (seed) and 2,000 (generated), unthrottled and 4x; numbers into the ledger. If a target fails: **T4b** the 200-row cap with "Show 200 more"
+- [x] **T4 Speed.** Run `speed.mjs` on a look stack REBUILT from the T3 commit: 370 (seed) and 2,000 (generated), unthrottled and 4x; numbers into the ledger. If a target fails: **T4b** the 200-row cap with "Show 200 more"
   (focus to the first new row) and its tests, then measure again.
-- [ ] **T5 e2e + docs (parallel, disjoint files).** (a) `e2e/w23.spec.ts` (creates its own assets by API, more than 60; finds a rack by typing, picks it, filters by kind, "Pick all under" within and over the maximum, removes a chip from
+- [x] **T5 e2e + docs (parallel, disjoint files).** (a) `e2e/w23.spec.ts` (creates its own assets by API, more than 60; finds a rack by typing, picks it, filters by kind, "Pick all under" within and over the maximum, removes a chip from
   the keyboard, Escape clears the search and keeps the dialog, stat and gauge pick one; light and dark) and the three lines of `phase3.spec.ts`/`w22.spec.ts`; e2e type check. (b) Docs: `dashboards-and-billing.md`, `screens.md`,
   `end-to-end-tests.md`, then `uv run pytest tests/test_docs_links.py tests/test_readme_ops.py tests/test_field_debugging_doc.py -q`.
-- [ ] **Gates (controller, once).** Frontend suite (`flock`), typecheck, build, e2e type check, `vis-rebuild.sh` (judge by `N passed`), gallery at 1440/1024/800 into `.waves/gallery/w23/`, whole-wave Opus review in a real browser, one fix wave,
+- [x] **Gates (controller, once).** Frontend suite (`flock`), typecheck, build, e2e type check, `vis-rebuild.sh` (judge by `N passed`), gallery at 1440/1024/800 into `.waves/gallery/w23/`, whole-wave Opus review in a real browser, one fix wave,
   gates again for what the fix touched, close-out docs commit (CHANGELOG, backlog next free letter, roadmap row, manual-test notes), merge, backup, rebuild, counts, 2 MB check, one push, memory bullet, MORNING, marker.
 
 ## Review focus
@@ -136,7 +136,14 @@ button: pick-all and clear-all are `aria-disabled`), 4, 5 (measure in the page),
 6. D2's inside-a-match extension and D4's "branch with a pick is open" rule: do they surprise?
 
 ## Execution log
-(filled in as tasks finish)
+- 10:36 start; branch wave/w23 from main 486315d; scripts copied from w22; baseline look stack built (ports 18233/18587 vis, 18234/18588 look).
+- 10:45 plan written (f1e698b); T0 baseline and the Opus plan review ran together (10 minutes): 2 Critical, 6 Important, 10 Minor, all folded (584d5a0).
+- T1 164b1da (extraction), T2 c74e558 (model, 50 tests), T3b 077a1f9 (styles), T5b cdac1fa (docs), T3a 9c4ff7b (component, 54 tests), T5a 123a87e (e2e spec 7 cases, project w23). T4b was dropped: the 200-row cap is in T3a.
+- T4 speed (production build, 2,000 assets, 4x CPU throttle): open median 54 ms (worst 91; target 300; today's picker 188 ms), keystrokes median 33 ms (worst 79; target 100); unthrottled 13.5 / 33 ms. Files in `.waves/w23/speed-*.json`.
+- Gates 1 at 9c4ff7b: vitest 257 files 9,238 passed, typecheck, build. Playwright run 1: 257 passed, w7u:1027 failed under load (passes alone), 245 did not run; the rest ran separately: 261 passed.
+- Whole-wave review (Opus, browser): 1 Critical, 4 Important, 7 Minor. Fix wave A bdd0eee and B 5f7b33b. Scoped re-review (Opus, medium, browser): 0 Critical, 0 Important, 2 Minor, ok to merge.
+- Final gates at bdd0eee: vitest 257 files 9,248 passed, typecheck, build, e2e type check clean; isolated Playwright 504 passed (19.9 min), 0 failed, 0 flaky; doc tests 63 passed, repo hygiene 6 passed.
+
 
 ## Folded from the Opus plan review (`.waves/w23/plan-review.md`: 2 Critical, 6 Important, 10 Minor; all accepted; this section overrides the text above where they differ)
 - **C1 Fold state is explicit, and an unpick never moves anything.** The picker keeps `marks: Map<id, boolean>` (true = folded, false = open), changed ONLY in event handlers (never in an effect).
@@ -171,4 +178,4 @@ button: pick-all and clear-all are `aria-disabled`), 4, 5 (measure in the page),
 - **M6** The effective kind is derived (`kinds.some(k => k.key === kind) ? kind : ""`), options sorted by key (the lower-cased name: sorted by name without regard to case); the select has `min-width: 0` and `max-width: 50%`.
 - **M7** "Pick all under" is drawn only when the row has RESULTS below it (any picked state); `aria-disabled` + a `title` ("Everything under it is picked") when all are picked; the slot is always reserved so rows do not shift.
 - **M8** Escape: ignore `isComposing`. **M9** e2e: the spec deletes its own assets in `afterAll`, sets and restores the look through `PUT /api/me/preferences`, and uses `exact: true` on every new name.
-- **M10** Docs (`dashboards-and-billing.md`, `screens.md`) run beside T3; the `end-to-end-tests.md` entry belongs to T5a. List height `clamp(160px, 30vh, 240px)`. The wording "a lib may not import a component" in D1 is not a project rule (`lib/kinds.ts` imports from `components/Icon`); the helpers still move, because the model needs them and the move keeps the import graph one-way.
+- **M10** Docs (`dashboards-and-billing.md`, `screens.md`) run beside T3; the `end-to-end-tests.md` entry belongs to T5a. List height `clamp(120px, 24vh, 240px)` (changed by the review fix M2; was `clamp(160px, 30vh, 240px)`). The wording "a lib may not import a component" in D1 is not a project rule (`lib/kinds.ts` imports from `components/Icon`); the helpers still move, because the model needs them and the move keeps the import graph one-way.

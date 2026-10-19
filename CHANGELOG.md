@@ -15,6 +15,14 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w23 (2026-10-19, MERGE)
+
+w23 rebuilds the asset picker of the widget editor (Edit, Add widget): a **Search assets** box (part of a name or a kind), a **Filter by kind**
+list, a tree that opens folded when it has more than 60 rows, the picks as removable tags above the list, and **Pick all under** a row (within the
+20 maximum; otherwise it picks nothing and says why). No migration, no new permission, no API change. On a 4x slowed CPU with 2,000 assets the
+dialog opens in 54 ms and a keystroke shows its rows in 33 ms (median). How to use it: [Dashboards and billing](docs/dashboards-and-billing.md).
+Nothing to do when you upgrade; the code to go back to is `486315d`.
+
 ## w22 (2026-10-19, dbc5425)
 
 w22 adds a sixth dashboard widget, **Text**: a heading, a paragraph or a divider you write on the dashboard, with no data. Edit, Add widget,
