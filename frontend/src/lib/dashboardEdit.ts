@@ -1,7 +1,7 @@
 import { ApiError } from "../api/client";
 import {
   METRICS, type Dashboard, type DashboardSave, type DataWidgetType, type GraphModel, type Metric, type RangePreset, type TextConfig,
-  type TextStyle, type WidgetAggregation, type WidgetConfig, type WidgetIn, type WidgetSource, type WidgetType,
+  type TextStyle, type WidgetAggregation, type WidgetBars, type WidgetConfig, type WidgetIn, type WidgetSource, type WidgetType,
 } from "../api/types";
 import { compactVertical, toDrafts, type DraftWidget } from "./layout";
 import { normalizeText } from "./textWidget";
@@ -50,7 +50,7 @@ export interface WidgetForm {
   metric: WidgetMetric;
   aggregation: Aggregation;
   range: RangePreset | "";
-  bars: "asset" | "time";
+  bars: WidgetBars;
   gaugeMin: string;
   gaugeMax: string;
   assets: number[];
