@@ -1,4 +1,4 @@
-import type { Asset, WidgetConfig } from "../api/types";
+import type { Asset, Widget, WidgetConfig } from "../api/types";
 
 /** What the dashboard's `?asset=` parameter says: nothing, an asset id, or something that cannot be one. */
 export type FocusParam = { kind: "none" } | { kind: "id"; id: number } | { kind: "invalid" };
@@ -40,6 +40,9 @@ export function topLevel(assets: Asset[]): Asset[] {
 export function isFollowing(config: Pick<WidgetConfig, "scope">): boolean {
   return config.scope === "focus" || config.scope === "children";
 }
+
+/** Does any data widget of the dashboard follow the focus? When none does, choosing a focus changes nothing on the page, so nothing may offer to narrow it (W2). */
+export const anyWidgetFollows = (widgets: readonly Widget[]): boolean => widgets.some((widget) => widget.type !== "text" && isFollowing(widget.config));
 
 /** What a following card says when the site has no assets to look at (a site with nothing in it). */
 export const NO_ASSETS_TEXT = "This site has no assets yet.";

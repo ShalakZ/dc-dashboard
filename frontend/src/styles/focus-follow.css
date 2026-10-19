@@ -9,4 +9,7 @@
   /* The footer's last sentence ("Its own assets, not Hall 1", "20 of 34 children of Hall 1 shown") and the dot before it. The dot is not .widget-dot: the narrow card
      hides that one whenever a marker hint is present (widgets.css), and the sentence must stay apart from the hint. The sentence shrinks with an ellipsis like the others. */
   .follow-dot { flex: none; }
+  /* The sentence gives way first (W5): it has no room of its own to start from (basis 0) and takes only what the "since" line and the marker hint leave over, so on a
+     narrow card w24's words ("no rate", the hint, "since ...") stay whole until nothing is left of it. Its title carries the whole sentence. */
+  .follow-note { flex: 1 1 0; min-width: 0; }
 }

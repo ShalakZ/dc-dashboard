@@ -182,9 +182,10 @@ export function WidgetDetails({ title, type, data, config, timezone, following, 
   const csvExport = useCsvExport(csv);
   const linked = can(PAGE_NEED.assets);
   // w25 (R10): the keyboard way to the drill-through of the chart. A bar whose asset has children gets a button that narrows the dashboard to it. The list is the
-  // one the chart already loaded (same query); it is asked for here only by a breakdown, and only for a role that may open assets (the panel is the viewer's).
-  const { allowed, setFocus } = useFocus();
-  const assetList = useAssets(allowed && data.breakdown != null).data;
+  // one the chart already loaded (same query); it is asked for here only by a breakdown, and only for a role that may open assets (the panel is the viewer's). Where no
+  // card of the dashboard follows the focus (`anyFollowing`) narrowing would change nothing, so there is no button (W2).
+  const { allowed, anyFollowing, setFocus } = useFocus();
+  const assetList = useAssets(allowed && anyFollowing && data.breakdown != null).data;
   const parents = useMemo(() => (assetList ? parentIds(assetList) : null), [assetList]);
 
   const latest = isLatestReading(data, config);
@@ -207,7 +208,7 @@ export function WidgetDetails({ title, type, data, config, timezone, following, 
   const removed = removedCount(data);
 
   const perValue = type === "bar" && data.mode === "values";
-  const narrowable = allowed && perValue && data.breakdown != null && parents !== null;
+  const narrowable = allowed && anyFollowing && perValue && data.breakdown != null && parents !== null;
   const showTable = rows.length > 0 && (summary !== null || perValue || rows.some((r) => r.states.length > 0));
   const totalsHidden = summary !== null && data.source !== "metric" && summary.rows.some((r) => r.total === null);
 

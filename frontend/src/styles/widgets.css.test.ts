@@ -245,6 +245,14 @@ describe("styles/widgets.css", () => {
       expect(bodyOf(".widget-foot .widget-hint")).toMatch(/flex:\s*0 1 auto/);
     });
 
+    it("the footer's last sentence (w25) gives way first: it starts from no room of its own, so the 'since' line and the hint keep their words until nothing is left of it (whole-wave review W5)", () => {
+      const follow = parseRules(stripComments(readFileSync("src/styles/focus-follow.css", "utf8")));
+      const note = follow.filter((r) => r.selector === ".follow-note").map((r) => r.body).join(" ");
+      expect(note).toMatch(/flex:\s*1 1 0\b/);
+      expect(note).toMatch(/min-width:\s*0/);
+      expect(follow.some((r) => /\.widget-(foot|dot|hint|since)\b/.test(r.selector)), "the file owns only its own classes").toBe(false);
+    });
+
     it("a waiting icon button looks disabled and takes the hover wash back, and is never a native :disabled (it may hold the focus the click gave it)", () => {
       expect(bodyOf('.widget-tools .icon-btn[aria-disabled="true"]')).toMatch(/opacity:\s*0\.55/);
       expect(bodyOf('.widget-tools .icon-btn[aria-disabled="true"]')).toMatch(/cursor:\s*not-allowed/);

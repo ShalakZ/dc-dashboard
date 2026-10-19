@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useWidgetData } from "../../api/queries";
 import type { RangePreset, WidgetConfig, DataWidgetType } from "../../api/types";
+import { hasNoBars } from "../../lib/breakdown";
 import { withoutEnergyStars } from "../../lib/compare";
 import { childrenNote, chooseText, isFollowing, leafText, NO_ASSETS_TEXT, ownAssetsNote } from "../../lib/focus";
 import { isLiveWidget, pointIdsOf } from "../../lib/live";
@@ -65,6 +66,9 @@ export function WidgetView({ widgetKey, type, title, config, dashboardRange, tim
   const choose = block?.state === "choose";
   const leaf = block?.state === "ok" && shown.scope === "children" && block.children?.count === 0;
   const bare = gone || choose || leaf; // no figures: no footer line about them either
+  // A breakdown that found no bars says so in a sentence that names the asset it looked under; read from a placeholder that would be the previous focus's asset under
+  // the new trail, so the card keeps an empty dimmed body until the real answer lands (as it does for the two sentences below).
+  const oldSentence = stale && data?.mode === "values" && data.breakdown != null && hasNoBars(data.values);
   // A sentence is about the focus the answer was fetched for, so none is drawn from a placeholder for another focus: a card that said "choose a focus" or "X has no
   // children" shows an empty dimmed body until the real answer lands.
   const sentence = stale ? null : choose ? chooseText(block.top_level, ctx.allowed) : leaf ? (block.asset ? leafText(block.asset.path) : NO_ASSETS_TEXT) : null;
@@ -88,10 +92,12 @@ export function WidgetView({ widgetKey, type, title, config, dashboardRange, tim
   // Rolling energy and cost windows start at a whole hour, not at "now minus the range": say where. The config already tells whether the line will come, before the data does.
   const sinceExpected = config.source !== "metric" && isRolling(preset);
   const csvSource = csv ? { type, config: shown, range: preset, ...(focus === null ? {} : { focus }) } : undefined;
-  // The footer's last sentence (R6, R11): which part of the tree a card that follows the focus really shows, or that the others keep their own.
+  // The footer's last sentence (R6, R11): which part of the tree a card that follows the focus really shows, or that the others keep their own. A card whose own asset
+  // IS the focus asset (assets exactly the focus, or a breakdown looking under it) shows the focus asset, so the sentence would be false there (W4).
+  const ownsFocus = ctx.focus !== null && (shown.bars === "kind" ? shown.root === ctx.focus : shown.assets.length === 1 && shown.assets[0] === ctx.focus);
   const note = follows
     ? (block?.state === "ok" && block.children && block.children.shown < block.children.count ? childrenNote(block.children.shown, block.children.count, block.asset?.name ?? null) : "")
-    : (ctx.focus !== null && ctx.name !== null ? ownAssetsNote(ctx.name) : "");
+    : (ctx.focus !== null && ctx.name !== null && !ownsFocus ? ownAssetsNote(ctx.name) : "");
   // The footer line's room is held on the focus, not on the words: the note about the asset's name waits for the asset list, and a children card's count comes and goes
   // with its answer, but the body must not move when either arrives.
   const footKeep = follows ? shown.scope === "children" : ctx.focus !== null;
@@ -117,7 +123,7 @@ export function WidgetView({ widgetKey, type, title, config, dashboardRange, tim
         actions={actions}
         dragHandle={dragHandle}
       >
-        {sentence !== null ? <p className="widget-empty">{sentence}</p> : data && !bare ? <WidgetBody type={type} data={data} config={shown} timezone={timezone} live={following} onKind={onKind} splitDisabled={!details} /> : null}
+        {sentence !== null ? <p className="widget-empty">{sentence}</p> : data && !bare && !oldSentence ? <WidgetBody type={type} data={data} config={shown} timezone={timezone} live={following} onKind={onKind} splitDisabled={!details} /> : null}
       </WidgetFrame>
       {open && canOpen && data && !stale && (
         <WidgetDetails

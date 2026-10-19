@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { ApiError } from "../api/client";
 import { keys, useDashboard, useSite } from "../api/queries";
@@ -13,7 +13,7 @@ import { Pending } from "../components/Pending";
 import { DashboardSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { newest } from "../lib/dashboardEdit";
-import { withFocus } from "../lib/focus";
+import { anyWidgetFollows, withFocus } from "../lib/focus";
 import { focusTrail } from "../lib/focusTrail";
 
 // The editor brings react-grid-layout with it: it loads only when someone starts editing (spec 10.8).
@@ -29,16 +29,31 @@ export function DashboardPage() {
  * The one trail of the page (R7). Without a focus, or before the asset list is here, it is Dashboards / name with the name as the current page. With
  * a focus it goes on through the focus asset's ancestors: the name then links to the whole site, each ancestor to the dashboard at that asset, and the
  * focus asset is the current page. The links only change `?asset=`, so in edit mode the editor stays mounted. It sits inside the focus provider.
+ * The link that was just used is replaced by plain text (the crumb it led to is now the current page), which would drop keyboard focus to the page body: after a
+ * plain click or an Enter on a crumb, focus goes to the new current crumb. Back, Forward and the Focus dialog change the focus without moving it.
  */
 function DashboardCrumbs({ id, name }: { id: number; name: string }) {
   const { focus, assets } = useFocus();
   const { search } = useLocation();
+  const current = useRef<HTMLSpanElement>(null);
+  const followed = useRef(false);
+  useEffect(() => {
+    if (!followed.current) return;
+    followed.current = false;
+    current.current?.focus();
+  }, [focus]);
+  // A click that opens a new tab or window (a modifier key) changes nothing here.
+  const onFollow = (event: MouseEvent<HTMLAnchorElement>) => {
+    followed.current = event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+  };
   const chain = focus !== null && assets ? focusTrail(assets, focus) : [];
   const path = `/dashboards/${id}`;
-  if (chain.length === 0) return <Crumbs trail={[{ label: "Dashboards", to: "/dashboards" }, { label: name }]} />;
+  if (chain.length === 0) return <Crumbs trail={[{ label: "Dashboards", to: "/dashboards" }, { label: name }]} currentRef={current} onFollow={onFollow} />;
   const at = (asset: number | null) => path + withFocus(search, asset);
   return (
     <Crumbs
+      currentRef={current}
+      onFollow={onFollow}
       trail={[
         { label: "Dashboards", to: "/dashboards" },
         { label: name, to: at(null) },
@@ -78,6 +93,8 @@ function DashboardScreen({ id }: { id: number }) {
   const timezone = site.data.timezone;
   const notice = failure ? <p className="error" role="alert">Could not refresh this page: {failure.message}</p> : null;
   const crumbs = <DashboardCrumbs id={id} name={dashboard.name} />;
+  // Whether choosing a focus changes anything here: only then may a click on a bar of a breakdown narrow the dashboard (W2).
+  const anyFollowing = anyWidgetFollows(dashboard.widgets);
 
   const leaveEdit = () => {
     setWantsEdit(false);
@@ -88,7 +105,7 @@ function DashboardScreen({ id }: { id: number }) {
   if (canEdit && wantsEdit) {
     // The focus provider is the outermost element of both branches, at the same place, so Edit and View share one instance and what it remembers.
     return (
-      <FocusProvider>
+      <FocusProvider anyFollowing={anyFollowing}>
         {notice}
         {crumbs}
         <FocusNotice />
@@ -111,7 +128,7 @@ function DashboardScreen({ id }: { id: number }) {
     );
   }
   return (
-    <FocusProvider>
+    <FocusProvider anyFollowing={anyFollowing}>
       {notice}
       {crumbs}
       <FocusNotice />

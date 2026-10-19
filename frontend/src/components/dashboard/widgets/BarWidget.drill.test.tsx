@@ -39,7 +39,8 @@ const bars = (...rows: [number, string, number | null][]): WidgetData =>
 const THREE = bars([10, "Rack 05", 100], [11, "Rack 06", 90], [12, "Rack 07", 80]);
 
 const setFocus = vi.fn();
-const state = (over: Partial<FocusState> = {}): FocusState => ({ focus: null, allowed: true, assets: ASSETS, name: null, notice: null, setFocus, reportGone: () => {}, ...over });
+/** A dashboard on which a card follows the focus (`anyFollowing`), so that a click may narrow it; the all-fixed case says `anyFollowing: false`. */
+const state = (over: Partial<FocusState> = {}): FocusState => ({ focus: null, allowed: true, assets: ASSETS, name: null, notice: null, anyFollowing: true, setFocus, reportGone: () => {}, ...over });
 
 function Where() {
   return <p data-testid="where">{useLocation().pathname}</p>;
@@ -148,9 +149,32 @@ describe("a breakdown chart where a click does something", () => {
     expect(drawn().option.tooltip.formatter([{ dataIndex: 2, seriesIndex: 0 }])).toContain("Click to open &lt;b&gt;Rack&lt;/b&gt; &amp; co&#39;s page");
   });
 
-  it("puts the line on the tooltip of a bar with no data as well", () => {
+  it("puts the line on the tooltip of a bar with no data as well, saying that only its name answers (W8)", () => {
     drawBars(bars([10, "Rack 05", 100], [12, "Rack 07", null]));
-    expect(tipOf(1)).toMatch(/Rack 07 no data Click to open Rack 07&#39;s page$/);
+    expect(tipOf(1)).toMatch(/Rack 07 no data Click its name to open Rack 07&#39;s page$/);
+    expect(tipOf(0), "a bar with a shape keeps the plain wording").toMatch(/Click to narrow the dashboard to Rack 05$/);
+  });
+
+  it("says its name for a bar with no data that would narrow, too (W8)", () => {
+    drawBars(bars([10, "Rack 05", null], [12, "Rack 07", 80]));
+    expect(tipOf(0)).toMatch(/Rack 05 no data Click its name to narrow the dashboard to Rack 05$/);
+  });
+
+  it("opens the page of every bar when nothing on the dashboard follows the focus, an asset with children included (W2)", () => {
+    const view = drawBars(THREE, { focus: state({ anyFollowing: false }) });
+    expect(drawn().option.series[0].cursor).toBe("pointer");
+    expect(tipOf(0)).toMatch(/^Rack 05 100\.00 kWh Click to open Rack 05&#39;s page$/);
+    expect(tipOf(0)).not.toContain("narrow");
+    click({ componentType: "series", dataIndex: 0 });
+    expect(setFocus).not.toHaveBeenCalled();
+    expect(view.getByTestId("where")).toHaveTextContent("/assets/10");
+    click({ componentType: "xAxis", value: "Rack 05" });
+    expect(setFocus).not.toHaveBeenCalled();
+  });
+
+  it("says in the tooltip of a bar with no data that its name opens the page when nothing follows (W2, W8)", () => {
+    drawBars(bars([10, "Rack 05", null], [12, "Rack 07", 80]), { focus: state({ anyFollowing: false }) });
+    expect(tipOf(0)).toMatch(/Rack 05 no data Click its name to open Rack 05&#39;s page$/);
   });
 
   it("keeps the handler ECharts holds when the answer changes, and follows the newest answer", () => {

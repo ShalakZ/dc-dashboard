@@ -54,6 +54,16 @@ export function CreateDashboardDialog({ onClose, initialStart = "blank" }: { onC
       <div ref={root} role="dialog" aria-modal="true" aria-label="New dashboard" className="dialog narrow">
         <h2>New dashboard</h2>
         <form onSubmit={submit}>
+          {/* First, so that the range and the name it sets are seen before they are edited (Power picks This month); the focus still opens on Name. */}
+          <fieldset>
+            <legend>Start from</legend>
+            {STARTS.map((s) => (
+              <label key={s.value}>
+                <input type="radio" name={startName} checked={start === s.value} onChange={() => choose(s.value)} />
+                {s.label}
+              </label>
+            ))}
+          </fieldset>
           <div className="field">
             <label htmlFor={nameId}>Name</label>
             <input id={nameId} ref={nameInput} value={name} maxLength={100} placeholder={power ? POWER_NAME : undefined} onChange={(e) => setName(e.target.value)} />
@@ -64,15 +74,6 @@ export function CreateDashboardDialog({ onClose, initialStart = "blank" }: { onC
               {RANGE_PRESETS.map((p) => <option key={p} value={p}>{RANGE_LABELS[p]}</option>)}
             </select>
           </div>
-          <fieldset>
-            <legend>Start from</legend>
-            {STARTS.map((s) => (
-              <label key={s.value}>
-                <input type="radio" name={startName} checked={start === s.value} onChange={() => choose(s.value)} />
-                {s.label}
-              </label>
-            ))}
-          </fieldset>
           {finalName === "" && <p className="muted">Enter a name.</p>}
           {error && <p className="error" role="alert">{error}</p>}
           <div className="row">

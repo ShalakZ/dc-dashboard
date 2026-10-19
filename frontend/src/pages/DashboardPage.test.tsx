@@ -4,7 +4,7 @@ import { useDefaultDashboard } from "../api/queries";
 import type { Asset, DataWidgetType } from "../api/types";
 import { downloadCsv } from "../lib/download";
 import { progress } from "../lib/progress";
-import { authed, config, dashboard, dataFor, textWidget, valueRow, valuesData, widget, widgetDataRoute } from "../test/dashboardFixtures";
+import { authed, breakdownBlock, breakdownData, config, dashboard, dataFor, textWidget, valueRow, valuesData, widget, widgetDataRoute } from "../test/dashboardFixtures";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithDataRouter, renderWithProviders } from "../test/render";
@@ -485,6 +485,74 @@ describe("DashboardPage with a focus asset (the header)", () => {
       expect(where()).toBe("/dashboards/3?asset=4");
       expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1", "Row 2", "Rack 5"]);
     });
+
+    it("an Enter on a crumb leaves keyboard focus on the crumb that replaces it, the new current page (W3); the current crumb is no tab stop", async () => {
+      const { where } = openAt("/dashboards/3?asset=4");
+      await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1", "Row 2", "Rack 5"]));
+      expect(within(trail()).getByText("Rack 5")).toHaveAttribute("tabindex", "-1");
+      within(trail()).getByRole("link", { name: "Row 2" }).focus();
+      await userEvent.keyboard("{Enter}");
+      expect(where()).toBe("/dashboards/3?asset=3");
+      const row = within(trail()).getByText("Row 2");
+      expect(row).toHaveAttribute("aria-current", "page");
+      expect(row).toHaveFocus();
+      // The dashboard's own crumb (the whole site) does the same.
+      within(trail()).getByRole("link", { name: "Hall A" }).focus();
+      await userEvent.keyboard("{Enter}");
+      expect(where()).toBe("/dashboards/3");
+      expect(within(trail()).getByText("Hall A")).toHaveFocus();
+      expect(within(trail()).getByText("Hall A")).toHaveAttribute("aria-current", "page");
+    });
+
+    it("a click on a crumb does the same, and the Dashboards crumb (it leaves the page) is not touched", async () => {
+      openAt("/dashboards/3?asset=4");
+      await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1", "Row 2", "Rack 5"]));
+      await userEvent.click(within(trail()).getByRole("link", { name: "Hall 1" }));
+      expect(within(trail()).getByText("Hall 1")).toHaveFocus();
+    });
+
+    it("Back, and the Focus dialog, change the focus without moving the keyboard focus to the trail", async () => {
+      const { router } = openAt("/dashboards/3?asset=4");
+      await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1", "Row 2", "Rack 5"]));
+      await userEvent.click(within(trail()).getByRole("link", { name: "Hall 1" }));
+      await act(async () => { await router.navigate(-1); });
+      await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1", "Row 2", "Rack 5"]));
+      expect(within(trail()).getByText("Rack 5")).not.toHaveFocus();
+      await userEvent.click(await screen.findByRole("button", { name: "Focus" }));
+      const dialog = await screen.findByRole("dialog", { name: "Choose a focus" });
+      await userEvent.click(await within(dialog).findByRole("radio", { name: "Hall 2" }));
+      await userEvent.click(within(dialog).getByRole("button", { name: "Show" }));
+      await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 2"]));
+      expect(within(trail()).getByText("Hall 2")).not.toHaveFocus();
+      expect(screen.getByRole("button", { name: "Focus" })).toHaveFocus();
+    });
+  });
+
+  describe("a click on a bar narrows the dashboard only where something follows the focus (W2)", () => {
+    const hall = { id: 2, name: "Hall 1" }; // has children in `deep`
+    const bars = widget(8, "bar", { title: "Hall bars", config: config({ assets: [], source: "energy", metric: null, aggregation: "sum", bars: "kind", kind: "Hall", range: "this_month" }), x: 0, y: 0, w: 6, h: 5 });
+    const followed = widget(9, "stat", { title: "Follows", config: config({ assets: [], source: "energy", metric: null, aggregation: "sum", range: "this_month", scope: "focus" }), x: 6, y: 0, w: 3, h: 2 });
+    const route = ({ body, url }: { url: string; body: unknown }) => ((body as { type: string }).type === "bar"
+      ? { body: breakdownData(1, { values: [valueRow({ asset_id: hall.id, name: hall.name, value: 100, point_id: null })], breakdown: breakdownBlock({ kind: "Hall", root: null, count: 1, shown: 1, more: { count: 0, with_value: 0, value: null, estimated: false, partial: false } }) }) }
+      : widgetDataRoute({ body, url }));
+    async function detailsOf(cards: ReturnType<typeof widget>[]) {
+      openAt("/dashboards/3", { over: { "GET /api/dashboards/3": { body: dashboard({ widgets: cards }) }, "POST /api/widget-data": route } });
+      await within(await region("Hall bars")).findByTestId("chart");
+      await userEvent.click(screen.getByRole("button", { name: "Details for Hall bars" }));
+      return screen.getByRole("dialog", { name: "Details: Hall bars" });
+    }
+
+    it("offers Narrow in the Details of a breakdown when another card of the dashboard follows the focus", async () => {
+      const dialog = await detailsOf([bars, followed]);
+      expect(await within(dialog).findByRole("button", { name: "Narrow to Hall 1" })).toBeInTheDocument();
+    });
+
+    it("offers none when every card keeps its own assets", async () => {
+      const dialog = await detailsOf([bars, current]);
+      expect(within(dialog).getByRole("link", { name: "Hall 1" })).toHaveAttribute("href", "/assets/2");
+      await new Promise((r) => setTimeout(r, 30)); // the asset list is not even asked for: there is nothing to wait for
+      expect(within(dialog).queryByRole("button", { name: /^Narrow to / })).not.toBeInTheDocument();
+    });
   });
 
   describe("the Focus button and the link to the asset's page", () => {
@@ -559,13 +627,14 @@ describe("DashboardPage with a focus asset (the header)", () => {
       expect(asked("table")[0].focus).toBeUndefined();
       await userEvent.click(await focusButton());
       const dialog = await screen.findByRole("dialog", { name: "Choose a focus" });
-      await userEvent.click(await within(dialog).findByRole("radio", { name: "Hall 2" }));
+      // Hall 1, not Hall 2: the stat's own asset is Hall 2 (id 5), and a card that shows exactly the focus asset leaves its "own assets" note out.
+      await userEvent.click(await within(dialog).findByRole("radio", { name: "Hall 1" }));
       await userEvent.click(within(dialog).getByRole("button", { name: "Show" }));
-      expect(where()).toBe("/dashboards/3?asset=5");
+      expect(where()).toBe("/dashboards/3?asset=2");
       await waitFor(() => expect(asked("table")).toHaveLength(2));
-      expect(asked("table")[1].focus).toBe(5);
+      expect(asked("table")[1].focus).toBe(2);
       // The fixed widget has seen the new focus (its footer names it) and the following one has its answer: nothing more is on its way.
-      await within(await region("Current power")).findByText("Its own assets, not Hall 2");
+      await within(await region("Current power")).findByText("Its own assets, not Hall 1");
       await waitFor(() => expect(document.querySelector(".widget-body[aria-busy]")).toBeNull());
       expect(asked("table")).toHaveLength(2);
       expect(asked("stat")).toHaveLength(1);

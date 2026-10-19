@@ -125,10 +125,22 @@ describe("drill-through on a breakdown (w25, R10)", () => {
     expect(drillAction(99, parents), "an asset the list does not know has no children there").toBe("open");
   });
 
+  it("opens the page of an asset with children too where nothing on the dashboard follows the focus (W2)", () => {
+    const parents = parentIds(assets);
+    expect(drillAction(3, parents, false)).toBe("open");
+    expect(drillAction(3, parents, true)).toBe("narrow");
+  });
+
   it("words the tooltip's line and the button", () => {
     expect(drillTip("narrow", "Rack 05")).toBe("Click to narrow the dashboard to Rack 05");
     expect(drillTip("open", "Feed A")).toBe("Click to open Feed A's page");
     expect(narrowLabel("Rack 05")).toBe("Narrow to Rack 05");
+  });
+
+  it("says that only the name answers on a bar with no shape (W8)", () => {
+    expect(drillTip("narrow", "Rack 07", true)).toBe("Click its name to narrow the dashboard to Rack 07");
+    expect(drillTip("open", "Rack 07", true)).toBe("Click its name to open Rack 07's page");
+    expect(drillTip("open", "Rack 07", false)).toBe("Click to open Rack 07's page");
   });
 });
 

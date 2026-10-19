@@ -432,9 +432,57 @@ describe("FocusProvider: setFocus and reportGone", () => {
   });
 });
 
+describe("FocusProvider: the gone line does not outlive the choice of a focus (W1)", () => {
+  it("a dead link says the whole site is shown; choosing a focus takes the line away, and clearing the focus does not bring it back", async () => {
+    const { where } = open("/x?asset=99");
+    expect(await screen.findByText(FOCUS_GONE_NOTICE)).toBeInTheDocument();
+    await waitFor(() => expect(where()).toBe("/x"));
+    act(() => ctx.setFocus(2));
+    await waitFor(() => expect(where()).toBe("/x?asset=2"));
+    expect(text("focus")).toBe("2");
+    expect(screen.queryByText(FOCUS_GONE_NOTICE)).not.toBeInTheDocument();
+    act(() => ctx.setFocus(null));
+    await waitFor(() => expect(where()).toBe("/x"));
+    expect(text("focus")).toBe("null");
+    expect(screen.queryByText(FOCUS_GONE_NOTICE)).not.toBeInTheDocument();
+  });
+
+  it("Back from the chosen focus to the entry of the dead link shows no line either", async () => {
+    const { where, router } = open("/x?asset=99");
+    expect(await screen.findByText(FOCUS_GONE_NOTICE)).toBeInTheDocument();
+    act(() => ctx.setFocus(2));
+    await waitFor(() => expect(where()).toBe("/x?asset=2"));
+    await act(async () => { await router.navigate(-1); });
+    await waitFor(() => expect(where()).toBe("/x"));
+    expect(screen.queryByText(FOCUS_GONE_NOTICE)).not.toBeInTheDocument();
+  });
+
+  it("choosing the sole top-level asset (the whole site) keeps the line, which is still true", async () => {
+    mockFetch({ ...authed("viewer"), "GET /api/assets": { body: single } });
+    const view = renderWithDataRouter(<Known><FocusProvider><Probe /></FocusProvider></Known>, { route: "/x?asset=99", path: "/x" });
+    expect(await screen.findByText(FOCUS_GONE_NOTICE)).toBeInTheDocument();
+    act(() => ctx.setFocus(1));
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+    expect(view.router.state.location.search).toBe("");
+    expect(screen.getByText(FOCUS_GONE_NOTICE)).toBeInTheDocument();
+  });
+});
+
+describe("FocusProvider: anyFollowing", () => {
+  it("is what the page says: false by default, true when the page passes it", async () => {
+    open("/x");
+    await screen.findByTestId("focus");
+    expect(ctx.anyFollowing).toBe(false);
+    mockFetch({ ...authed("viewer"), "GET /api/assets": { body: forest } });
+    renderWithDataRouter(<Known><FocusProvider anyFollowing><Probe /></FocusProvider></Known>, { route: "/y", path: "/y" });
+    await waitFor(() => expect(ctx.anyFollowing).toBe(true));
+  });
+});
+
 describe("useFocus without a provider", () => {
   it("follows nothing, says nothing and changes nothing", () => {
     render(<Probe />);
+    expect(ctx.anyFollowing).toBe(false);
     expect(text("focus")).toBe("null");
     expect(text("allowed")).toBe("false");
     expect(text("assets")).toBe("none");

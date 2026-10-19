@@ -22,7 +22,8 @@ const BARS: WidgetData = breakdownData(2, {
 const CONFIG = config({ assets: [], bars: "kind" });
 
 const setFocus = vi.fn();
-const state = (over: Partial<FocusState> = {}): FocusState => ({ focus: null, allowed: true, assets: ASSETS, name: null, notice: null, setFocus, reportGone: () => {}, ...over });
+/** A dashboard on which a card follows the focus (`anyFollowing`), so that a Narrow button means something; the all-fixed case says `anyFollowing: false`. */
+const state = (over: Partial<FocusState> = {}): FocusState => ({ focus: null, allowed: true, assets: ASSETS, name: null, notice: null, anyFollowing: true, setFocus, reportGone: () => {}, ...over });
 
 /** A card with its Details button, as WidgetView holds the drawer: the button that opened it is where focus goes back. */
 function Card({ data }: { data: WidgetData }) {
@@ -125,6 +126,13 @@ describe("the Details panel of a breakdown where there is no drill-through", () 
   it("has none for a role that cannot open assets", async () => {
     const { dialog } = await openDetails(BARS, { focus: state({ allowed: false, assets: undefined }) });
     expectUnchanged(dialog);
+  });
+
+  it("has none on a dashboard where no card follows the focus (W2), and then does not ask for the asset list", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(() => {}));
+    const { dialog } = await openDetails(BARS, { focus: state({ anyFollowing: false }), cached: null });
+    expectUnchanged(dialog);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("has none until the asset list is loaded", async () => {

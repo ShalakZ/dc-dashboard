@@ -41,14 +41,14 @@ const posts = (calls: ReturnType<typeof mockFetch>) => calls.filter((c) => c.met
 const radio = (dialog: HTMLElement, name: string) => within(dialog).getByRole("radio", { name }) as HTMLInputElement;
 
 describe("CreateDashboardDialog", () => {
-  it("offers Start from Blank (chosen) or Power after Range, with the focus on Name", async () => {
+  it("offers Start from Blank (chosen) or Power before Name and Range (the range Power sets is seen before it is edited), with the focus on Name", async () => {
     const { dialog } = await show();
     const group = within(dialog).getByRole("group", { name: "Start from" });
     expect(within(group).getAllByRole("radio").map((r) => r.parentElement?.textContent)).toEqual(["Blank", "Power"]);
     expect(radio(dialog, "Blank").checked).toBe(true);
     expect(radio(dialog, "Power").checked).toBe(false);
     const order = Array.from(dialog.querySelectorAll("input, select, button")).map((e) => e.tagName + (e.getAttribute("type") ?? ""));
-    expect(order).toEqual(["INPUT", "SELECT", "INPUTradio", "INPUTradio", "BUTTONbutton", "BUTTONsubmit"]); // Name, Range, Start from, Cancel, Create
+    expect(order).toEqual(["INPUTradio", "INPUTradio", "INPUT", "SELECT", "BUTTONbutton", "BUTTONsubmit"]); // Start from, Name, Range, Cancel, Create
     expect(screen.getByLabelText("Name")).toHaveFocus();
     expect(screen.getByLabelText("Name")).not.toHaveAttribute("placeholder");
   });

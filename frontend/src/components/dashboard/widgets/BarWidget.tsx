@@ -107,7 +107,7 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
       return { text: `${figureText(v.value, v)}${unit}${v.no_data ? ` (${NO_DATA})` : ""}`, state: stateOf(v, false) };
     });
     const names = uniqueLabels(data.values);
-    const notes = drill && data.breakdown ? drill.map((action, i) => drillTip(action, names[i])) : undefined;
+    const notes = drill && data.breakdown ? drill.map((action, i) => drillTip(action, names[i], isNoDataBar(data.values[i]))) : undefined;
     return {
       ...base,
       tooltip: { ...base.tooltip, formatter: tooltipFor([cells], labels, false, theme, [], notes) },
@@ -217,18 +217,19 @@ export function clickedBar(params: ClickParams, labels: readonly string[]): numb
 
 /**
  * The chart of a breakdown by kind in the viewer (w25, R10): a click on a bar, or on its name, narrows the dashboard to an asset that has children and opens the
- * page of one that has none; the tooltip says which. It waits for the asset list (children are read from it), and until then behaves like PlainBars. Only this
- * component asks for the list and for the router, so a card that cannot drill needs neither.
+ * page of one that has none; the tooltip says which. Where no card follows the focus (`anyFollowing`) narrowing would change nothing, so every click opens the page.
+ * It waits for the asset list (children are read from it), and until then behaves like PlainBars. Only this component asks for the list and for the router, so a
+ * card that cannot drill needs neither.
  */
 const DrillBars = memo(function DrillBars({ data, timezone, theme, chartWidth }: BarsProps) {
   const assets = useAssets().data;
-  const { setFocus } = useFocus();
+  const { setFocus, anyFollowing } = useFocus();
   const navigate = useNavigate();
   const actions = useMemo(() => {
     if (!assets) return undefined;
     const parents = parentIds(assets);
-    return data.values.map((bar) => drillAction(bar.asset_id, parents));
-  }, [assets, data.values]);
+    return data.values.map((bar) => drillAction(bar.asset_id, parents, anyFollowing));
+  }, [assets, data.values, anyFollowing]);
   const option = useMemo(() => barOption(data, timezone, theme, chartWidth, actions), [data, timezone, theme, chartWidth, actions]);
   // The handler ECharts holds never changes (a new one would be bound again on every refetch); it calls whatever the latest render decided.
   const click = useRef<(params: ClickParams) => void>(() => {});

@@ -97,13 +97,21 @@ export function selectedKind(options: readonly KindOption[], current: string): s
 export const parentIds = (assets: readonly Asset[]): Set<number> =>
   new Set(assets.flatMap((asset) => (asset.parent_id === null ? [] : [asset.parent_id])));
 
-/** What a click on a bar of a breakdown does (w25, R10): narrow the dashboard to an asset that has children, open the page of one that has none. */
+/**
+ * What a click on a bar of a breakdown does (w25, R10): narrow the dashboard to an asset that has children, open the page of one that has none. Where no card of the
+ * dashboard follows the focus (`narrowing` false) narrowing would change nothing on the page, so an asset with children opens its page like a leaf (W2).
+ */
 export type DrillAction = "narrow" | "open";
-export const drillAction = (id: number, parents: ReadonlySet<number>): DrillAction => (parents.has(id) ? "narrow" : "open");
+export const drillAction = (id: number, parents: ReadonlySet<number>, narrowing = true): DrillAction => (narrowing && parents.has(id) ? "narrow" : "open");
 
-/** The last line of a bar's tooltip when a click does something; `name` is the bar's name as the chart shows it. */
-export const drillTip = (action: DrillAction, name: string): string =>
-  action === "narrow" ? `Click to narrow the dashboard to ${name}` : `Click to open ${name}'s page`;
+/**
+ * The last line of a bar's tooltip when a click does something; `name` is the bar's name as the chart shows it. A bar with no shape (`nameOnly`: no data) cannot be
+ * clicked, only its name can, and the line says so.
+ */
+export const drillTip = (action: DrillAction, name: string, nameOnly = false): string => {
+  const click = nameOnly ? "Click its name to" : "Click to";
+  return action === "narrow" ? `${click} narrow the dashboard to ${name}` : `${click} open ${name}'s page`;
+};
 
 /** The name of the Details panel's keyboard route to the same narrowing. */
 export const narrowLabel = (name: string): string => `Narrow to ${name}`;

@@ -17,6 +17,8 @@ export interface FocusState {
   name: string | null;
   /** A sentence for the page when a link's focus was refused or is gone; null when there is nothing to say. */
   notice: string | null;
+  /** Does any data widget of the dashboard follow the focus? Only then does choosing a focus change anything on the page, so only then may a click narrow it (W2). */
+  anyFollowing: boolean;
   /** Push the address with this focus (null = the whole site). Does nothing for the focus it already is, or without permission. */
   setFocus(id: number | null): void;
   /** The server says this asset is gone. Clears the focus only if it is still the one in the address. */
@@ -25,7 +27,7 @@ export interface FocusState {
 
 const noop = () => {};
 /** A widget drawn without a provider (the unit tests of a lone card) follows nothing. */
-const NO_FOCUS: FocusState = { focus: null, allowed: false, assets: undefined, name: null, notice: null, setFocus: noop, reportGone: noop };
+const NO_FOCUS: FocusState = { focus: null, allowed: false, assets: undefined, name: null, notice: null, anyFollowing: false, setFocus: noop, reportGone: noop };
 
 export const FocusContext = createContext<FocusState>(NO_FOCUS);
 export const useFocus = () => useContext(FocusContext);
@@ -38,9 +40,9 @@ export function FocusNotice() {
 
 /**
  * Reads `?asset=` and offers it to everything below (R3, R4, R5). Mount it where the dashboard is drawn, in the viewer and the editor alike
- * and in the same place for both, so that switching between them keeps what it remembers.
+ * and in the same place for both, so that switching between them keeps what it remembers. `anyFollowing` is the page's answer to "does any data widget follow the focus?".
  */
-export function FocusProvider({ children }: { children: ReactNode }) {
+export function FocusProvider({ children, anyFollowing = false }: { children: ReactNode; anyFollowing?: boolean }) {
   const { user, can } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -102,6 +104,8 @@ export function FocusProvider({ children }: { children: ReactNode }) {
     const search = withFocus(now.search, id);
     live.current.navigate({ pathname: now.pathname, search, hash: now.hash }, { state: null });
     here.current = { ...now, search, raw: id === null ? null : String(id) };
+    // "The dashboard shows the whole site" is about the link that was followed; once a focus is chosen it is no longer said, and does not come back when the focus is cleared or Back lands on the dead link's entry.
+    if (id !== null) setGone(false);
   }, []);
 
   const reportGone = useCallback((id: number) => {
@@ -109,10 +113,11 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   }, [clear]);
 
   const name = focus === null ? null : (assets?.find((asset) => asset.id === focus)?.name ?? null);
-  const notice = !settled ? null : !allowed ? (raw !== null ? FOCUS_DENIED_NOTICE : null) : gone ? FOCUS_GONE_NOTICE : null;
+  // The gone line is kept for the visit (R4) but said only while the dashboard really shows the whole site: with a focus chosen it would be false.
+  const notice = !settled ? null : !allowed ? (raw !== null ? FOCUS_DENIED_NOTICE : null) : gone && focus === null ? FOCUS_GONE_NOTICE : null;
   const value = useMemo<FocusState>(
-    () => ({ focus, allowed, assets, name, notice, setFocus, reportGone }),
-    [focus, allowed, assets, name, notice, setFocus, reportGone],
+    () => ({ focus, allowed, assets, name, notice, anyFollowing, setFocus, reportGone }),
+    [focus, allowed, assets, name, notice, anyFollowing, setFocus, reportGone],
   );
   return <FocusContext.Provider value={value}>{children}</FocusContext.Provider>;
 }

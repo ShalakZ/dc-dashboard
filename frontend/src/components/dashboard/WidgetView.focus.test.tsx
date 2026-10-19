@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
@@ -27,7 +27,7 @@ const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider 
 
 const reportGone = vi.fn();
 /** One identity for `reportGone` in every context of a test, as the provider keeps. */
-const ctxOf = (over: Partial<FocusState> = {}): FocusState => ({ focus: null, allowed: true, assets: undefined, name: null, notice: null, setFocus: vi.fn(), reportGone, ...over });
+const ctxOf = (over: Partial<FocusState> = {}): FocusState => ({ focus: null, allowed: true, assets: undefined, name: null, notice: null, anyFollowing: true, setFocus: vi.fn(), reportGone, ...over });
 const at = (focus: number | null): FocusState => ctxOf({ focus, name: focus === null ? null : `Hall ${focus}` });
 
 const FOLLOWS = config({ assets: [], source: "energy", metric: null, aggregation: "sum", range: "this_month", scope: "focus" });
@@ -363,6 +363,33 @@ describe("WidgetView with a focus: the sentences", () => {
     expect(screen.queryByText(/has no children/)).not.toBeInTheDocument();
   });
 
+  it("does not say 'No Panels under <the asset it just left>' while the breakdown of the next focus loads: an empty dimmed body until the real answer lands (W9)", async () => {
+    const lookUnder = config({ assets: [], source: "energy", metric: null, aggregation: "sum", bars: "kind", kind: "Panel", range: "this_month", scope: "focus" });
+    mockFetch({
+      "POST /api/widget-data": ({ body }) => {
+        const { focus } = body as { focus: number };
+        const root = { id: focus, name: `Hall ${focus}` };
+        return {
+          body: focus === 7
+            ? breakdownData(0, { values: [], breakdown: breakdownBlock({ kind: "Panel", root, count: 0, shown: 0, kinds: [{ kind: "Rack", count: 4 }] }), focus: block(7) })
+            : breakdownData(1, { values: [valueRow({ asset_id: 10, name: "Panel A", value: 7, point_id: null })], breakdown: breakdownBlock({ kind: "Panel", root }), focus: block(focus) }),
+        };
+      },
+    });
+    const view = show(at(7), { type: "bar", config: lookUnder });
+    expect(await screen.findByText(/No Panels under Hall 7/)).toBeInTheDocument();
+    const gate = holdFetch(everything);
+    view.again(at(9), { type: "bar", config: lookUnder });
+    expect(screen.queryByText(/No Panels/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Split by/)).not.toBeInTheDocument();
+    expect(bodyOfCard()).toBeEmptyDOMElement();
+    expect(bodyOfCard()).toHaveClass("follow-stale");
+    expect(bodyOfCard()).toHaveAttribute("aria-busy", "true");
+    gate.release();
+    expect(await screen.findByTestId("chart")).toHaveTextContent("Panel A");
+    expect(bodyOfCard()).not.toHaveClass("follow-stale");
+  });
+
   it("keeps the previous figures, dimmed, when the previous answer had some (no sentence takes their place)", async () => {
     mockFetch({ "POST /api/widget-data": byFocus });
     const view = show(at(7), { config: CHILDREN });
@@ -456,6 +483,41 @@ describe("WidgetView with a focus: the footer line", () => {
     show(at(7));
     await screen.findByText("Row 7");
     expect(screen.queryByText(/Its own assets/)).not.toBeInTheDocument();
+  });
+
+  it("does not say it on a card whose own assets are exactly the focus asset (W4), and then says it when the focus moves on, in the line it already holds", async () => {
+    mockFetch({ "POST /api/widget-data": byFocus });
+    const view = show(at(7), { config: config({ ...FIXED, assets: [7] }) });
+    await screen.findByText("Row site");
+    expect(screen.queryByText(/Its own assets/)).not.toBeInTheDocument();
+    const reserved = footOfCard();
+    expect(reserved).toHaveAttribute("aria-hidden", "true"); // the line is held: the body must not move when the focus leaves
+    view.again(at(9), { config: config({ ...FIXED, assets: [7] }) });
+    expect(await screen.findByText("Its own assets, not Hall 9")).toBeInTheDocument();
+    expect(footOfCard()).toBe(reserved);
+  });
+
+  it("still says it when the focus asset is only one of several, or the card has another asset (W4)", async () => {
+    mockFetch({ "POST /api/widget-data": byFocus });
+    show(at(7), { config: config({ ...FIXED, assets: [7, 8] }) });
+    expect(await screen.findByText("Its own assets, not Hall 7")).toBeInTheDocument();
+    cleanup();
+    show(at(7), { config: config({ ...FIXED, assets: [8] }) });
+    expect(await screen.findByText("Its own assets, not Hall 7")).toBeInTheDocument();
+  });
+
+  it("leaves it out of a fixed breakdown whose root is the focus asset, and keeps it for another root or the whole site (W4)", async () => {
+    mockFetch({ "POST /api/widget-data": ({ body }) => ({ body: breakdownData(1, { values: [valueRow({ asset_id: 10, name: "Rack A", value: 7, point_id: null })], breakdown: breakdownBlock({ kind: "Rack" }), focus: (body as { focus?: number }).focus === undefined ? null : block(7) }) }) });
+    const under = (root: number | null) => config({ assets: [], source: "energy", metric: null, aggregation: "sum", bars: "kind", kind: "Rack", range: "this_month", root });
+    show(at(7), { type: "bar", config: under(7) });
+    await screen.findByTestId("chart");
+    expect(screen.queryByText(/Its own assets/)).not.toBeInTheDocument();
+    cleanup();
+    show(at(7), { type: "bar", config: under(8) });
+    expect(await screen.findByText("Its own assets, not Hall 7")).toBeInTheDocument();
+    cleanup();
+    show(at(7), { type: "bar", config: under(null) });
+    expect(await screen.findByText("Its own assets, not Hall 7")).toBeInTheDocument();
   });
 
   it("counts the children shown when a card cannot show them all (R6), by the focus asset's name", async () => {

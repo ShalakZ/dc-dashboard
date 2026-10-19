@@ -1,5 +1,6 @@
-import type { Asset } from "../api/types";
-import { childrenNote, chooseText, FOCUS_DENIED_NOTICE, FOCUS_GONE_NOTICE, isFollowing, leafText, NO_ASSETS_TEXT, ownAssetsNote, parseFocusParam, topLevel, withFocus } from "./focus";
+import type { Asset, Widget } from "../api/types";
+import { config } from "../test/dashboardFixtures";
+import { anyWidgetFollows, childrenNote, chooseText, FOCUS_DENIED_NOTICE, FOCUS_GONE_NOTICE, isFollowing, leafText, NO_ASSETS_TEXT, ownAssetsNote, parseFocusParam, topLevel, withFocus } from "./focus";
 
 const a = (id: number, parent_id: number | null, name: string, sort_order = 0): Asset => ({
   id, parent_id, name, kind: "generic", sort_order,
@@ -82,6 +83,19 @@ describe("isFollowing", () => {
     expect(isFollowing({ scope: "children" })).toBe(true);
     expect(isFollowing({ scope: "fixed" })).toBe(false);
     expect(isFollowing({})).toBe(false);
+  });
+});
+
+describe("anyWidgetFollows", () => {
+  const data = (id: number, scope?: "fixed" | "focus" | "children"): Widget => ({ id, type: "stat", title: `W${id}`, x: 0, y: 0, w: 3, h: 2, config: config({ ...(scope ? { scope } : {}) }) });
+  const text: Widget = { id: 9, type: "text", title: "Heading", x: 0, y: 0, w: 12, h: 1, config: { style: "heading", text: "Plant" } };
+
+  it("is true when any data widget follows the focus or its children, false for fixed widgets, text and an empty dashboard", () => {
+    expect(anyWidgetFollows([data(1), data(2, "fixed"), data(3, "focus")])).toBe(true);
+    expect(anyWidgetFollows([data(1, "children")])).toBe(true);
+    expect(anyWidgetFollows([data(1), data(2, "fixed"), text])).toBe(false);
+    expect(anyWidgetFollows([text])).toBe(false);
+    expect(anyWidgetFollows([])).toBe(false);
   });
 });
 
