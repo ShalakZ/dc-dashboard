@@ -1,5 +1,6 @@
 """`python -m dcdash.diagnostics.speed` (w26 R11): the lines the owner pastes back. They carry counts and seconds only, the run reads and
 never writes, a stage that fails does not stop the ones after it, and an empty database prints without failing."""
+import os
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -232,3 +233,81 @@ def test_the_figure_cache_line_reads_the_two_switches(monkeypatch, switch, ttl, 
             monkeypatch.setenv(name, value)
     assert speed._figure_cache() == expected
 
+
+
+# ---- main(): the cache is off for the run, and everything the run opened is closed ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "installed, expected",
+    [
+        ("1", "on, 30 s (switched off for this check, so each stage shows its true cost)"),
+        (None, "on, 30 s (switched off for this check, so each stage shows its true cost)"),
+        ("0", "off"),
+    ],
+)
+def test_main_switches_the_figure_cache_off_for_the_run_and_the_line_reports_the_installations_setting(
+    monkeypatch, installed, expected
+):
+    if installed is None:
+        # unset, but through the monkeypatch: it must remember the variable, or the "0" that main() sets would outlive the test
+        monkeypatch.setenv("DCDASH_FIGURE_CACHE", "1")
+        monkeypatch.delenv("DCDASH_FIGURE_CACHE")
+    else:
+        monkeypatch.setenv("DCDASH_FIGURE_CACHE", installed)
+    monkeypatch.setattr(speed, "_installed_switch", None)  # main() sets it; the monkeypatch puts it back
+    seen: dict[str, str] = {}
+
+    async def stub() -> int:
+        seen["env"] = os.environ["DCDASH_FIGURE_CACHE"]
+        seen["line"] = speed._figure_cache()
+        return 0
+
+    monkeypatch.setattr(speed, "_cli", stub)
+
+    assert speed.main() == 0
+    assert seen == {"env": "0", "line": expected}  # the process runs with the cache off; the line says what the installation has
+
+
+async def test_the_run_closes_the_cache_the_compute_thread_and_the_request_engine_in_the_apps_order(monkeypatch):
+    order: list[str] = []
+
+    async def amain() -> int:
+        order.append("run")
+        return 0
+
+    async def dispose_cache() -> None:
+        order.append("cache")
+
+    async def dispose_engine() -> None:
+        order.append("engine")
+
+    monkeypatch.setattr(speed, "amain", amain)
+    monkeypatch.setattr(speed.figure_cache, "dispose", dispose_cache)
+    monkeypatch.setattr(speed.compute, "shutdown", lambda: order.append("thread"))
+    monkeypatch.setattr(speed, "dispose_engine", dispose_engine)
+
+    assert await speed._cli() == 0
+    assert order == ["run", "cache", "thread", "engine"]
+
+
+async def test_a_cache_that_will_not_close_does_not_keep_the_thread_and_the_engine_open(monkeypatch):
+    closed: list[str] = []
+
+    async def amain() -> int:
+        return 0
+
+    async def dispose_cache() -> None:
+        raise OSError("the pool is gone")
+
+    async def dispose_engine() -> None:
+        closed.append("engine")
+
+    monkeypatch.setattr(speed, "amain", amain)
+    monkeypatch.setattr(speed.figure_cache, "dispose", dispose_cache)
+    monkeypatch.setattr(speed.compute, "shutdown", lambda: closed.append("thread"))
+    monkeypatch.setattr(speed, "dispose_engine", dispose_engine)
+
+    with pytest.raises(OSError):
+        await speed._cli()
+    assert closed == ["thread", "engine"]

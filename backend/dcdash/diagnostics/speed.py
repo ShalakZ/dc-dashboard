@@ -3,11 +3,19 @@
     docker compose exec -T api python -m dcdash.diagnostics.speed
 
 It prints counts and seconds only, never a name of a source, point or asset, an address, a credential or a path. It reads and
-never writes: the whole run is ONE session whose first statement is `SET TRANSACTION READ ONLY`, and it is rolled back, never
-committed. Every statement is also limited to STATEMENT_TIMEOUT_SECONDS, so a very slow database ends a stage instead of
-hanging the run. Each stage runs in its own savepoint inside a `try`: a stage that fails prints `stage <name>: failed (<Class>)`
-(the class of the root cause, never its message) and the run goes on. Each timed stage runs twice, `first` and `repeat`, so a
-cache shows up as a drop.
+never writes: the session it runs the stages in has `SET TRANSACTION READ ONLY` as its first statement, and it is rolled back,
+never committed. Every statement of that session is also limited to STATEMENT_TIMEOUT_SECONDS, so a very slow database ends a
+stage instead of hanging the run. Each stage runs in its own savepoint inside a `try`: a stage that fails prints
+`stage <name>: failed (<Class>)` (the class of the root cause, never its message) and the run goes on. Each timed stage runs
+twice, `first` and `repeat`, so a cache shows up as a drop.
+
+The one exception to that session is Billing's month. Its figures are computed by the figure cache (core/figure_cache.py), on the
+cache's own small connection pool: ordinary read-only statements (no write is possible, it only selects), but outside this
+session's READ ONLY transaction and its statement timeout. `main()` therefore turns the cache off for the run (the environment
+variable DCDASH_FIGURE_CACHE=0 in this process only; the installation's own setting is untouched and is what the `figure cache`
+line reports), so the `repeat` of Billing's month is a second computation, not a hit, and every stage shows its true cost; the
+computation still runs on the cache's pool, and the run closes that pool and the compute thread when it ends, so nothing is left
+open. A stalled database ends every other stage at the statement timeout but Billing's, which waits for the database.
 
 It calls only the public functions the handlers call (`hourly_energy`, `cost_by_hour`, `month_costs`, `month_check`,
 `storage_stats`, `rows_per_day_range`) plus the engine's row statement, so a faster engine behind those names shows here.
@@ -25,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api import billing, billing_check
 from dcdash.api.settings import current_timezone
-from dcdash.core import cost, energy, storage
+from dcdash.core import compute, cost, energy, figure_cache, storage
 from dcdash.core.build import build_info
 from dcdash.core.db import dispose_engine, get_sessionmaker
 from dcdash.core.timeutil import month_bounds, validate_whole_hour_zone
@@ -33,6 +41,8 @@ from dcdash.core.tree import AssetTree
 
 STATEMENT_TIMEOUT_SECONDS = 120
 _MAX_CAUSE_DEPTH = 6
+_SWITCH = "DCDASH_FIGURE_CACHE"
+_installed_switch: str | None = None  # the installation's own setting, kept by `main()` before it turns the cache off for the run
 
 _COUNT = {"assets": text("SELECT count(*) FROM assets"), "points": text("SELECT count(*) FROM points")}
 _COUNT_HOURLY = text("SELECT count(*) FROM readings_1h WHERE bucket >= :start AND bucket < :end")
@@ -114,12 +124,15 @@ def _months(tz_name: str) -> list[tuple[str, str]]:
 
 def _figure_cache() -> str:
     # A later w26 task replaces this by a call into the figure cache module, so the line shows what the running code decides.
-    if os.environ.get("DCDASH_FIGURE_CACHE", "").strip() == "0":
+    # It reports the installation's setting, not the "0" `main()` puts in the environment for the run.
+    switch = os.environ.get(_SWITCH, "") if _installed_switch is None else _installed_switch
+    if switch.strip() == "0":
         return "off"
     try:
-        return f"on, {float(os.environ.get('DCDASH_FIGURE_CACHE_TTL', '30')):g} s"
+        line = f"on, {float(os.environ.get('DCDASH_FIGURE_CACHE_TTL', '30')):g} s"
     except ValueError:
-        return "on, 30 s (DCDASH_FIGURE_CACHE_TTL is not a number)"
+        line = "on, 30 s (DCDASH_FIGURE_CACHE_TTL is not a number)"
+    return line if _installed_switch is None else f"{line} (switched off for this check, so each stage shows its true cost)"
 
 
 # -- the counts ---------------------------------------------------------------------------------------------------------------
@@ -300,10 +313,20 @@ async def _cli() -> int:
     try:
         return await amain()
     finally:
-        await dispose_engine()
+        # Billing's month ran on the figure cache's own pool and its figures were computed on the compute thread: close both, in
+        # the order the app's shutdown does (api/main.py), so nothing is left open when the loop ends.
+        try:
+            await figure_cache.dispose()
+        finally:
+            compute.shutdown()
+            await dispose_engine()
 
 
 def main() -> int:
+    global _installed_switch
+    # With the cache on, the `repeat` of Billing's month would be a hit and hide the cost the owner asks about.
+    _installed_switch = os.environ.get(_SWITCH, "")
+    os.environ[_SWITCH] = "0"
     return asyncio.run(_cli())
 
 
