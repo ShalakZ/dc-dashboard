@@ -7,12 +7,14 @@ import type { Dashboard } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { Crumbs } from "../components/Crumbs";
 import { DashboardViewer } from "../components/dashboard/DashboardViewer";
-import { FocusNotice, FocusProvider } from "../components/dashboard/FocusContext";
+import { FocusNotice, FocusProvider, useFocus } from "../components/dashboard/FocusContext";
 import { LiveValuesProvider } from "../components/dashboard/LiveValuesContext";
 import { Pending } from "../components/Pending";
 import { DashboardSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { newest } from "../lib/dashboardEdit";
+import { withFocus } from "../lib/focus";
+import { focusTrail } from "../lib/focusTrail";
 
 // The editor brings react-grid-layout with it: it loads only when someone starts editing (spec 10.8).
 const DashboardEditor = lazy(() => import("../components/dashboard/DashboardEditor").then((m) => ({ default: m.DashboardEditor })));
@@ -21,6 +23,29 @@ export function DashboardPage() {
   const id = Number(useParams().id);
   // Keyed by id so moving from one dashboard to another starts from a clean slate.
   return <DashboardScreen key={id} id={id} />;
+}
+
+/**
+ * The one trail of the page (R7). Without a focus, or before the asset list is here, it is Dashboards / name with the name as the current page. With
+ * a focus it goes on through the focus asset's ancestors: the name then links to the whole site, each ancestor to the dashboard at that asset, and the
+ * focus asset is the current page. The links only change `?asset=`, so in edit mode the editor stays mounted. It sits inside the focus provider.
+ */
+function DashboardCrumbs({ id, name }: { id: number; name: string }) {
+  const { focus, assets } = useFocus();
+  const { search } = useLocation();
+  const chain = focus !== null && assets ? focusTrail(assets, focus) : [];
+  const path = `/dashboards/${id}`;
+  if (chain.length === 0) return <Crumbs trail={[{ label: "Dashboards", to: "/dashboards" }, { label: name }]} />;
+  const at = (asset: number | null) => path + withFocus(search, asset);
+  return (
+    <Crumbs
+      trail={[
+        { label: "Dashboards", to: "/dashboards" },
+        { label: name, to: at(null) },
+        ...chain.map((asset, i) => (i === chain.length - 1 ? { label: asset.name } : { label: asset.name, to: at(asset.id) })),
+      ]}
+    />
+  );
 }
 
 function DashboardScreen({ id }: { id: number }) {
@@ -44,7 +69,7 @@ function DashboardScreen({ id }: { id: number }) {
     if (loadError instanceof ApiError && loadError.status === 404) void queryClient.invalidateQueries({ queryKey: keys.defaultDashboard });
   }, [loadError, queryClient]);
 
-  if (query.isLoading || site.isLoading) return <DashboardSkeleton label="Loading the dashboard" canEdit={canEdit} />;
+  if (query.isLoading || site.isLoading) return <DashboardSkeleton label="Loading the dashboard" canEdit={canEdit} canFocus={can("assets.view")} />;
   const failure = query.error ?? site.error;
   // Block the page only when there is nothing to show. React Query keeps the last data when a refetch fails and still sets
   // `error`; replacing the screen then would unmount the editor and silently throw away unsaved edits (and a failed Reload
@@ -52,7 +77,7 @@ function DashboardScreen({ id }: { id: number }) {
   if (!dashboard || !site.data) return <p className="error" role="alert">{failure?.message ?? "not found"}</p>;
   const timezone = site.data.timezone;
   const notice = failure ? <p className="error" role="alert">Could not refresh this page: {failure.message}</p> : null;
-  const crumbs = <Crumbs trail={[{ label: "Dashboards", to: "/dashboards" }, { label: dashboard.name }]} />;
+  const crumbs = <DashboardCrumbs id={id} name={dashboard.name} />;
 
   const leaveEdit = () => {
     setWantsEdit(false);

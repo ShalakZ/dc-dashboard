@@ -1,4 +1,24 @@
 @layer w6 {
-  /* w25: the dashboard header's focus controls (Focus button, Open page link, the dialog "Choose a focus", the extended trail) and the drill-through words
-     on a breakdown (components/dashboard/DashboardViewer.tsx, FocusDialog.tsx, widgets/BarWidget.tsx). Tokens only. Filled in by tasks T4 and T5. */
+  /* w25: the dashboard header's focus controls (the Open page link, the dialog "Choose a focus"): components/dashboard/DashboardViewer.tsx and FocusDialog.tsx.
+     Tokens only. Every selector names a class this piece owns: .dash-head and .dialog are app.css's, and the clash guard in app.css.test.ts refuses a second rule for them. */
+
+  /* The link to the focus asset's page, drawn as a button (the same box as a base button: border, radius, control height, 13px/500). It is ONE line
+     high, whatever the name: a long name is cut with an ellipsis (the whole text is its accessible name and its title), so it stays as tall as Focus
+     and Edit beside it. It may shrink in a narrow header; the row wraps before that, as it does for the range select. The :hover rule says
+     text-decoration again because app.css underlines a link on hover (a:hover), which out-ranks the plain class. */
+  .focus-open { display: inline-block; flex: 0 1 auto; min-width: 0; max-width: min(100%, 22rem); height: var(--ctl-h); padding: 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); font-size: var(--fs-sm); font-weight: 500; line-height: calc(var(--ctl-h) - 2px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: none; }
+  .focus-open:hover { background: var(--surface); text-decoration: none; }
+
+  /* The dialog. Its body (the picker and Whole site) is the one box that scrolls, so with a short window Show and Cancel stay in sight; the padding and
+     the equal negative margin keep a focus ring at the body's edge from being clipped by its scrolling. The picker's list has a fixed height of its own
+     (asset-picker.css), so what the search finds never resizes the dialog. */
+  .focus-dialog { overflow: hidden; grid-template-rows: auto minmax(0, 1fr) auto; }
+  .focus-dialog > .focus-body { display: grid; align-content: start; gap: 12px; min-height: 0; margin: -4px; padding: 4px; overflow: auto; }
+
+  /* The line that stands in for the picker while the list loads, as tall as the picker will be (its tools, live line, picks box and list at the same
+     clamp), so the dialog does not jump when the list lands. */
+  .focus-loading { min-height: calc(172px + clamp(120px, 24vh, 240px)); }
+
+  /* Whole site while the draft is already the whole site: aria-disabled and not disabled (it may hold the focus the click gave it); it looks idle and does nothing. */
+  .focus-whole[aria-disabled="true"], .focus-whole[aria-disabled="true"]:hover { background: none; opacity: 0.55; cursor: not-allowed; }
 }

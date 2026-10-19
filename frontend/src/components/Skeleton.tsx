@@ -370,11 +370,12 @@ export function AssetSkeleton({ label, canEdit }: { label: string; canEdit?: boo
 
 /**
  * The dashboard page, which has no `.page-head`: its top is the trail (Dashboards and the dashboard's name) and the `.row.dash-head` (the title,
- * a spacer, the range label and its 142x34 select, and for someone who can edit the 55px Edit button), then the widgets. The widgets are four
+ * a spacer, the range label and its 142x34 select, for someone who can open assets the 64px Focus button, and for someone who can edit the 55px Edit
+ * button), then the widgets. The widgets are four
  * 240px blocks in two columns with the grid's 10px gap: the real grid is the dashboard's own layout, which is not known yet. The region is
  * `.sk-dash`, which gives the trail the margin `main > .crumbs` gives the real one. None of the grid's class names: a locator must not find it.
  */
-export function DashboardSkeleton({ label, canEdit }: { label: string; canEdit?: boolean }) {
+export function DashboardSkeleton({ label, canEdit, canFocus }: { label: string; canEdit?: boolean; canFocus?: boolean }) {
   return (
     <SkeletonRegion label={label} className="sk-dash">
       <TrailSkeleton widths={["10ch", "14ch"]} />
@@ -383,6 +384,7 @@ export function DashboardSkeleton({ label, canEdit }: { label: string; canEdit?:
         <span className="spacer" />
         <Skeleton width="14ch" />
         <Skeleton variant="block" width={142} height={CTL_H} />
+        {canFocus ? <Skeleton variant="block" width={64} height={CTL_H} /> : null}
         {canEdit ? <Skeleton variant="block" width={55} height={CTL_H} /> : null}
       </div>
       <div className="sk-quad" aria-hidden="true">

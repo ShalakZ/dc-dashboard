@@ -4,6 +4,7 @@ import { defaultSize, nextPosition, toDrafts } from "../lib/layout";
 import { assetList, authed, config, dashboard, widget, widgetDataRoute } from "../test/dashboardFixtures";
 import { FakeEventSource } from "../test/fakeEventSource";
 import { mockFetch, type Routes } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { model, point, source } from "../test/graphFixtures";
 import { renderWithDataRouter } from "../test/render";
 import { accountKnown, SignedIn } from "../test/signedIn";
@@ -56,7 +57,7 @@ const graph = model({
 const putBody = (calls: Call[]) => calls.find((c) => c.method === "PUT")?.body;
 const puts = (calls: Call[]) => calls.filter((c) => c.method === "PUT");
 
-function open(role: string, entry: string | { pathname: string; state?: unknown } = "/dashboards/3", over: Routes = {}, toasts?: ToastApi) {
+function open(role: string, entry: string | { pathname: string; state?: unknown } = "/dashboards/3", over: Routes = {}, toasts?: ToastApi, hold?: (method: string, path: string) => boolean) {
   const calls = mockFetch({
     ...authed(role),
     "GET /api/dashboards/3": { body: base },
@@ -70,8 +71,9 @@ function open(role: string, entry: string | { pathname: string; state?: unknown 
     },
     ...over,
   });
+  const held = hold ? holdFetch(hold) : { release: () => {} };
   const view = renderWithDataRouter(<><DashboardPage /><SignedIn /></>, { route: entry, path: "/dashboards/:id", toasts });
-  return { calls, ...view };
+  return { calls, ...view, release: held.release };
 }
 const add = () => screen.getByRole("button", { name: "Add widget" });
 const saveButton = () => screen.getByRole("button", { name: "Save" });
@@ -737,5 +739,83 @@ describe("closing up (vertical compaction)", () => {
     expect(saved.find((w) => w.title === "Hall power")).toMatchObject({ x: 0, y: 2 }); // not below B (y 4): under A, which is only 2 high, in the free space
     const overlap = (a: (typeof saved)[number], b: (typeof saved)[number]) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
     expect(saved.some((a, i) => saved.slice(i + 1).some((b) => overlap(a, b)))).toBe(false);
+  });
+});
+
+describe("a focus asset in edit mode", () => {
+  /** The assets are one Site over MV2 over two panels: with ONE top-level asset the trail leaves Site out. */
+  const line = (name: string) => `Widgets that follow the focus show ${name}.`;
+  const trail = () => screen.getByRole("navigation", { name: "Breadcrumb" });
+  const crumbs = () => within(trail()).getAllByRole("listitem").map((li) => (li.textContent ?? "").replace(/^\//, ""));
+  const where = (router: { state: { location: { pathname: string; search: string } } }) => router.state.location.pathname + router.state.location.search;
+
+  it("says nothing about a focus when there is none", async () => {
+    open("operator", "/dashboards/3");
+    await startEditing();
+    expect(screen.queryByText(/Widgets that follow the focus/)).not.toBeInTheDocument();
+  });
+
+  it("with a focus: the line names the asset, the header has no Focus button and no Open page link, and the trail extends", async () => {
+    open("operator", "/dashboards/3?asset=5");
+    await startEditing();
+    const text = await screen.findByText(line("LV Panel 1"));
+    expect(text.tagName).toBe("P");
+    expect(text).toHaveClass("muted");
+    expect(text).not.toHaveAttribute("role");
+    expect(text.closest(".dash-head")).toBeNull(); // below the header
+    expect(screen.queryByRole("button", { name: "Focus" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^Open .* page$/ })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Dashboard name")).toBeInTheDocument();
+    await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "MV2", "LV Panel 1"]));
+  });
+
+  it("says Asset #id while the list is not here, then the name, in the same line", async () => {
+    const page = open("operator", "/dashboards/3?asset=5", {}, undefined, (_method, path) => path === "/api/assets");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const text = await screen.findByText(line("Asset #5"));
+    page.release();
+    expect(await screen.findByText(line("LV Panel 1"))).toBe(text);
+  });
+
+  it("a crumb that only changes ?asset= keeps the editor and the unsaved edits, and the leave prompt does not appear", async () => {
+    const { router } = open("operator", "/dashboards/3?asset=5");
+    await startEditing();
+    await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "MV2", "LV Panel 1"]));
+    const name = screen.getByLabelText("Dashboard name");
+    await userEvent.type(name, "x");
+    expect(screen.getByText("Not saved yet")).toBeInTheDocument();
+
+    await userEvent.click(within(trail()).getByRole("link", { name: "MV2" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(where(router)).toBe("/dashboards/3?asset=2");
+    expect(router.state.historyAction).toBe("PUSH");
+    expect(screen.getByLabelText("Dashboard name")).toBe(name); // the same input: the editor was not remounted
+    expect(name).toHaveValue("Hall Ax");
+    expect(await screen.findByText(line("MV2"))).toBeInTheDocument();
+    expect(crumbs()).toEqual(["Dashboards", "Hall A", "MV2"]);
+
+    await userEvent.click(within(trail()).getByRole("link", { name: "Hall A" })); // the dashboard's name: the whole site
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(where(router)).toBe("/dashboards/3");
+    expect(name).toHaveValue("Hall Ax");
+    expect(screen.queryByText(/Widgets that follow the focus/)).not.toBeInTheDocument();
+
+    await act(async () => { await router.navigate(-1); }); // Back works in edit mode too
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(where(router)).toBe("/dashboards/3?asset=2");
+    expect(name).toHaveValue("Hall Ax");
+
+    await userEvent.click(within(trail()).getByRole("link", { name: "Dashboards" })); // another path still asks
+    expect(await screen.findByRole("alertdialog", { name: "Unsaved changes" })).toBeInTheDocument();
+    expect(where(router)).toBe("/dashboards/3?asset=2");
+  });
+
+  it("leaving edit mode with a focus keeps it: the viewer has the Focus button and the Open page link", async () => {
+    const { router } = open("operator", "/dashboards/3?asset=5");
+    await startEditing();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("button", { name: "Focus" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Open LV Panel 1 page" })).toBeInTheDocument();
+    expect(where(router)).toBe("/dashboards/3?asset=5");
   });
 });

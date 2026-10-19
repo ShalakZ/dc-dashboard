@@ -10,6 +10,7 @@ import { RANGE_LABELS, RANGE_PRESETS } from "../../lib/ranges";
 import { Icon } from "../Icon";
 import { TrashButton } from "../TrashButton";
 import { DashboardGrid } from "./DashboardGrid";
+import { useFocus } from "./FocusContext";
 import { WidgetEditor, type EditorFields } from "./WidgetEditor";
 import { WidgetCard } from "./WidgetCard";
 
@@ -31,6 +32,7 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
   const graph = useGraph();
   const metricAssets = useMemo(() => (graph.data ? metricAssetsOf(graph.data) : null), [graph.data]);
   const save = useSaveDashboard();
+  const { focus, name: focusName } = useFocus();
   const { run, busy, error } = useAction();
   const nameId = useId();
   const rangeId = useId();
@@ -150,6 +152,7 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
         <button type="button" onClick={submit} disabled={!canSave}>Save</button>
         <button type="button" onClick={() => (dirty ? setConfirmCancel(true) : onCancel())} disabled={busy}>Cancel</button>
       </div>
+      {focus !== null && <p className="muted">{`Widgets that follow the focus show ${focusName ?? `Asset #${focus}`}.`}</p>}
       {problem && <p className="muted">{problem}</p>}
       {full && <p className="muted">A dashboard can have at most {MAX_WIDGETS} widgets.</p>}
       {assets.error && <p className="error" role="alert">Could not load the assets: {assets.error.message}</p>}

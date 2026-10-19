@@ -493,8 +493,8 @@ const PAGES: readonly PageCase[] = [
   { name: "Asset kinds", open: goTo("/assets/kinds"), floor: 6, named: (p) => [btn(p, "New kind"), p.getByRole("button", { name: /^All \d+$/ })] },
   // floor 0: New dashboard is the only control on the page with an edge at rest.
   { name: "Dashboards", open: goTo("/dashboards"), floor: 0, named: (p) => [btn(p, "New dashboard")] },
-  // 1: the range select beside Edit.
-  { name: "a dashboard", open: goTo(() => `/dashboards/${dashboardId}`), floor: 1, named: (p) => [btn(p, "Edit"), p.getByLabel("Dashboard range")] },
+  // 1: the range select beside Focus (w25: a role with the Assets Tree has it) and Edit.
+  { name: "a dashboard", open: goTo(() => `/dashboards/${dashboardId}`), floor: 1, named: (p) => [btn(p, "Edit"), btn(p, "Focus"), p.getByLabel("Dashboard range")] },
   {
     // 10: name, range, Add widget, Save and Cancel on one line (10).
     name: "a dashboard in edit mode",

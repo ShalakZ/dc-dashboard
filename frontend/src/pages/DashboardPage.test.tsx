@@ -1,13 +1,14 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useDefaultDashboard } from "../api/queries";
-import type { DataWidgetType } from "../api/types";
+import type { Asset, DataWidgetType } from "../api/types";
 import { downloadCsv } from "../lib/download";
 import { progress } from "../lib/progress";
 import { authed, config, dashboard, dataFor, textWidget, valueRow, valuesData, widget, widgetDataRoute } from "../test/dashboardFixtures";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
-import { renderWithProviders } from "../test/render";
+import { renderWithDataRouter, renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { DashboardPage } from "./DashboardPage";
 
 // What the chart did: how often each kind was rendered, and which distinct option objects it was handed. The real
@@ -350,16 +351,24 @@ describe("DashboardPage while it loads", () => {
     expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
   });
 
-  it("gives someone who can edit the Edit button's block in the head row, and a viewer not", async () => {
+  it("gives someone who can edit the Edit button's block in the head row, after the select's and the Focus button's, and a viewer not", async () => {
     const operator = open("operator", {}, (_method, path) => path === "/api/dashboards/3");
-    await waitFor(() => expect(document.querySelectorAll(".dash-head > .sk-block")).toHaveLength(2)); // (the role arrives with /api/me, a moment after the first render)
+    await waitFor(() => expect(document.querySelectorAll(".dash-head > .sk-block")).toHaveLength(3)); // (the role arrives with /api/me, a moment after the first render)
     operator.release();
     await screen.findByRole("heading", { name: "Hall A" });
   });
 
-  it("has only the select's block for a viewer", async () => {
+  it("has the select's block and the Focus button's for a viewer (it can open assets)", async () => {
     const page = open("viewer", {}, (_method, path) => path === "/api/dashboards/3");
     await pause(); // /api/me has answered
+    expect(document.querySelectorAll(".dash-head > .sk-block")).toHaveLength(2);
+    page.release();
+    await screen.findByRole("heading", { name: "Hall A" });
+  });
+
+  it("has only the select's block for a role that cannot open assets", async () => {
+    const page = open("custom", { "GET /api/me": { body: userFor("custom", { permissions: ["dashboards.view"] }) } }, (_method, path) => path === "/api/dashboards/3");
+    await pause();
     expect(document.querySelectorAll(".dash-head > .sk-block")).toHaveLength(1);
     page.release();
     await screen.findByRole("heading", { name: "Hall A" });
@@ -369,5 +378,191 @@ describe("DashboardPage while it loads", () => {
     open("viewer", { "GET /api/dashboards/3": { status: 404, body: { detail: "dashboard not found" } } });
     expect(await screen.findByRole("alert")).toHaveTextContent("dashboard not found");
     expect(document.querySelector(".sk-region")).toBeNull();
+  });
+});
+
+describe("DashboardPage with a focus asset (the header)", () => {
+  const node = (id: number, parent_id: number | null, name: string, sort_order = 0): Asset => ({ id, parent_id, name, kind: "generic", sort_order });
+  /** One top-level asset (Site) over Hall 1 > Row 2 > Rack 5, and Hall 2 beside Hall 1. */
+  const deep = [node(1, null, "Site"), node(2, 1, "Hall 1"), node(3, 2, "Row 2"), node(4, 3, "Rack 5"), node(5, 1, "Hall 2", 1)];
+  /** Two top-level assets: Site A over Hall 1 > Row 2, and Site B. */
+  const forest = [node(1, null, "Site A"), node(2, 1, "Hall 1"), node(3, 2, "Row 2"), node(9, null, "Site B", 1)];
+
+  /** A data router, so a test can read the address, see how it changed and go back. One fixed stat widget: it never follows a focus. */
+  function openAt(entry: string, { role = "viewer", assets = deep, over = {}, hold }: { role?: string; assets?: Asset[]; over?: Routes; hold?: (method: string, path: string) => boolean } = {}) {
+    const calls = mockFetch({
+      ...authed(role),
+      "GET /api/dashboards/3": { body: dashboard({ widgets: [current] }) },
+      "GET /api/assets": { body: assets },
+      "POST /api/widget-data": widgetDataRoute,
+      ...over,
+    });
+    const held = hold ? holdFetch(hold) : { release: () => {} };
+    const view = renderWithDataRouter(<DashboardPage />, { route: entry, path: "/dashboards/:id" });
+    return { calls, ...view, release: held.release, where: () => view.router.state.location.pathname + view.router.state.location.search };
+  }
+  const trail = () => screen.getByRole("navigation", { name: "Breadcrumb" });
+  const crumbs = () => within(trail()).getAllByRole("listitem").map((li) => (li.textContent ?? "").replace(/^\//, ""));
+  const listRequests = (calls: { path: string }[]) => calls.filter((c) => c.path === "/api/assets");
+  const only = (names: string[]) => ({ "GET /api/me": { body: userFor("custom", { permissions: names as never }) } });
+
+  describe("the trail", () => {
+    it("without a focus is today's trail and asks for no asset list", async () => {
+      const { calls } = openAt("/dashboards/3");
+      await screen.findByRole("heading", { name: "Hall A" });
+      await screen.findByRole("button", { name: "Focus" }); // the account is known
+      expect(crumbs()).toEqual(["Dashboards", "Hall A"]);
+      expect(within(trail()).getByText("Hall A")).toHaveAttribute("aria-current", "page");
+      expect(within(trail()).getAllByRole("link")).toHaveLength(1);
+      expect(listRequests(calls)).toHaveLength(0);
+    });
+
+    it("with a focus one level down goes on through it: the dashboard's name links to the whole site and the focus asset is the current page", async () => {
+      openAt("/dashboards/3?asset=2&range=7d", { assets: forest });
+      await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "Site A", "Hall 1"]));
+      const links = within(trail()).getAllByRole("link");
+      expect(links.map((l) => [l.textContent, l.getAttribute("href")])).toEqual([
+        ["Dashboards", "/dashboards"], ["Hall A", "/dashboards/3?range=7d"], ["Site A", "/dashboards/3?asset=1&range=7d"],
+      ]);
+      expect(within(trail()).getByText("Hall 1")).toHaveAttribute("aria-current", "page");
+      expect(screen.getAllByRole("navigation", { name: /breadcrumb/i })).toHaveLength(1);
+    });
+
+    it("with a deep focus lists the ancestors root first, each a link to the dashboard at that asset, and leaves out the only top-level asset", async () => {
+      openAt("/dashboards/3?asset=4");
+      await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1", "Row 2", "Rack 5"]));
+      expect(within(trail()).getAllByRole("link").map((l) => l.getAttribute("href"))).toEqual([
+        "/dashboards", "/dashboards/3", "/dashboards/3?asset=2", "/dashboards/3?asset=3",
+      ]);
+      expect(within(trail()).getByText("Rack 5")).toHaveAttribute("aria-current", "page");
+    });
+
+    it("keeps several top-level assets in the trail", async () => {
+      openAt("/dashboards/3?asset=3", { assets: forest });
+      await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "Site A", "Hall 1", "Row 2"]));
+    });
+
+    it("a focus that is the only top-level asset is cleared by the provider and the trail is today's", async () => {
+      const { where } = openAt("/dashboards/3?asset=1");
+      await waitFor(() => expect(where()).toBe("/dashboards/3"));
+      expect(crumbs()).toEqual(["Dashboards", "Hall A"]);
+      expect(screen.queryByRole("link", { name: /^Open .* page$/ })).not.toBeInTheDocument();
+    });
+
+    it("until the asset list is here it is today's trail (the name is the current page), then it extends", async () => {
+      const page = openAt("/dashboards/3?asset=4", { hold: (_method, path) => path === "/api/assets" });
+      await screen.findByRole("heading", { name: "Hall A" });
+      await screen.findByRole("button", { name: "Focus" });
+      expect(crumbs()).toEqual(["Dashboards", "Hall A"]);
+      expect(within(trail()).getByText("Hall A")).toHaveAttribute("aria-current", "page");
+      expect(within(trail()).getAllByRole("link")).toHaveLength(1);
+      page.release();
+      await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1", "Row 2", "Rack 5"]));
+      expect(within(trail()).getByText("Hall A")).not.toHaveAttribute("aria-current");
+    });
+
+    it("an asset that is not in the list leaves today's trail (the provider drops the focus)", async () => {
+      const { where } = openAt("/dashboards/3?asset=77");
+      await waitFor(() => expect(where()).toBe("/dashboards/3"));
+      expect(crumbs()).toEqual(["Dashboards", "Hall A"]);
+    });
+
+    it("a crumb pushes: Back walks back, one step at a time", async () => {
+      const { where, router } = openAt("/dashboards/3?asset=4");
+      await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1", "Row 2", "Rack 5"]));
+      await userEvent.click(within(trail()).getByRole("link", { name: "Hall 1" }));
+      expect(where()).toBe("/dashboards/3?asset=2");
+      expect(router.state.historyAction).toBe("PUSH");
+      expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1"]);
+      await userEvent.click(within(trail()).getByRole("link", { name: "Hall A" }));
+      expect(where()).toBe("/dashboards/3");
+      expect(router.state.historyAction).toBe("PUSH");
+      expect(crumbs()).toEqual(["Dashboards", "Hall A"]);
+      await act(async () => { await router.navigate(-1); });
+      expect(where()).toBe("/dashboards/3?asset=2");
+      expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1"]);
+      await act(async () => { await router.navigate(-1); });
+      expect(where()).toBe("/dashboards/3?asset=4");
+      expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1", "Row 2", "Rack 5"]);
+    });
+  });
+
+  describe("the Focus button and the link to the asset's page", () => {
+    const focusButton = () => screen.findByRole("button", { name: "Focus" });
+
+    it("is a button with a dialog behind it, after the range select and before Edit", async () => {
+      openAt("/dashboards/3", { role: "operator" });
+      const button = await focusButton();
+      expect(button).toHaveAttribute("type", "button");
+      expect(button).toHaveAttribute("aria-haspopup", "dialog");
+      const select = screen.getByLabelText("Dashboard range");
+      const edit = await screen.findByRole("button", { name: "Edit" });
+      expect(select.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(button.compareDocumentPosition(edit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.queryByRole("link", { name: /^Open .* page$/ })).not.toBeInTheDocument(); // no focus, no link
+    });
+
+    it("is not there for a role that cannot open assets, with or without a focus in the address", async () => {
+      openAt("/dashboards/3?asset=2", { role: "custom", over: only(["dashboards.view"]) });
+      await screen.findByRole("heading", { name: "Hall A" });
+      expect(await screen.findByText(/Your role cannot open assets/)).toBeInTheDocument(); // the account is known, and the link was refused
+      expect(screen.queryByRole("button", { name: "Focus" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: /^Open .* page$/ })).not.toBeInTheDocument();
+      expect(crumbs()).toEqual(["Dashboards", "Hall A"]);
+    });
+
+    it("with a focus adds a link styled as a button to the asset's page, named for the asset, and keeps it in place when the name arrives", async () => {
+      const page = openAt("/dashboards/3?asset=2", { hold: (_method, path) => path === "/api/assets" });
+      const waiting = await screen.findByRole("link", { name: "Open Asset #2 page" });
+      expect(waiting).toHaveAttribute("href", "/assets/2");
+      page.release();
+      const link = await screen.findByRole("link", { name: "Open Hall 1 page" });
+      expect(link).toBe(waiting); // the same element, only its words changed
+      expect(link).toHaveAttribute("href", "/assets/2");
+      expect(link).toHaveClass("focus-open");
+      const focus = await focusButton();
+      expect(focus.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("opens the dialog; Show pushes the chosen asset, the trail and the link follow, the focus returns, Back undoes it, and a fixed widget asks for nothing new", async () => {
+      const { calls, where, router } = openAt("/dashboards/3");
+      await within(await region("Current power")).findByText("10.50");
+      expect(dataRequests(calls)).toHaveLength(1);
+      const button = await focusButton();
+      await userEvent.click(button);
+      const dialog = await screen.findByRole("dialog", { name: "Choose a focus" });
+      await userEvent.click(await within(dialog).findByRole("radio", { name: "Hall 2" }));
+      expect(where()).toBe("/dashboards/3"); // a draft so far
+      await userEvent.click(within(dialog).getByRole("button", { name: "Show" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(where()).toBe("/dashboards/3?asset=5");
+      expect(router.state.historyAction).toBe("PUSH");
+      expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 2"]);
+      expect(await screen.findByRole("link", { name: "Open Hall 2 page" })).toHaveAttribute("href", "/assets/5");
+      expect(button).toHaveFocus();
+      expect(dataRequests(calls)).toHaveLength(1); // the stat does not follow the focus
+      await act(async () => { await router.navigate(-1); });
+      expect(where()).toBe("/dashboards/3");
+      expect(crumbs()).toEqual(["Dashboards", "Hall A"]);
+      expect(screen.queryByRole("link", { name: /^Open .* page$/ })).not.toBeInTheDocument();
+    });
+
+    it("Cancel leaves the address and the trail alone", async () => {
+      const { where, router } = openAt("/dashboards/3?asset=2");
+      await userEvent.click(await focusButton());
+      const dialog = await screen.findByRole("dialog", { name: "Choose a focus" });
+      await userEvent.click(await within(dialog).findByRole("radio", { name: "Hall 2" }));
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(where()).toBe("/dashboards/3?asset=2");
+      expect(router.state.historyAction).toBe("POP");
+      expect(await focusButton()).toHaveFocus();
+    });
+
+    it("does not add a second landmark or a second element named breadcrumb", async () => {
+      openAt("/dashboards/3?asset=4");
+      await waitFor(() => expect(crumbs()).toHaveLength(5));
+      expect(screen.getAllByRole("navigation")).toHaveLength(1);
+      expect(document.querySelectorAll("[aria-label*='readcrumb' i]")).toHaveLength(1);
+    });
   });
 });
