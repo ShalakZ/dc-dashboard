@@ -16,7 +16,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w25 (2026-10-19, merge pending)
+## w25 (2026-10-19, 8cac583)
 
 w25 lets a dashboard follow **one focus asset**. The Focus button (needs See the Assets Tree) or the address `?asset=<id>` points it at a hall,
 row or rack: widgets set to follow it show that asset or its children, the others keep their own assets and say so, the trail climbs back up, and
