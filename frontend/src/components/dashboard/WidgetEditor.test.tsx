@@ -657,6 +657,10 @@ describe("the comparison box", () => {
     expect(range.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const tip = within(box.closest(".has-tip") as HTMLElement).getByRole("button", { name: "What does this mean?" });
     expect(tip).toHaveAttribute("type", "button");
+    // The box and its words are an inline label (the stylesheet keeps the field's negative margin off it) in a wrapper that shrinks to them, so the tip follows the words.
+    expect(box.closest("label")).toHaveClass("inline");
+    expect(box.closest(".has-tip")).toHaveClass("compare-field");
+    expect(box.closest("label")?.nextElementSibling).toBe(tip.closest(".tip"));
     await userEvent.click(tip);
     const note = screen.getByRole("note");
     expect(note).toHaveTextContent(/complete days/);
@@ -951,9 +955,40 @@ describe("one bar per asset of a kind", () => {
     })])[0];
     const { onSave } = await kindMode(draft);
     expect(screen.getByText("Under: Whole site")).toBeInTheDocument();
-    expect(screen.getByText(/looked under was removed/)).toBeInTheDocument();
+    expect(screen.getByText(/looked under was removed/)).toBeVisible();
     await userEvent.click(save());
     expect(saved(onSave).config).not.toHaveProperty("root");
+  });
+
+  it("says the removed place only while the form still looks at the whole site: a new pick hides the note (its line stays), 'Whole site' brings it back", async () => {
+    const draft = toDrafts([widget(1, "bar", {
+      title: "Racks", config: config({ assets: [], source: "energy", metric: null, aggregation: "sum", bars: "kind", kind: "Rack", root: 99 }),
+    })])[0];
+    await kindMode(draft);
+    const note = screen.getByText(/looked under was removed/);
+    expect(note).toBeVisible();
+    await userEvent.click(within(lookUnder()).getByRole("radio", { name: "MV2" }));
+    expect(screen.getByText("Under: MV2")).toBeInTheDocument();
+    expect(note, "kept in the layout so nothing below it moves").toBeInTheDocument();
+    expect(note).not.toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Whole site" }));
+    expect(note).toBeVisible();
+  });
+
+  it("shows no such line at all for a saved place that still exists", async () => {
+    await kindMode();
+    expect(screen.queryByText(/looked under was removed/)).not.toBeInTheDocument();
+  });
+
+  it("marks 'Whole site' aria-disabled (not disabled) while the whole site is chosen, and not once a place is picked", async () => {
+    await kindMode();
+    const whole = screen.getByRole("button", { name: "Whole site" });
+    expect(whole).toHaveAttribute("aria-disabled", "true");
+    expect(whole).toBeEnabled();
+    await userEvent.click(within(lookUnder()).getByRole("radio", { name: "MV2" }));
+    expect(whole).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(whole);
+    expect(whole).toHaveAttribute("aria-disabled", "true");
   });
 
   it("has no label that a lookup by substring would find twice", async () => {

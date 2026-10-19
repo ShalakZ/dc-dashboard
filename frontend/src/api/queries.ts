@@ -689,8 +689,16 @@ export function useDeleteDashboard() {
 /** A widget config as a cache key, without its `kind`: two configs that differ only in the kind a breakdown by kind splits by are the same widget. */
 const withoutKind = (config: WidgetConfig): string => hashKey([{ ...config, kind: undefined }]);
 
+/** How often a widget's figures are read again: every 30 s. */
+const WIDGET_REFETCH_MS = 30_000;
+/** A comparison's figures change only when a day completes or a month is closed (a close or a reopen already invalidates `keys.widgetData`), and each answer costs two whole-month reads: every five minutes. */
+const COMPARE_REFETCH_MS = 5 * 60_000;
+
+/** The re-read interval of a widget's data: five minutes for a widget that compares with last month's same days, 30 s for every other. */
+export const widgetRefetchMs = (config: WidgetConfig): number => (config.compare === "same_days_last_month" ? COMPARE_REFETCH_MS : WIDGET_REFETCH_MS);
+
 /**
- * `preset` is the effective range (the caller resolves inheritance). Refetches every 30 s. While a new range loads the old
+ * `preset` is the effective range (the caller resolves inheritance). Refetches every 30 s, or every five minutes for a comparison (`widgetRefetchMs`). While a new range loads the old
  * figures stay, but only for the same widget: after a change of type or config (the editor's preview) the old answer
  * belongs to another kind of widget, so nothing is shown until the new one arrives. The one exception is the `kind` of a breakdown
  * by kind (w24): the viewer's "Split by" changes it, and the card keeps the previous bars (it does not swap to a skeleton, so the select stays
@@ -700,7 +708,7 @@ export const useWidgetData = (type: DataWidgetType, config: WidgetConfig, preset
   useQuery({
     queryKey: [...keys.widgetData, type, config, preset] as const,
     enabled,
-    refetchInterval: 30_000,
+    refetchInterval: widgetRefetchMs(config),
     placeholderData: (previous, previousQuery) => {
       const before = previousQuery?.queryKey; // [..keys.widgetData, type, config, preset]
       return before && before[1] === type && withoutKind(before[2] as WidgetConfig) === withoutKind(config) ? previous : undefined;

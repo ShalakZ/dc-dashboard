@@ -966,6 +966,67 @@ describe("the breakdown by kind (w24)", () => {
     expect(option.series[0].markPoint.data).toEqual([{ coord: [1, 0] }]);
   });
 
+  describe("a bar with no data is the dash mark, never an empty slot or a zero-height bar (whole-wave review I-3)", () => {
+    type Mark = { series: { data: (number | null)[]; markPoint?: { data: { coord: number[] }[]; label: { formatter: string } } }[] };
+    const marks = (data: WidgetData) => barOption(data, TZ) as unknown as Mark;
+    const tipOf = (data: WidgetData, index: number) => tipText((barOption(data, TZ) as unknown as { tooltip: { formatter: (p: unknown) => string } }).tooltip.formatter([{ dataIndex: index, seriesIndex: 0 }]));
+    const bars = (rows: ReturnType<typeof valueRow>[], over: Partial<WidgetData> = {}) =>
+      breakdownData(rows.length, { values: rows.map((r, i) => ({ ...r, asset_id: 10 + i, name: `Rack ${i + 1}`, point_id: null })), ...over });
+    const real = valueRow({ value: 5 });
+    const silentNull = valueRow({ value: null, no_data: true });
+    const silentZero = valueRow({ value: 0, no_data: true });
+    const trueZero = valueRow({ value: 0 });
+
+    it("gives every no-data bar of an energy breakdown a dash and the words 'no data', and draws no bar for it; a recorded zero stays a bar", () => {
+      const data = bars([real, silentNull, silentZero, trueZero]);
+      const option = marks(data);
+      expect(option.series[0].data).toEqual([5, null, null, 0]);
+      expect(option.series[0].markPoint).toMatchObject({ label: { show: true, formatter: "—" }, data: [{ coord: [1, 0] }, { coord: [2, 0] }] });
+      expect(tipOf(data, 1)).toContain("no data");
+      expect(tipOf(data, 2)).toContain("no data");
+      expect(tipOf(data, 2), "the zero of a silent meter is not shown as a figure").not.toContain("0.00");
+      expect(tipOf(data, 3)).toContain("0.00 kWh");
+      expect(tipOf(data, 3)).not.toContain("no data");
+    });
+
+    it("does the same for a cost breakdown, and keeps 'no rate' for a cost that was recorded without one", () => {
+      const data = bars([real, silentNull, silentZero, valueRow({ value: null })], { source: "cost", unit: "QAR" });
+      const option = marks(data);
+      expect(option.series[0].data).toEqual([5, null, null, null]);
+      expect(option.series[0].markPoint?.data).toEqual([{ coord: [1, 0] }, { coord: [2, 0] }, { coord: [3, 0] }]);
+      expect(tipOf(data, 1)).toContain("no data");
+      expect(tipOf(data, 2)).toContain("no data");
+      expect(tipOf(data, 3)).toContain("no rate");
+      expect(tipOf(data, 3)).not.toContain("no data");
+    });
+
+    it("leaves the plain per-asset bar chart exactly as it was: a silent zero is a zero bar worded '(no data)' and a silent null has no dash", () => {
+      const plain = valuesData({ type: "bar", source: "energy", metric: null, unit: "kWh", breakdown: null, values: [
+        valueRow({ name: "A", value: 5, point_id: null }),
+        valueRow({ asset_id: 6, name: "B", value: 0, no_data: true, point_id: null }),
+        valueRow({ asset_id: 7, name: "C", value: null, no_data: true, point_id: null }),
+      ] });
+      const option = marks(plain);
+      expect(option.series[0].data).toEqual([5, 0, null]);
+      expect(option.series[0].markPoint).toBeUndefined();
+      expect(tipOf(plain, 1)).toContain("0.00 kWh (no data)");
+      expect(tipOf(plain, 2)).toContain("no data");
+    });
+
+    it("says there is nothing to draw, instead of a chart of dashes, when every bar is a no-data bar", () => {
+      show(bars([silentNull, silentZero], { breakdown: breakdownBlock({ count: 2, more: none, no_data: 2 }) }));
+      expect(screen.getByText("None of the 2 Racks under Hall 1 has energy readings.")).toHaveClass("widget-empty");
+      expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    });
+
+    it("draws the chart with its dashes when only some bars have no data", () => {
+      show(bars([real, silentNull, silentZero]));
+      const drawn = JSON.parse(screen.getByTestId("chart").textContent!) as { series: { data: (number | null)[]; markPoint: { data: unknown[] } }[] };
+      expect(drawn.series[0].data).toEqual([5, null, null]);
+      expect(drawn.series[0].markPoint.data).toHaveLength(2);
+    });
+  });
+
   it("lists the kinds with their counts and shows the current one", () => {
     show(breakdownData(3), { kind: "Panel" });
     expect(within(select()).getAllByRole("option").map((o) => o.textContent)).toEqual(["Rack (117)", "Panel (8)"]);

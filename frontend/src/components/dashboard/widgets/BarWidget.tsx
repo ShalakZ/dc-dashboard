@@ -2,7 +2,7 @@ import type { EChartsOption } from "echarts";
 import ReactECharts from "echarts-for-react";
 import { memo, useId, useLayoutEffect, useState } from "react";
 import type { WidgetData } from "../../../api/types";
-import { breakdownDescription, breakdownLine, emptyBreakdownText, hasNoBars, kindOptions, selectedKind } from "../../../lib/breakdown";
+import { breakdownDescription, breakdownLine, emptyBreakdownText, hasNoBars, isNoDataBar, kindOptions, selectedKind } from "../../../lib/breakdown";
 import { chartDescription } from "../../../lib/widgetDetails";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
 import { chartLabels, figureText, hasNoReading, labelBucket, NO_DATA, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
@@ -85,8 +85,12 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
     const layout = barAxisLayout(labels, chartWidth);
     // A metric that recorded nothing is "no data", with no dash mark: the dash means a missing rate and nothing else. A cost
     // without a rate keeps its dash whether or not anything was recorded, like the stat, the table and Billing.
+    // A breakdown by kind (w24) is the exception: there a bar that recorded nothing (no figure, or the zero of a meter silent for the whole range,
+    // a cost too) is an empty slot among bars that have figures, so it gets the dash mark and the words "no data" in its tooltip, never a bar.
     const noReading = (v: WidgetData["values"][number]) => hasNoReading(v.value, v.no_data, data.source);
+    const silent = (v: WidgetData["values"][number]) => data.breakdown != null && isNoDataBar(v);
     const cells = data.values.map((v): TipCell => {
+      if (silent(v)) return { text: NO_DATA, state: "" };
       if (v.value === null) return noReading(v) ? { text: NO_DATA, state: "" } : { text: DASH, state: stateOf(v, data.source === "cost") };
       return { text: `${figureText(v.value, v)}${unit}${v.no_data ? ` (${NO_DATA})` : ""}`, state: stateOf(v, false) };
     });
@@ -109,8 +113,8 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
       },
       yAxis: { type: "value", name: data.unit ?? undefined, ...axis },
       series: [{
-        type: "bar", color: theme.accent, data: data.values.map((v) => v.value),
-        ...dashMarks(data.values.flatMap((v, i) => (v.value === null && !noReading(v) ? [i] : [])), theme),
+        type: "bar", color: theme.accent, data: data.values.map((v) => (silent(v) ? null : v.value)),
+        ...dashMarks(data.values.flatMap((v, i) => (silent(v) || (v.value === null && !noReading(v)) ? [i] : [])), theme),
       }],
     } as EChartsOption;
   }

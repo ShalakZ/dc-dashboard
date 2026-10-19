@@ -1,6 +1,6 @@
 import { breakdownBlock, breakdownData, valueRow } from "../test/dashboardFixtures";
 import {
-  breakdownDescription, breakdownLine, emptyBreakdownText, hasNoBars, insideOthersText, kindNoun, kindOptions, moreFigure, moreText, pluralKind, selectedKind,
+  breakdownDescription, breakdownLine, emptyBreakdownText, hasNoBars, insideOthersText, isNoDataBar, kindNoun, kindOptions, moreFigure, moreText, pluralKind, selectedKind,
 } from "./breakdown";
 
 const more = (over: Partial<ReturnType<typeof breakdownBlock>["more"]> = {}) => breakdownBlock({ more: { count: 107, with_value: 107, value: 1234.5, estimated: false, partial: false, ...over } });
@@ -63,6 +63,16 @@ describe("a chart with nothing to draw", () => {
     expect(hasNoBars([])).toBe(true);
     expect(hasNoBars([valueRow({ value: null, no_data: true })])).toBe(true);
     expect(hasNoBars([valueRow({ value: null }), valueRow({ value: 0 })])).toBe(false);
+    expect(hasNoBars([valueRow({ value: null, no_data: true }), valueRow({ value: 0, no_data: true })]), "a silent meter's zero is no figure either").toBe(true);
+    expect(hasNoBars([valueRow({ value: 0, no_data: true }), valueRow({ value: 3 })])).toBe(false);
+  });
+
+  it("knows a bar that recorded nothing: no figure or the zero of a silent meter, both flagged no_data; a recorded zero and a figure are not", () => {
+    expect(isNoDataBar({ value: null, no_data: true })).toBe(true);
+    expect(isNoDataBar({ value: 0, no_data: true })).toBe(true);
+    expect(isNoDataBar({ value: 0, no_data: false })).toBe(false);
+    expect(isNoDataBar({ value: null, no_data: false })).toBe(false); // a cost recorded without a rate: the "no rate" dash, not "no data"
+    expect(isNoDataBar({ value: 4.2, no_data: true })).toBe(false);
   });
 
   it("says none of the assets has readings, naming the root", () => {

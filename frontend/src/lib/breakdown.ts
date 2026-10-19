@@ -48,8 +48,14 @@ export function insideOthersText(breakdown: WidgetBreakdown): string {
 export const breakdownLine = (breakdown: WidgetBreakdown, unit: string | null): string =>
   [moreText(breakdown, unit), insideOthersText(breakdown)].filter(Boolean).join(" ");
 
-/** True when no bar has a figure, or there is no bar: the chart has nothing to draw. */
-export const hasNoBars = (values: WidgetData["values"]): boolean => values.every((v) => v.value === null);
+/**
+ * A bar of a breakdown that recorded nothing: no figure, or the zero of a meter that was silent for the whole range, both flagged `no_data`. It is drawn as
+ * the dash mark with the words "no data" in its tooltip, never as a bar (a zero-height bar reads as a real zero). A zero that was recorded (no `no_data`) is a zero.
+ */
+export const isNoDataBar = (bar: { value: number | null; no_data: boolean }): boolean => bar.no_data && (bar.value === null || bar.value === 0);
+
+/** True when no bar has a figure (or only a silent meter's zero), or there is no bar: the chart has nothing to draw. */
+export const hasNoBars = (values: WidgetData["values"]): boolean => values.every((v) => v.value === null || isNoDataBar(v));
 
 /**
  * The sentence that stands in the chart's place when it has nothing to draw: no asset of the kind under the root, or none of them has a figure.

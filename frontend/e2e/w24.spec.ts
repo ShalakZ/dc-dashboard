@@ -997,6 +997,33 @@ async function pickAsset(dialog: Locator, group: string, name: string): Promise<
   await picker.getByRole(group === "Assets" ? "checkbox" : "radio", { name, exact: true }).check();
 }
 
+/**
+ * The comparison box sits BESIDE its words: its right edge is at or left of where the label's text starts (whole-wave review I-1: a global rule once pulled the
+ * words under the box, which a measurement of the label as one box cannot see), a few px apart; and, on one line, the "?" tip follows the words (it does not
+ * sit at the column's edge). The text is measured with a Range over the label's own text node.
+ */
+async function expectBoxBesideWords(dialog: Locator, where: string): Promise<void> {
+  const label = dialog.locator("label.inline");
+  await expect(label, `${where}: the comparison box's label`).toHaveCount(1);
+  const m = await label.evaluate((el) => {
+    const box = el.querySelector('input[type="checkbox"]')!.getBoundingClientRect();
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node && !(node.textContent ?? "").trim()) node = walker.nextNode();
+    const range = document.createRange();
+    range.selectNodeContents(node!);
+    const text = range.getBoundingClientRect();
+    const tip = el.parentElement!.querySelector("button")!.getBoundingClientRect();
+    return { boxRight: box.right, textLeft: text.left, textRight: text.right, lines: range.getClientRects().length, tipLeft: tip.left };
+  });
+  expect(m.boxRight, `${where}: the box's right edge (${m.boxRight}) is at or left of its words (${m.textLeft})`).toBeLessThanOrEqual(m.textLeft);
+  expect(m.textLeft - m.boxRight, `${where}: the gap between the box and its words`).toBeLessThanOrEqual(16);
+  if (m.lines === 1) {
+    expect(m.tipLeft, `${where}: the tip is after the words`).toBeGreaterThanOrEqual(m.textRight);
+    expect(m.tipLeft - m.textRight, `${where}: the tip follows the words, not the column's edge`).toBeLessThanOrEqual(12);
+  }
+}
+
 test("5. ticking the comparison on a time series locks Widget range on This month, turns the picker from checkboxes to radios, and unticking gives the range back", async ({ page }) => {
   test.setTimeout(150_000);
   const stub = await prepare(page);
@@ -1007,6 +1034,7 @@ test("5. ticking the comparison on a time series locks Widget range on This mont
   const note = dialog.locator("p.field-help");
   await expect(box, "a time series of energy offers the comparison").toBeVisible();
   await expect(box).not.toBeChecked();
+  await expectBoxBesideWords(dialog, "the editor");
   await expect(note, "the sentence's room is kept, hidden until the box is ticked").toBeHidden();
   await expect(pickerOf(dialog, "Assets"), "several assets are allowed before the box is ticked").toBeVisible();
   await range.selectOption("24h");
@@ -1073,6 +1101,7 @@ test("5. Bars gains One bar per asset of a kind, which asks Look under, One bar 
   const whole = dialog.getByRole("button", { name: "Whole site", exact: true });
   await expect(whole).toHaveAttribute("aria-disabled", "true");
   expect(await whole.evaluate((el) => (el as HTMLButtonElement).disabled), "the button is aria-disabled, never disabled: a disabled button that has the focus drops it").toBe(false);
+  expect(await whole.evaluate((el) => getComputedStyle(el).opacity), "and it looks disabled while the whole site is chosen").not.toBe("1");
   await expect(saveWidget(dialog)).toBeDisabled();
   await fieldOf(dialog, "Title").fill("W24 bars");
   await expect(issuesOf(dialog)).toHaveText(["Enter the kind of asset to draw one bar for."]);
@@ -1091,6 +1120,7 @@ test("5. Bars gains One bar per asset of a kind, which asks Look under, One bar 
   await pickAsset(dialog, "Look under", HALL);
   await expect(dialog.getByText(`Under: ${HALL}`, { exact: true })).toBeVisible();
   await expect(whole).not.toHaveAttribute("aria-disabled", "true");
+  expect(await whole.evaluate((el) => getComputedStyle(el).opacity), "a live Whole site is drawn in full").toBe("1");
   // The preview asks for the breakdown, with no assets, the kind, the root and the number of bars; and its Split by is shown but cannot be used.
   await expect.poll(
     () => stub.requests.some((r) => r.config.bars === "kind" && r.config.kind === "Rack" && r.config.root === ids.hall && r.config.top === 5 && r.config.assets.length === 0 && r.config.compare === undefined),
@@ -1101,6 +1131,7 @@ test("5. Bars gains One bar per asset of a kind, which asks Look under, One bar 
   await whole.click();
   await expect(dialog.getByText("Under: Whole site", { exact: true })).toBeVisible();
   await expect(whole).toHaveAttribute("aria-disabled", "true");
+  expect(await whole.evaluate((el) => getComputedStyle(el).opacity), "a Whole site that does nothing looks disabled").not.toBe("1");
 
   // Back to one bar per asset: the Assets picker returns and the kind fields go.
   await bars.selectOption("asset");
@@ -1301,6 +1332,7 @@ for (const size of SIZES) {
       await openEditor(page);
       const dialog = await openAddDialog(page, "stat", "energy");
       await compareBox(dialog).check();
+      await expectBoxBesideWords(dialog, `${where}: the stat dialog`);
       await expectApart([
         ["Widget range", fieldOf(dialog, "Widget range")], ["its sentence", dialog.locator("p.field-help")], ["the comparison box and its words", dialog.locator("label.inline"), true],
         ["its tip", dialog.getByRole("button", { name: "What does this mean?", exact: true })], ["the picker", pickerOf(dialog, "Asset")],

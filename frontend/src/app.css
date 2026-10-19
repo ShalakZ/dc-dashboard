@@ -324,7 +324,7 @@
      before the tip instead of running under it, and the field takes the room back with a negative margin, so it still spans the whole
      wrapper. The tip box is as tall as the label's first line (--fs-sm at the 1.4 line height), which centres the 24px button on it. */
   .has-tip > label { padding-right: 28px; }
-  .has-tip > label > :is(input, select, textarea) { margin-right: -28px; }
+  .has-tip > label:not(.inline) > :is(input, select, textarea) { margin-right: -28px; } /* not a label.inline: its checkbox sits beside its words, a negative margin would pull the words under it */
   .has-tip > .tip { position: absolute; top: 0; right: 0; height: calc(var(--fs-sm) * 1.4); }
 
   /* Plain text colours (colour only: they also style text inside the widgets) */
@@ -677,6 +677,9 @@
   .editor-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
   .editor-cols > div { display: grid; gap: 8px; align-content: start; }
   .editor-cols h3 { margin: 0; font-size: 14px; }
+  .editor-cols .compare-field { width: fit-content; max-width: 100%; } /* the box, its words and its ? tip travel together: the tip sits right after the words, not at the column's edge */
+  .editor-cols .quiet[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; } /* Whole site while the whole site is chosen: aria-disabled, never disabled (it may hold the focus the click gave it) */
+  .editor-cols .quiet[aria-disabled="true"]:hover { background: none; }
   .issues { margin: 0; padding-left: 18px; }
   @media (max-width: 700px) {
     .editor-cols { grid-template-columns: minmax(0, 1fr); }

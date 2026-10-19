@@ -80,7 +80,8 @@ function KindBars({ assets, root, kind, top, rootGone, patch, ids }: KindBarsPro
           Whole site
         </button>
       </div>
-      {rootGone && <p className="muted">The asset this widget looked under was removed, so it now looks at the whole site.</p>}
+      {/* The sentence is true only while the form still looks at the whole site: a new pick hides it (visibility, so the line keeps its room and nothing below moves). */}
+      {rootGone && <p className="muted" style={{ visibility: root === null ? "visible" : "hidden" }}>The asset this widget looked under was removed, so it now looks at the whole site.</p>}
       <div className="field has-tip">
         <label htmlFor={ids.kind}>One bar for each</label>
         <InfoTip>{KIND_TIP}</InfoTip>
@@ -260,7 +261,7 @@ export function WidgetEditor({ initial, assets, metricAssets, dashboardRange, ti
                   )}
                 </div>
                 {comparable && (
-                  <div className="has-tip">
+                  <div className="has-tip compare-field">
                     <label className="inline">
                       <input type="checkbox" checked={comparing} onChange={(e) => onCompare(e.target.checked)} />
                       Compare with the same days of last month

@@ -7,7 +7,7 @@ import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import {
   auditPageOptions, auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
-  usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
+  usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData, widgetRefetchMs,
   useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
   useAddStarterKinds, useAssetKinds, useAssets, useBulkDeleteAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
   loadMovePreview, useMoveAssets, useRemoveDiscoveredSources, useTidyLayout, useBillingMonths, useBillingMonthCheck, useCloseBillingMonth, useReopenBillingMonth, monthCheckRefetchMs,
@@ -431,6 +431,47 @@ describe("phase 3 queries", () => {
     expect(calls.find((c) => c.method === "PUT")?.body).toEqual(body);
     expect(calls.filter((c) => c.method === "GET" && c.path === "/api/dashboards/5")).toHaveLength(1); // no refetch of the detail
     await waitFor(() => expect(calls.filter((c) => c.path === "/api/dashboards")).toHaveLength(2));
+  });
+});
+
+describe("useWidgetData refetching (w24)", () => {
+  afterEach(() => vi.useRealTimers());
+  const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+  const base: WidgetConfig = { assets: [5], source: "energy", metric: null, aggregation: "sum", range: "this_month", bars: "asset", min: 0, max: null };
+  const answer = { type: "stat", mode: "values", source: "energy", metric: null, unit: "kWh", range: { preset: "this_month", start: "s", end: "e" }, tier: null, bucket: null, series: [], values: [], missing: [], no_metric: [] };
+  const asked = (calls: { path: string }[]) => calls.filter((c) => c.path === "/api/widget-data").length;
+
+  it("asks for the figures of a plain widget again every 30 s, a widget that compares with last month's same days every 5 minutes, and nothing else changes", () => {
+    expect(widgetRefetchMs(base)).toBe(30_000);
+    expect(widgetRefetchMs({ ...base, compare: "none" })).toBe(30_000);
+    expect(widgetRefetchMs({ ...base, compare: "same_days_last_month" })).toBe(300_000);
+    expect(widgetRefetchMs({ ...base, bars: "kind", kind: "Rack" })).toBe(30_000);
+  });
+
+  it("a plain widget reads again after 30 s", async () => {
+    vi.useFakeTimers();
+    const calls = mockFetch({ "POST /api/widget-data": { body: answer } });
+    renderHook(() => useWidgetData("stat", base, "this_month"), { wrapper: stableWrapper() });
+    await advance(1_000);
+    expect(asked(calls)).toBe(1);
+    await advance(20_000); // 21 s
+    expect(asked(calls)).toBe(1);
+    await advance(10_000); // 31 s
+    expect(asked(calls)).toBe(2);
+  });
+
+  it("a comparing widget does not read again after 30 s or after four minutes, and does after five", async () => {
+    vi.useFakeTimers();
+    const calls = mockFetch({ "POST /api/widget-data": { body: answer } });
+    renderHook(() => useWidgetData("stat", { ...base, compare: "same_days_last_month" }, "this_month"), { wrapper: stableWrapper() });
+    await advance(1_000);
+    expect(asked(calls)).toBe(1);
+    await advance(30_000); // 31 s
+    expect(asked(calls)).toBe(1);
+    await advance(4 * 60_000 - 30_000); // 4 min 1 s
+    expect(asked(calls)).toBe(1);
+    await advance(60_000); // 5 min 1 s
+    expect(asked(calls)).toBe(2);
   });
 });
 
