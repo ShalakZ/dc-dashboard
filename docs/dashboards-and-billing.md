@@ -201,7 +201,7 @@ Dashboards are shared by everyone.
   dashboard opens in view mode, not in the editor. On the Dashboards page with no dashboards yet, a role that may build them also
   sees **Start blank** and **Start from Power**; a viewer sees only the line "No dashboards yet.". The server makes the dashboard and its widgets in
   one step and writes one `dashboard.created` audit row, which adds `"recipe": "power"` and the real widget count.
-  - **The five widgets.** A heading, "Power use and cost"; the stats "Energy this month" and "Cost this month", each against the same
+  - **The five widgets.** A heading, "Power use and cost"; the stats "Energy" and "Cost", each for this month so far against the same
     days of last month (**Comparing with last month**); "Energy by <kind>", a breakdown of energy by the kind that has meters; and the
     daily chart "Energy by day, against last month". All but the heading follow the focus, so the whole dashboard answers for the site,
     a hall or a rack depending on the focus (choose it with **Focus**, a click on a bar or a link). Edit it like any other dashboard.

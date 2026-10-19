@@ -13,9 +13,9 @@ from dcdash.core.widgets import KIND_MAX, validate_config
 
 LAYOUT = [  # (type, title, x, y, w, h) with the bar's title filled in for a Panel site
     ("text", "Power use and cost", 0, 0, 12, 1),
-    ("stat", "Energy this month", 0, 1, 3, 3),
-    ("stat", "Cost this month", 3, 1, 3, 3),
-    ("bar", "Energy by panel", 6, 1, 6, 3),
+    ("stat", "Energy", 0, 1, 3, 3),
+    ("stat", "Cost", 3, 1, 3, 3),
+    ("bar", "Energy by Panel", 6, 1, 6, 3),
     ("timeseries", "Energy by day, against last month", 0, 4, 12, 4),
 ]
 
@@ -144,19 +144,19 @@ def test_every_widget_but_the_heading_follows_the_focus():
 
 def test_the_two_stats_and_the_chart_compare_with_the_same_days_of_last_month():
     widgets = {w["title"]: w["config"] for w in power_widgets(*world())}
-    for title in ("Energy this month", "Cost this month", "Energy by day, against last month"):
+    for title in ("Energy", "Cost", "Energy by day, against last month"):
         config = widgets[title]
         assert config["range"] == "this_month" and config["compare"] == "same_days_last_month", title
         assert config["aggregation"] == "sum"
-    assert widgets["Energy this month"]["source"] == "energy"
-    assert widgets["Cost this month"]["source"] == "cost"
+    assert widgets["Energy"]["source"] == "energy"
+    assert widgets["Cost"]["source"] == "cost"
     assert widgets["Energy by day, against last month"]["source"] == "energy"
 
 
 def test_the_bar_is_a_breakdown_of_energy_by_the_best_kind_that_inherits_the_range():
     tree, kinds, metered = world(("F1", "Feed", True), ("F2", "Feed", True))
     bar = power_widgets(tree, kinds, metered)[3]
-    assert bar["type"] == "bar" and bar["title"] == "Energy by feed"
+    assert bar["type"] == "bar" and bar["title"] == "Energy by Feed"
     config = bar["config"]
     assert config["bars"] == "kind" and config["kind"] == "Feed" and config["source"] == "energy"
     assert config["range"] is None and "root" not in config and "top" not in config
@@ -191,7 +191,7 @@ def test_titles_stay_within_a_title_even_for_a_long_or_odd_kind():
         widgets = power_widgets(tree, kinds, metered)
         assert all(len(w["title"]) <= 100 for w in widgets), kind
         checked_configs([WidgetIn(**widget) for widget in widgets])  # never a 422 that a person cannot fix
-    assert power_widgets(*world(("A", "Rack", True)))[3]["title"] == "Energy by rack"
+    assert power_widgets(*world(("A", "Rack", True)))[3]["title"] == "Energy by Rack"
 
 
 def test_the_recipe_hands_out_fresh_dicts():
@@ -244,9 +244,9 @@ async def test_the_stored_configs_are_the_validated_dumps(client, db):
     by_title = {w["title"]: w["config"] for w in dash["widgets"]}
     for widget in dash["widgets"]:
         assert widget["config"] == validate_config(widget["type"], widget["config"]).model_dump(mode="json")
-    stat = by_title["Energy this month"]
+    stat = by_title["Energy"]
     assert stat["scope"] == "focus" and stat["assets"] == []
-    assert "root" not in by_title["Energy by panel"] and "top" not in by_title["Energy by panel"]  # defaults are left out
+    assert "root" not in by_title["Energy by Panel"] and "top" not in by_title["Energy by Panel"]  # defaults are left out
     assert "scope" not in by_title["Power use and cost"]
     rows = await db.fetch("SELECT config FROM widgets WHERE dashboard_id = $1 ORDER BY y, x", dash["id"])
     assert [row["config"] for row in rows] == [w["config"] for w in dash["widgets"]]
@@ -257,7 +257,7 @@ async def test_the_bar_looks_for_the_kind_the_site_meters(client, db):
     await seed(db, ("Panel A", "Panel", False), ("Feed A", "Feed", True), ("Feed B", "feed", True))
     dash = (await power(client)).json()
     bar = next(w for w in dash["widgets"] if w["type"] == "bar")
-    assert bar["title"] == "Energy by feed" and bar["config"]["kind"] == "Feed"
+    assert bar["title"] == "Energy by Feed" and bar["config"]["kind"] == "Feed"
 
 
 async def test_an_empty_site_still_gets_the_dashboard(client, db):
@@ -265,7 +265,7 @@ async def test_an_empty_site_still_gets_the_dashboard(client, db):
     response = await power(client)
     assert response.status_code == 201, response.text
     widgets = response.json()["widgets"]
-    assert len(widgets) == 5 and widgets[3]["title"] == "Energy by panel"
+    assert len(widgets) == 5 and widgets[3]["title"] == "Energy by Panel"
 
 
 async def test_one_audit_row_names_the_recipe_and_the_real_widget_count(client, db):
@@ -357,3 +357,8 @@ async def test_an_unknown_recipe_is_a_422(client, db):
         assert response.status_code == 422, recipe
     assert await db.fetchval("SELECT count(*) FROM dashboards") == 0
 
+
+
+def test_the_bar_title_keeps_the_spelling_of_the_kind():
+    assert power_widgets(*world(("A", "UPS", True)))[3]["title"] == "Energy by UPS"
+    assert power_widgets(*world(("A", "LV panel", True)))[3]["title"] == "Energy by LV panel"

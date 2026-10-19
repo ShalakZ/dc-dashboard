@@ -46,9 +46,10 @@ def best_kind(tree: AssetTree, kinds: Mapping[int, str], metered: Collection[int
 
 
 def _bar_title(kind: str) -> str:
-    """"Energy by rack". A title is one line of at most TITLE_MAX characters of plain text: a kind that would break that
-    (a very long one, one with a line break in it) gives the general title, so the starter can always be created."""
-    title = f"Energy by {kind.lower()}"
+    """"Energy by Panel", the kind as the assets spell it ("Energy by LV panel", "Energy by UPS"). A title is one line of at most
+    TITLE_MAX characters of plain text: a kind that would break that (a very long one, one with a line break in it) gives the
+    general title, so the starter can always be created."""
+    title = f"Energy by {kind}"
     return title if len(title) <= TITLE_MAX and title.isprintable() else "Energy by kind"
 
 
@@ -75,8 +76,9 @@ def power_widgets(tree: AssetTree, kinds: Mapping[int, str], metered: Collection
     kind = best_kind(tree, kinds, metered)
     return [
         _widget("text", "Power use and cost", {"style": "heading", "text": "Power use and cost"}, 0, 0, 12, 1),
-        _widget("stat", "Energy this month", _following("energy", **compare), 0, 1, 3, 3),
-        _widget("stat", "Cost this month", _following("cost", **compare), 3, 1, 3, 3),
+        # Short titles: a 3-wide card clips a longer one at 1024 px, and the window line under the figure already says "1 to 18 Oct".
+        _widget("stat", "Energy", _following("energy", **compare), 0, 1, 3, 3),
+        _widget("stat", "Cost", _following("cost", **compare), 3, 1, 3, 3),
         _widget("bar", _bar_title(kind), _following("energy", bars="kind", kind=kind), 6, 1, 6, 3),
         _widget("timeseries", "Energy by day, against last month", _following("energy", **compare), 0, 4, 12, 4),
     ]
