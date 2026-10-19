@@ -277,6 +277,66 @@ describe("DashboardsPage", () => {
     expect(await screen.findByText("No dashboards yet. Create one to get started.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New dashboard" })).toBeInTheDocument();
   });
+
+  describe("the empty page offers a start (w25)", () => {
+    const empty = { "GET /api/dashboards": { body: [] } };
+    const POWER_BODY = { "POST /api/dashboards": { status: 201, body: dashboard({ id: 9, name: "Power", range: "this_month" }) } };
+
+    it("gives an editor Start blank and Start from Power under the sentence, and a viewer today's text only", async () => {
+      open("viewer", empty);
+      expect(await screen.findByText("No dashboards yet.")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /start/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    });
+
+    it("an editor's page has the two buttons beside the header's New dashboard, which stays", async () => {
+      open("operator", empty);
+      const empties = (await screen.findByText("No dashboards yet. Create one to get started.")).closest(".empty") as HTMLElement;
+      expect(within(empties).getAllByRole("button").map((b) => b.textContent)).toEqual(["Start blank", "Start from Power"]);
+      expect(within(empties).getAllByRole("button").map((b) => b.getAttribute("type"))).toEqual(["button", "button"]);
+      expect(screen.getByRole("button", { name: "New dashboard" })).toBeInTheDocument();
+      expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["New dashboard", "Start blank", "Start from Power"]);
+    });
+
+    it("dashboards.edit alone sees the buttons, dashboards.default alone does not", async () => {
+      open("custom", { "GET /api/me": { body: userFor("custom", { permissions: ["dashboards.view", "dashboards.default"] }) }, ...empty });
+      expect(await screen.findByText("No dashboards yet.")).toBeInTheDocument();
+      await accountKnown();
+      expect(screen.queryByRole("button", { name: "Start blank" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Start from Power" })).not.toBeInTheDocument();
+    });
+
+    it("Start from Power opens the dialog with Power and This month chosen, and Create sends the recipe", async () => {
+      const calls = open("operator", { ...empty, ...POWER_BODY });
+      await userEvent.click(await screen.findByRole("button", { name: "Start from Power" }));
+      const dialog = screen.getByRole("dialog", { name: "New dashboard" });
+      expect(within(dialog).getByRole("radio", { name: "Power" })).toBeChecked();
+      expect(within(dialog).getByLabelText("Range")).toHaveValue("this_month");
+      expect(within(dialog).getByLabelText("Name")).toHaveFocus();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+      await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/dashboards/9|null"));
+      expect(calls.find((c) => c.method === "POST")?.body).toEqual({ name: "Power", range: "this_month", recipe: "power" });
+    });
+
+    it("Start blank and the header's New dashboard open the dialog on Blank, and Escape puts the focus back on the button", async () => {
+      open("operator", empty);
+      await userEvent.click(await screen.findByRole("button", { name: "Start blank" }));
+      expect(within(screen.getByRole("dialog", { name: "New dashboard" })).getByRole("radio", { name: "Blank" })).toBeChecked();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Start blank" })).toHaveFocus();
+      await userEvent.click(screen.getByRole("button", { name: "New dashboard" }));
+      expect(within(screen.getByRole("dialog", { name: "New dashboard" })).getByRole("radio", { name: "Blank" })).toBeChecked();
+      expect(within(screen.getByRole("dialog")).getByLabelText("Range")).toHaveValue("24h");
+    });
+
+    it("a page that lists dashboards gets no start buttons", async () => {
+      open("operator");
+      await screen.findByRole("link", { name: "Hall A" });
+      expect(screen.queryByRole("button", { name: "Start blank" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Start from Power" })).not.toBeInTheDocument();
+    });
+  });
 });
 
 describe("DashboardsPage controls follow the permissions of the role (a custom role)", () => {

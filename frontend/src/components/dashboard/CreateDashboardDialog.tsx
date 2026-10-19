@@ -7,8 +7,15 @@ import { useDialogFocus } from "../../hooks/useDialogFocus";
 import { RANGE_LABELS, RANGE_PRESETS } from "../../lib/ranges";
 import { useToast } from "../Toasts";
 
-/** Name and default range; on success the new (empty) dashboard opens in edit mode. */
-export function CreateDashboardDialog({ onClose }: { onClose: () => void }) {
+export type StartFrom = "blank" | "power";
+const STARTS: { value: StartFrom; label: string }[] = [{ value: "blank", label: "Blank" }, { value: "power", label: "Power" }];
+const POWER_NAME = "Power"; // the name an empty field gets when the dashboard starts from Power (the server's 409 answers a second one)
+
+/**
+ * Name, default range and what to start from. Blank opens the new (empty) dashboard in edit mode; Power comes filled with the starter widgets
+ * (the server builds them from `recipe`) and opens in view mode, with This month as its range.
+ */
+export function CreateDashboardDialog({ onClose, initialStart = "blank" }: { onClose: () => void; initialStart?: StartFrom }) {
   const navigate = useNavigate();
   const create = useCreateDashboard();
   const toast = useToast();
@@ -17,18 +24,28 @@ export function CreateDashboardDialog({ onClose }: { onClose: () => void }) {
   const nameInput = useRef<HTMLInputElement>(null);
   const nameId = useId();
   const rangeId = useId();
+  const startName = useId();
   const [name, setName] = useState("");
-  const [range, setRange] = useState<RangePreset>("24h");
+  const [start, setStart] = useState<StartFrom>(initialStart);
+  const [range, setRange] = useState<RangePreset>(initialStart === "power" ? "this_month" : "24h");
   useDialogFocus(root, onClose, { busy, initial: nameInput });
+  const power = start === "power";
   const trimmed = name.trim();
+  const finalName = trimmed === "" && power ? POWER_NAME : trimmed;
+
+  // Power sets the range its compare widgets need; going back to Blank leaves whatever range the person has by then.
+  const choose = (value: StartFrom) => {
+    setStart(value);
+    if (value === "power") setRange("this_month");
+  };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (trimmed === "" || busy) return;
+    if (finalName === "" || busy) return;
     void run(async () => {
-      const created = await create.mutateAsync({ name: trimmed, range });
-      toast.success("Dashboard created"); // the new page opens in edit mode; nothing there says it was just made
-      navigate(`/dashboards/${created.id}`, { state: { edit: true } });
+      const created = await create.mutateAsync(power ? { name: finalName, range, recipe: "power" } : { name: finalName, range });
+      toast.success("Dashboard created"); // the new page does not say it was just made
+      navigate(`/dashboards/${created.id}`, power ? undefined : { state: { edit: true } });
     });
   };
 
@@ -39,7 +56,7 @@ export function CreateDashboardDialog({ onClose }: { onClose: () => void }) {
         <form onSubmit={submit}>
           <div className="field">
             <label htmlFor={nameId}>Name</label>
-            <input id={nameId} ref={nameInput} value={name} maxLength={100} onChange={(e) => setName(e.target.value)} />
+            <input id={nameId} ref={nameInput} value={name} maxLength={100} placeholder={power ? POWER_NAME : undefined} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className="field">
             <label htmlFor={rangeId}>Range</label>
@@ -47,11 +64,20 @@ export function CreateDashboardDialog({ onClose }: { onClose: () => void }) {
               {RANGE_PRESETS.map((p) => <option key={p} value={p}>{RANGE_LABELS[p]}</option>)}
             </select>
           </div>
-          {trimmed === "" && <p className="muted">Enter a name.</p>}
+          <fieldset>
+            <legend>Start from</legend>
+            {STARTS.map((s) => (
+              <label key={s.value}>
+                <input type="radio" name={startName} checked={start === s.value} onChange={() => choose(s.value)} />
+                {s.label}
+              </label>
+            ))}
+          </fieldset>
+          {finalName === "" && <p className="muted">Enter a name.</p>}
           {error && <p className="error" role="alert">{error}</p>}
           <div className="row">
             <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
-            <button type="submit" className="primary" disabled={busy || trimmed === ""}>Create</button>
+            <button type="submit" className="primary" disabled={busy || finalName === ""}>Create</button>
           </div>
         </form>
       </div>
