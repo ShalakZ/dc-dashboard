@@ -370,6 +370,12 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   it checks the title bar, moving, resizing to one row and a 1-row heading at 1024 px wide. It drives the dialog by keyboard, checks the
   counter (an emoji counts once) and the API refusals: a NUL in a title or a text, a CRLF kept as a line feed, and `type: "text"` on
   `POST /api/widget-data` and `/api/widget-data/csv`.
+- `w23.spec.ts` (its own project, last in the list, after `w22`) checks the asset picker of the widget editor. It creates its own
+  assets through the API (`W23 Site` with two halls, three rows each and ten racks per row, 69 assets, so the picker opens folded) and
+  its own dashboard `w23 <run>`, deletes both at the end and restores the look preference. It finds a rack by typing and picks it, filters
+  by kind, uses Pick all under a row within and over the maximum of 20 (over it nothing is picked and the live line says so), clears the
+  search with Escape without closing the dialog, and walks the chips by keyboard (the focus never falls to the page). It checks that a
+  stat and a gauge pick one asset, that the list does not move at 1024 x 640 and 800 x 600, and the chips in the dark look.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

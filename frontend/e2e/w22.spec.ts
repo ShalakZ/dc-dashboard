@@ -331,6 +331,7 @@ test("2. a page of text widgets asks widget-data for nothing, in view mode, in e
   await fieldOf(dialog, "Type").selectOption({ value: "stat" });
   await fieldOf(dialog, "Title").fill("w22 stat");
   await fieldOf(dialog, "Source").selectOption({ value: "energy" });
+  await dialog.getByLabel("Search assets", { exact: true }).fill(assetName); // a row may sit under a folded branch: search first
   await dialog.getByRole("radio", { name: assetName, exact: true }).check();
   await expect(dialog.locator(".widget-preview .widget-frame")).toBeVisible();
   await expect(saveWidget(dialog)).toBeEnabled();

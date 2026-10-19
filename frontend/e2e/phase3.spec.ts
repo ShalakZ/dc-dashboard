@@ -225,6 +225,7 @@ test("phase 3 journey: currency and tariff, billing, cost tile, an operator's da
     await dialog.getByLabel("Title", { exact: true }).fill(STAT);
     await dialog.getByLabel("Metric", { exact: true }).selectOption({ value: "active_power_kw" });
     await dialog.getByLabel("Aggregation", { exact: true }).selectOption({ value: "last" });
+    await dialog.getByLabel("Search assets", { exact: true }).fill("Panel 01"); // a row may sit under a folded branch: search first
     await dialog.getByRole("radio", { name: "Panel 01" }).check();
     await expect(dialog.locator(".widget-preview .big")).toHaveText(/\d+\.\d{2}/); // the preview fetches real data
     await dialog.getByRole("button", { name: "Save widget" }).click();
@@ -235,7 +236,10 @@ test("phase 3 journey: currency and tariff, billing, cost tile, an operator's da
     await dialog.getByLabel("Title", { exact: true }).fill(BAR);
     await dialog.getByLabel("Source", { exact: true }).selectOption({ value: "energy" });
     await dialog.getByLabel("Widget range", { exact: true }).selectOption({ value: "today" });
-    for (const name of BAR_ASSETS) await dialog.getByRole("checkbox", { name }).check();
+    for (const name of BAR_ASSETS) {
+      await dialog.getByLabel("Search assets", { exact: true }).fill(name); // a row may sit under a folded branch: search first
+      await dialog.getByRole("checkbox", { name }).check();
+    }
     await expect(dialog.getByText("3 selected (up to 20)")).toBeVisible();
     await expect(dialog.locator(".widget-preview canvas").first()).toBeVisible();
     await dialog.getByRole("button", { name: "Save widget" }).click();
