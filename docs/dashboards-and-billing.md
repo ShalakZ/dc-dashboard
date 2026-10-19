@@ -166,11 +166,11 @@ Dashboards are shared by everyone.
     **Whole site**, and the live line reads "Under: The focus asset". A comparison always shows one asset, so it takes only the focus
     asset.
   - **Children.** With more than 20 children the card shows the first 20 and its footer says "20 of 34 children of Hall 1 shown". An
-    asset with no children gets a sentence in place of the figures ("Seeded pilot hall / Hall 1 / Rack 05 has no children."), and so
+    asset with no children gets a sentence in place of the figures ("Seeded pilot hall / Hall 1 / Rack 05 / Feed A has no children."), and so
     does a breakdown whose kind is not found under the focus ("No Panels under Hall 1. Choose another kind in Split by.").
   - **Cards that keep their own assets.** While a focus is set, every data card that does not follow it says so at the end of its
-    footer line: "Its own assets, not Hall 1". A text widget says nothing. Those cards do not move when the focus changes and ask
-    the server for nothing.
+    footer line: "Its own assets, not Hall 1". A text widget says nothing. Those cards do not move when the focus changes and make
+    no new request for it.
   - **Changing the focus.** A card that follows it keeps its old figures, dimmed and marked busy for a screen reader, until the new
     ones land, so figures of one asset are never shown plain under the name of another. A focus you looked at a moment ago is drawn at
     once from what the page remembers, and the card reads it again in the background. **Details** and **CSV** of such a card are for the
@@ -199,7 +199,7 @@ Dashboards are shared by everyone.
   the empty dashboard it was before, and opens in the editor as before. Choosing Power sets the range to **This month**, an empty name
   becomes "Power" (a second one needs another name: the dialog shows the server's "a dashboard with this name already exists"), and the
   dashboard opens in view mode, not in the editor. On the Dashboards page with no dashboards yet, a role that may build them also
-  sees **Start blank** and **Start from Power**; a viewer sees today's text only. The server makes the dashboard and its widgets in
+  sees **Start blank** and **Start from Power**; a viewer sees only the line "No dashboards yet.". The server makes the dashboard and its widgets in
   one step and writes one `dashboard.created` audit row, which adds `"recipe": "power"` and the real widget count.
   - **The five widgets.** A heading, "Power use and cost"; the stats "Energy this month" and "Cost this month", each against the same
     days of last month (**Comparing with last month**); "Energy by <kind>", a breakdown of energy by the kind that has meters; and the

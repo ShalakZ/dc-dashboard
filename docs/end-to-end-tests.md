@@ -416,7 +416,7 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   exists, ..." and drop `?asset` from the address. A role made through the API with only `dashboards.view` has no Focus button and no
   Open page link, ignores `?asset` with the line "This link opens the dashboard on one asset. ...", never asks for the asset list, and
   gets a 403 from `POST /api/widget-data` only when the body carries a `focus`. With a second top-level asset (made in the case and
-  removed in it) a card that follows the focus says "This site has 2 top-level assets: choose a focus to see this figure." through the
+  removed in it) a card that follows the focus says "This site has N top-level assets: choose a focus to see this figure." (N read from the API) through the
   real server, a children card lists the two roots and a breakdown looks at the whole site; with one top-level asset the sole root is
   the focus without being chosen. **New dashboard** with **Start from** Power makes the five widgets and opens in view mode, an empty name
   becomes "Power", a second one shows the name-taken line in the dialog, and the compare stats and the breakdown carry the focus when it
