@@ -30,6 +30,20 @@ def _journal_state():
     journal.reset_limits()
 
 
+@pytest.fixture(autouse=True)
+async def _figure_cache_state(monkeypatch):
+    """The figure cache keeps process-wide state and its computations are tasks that outlive a test on the session-wide event
+    loop: cancel and await them, and empty the store, before and after every test (before the `db` fixture's TRUNCATE, whose
+    locks a task still reading would block). TTL 0 makes every request re-check the data, so a test that writes readings
+    between two requests sees them, and a keep-warm loop would stay off."""
+    from dcdash.core import figure_cache
+
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "0")
+    await figure_cache.aclear()
+    yield
+    await figure_cache.aclear()
+
+
 @pytest.fixture(scope="session")
 def database_url():
     container = PostgresContainer(

@@ -19,7 +19,7 @@ from dcdash.api import (
 from dcdash.api.error_recorder import ErrorRecorder
 from dcdash.api.settings import seed_general
 from dcdash.api.stream import Broadcaster
-from dcdash.core import journal
+from dcdash.core import figure_cache, journal
 from dcdash.core.config import get_settings
 from dcdash.core.db import dispose_engine, get_sessionmaker
 from dcdash.core.logscrub import install_log_scrub
@@ -40,6 +40,7 @@ async def _shut_down(tasks: list[asyncio.Task], pool: asyncpg.Pool) -> None:
         await asyncio.gather(*tasks, return_exceptions=True)
         await journal.cancel_pending()  # before the pool closes: a write still in flight would fail on a closed pool
         await pool.close()
+        await figure_cache.dispose()  # its tasks and its own engine, before the request engine goes
         await dispose_engine()
 
     closing = asyncio.ensure_future(steps())
