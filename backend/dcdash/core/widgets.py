@@ -28,9 +28,9 @@ from dcdash.core.breakdown import order as order_bars
 from dcdash.core.compare import (
     Side, change, contributing_meters, rate_change, side_from_entries, snapshot_entries, snapshot_status, windows,
 )
-from dcdash.core.cost import HourCost, cost_by_hour, load_tariffs, no_data, rate_at, summarize
-from dcdash.core.daycost import day_entries
+from dcdash.core.cost import HourCost, cost_by_hour, load_tariffs, summarize
 from dcdash.core.energy import HourEnergy, hourly_energy
+from dcdash.core.figures import entries_at, month_days, window_values
 from dcdash.core.metrics import Metric, unit_for
 from dcdash.core.models import Asset, BillingClose
 from dcdash.core.series import (
@@ -569,38 +569,30 @@ async def _fill_billing(
         result.bucket, spans = _spans(first, last, tz_name, zone)
     if not asset_ids:
         return
+    if result.mode != "series":
+        # A plain value (a stat, a gauge, a table row, a breakdown bar): every asset's figure for the window comes from one
+        # value, shared by every widget that asks for the same window (core/figures.py). Names and paths are the request's.
+        values = (await window_values(db, first, last, end, tz_name, cost)).values
+        for asset_id in asset_ids:
+            name, path = tree.nodes[asset_id].name, tree.path(asset_id)
+            figure = values.get(asset_id)  # None: no energy anywhere in this asset's subtree
+            if figure is None:
+                result.values.append(_Value(asset_id, name, path, None, no_data=True))
+            else:
+                value, estimated, partial, nothing = figure
+                result.values.append(_Value(asset_id, name, path, value, estimated, partial, no_data=nothing))
+        return
     energy = await hourly_energy(db, tree, first, last)
     tariffs = await load_tariffs(db) if cost else []
     hours_of = cost_by_hour(energy, tariffs, tree, tz_name) if cost else energy.hours
-    last_day = (end - timedelta(microseconds=1)).astimezone(zone).date()  # the local day the period ends on
     for asset_id in asset_ids:
         name, path = tree.nodes[asset_id].name, tree.path(asset_id)
         figures = hours_of.get(asset_id)  # None: no energy anywhere in this asset's subtree
         hours = {} if figures is None else {hour: fig for hour, fig in figures.items() if first <= hour < last}
-        if result.mode == "series":
-            groups = _by_span(hours.items(), spans)
-            point = _cost_point if cost else _energy_point
-            points = [] if figures is None else [point(label, group) for (label, _, _), group in zip(spans, groups)]
-            result.series.append(_Series(asset_id, name, path, points))
-        elif figures is None:
-            result.values.append(_Value(asset_id, name, path, None, no_data=True))
-        elif cost:
-            # A period with no hours under a rate in effect costs 0.0, exactly as on Billing and the asset page.
-            rated = rate_at(tariffs, tree, asset_id, last_day) is not None
-            total = summarize(hours.values(), rate_in_effect=rated)
-            # Billing prices each day on its own and adds the days up. A multi-day window whose recorded hours are all
-            # unpriced (they fall before the rate starts) still ends under a rate, and Billing's later empty days
-            # cost 0.0: so the window costs 0.0 there too, and `partial` keeps saying that some hours had no rate.
-            cost_total = 0.0 if total.cost is None and rated else total.cost
-            result.values.append(_Value(
-                asset_id, name, path, cost_total, total.estimated, total.partial, no_data=no_data(hours.values())
-            ))
-        else:
-            kwh = sum((h.kwh for h in hours.values()), 0.0)  # 0.0, not int 0, for an empty window
-            result.values.append(_Value(
-                asset_id, name, path, kwh, any(h.estimated for h in hours.values()),
-                no_data=not any(h.has_data for h in hours.values()),
-            ))
+        groups = _by_span(hours.items(), spans)
+        point = _cost_point if cost else _energy_point
+        points = [] if figures is None else [point(label, group) for (label, _, _), group in zip(spans, groups)]
+        result.series.append(_Series(asset_id, name, path, points))
 
 
 async def _active_close_figures(db: AsyncSession, month: str) -> dict[str, Any] | None:
@@ -678,25 +670,26 @@ async def _fill_compare(
         finish(None, None, "no_readings", True, None, [])
         return
 
-    tariffs = await load_tariffs(db)
-    reads = []  # (start of the read, its energy, the energy priced), last month first
-    for month in (win.last_month, win.this_month):
-        lo, hi = (bound.astimezone(timezone.utc) for bound in month_bounds(month, tz_name))
-        energy = await hourly_energy(db, tree, lo, hi)
-        reads.append((lo, energy, cost_by_hour(energy, tariffs, tree, tz_name)))
-    (_, _, last_priced), (_, this_energy, this_priced) = reads
+    # Both months come from the shared month values (core/figures.py): the same day entries Billing shows. Every lookup on the
+    # figure side below (rates, the contributing meters, the rate note) uses the values' own tree and tariffs, never the
+    # request's, so a configuration edit that lands between the request's load and the values' snapshot cannot mix two
+    # configurations. The two values must agree on the configuration; if an edit landed between them, ask again (a few times,
+    # then go on).
+    for _ in range(3):
+        md_last = await month_days(db, tz_name, *month_bounds(win.last_month, tz_name))
+        md_this = await month_days(db, tz_name, *month_bounds(win.this_month, tz_name))
+        if md_last.config_fp == md_this.config_fp:
+            break
 
-    def rate_on(day: date) -> bool:
-        return rate_at(tariffs, tree, asset_id, day) is not None
-
-    this_entries = day_entries(this_priced.get(asset_id), win.this_days, now=now, rate_on=rate_on)
+    # The windows' days are prefixes of the months' local days (core/compare.py `windows`): same entries, by position.
+    this_entries = entries_at(md_this, asset_id, now)[: len(win.this_days)]
     this = side_from_entries(this_entries[: win.days])
 
     last_entries: list[dict[str, Any] | None] | None  # None: nothing of last month can be set against this month
     figures = await _active_close_figures(db, win.last_month)
     same_zone, same_currency, last_state = True, True, "ok"
     if figures is None:
-        last_entries = day_entries(last_priced.get(asset_id), win.last_days, now=now, rate_on=rate_on)
+        last_entries = entries_at(md_last, asset_id, now)[: len(win.last_days)]
     else:
         block["last_month"]["closed"] = True
         same_zone, same_currency = snapshot_status(figures, tz_name, currency)
@@ -713,13 +706,13 @@ async def _fill_compare(
 
     # The rate note: a price change somewhere between the first day of last month's window and the last of this month's.
     partial_owns = {
-        owner for start, energy, _ in reads for owner in energy.own
-        if energy.own_from.get(owner) is not None and energy.own_from[owner] > start
+        owner for md in (md_last, md_this) for owner in md.own
+        if md.own_from.get(owner) is not None and md.own_from[owner] > md.start_utc
     }
-    meters = contributing_meters(tree, this_energy.own, asset_id, partial_owns)
+    meters = contributing_meters(md_this.tree, md_this.own, asset_id, partial_owns)
     rate_date = None
     if win.last_first is not None and win.this_last is not None:  # always, once the state is "ok"
-        rate_date = rate_change(tariffs, tree, meters, after=win.last_first, up_to=win.this_last)
+        rate_date = rate_change(md_this.tariffs, md_this.tree, meters, after=win.last_first, up_to=win.this_last)
 
     last_points: list[_Point] = []
     if chart and last_entries is not None:

@@ -278,6 +278,12 @@ async def _config_fingerprint(session: AsyncSession) -> str:
     return (await session.execute(_CONFIG, _METRICS)).scalar_one()
 
 
+async def config_fingerprint(session: AsyncSession) -> str:
+    """The configuration fingerprint as seen by `session`. A `compute` that must record the configuration its value was made
+    under (so a consumer can check that two values agree) asks for it on the session it is given, inside its snapshot."""
+    return await _config_fingerprint(session)
+
+
 async def _data_fingerprint(session: AsyncSession, start: datetime, end: datetime) -> str:
     return (await session.execute(_DATA, {**_METRICS, "start": start, "end": end})).scalar_one()
 
