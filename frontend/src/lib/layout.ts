@@ -76,6 +76,11 @@ export function defaultSize(type: WidgetType, style?: TextStyle, config?: Partia
   return { ...(type === "text" && style === "divider" ? DIVIDER_SIZE : SIZE[type]) };
 }
 
+/** The room a stat needs once it compares with last month (w24): 3 x 3, or null for any other widget. An existing card that gains the comparison grows to it. */
+export function compareStatSize(type: WidgetType, config: Partial<WidgetConfig> | undefined): { w: number; h: number } | null {
+  return isCompareStat(type, config) ? { ...COMPARE_STAT_SIZE } : null;
+}
+
 /** A new widget starts a fresh row at column 0 below everything; the editor then closes it up into any free space (compactVertical). */
 export function nextPosition(drafts: DraftWidget[], _size: { w: number; h: number }): { x: number; y: number } {
   return { x: 0, y: drafts.reduce((bottom, d) => Math.max(bottom, d.y + d.h), 0) };

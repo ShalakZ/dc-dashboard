@@ -1,6 +1,6 @@
 import { verticalCompactor } from "react-grid-layout";
 import type { DataWidget, TextStyle, TextWidget, WidgetConfig, WidgetType } from "../api/types";
-import { applyGrid, columnsOf, compactVertical, defaultSize, GRID_COLS, newKey, nextPosition, toDrafts, toGrid, type DraftWidget } from "./layout";
+import { applyGrid, columnsOf, compactVertical, compareStatSize, defaultSize, GRID_COLS, newKey, nextPosition, toDrafts, toGrid, type DraftWidget } from "./layout";
 
 const config: WidgetConfig = {
   assets: [1], source: "energy", metric: null, aggregation: "sum", range: null, bars: "asset", min: 0, max: null,
@@ -37,6 +37,13 @@ describe("toDrafts / toGrid", () => {
       { i: "8", x: 0, y: 0, w: 3, h: 2, minW: 3, minH: 3 },
       { i: "9", x: 0, y: 0, w: 6, h: 2, minW: 2, minH: 1 }, // a text card may shrink to one row
     ]);
+  });
+
+  it("a stat that compares with last month needs 3 x 3; any other widget needs nothing extra (w24)", () => {
+    expect(compareStatSize("stat", { compare: "same_days_last_month" })).toEqual({ w: 3, h: 3 });
+    expect(defaultSize("stat", undefined, { compare: "same_days_last_month" })).toEqual({ w: 3, h: 3 });
+    expect(compareStatSize("stat", {})).toBeNull();
+    expect(compareStatSize("timeseries", { compare: "same_days_last_month" })).toBeNull();
   });
 
   it("a new bar chart and time series are 6 x 5 (room for a legend, S7-3); the other types keep their size", () => {
