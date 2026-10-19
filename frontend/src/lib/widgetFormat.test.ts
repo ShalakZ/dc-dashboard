@@ -288,6 +288,17 @@ describe("flagsOf, a comparison and a breakdown (w24)", () => {
     expect(flagsOf(cost).noRate).toBe(true);
   });
 
+  it("a cost breakdown's bar that recorded nothing is no data, not a missing rate (a plain cost widget keeps its rule)", () => {
+    const silent = valueRow({ asset_id: 90, name: "Electrical", value: null, no_data: true, point_id: null });
+    const cost = breakdownData(2, { source: "cost", unit: "USD" });
+    cost.values.push(silent);
+    expect(flagsOf(cost).noRate).toBe(false);
+    cost.values.push(valueRow({ asset_id: 91, name: "Unrated", value: null, no_data: false, point_id: null })); // readings, no rate: still a missing rate
+    expect(flagsOf(cost).noRate).toBe(true);
+    const plain = valuesData({ source: "cost", unit: "USD", values: [silent] });
+    expect(flagsOf(plain).noRate).toBe(true); // without a breakdown the existing rule stands
+  });
+
   it("finds the marks of the bars a breakdown left out", () => {
     expect(flagsOf(breakdownData())).toEqual({ estimated: false, partial: false, noRate: false });
     const more = { count: 4, with_value: 4, value: 9, estimated: true, partial: true };

@@ -64,7 +64,7 @@ export function flagsOf(data: Pick<WidgetData, "series" | "values" | "source"> &
   const lastPoints = assets.flatMap((a) => (cost && lastCostGone(a) ? [] : a.last_points));
   const rows = [...data.series, ...data.values, ...lastPoints];
   const noRate = cost
-    && (data.values.some((v) => v.value === null)
+    && (data.values.some((v) => v.value === null && !(data.breakdown && v.no_data)) // a breakdown's bar that recorded nothing is "no data", not a missing rate
       || data.series.some((s) => s.points.some((p) => p.value === null && !p.no_data))
       || lastPoints.some((p) => p.value === null && !p.no_data)
       || sides.some((s) => s.cost === null && s.no_data_days < (data.compare?.days ?? 0))); // some day had readings, yet no cost: the rate is missing
