@@ -713,3 +713,45 @@ async def test_reading_rows_costs_one_statement_and_none_without_a_meter(db):
             event.remove(sync_engine, "before_cursor_execute", record)
 
     assert len(statements) == 1 and "readings_1h" in statements[0]
+
+
+async def test_the_split_read_equals_the_oracle_when_the_rows_cross_many_parts(db, monkeypatch):
+    """The same database world as above, read seven rows to a part: every point's rows span many parts, a point's last rows and a
+    point's first rows land in different ones, and the figures still equal the oracle's (a part boundary changes no digit)."""
+    await build_database_world(db)
+    start, end = DB_T0, DB_T0 + DB_HOURS * HOUR
+    monkeypatch.setattr(energy, "PART_ROWS", 7)
+    part_sizes: list[int] = []
+    real_add_part = energy._add_part
+
+    def counting(part, *rest):
+        part = list(part)
+        part_sizes.append(len(part))
+        real_add_part(part, *rest)
+
+    monkeypatch.setattr(energy, "_add_part", counting)
+    async with get_sessionmaker()() as session:
+        tree = await AssetTree.load(session)
+        meters = await energy.load_meters(session, tree)
+        read = await energy.read_energy_rows(session, meters, start, end)
+        sizes = list(part_sizes)
+        part_sizes.clear()
+        whole = await energy.hourly_energy(session, tree, start, end)
+        old = await old_hourly_energy(session, tree, start, end)
+        once = energy._collect(await session.execute(energy._ROWS, _rows_params(meters, start, end)))
+
+    total = sum(len(ts) for ts in read.rows.values()) + len(read.baselines) + len(read.first_buckets)
+    assert total > 100 and len(sizes) >= total // 7 and max(sizes) <= 7  # many parts, none longer than the patched size
+    assert read == once  # the parts file exactly the rows the one-shot read files (values, types and order)
+    assert canon_energy(energy.assemble(tree, meters, read.rows, read.baselines, start, end, read.first_buckets)) == canon_energy(old)
+    assert canon_energy(whole) == canon_energy(old)
+
+
+async def test_reading_rows_refuses_a_naive_datetime_with_or_without_meters():
+    """The timezone check lives in `read_energy_rows` itself (figures.py calls it directly), before the meters are even looked at."""
+    naive, aware = datetime(2026, 6, 10), DB_T0
+    one_meter = {1: energy.Meter(100, 1.0, 60, True)}
+    for meters in ({}, one_meter):
+        for start, end in ((naive, aware), (aware, naive), (naive, naive)):
+            with pytest.raises(ValueError, match="timezone"):
+                await energy.read_energy_rows(None, meters, start, end)  # no session: it must be refused before any use of it

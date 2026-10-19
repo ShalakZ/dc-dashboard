@@ -229,7 +229,9 @@ def total(hours: dict[datetime, HourEnergy] | None) -> Energy | None:
 # (to know from when an own meter counts). Bad-quality readings are already excluded by the rollup views, which are
 # real-time, so the hours not yet materialized are included. `sum(n)` in the rollup is numeric, which asyncpg returns as
 # Decimal: `n` and `minutes` are cast to integers here, in every branch (a UNION takes the widest type of its branches),
-# so the rows arrive as Python ints. The column order is the order `_collect` unpacks them in.
+# so the rows arrive as Python ints. The column order is the order `_collect` unpacks them in. `CAST(n AS bigint)` rounds where the
+# old `int(Decimal)` truncated: the two agree only because `n` is a sum of whole counts, so a rollup that ever averages `n`
+# would change digits here. `billing_check._ROWS` (a test pins that its values equal these) still returns `Decimal` for `n`.
 _ROWS = text(
     """
     SELECT point_id, bucket, min_value, max_value, sum_value, CAST(n AS bigint) AS n, last_value,
@@ -316,14 +318,19 @@ def _collect(result: Iterable) -> EnergyRows:
 
 
 # Rows fetched, decoded and filed per turn of the event loop. A request that arrives during a month read waits for one part
-# (tens of milliseconds at this size: 45 ms was the longest gap measured over 172,800 rows), not for the whole month.
-PART_ROWS = 5000
+# (tens of milliseconds: over 172,800 rows the longest gap was 45 to 48 ms with 5000 rows a part and about 40 ms with 2000, on
+# a busy machine; the first cold dashboard measured `GET /api/me` waiting up to 130 ms), not for the whole month. Fewer rows a
+# part means a shorter turn; more parts cost a few more trips to the loop.
+PART_ROWS = 2000
 
 
 async def read_energy_rows(db: AsyncSession, meters: dict[int, Meter], start: datetime, end: datetime) -> EnergyRows:
     """The rollup rows for the points of `meters`: ONE statement on `readings_1h` (none when there is no meter), streamed in
-    parts of `PART_ROWS` rows so the loop is free between parts. `start` and `end` must be timezone-aware, as `hourly_energy`
-    checks. The only thing here that needs a session: `assemble` does not."""
+    parts of `PART_ROWS` rows so the loop is free between parts. `start` and `end` must be timezone-aware (a `ValueError`
+    otherwise, with or without meters; `hourly_energy` asks first, before it reads the meters). The only thing here that needs
+    a session: `assemble` does not."""
+    if start.tzinfo is None or end.tzinfo is None:
+        raise ValueError("start and end must include a timezone offset")
     if not meters:
         return EnergyRows({}, {}, {})
     params = {

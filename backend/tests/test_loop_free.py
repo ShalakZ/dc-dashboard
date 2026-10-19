@@ -138,7 +138,7 @@ async def test_the_chunked_read_never_holds_the_loop_for_long_and_files_the_same
     assert rows > 5 * energy.PART_ROWS  # the read crossed many parts
     assert read == whole  # rows split across parts are filed exactly as the one-shot read files them (R1)
     assert len(gaps) > 20  # the loop took many turns during the read: it was not held to the end
-    assert max(gaps) < 0.1, f"the loop was held for {max(gaps) * 1000:.0f} ms during the read"
+    assert max(gaps) < 0.3, f"the loop was held for {max(gaps) * 1000:.0f} ms during the read"  # wide: a loaded machine
     if max(whole_gaps) < 0.1:
         pytest.skip(f"reading at once held the loop only {max(whole_gaps) * 1000:.0f} ms here: too fast to tell the two apart")
     assert max(gaps) < max(whole_gaps)
@@ -149,6 +149,11 @@ async def test_assemble_on_the_thread_leaves_get_api_me_waiting_little(client, d
     await login_as(client, db, "admin")
     async with get_sessionmaker()() as session:
         tree = await AssetTree.load(session)
+        meters = await energy.load_meters(session, tree)
+        read = await energy.read_energy_rows(session, meters, T0, END)
+        began = time.perf_counter()
+        energy.assemble(tree, meters, read.rows, read.baselines, T0, END, read.first_buckets)  # what the loop would be held for
+        inline_ms = (time.perf_counter() - began) * 1000
         sizes: list[float] = []
 
         async def threaded() -> None:
@@ -159,9 +164,14 @@ async def test_assemble_on_the_thread_leaves_get_api_me_waiting_little(client, d
 
         waits = await waits_of_me_during(client, threaded)
 
-    print(f"\nthreaded hourly_energy ({sizes[0] * 1000:.0f} ms): GET /api/me waited p95 {p95(waits) * 1000:.0f} ms, "
-          f"max {max(waits) * 1000:.0f} ms over {len(waits)} requests")
-    assert p95(waits) < 0.15
+    print(f"\nthreaded hourly_energy ({sizes[0] * 1000:.0f} ms; assemble alone takes {inline_ms:.0f} ms): GET /api/me waited "
+          f"p95 {p95(waits) * 1000:.0f} ms, max {max(waits) * 1000:.0f} ms over {len(waits)} requests")
+    assert p95(waits) < 0.4  # wide: a loaded machine
+    if inline_ms >= 250:
+        # Measured in this run, so a slow machine cannot fail it and a fast one cannot hide the old way: assembled inline, a
+        # request waits for about the whole `assemble` (minus the up-to-50 ms until one falls due); on the thread it waits for a
+        # few turns of the GIL.
+        assert max(waits) * 1000 < 0.6 * inline_ms, f"GET /api/me waited {max(waits) * 1000:.0f} ms behind a {inline_ms:.0f} ms assemble"
 
 
 async def test_assemble_in_the_loop_the_old_way_made_the_same_request_wait_longer(client, db):

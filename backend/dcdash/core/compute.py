@@ -25,6 +25,10 @@ from typing import Any, TypeVar
 
 T = TypeVar("T")
 
+# Process-wide, not just for this module: `core.energy` imports this module, so every importer of the engine (`core.cost`,
+# `core.daycost`, `core.tree_move`, the API modules, the speed check; today the seeders in seed/ do not import it, but one that
+# did would get it too) has the setting. That is harmless: a single-threaded program has no second thread to hand the GIL to,
+# so the shorter interval changes nothing for it, and the only thread this process starts for the engine's work is the one below.
 sys.setswitchinterval(0.001)
 
 # Created on first use, so it can be created again after `shutdown()` (the app's shutdown, and the tests, stop it).

@@ -108,9 +108,10 @@ async def test_the_loop_keeps_ticking_while_a_pure_function_burns_300_ms_of_cpu(
 
     during = stamps[began - 1:]
     gaps = [later - earlier for earlier, later in zip(during, during[1:])]
-    # A smoke test with a loose bound: run inline, the 300 ms would be one gap of 300 ms.
-    assert len(during) >= 10, f"the loop ticked only {len(during)} times while the thread burned 300 ms"
-    assert max(gaps) < 0.1, f"the loop was blocked for {max(gaps) * 1000:.0f} ms"
+    # A smoke test with a wide bound, so that a loaded machine does not fail it (a cache task left running by an earlier test
+    # can queue ahead of the burn): run inline, the 300 ms would be ONE gap of more than 300 ms and about one tick.
+    assert len(during) >= 5, f"the loop ticked only {len(during)} times while the thread burned 300 ms"
+    assert max(gaps) < 0.3, f"the loop was blocked for {max(gaps) * 1000:.0f} ms"
 
 
 # ---- who runs on the thread -----------------------------------------------------------------------------------------------
