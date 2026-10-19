@@ -7,6 +7,7 @@ import type { Dashboard } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { Crumbs } from "../components/Crumbs";
 import { DashboardViewer } from "../components/dashboard/DashboardViewer";
+import { FocusNotice, FocusProvider } from "../components/dashboard/FocusContext";
 import { LiveValuesProvider } from "../components/dashboard/LiveValuesContext";
 import { Pending } from "../components/Pending";
 import { DashboardSkeleton } from "../components/Skeleton";
@@ -60,10 +61,12 @@ function DashboardScreen({ id }: { id: number }) {
   };
 
   if (canEdit && wantsEdit) {
+    // The focus provider is the outermost element of both branches, at the same place, so Edit and View share one instance and what it remembers.
     return (
-      <>
+      <FocusProvider>
         {notice}
         {crumbs}
+        <FocusNotice />
         <Suspense fallback={<><Pending /><p className="muted">loading editor…</p></>}>
           <DashboardEditor
             key={epoch}
@@ -79,16 +82,17 @@ function DashboardScreen({ id }: { id: number }) {
             }}
           />
         </Suspense>
-      </>
+      </FocusProvider>
     );
   }
   return (
-    <>
+    <FocusProvider>
       {notice}
       {crumbs}
+      <FocusNotice />
       <LiveValuesProvider>
         <DashboardViewer dashboard={dashboard} timezone={timezone} onEdit={canEdit ? () => setWantsEdit(true) : undefined} />
       </LiveValuesProvider>
-    </>
+    </FocusProvider>
   );
 }
