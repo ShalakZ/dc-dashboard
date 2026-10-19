@@ -16,6 +16,8 @@ The tests start their own TimescaleDB container (testcontainers, image `timescal
 `backend/tests/conftest.py`), so Docker must be running. `uv run pytest tests/<file>.py` runs one file; the doc-reading tests
 (`tests/test_readme_ops.py`, `tests/test_field_debugging_doc.py`, `tests/test_docs_links.py`) need no Docker.
 
+`docker compose exec -T api python -m dcdash.diagnostics.speed` prints where the time goes (counts and seconds, read-only): [the speed check](field-debugging.md#the-speed-check).
+
 ## Frontend
 
 The dev server needs the stack running for the API:
