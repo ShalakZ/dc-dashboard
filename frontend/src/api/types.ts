@@ -467,7 +467,7 @@ export interface WidgetValue {
 }
 /** One side (this month's days 1 to D, or last month's) of a comparison: the sums of Billing's day cells; `cost` is null when no day has a rate. */
 export interface CompareSide { kwh: number; cost: number | null; estimated: boolean; partial: boolean; no_data_days: number }
-export type CompareWhyNone = "no_previous" | "no_current" | "missing_days" | "partial" | "previous_zero" | "currency";
+export type CompareWhyNone = "currency" | "no_cost" | "no_previous" | "no_current" | "missing_days" | "partial" | "previous_zero";
 /** The change of one measure: `abs` when both sides have a number, `percent` only when it is safe to show (otherwise `why_none` says why). */
 export interface CompareChange { abs: number | null; percent: number | null; why_none: CompareWhyNone | null }
 export interface CompareAsset {
@@ -482,7 +482,7 @@ export interface CompareAsset {
 export interface WidgetCompare {
   mode: "same_days_last_month"; state: "ok" | "nothing_yet"; elapsed_days: number; days: number;
   this_window: { from: string; to: string } | null; last_window: { from: string; to: string } | null;
-  left_out_days: string[]; last_month: { month: string; closed: boolean }; currency: string;
+  left_out_days: string[]; last_month: { month: string; closed: boolean }; currency: string | null;
   assets: CompareAsset[];
 }
 /** `bars: "kind"`: the bars drawn are the first `shown` of `count`; `more` sums the rest (never an "Other" bar). */
