@@ -47,8 +47,8 @@ class WidgetDataRequest(BaseModel):
 
 async def _compute(body: WidgetDataRequest, db: AsyncSession, user: User) -> WidgetResult:
     # A focus is the one new way to NAME an arbitrary asset, so it needs assets.view, checked first and also for a fixed widget.
-    # Without a focus a following widget shows a dashboards.view-only role just the sole top-level asset (name, path) or the
-    # count of top-level assets: nothing a config naming any id, `missing` and the CSV rows (full paths) do not already give.
+    # Without a focus a following widget shows a dashboards.view-only role the sole top-level asset, the top-level assets (or the sole
+    # one's children) as rows, or their count: nothing a config naming those ids, `missing` and the CSV rows (full paths) do not already give.
     if body.focus is not None and not user.can("assets.view"):
         raise HTTPException(403, INSUFFICIENT_PERMISSION)
     if body.type == "text":  # a Text widget has no figures: refused before its config is even looked at

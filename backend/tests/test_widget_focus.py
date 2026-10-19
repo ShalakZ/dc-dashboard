@@ -487,6 +487,11 @@ async def test_a_focus_needs_the_assets_tree_even_on_a_fixed_widget(client, db, 
     # It is the first thing looked at: a text widget, an unknown focus and a broken config get the same refusal.
     assert (await ask(client, "text", {}, path=path, focus=ids["hall1"])).status_code == 403
     assert (await ask(client, "stat", following("focus"), path=path, focus=999)).status_code == 403
+    # The refusal does not depend on the type or the shape of the config: a following breakdown and a following comparison get it too.
+    breakdown = {**following("focus"), "bars": "kind", "kind": "Rack"}
+    compare = {**following("focus"), "compare": "same_days_last_month", "range": "this_month"}
+    assert (await ask(client, "bar", breakdown, path=path, focus=ids["hall1"])).status_code == 403
+    assert (await ask(client, "timeseries", compare, path=path, focus=ids["hall1"])).status_code == 403
 
 
 @pytest.mark.parametrize("path", PATHS)
