@@ -48,6 +48,8 @@ async def _compute(body: WidgetDataRequest, db: AsyncSession) -> WidgetResult:
         config = validate_data_config(body.type, body.config)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
+    if config.compare != "none" and body.range != "this_month":  # the client resolved a dashboard range into the request
+        raise HTTPException(422, "range: a comparison needs the range this month")
     try:
         return await compute_widget(db, body.type, config, body.range, _now())
     except SiteZoneError as exc:

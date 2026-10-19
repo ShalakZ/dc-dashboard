@@ -11,6 +11,7 @@ from dcdash.core.pg import CONFIG_CHANNEL
 from helpers import listening, login_as, make_asset
 
 STAT = {"assets": [1], "source": "metric", "metric": "active_power_kw", "aggregation": "last"}
+ENERGY = {"assets": [1], "source": "energy", "aggregation": "sum"}
 FIELDS = ("type", "title", "config", "x", "y", "w", "h")
 
 
@@ -205,6 +206,59 @@ async def test_put_replaces_everything_and_returns_a_newer_stamp(client, db, ass
     assert [w["title"] for w in kept["widgets"]] == ["Upper left"]
     assert kept["widgets"][0]["id"] not in {w["id"] for w in saved["widgets"]}
     assert await db.fetchval("SELECT count(*) FROM widgets") == 1
+
+
+async def test_a_compare_widget_and_a_kind_widget_are_stored_and_read_back_with_their_keys(client, db, asset_ids):
+    # w24: compare, kind, root and top are written only when they are not the default (the pin above stays as it was).
+    await login_as(client, db, "operator")
+    dash = await create(client)
+    compare = {
+        "assets": asset_ids[:1], "source": "cost", "aggregation": "sum", "range": "this_month",
+        "compare": "same_days_last_month",
+    }
+    kind = {
+        "assets": [], "source": "energy", "aggregation": "sum", "bars": "kind", "kind": "  Rack ", "root": asset_ids[0], "top": 5,
+    }
+    plain_kind = {"assets": [], "source": "energy", "aggregation": "sum", "bars": "kind", "kind": "Rack"}
+    saved = (await save(client, dash, [
+        widget("Compare", "stat", compare), widget("Racks", "bar", kind, y=3), widget("All racks", "bar", plain_kind, y=6),
+    ])).json()
+    by_title = {w["title"]: w["config"] for w in saved["widgets"]}
+    assert by_title["Compare"] == {
+        "assets": asset_ids[:1], "source": "cost", "metric": None, "aggregation": "sum", "range": "this_month",
+        "bars": "asset", "min": 0.0, "max": None, "compare": "same_days_last_month",
+    }
+    assert by_title["Racks"] == {  # the kind is stored trimmed
+        "assets": [], "source": "energy", "metric": None, "aggregation": "sum", "range": None, "bars": "kind",
+        "min": 0.0, "max": None, "kind": "Rack", "root": asset_ids[0], "top": 5,
+    }
+    assert by_title["All racks"] == {  # the site as root and ten bars are the defaults: not stored
+        "assets": [], "source": "energy", "metric": None, "aggregation": "sum", "range": None, "bars": "kind",
+        "min": 0.0, "max": None, "kind": "Rack",
+    }
+    assert await fetch(client, dash) == saved
+    # Saved back as loaded, nothing changes: the stored configs are a fixed point of the normalisation.
+    again = (await save(client, saved, [as_input(w) for w in saved["widgets"]])).json()
+    assert {w["title"]: w["config"] for w in again["widgets"]} == by_title
+
+
+@pytest.mark.parametrize(
+    "widget_type,config,words",
+    [
+        ("stat", {**ENERGY, "compare": "same_days_last_month"}, ["range", "this month"]),
+        ("bar", {**ENERGY, "range": "this_month", "compare": "same_days_last_month"}, ["compare", "stat or a time series"]),
+        ("bar", {**ENERGY, "assets": [], "bars": "kind"}, ["kind"]),
+        ("bar", {**ENERGY, "bars": "kind", "kind": "Rack"}, ["assets", "empty"]),
+        ("bar", {**STAT, "assets": [], "aggregation": "avg", "bars": "kind", "kind": "Rack"}, ["bars"]),
+        ("bar", {**ENERGY, "top": 5}, ["top"]),
+    ],
+)
+async def test_the_save_refuses_the_new_keys_that_break_a_rule(client, db, asset_ids, widget_type, config, words):
+    await login_as(client, db, "operator")
+    dash = await create(client)
+    response = await save(client, dash, [widget("Bad", widget_type, config)])
+    assert response.status_code == 422
+    assert all(word in detail_text(response) for word in words), detail_text(response)
 
 
 @pytest.mark.parametrize("offset_hours", [0, 3, -5])

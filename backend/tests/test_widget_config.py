@@ -202,9 +202,127 @@ def test_unknown_widget_type():
 
 
 def test_several_problems_are_reported_together_in_plain_words():
-    message = reject("table", make(assets=[], range="soon"))
+    message = reject("table", make(assets=list(range(1, 22)), range="soon"))
     assert "assets:" in message and "range:" in message and "; " in message
     assert "validation error" not in message and "\n" not in message
+
+
+# w24: the comparison and the breakdown by kind (compare, kind, root, top, bars "kind").
+
+ENERGY = {"assets": [1], "source": "energy", "aggregation": "sum"}
+COMPARE = {**ENERGY, "range": "this_month", "compare": "same_days_last_month"}
+KIND = {"assets": [], "source": "energy", "aggregation": "sum", "bars": "kind", "kind": "Rack"}
+
+
+def test_the_new_keys_are_left_out_of_the_dump_while_they_hold_their_defaults():
+    plain = validate_config("stat", make(aggregation="last")).model_dump(mode="json")
+    assert set(plain) == {"assets", "source", "metric", "aggregation", "range", "bars", "min", "max"}
+    assert (validate_config("stat", make(aggregation="last")).compare, validate_config("bar", KIND).top) == ("none", 10)
+    # A key given at its default is as good as absent, so a client may send it.
+    assert validate_config("stat", {**make(aggregation="last"), "compare": "none", "top": 10}).model_dump(mode="json") == plain
+    assert "root" not in validate_config("bar", {**KIND, "root": None}).model_dump(mode="json")
+
+
+def test_the_new_keys_are_dumped_once_they_differ_from_their_defaults():
+    assert validate_config("stat", COMPARE).model_dump(mode="json")["compare"] == "same_days_last_month"
+    dumped = validate_config("bar", {**KIND, "root": 7, "top": 5}).model_dump(mode="json")
+    assert (dumped["bars"], dumped["kind"], dumped["root"], dumped["top"]) == ("kind", "Rack", 7, 5)
+    assert validate_config("bar", KIND).model_dump(mode="json")["kind"] == "Rack"
+
+
+@pytest.mark.parametrize("widget_type", ["stat", "timeseries"])
+def test_a_stat_and_a_time_series_can_compare(widget_type):
+    assert validate_config(widget_type, COMPARE).compare == "same_days_last_month"
+    assert validate_config(widget_type, {**COMPARE, "source": "cost"}).source == "cost"
+
+
+@pytest.mark.parametrize(
+    "widget_type,overrides,start",
+    [
+        ("bar", {}, "compare:"),
+        ("table", {}, "compare:"),
+        ("gauge", {"source": "metric", "metric": "active_power_kw", "aggregation": "last", "max": 100.0}, "compare:"),
+        ("stat", {"source": "metric", "metric": "active_power_kw", "aggregation": "avg"}, "compare:"),
+        ("stat", {"assets": [1, 2]}, "assets:"),
+        ("timeseries", {"assets": [1, 2]}, "assets:"),
+        ("stat", {"range": "7d"}, "range:"),
+        ("stat", {"range": None}, "range:"),  # following the dashboard is not a range of its own
+        ("timeseries", {"range": "last_month"}, "range:"),
+    ],
+)
+def test_a_comparison_that_breaks_a_rule_is_refused_naming_the_field(widget_type, overrides, start):
+    message = reject(widget_type, {**COMPARE, **overrides})
+    assert message.startswith(start) and "\n" not in message
+
+
+def test_the_comparison_messages_say_what_to_do():
+    assert reject("bar", COMPARE) == "compare: only a stat or a time series can compare, not a bar"
+    assert reject("stat", {**COMPARE, "range": "7d"}) == "range: a comparison needs the range this month"
+    assert reject("stat", {**COMPARE, "assets": [1, 2]}) == "assets: a comparison shows exactly one asset (got 2)"
+
+
+def test_choosing_no_assets_is_judged_first_and_names_its_field():
+    assert reject("table", make(assets=[])) == "assets: choose at least one asset"
+    assert reject("stat", make(assets=[], aggregation="last")) == "assets: choose at least one asset"  # not "exactly one (got 0)"
+    assert reject("bar", {**KIND, "assets": [], "bars": "asset"}) == "assets: choose at least one asset"
+
+
+def test_a_config_wrong_twice_names_the_first_field_problem_only():
+    # The assets rule is a type rule now: a bad metric (a field rule) is reported and the empty list waits for the next try.
+    message = reject("table", make(assets=[], metric="custom"))
+    assert message.startswith("metric:") and "assets" not in message
+
+
+def test_a_bar_widget_can_have_one_bar_per_asset_of_a_kind():
+    parsed = validate_config("bar", KIND)
+    assert (parsed.bars, parsed.assets, parsed.kind, parsed.root, parsed.top) == ("kind", [], "Rack", None, 10)
+    assert validate_config("bar", {**KIND, "source": "cost", "root": 3, "top": 50}).top == 50
+    assert validate_config("bar", {**KIND, "top": 3}).top == 3
+
+
+def test_the_kind_is_trimmed_with_the_white_space_kind_key_ignores():
+    nbsp, feff, vt = chr(0xA0), chr(0xFEFF), chr(0x0B)
+    parsed = validate_config("bar", {**KIND, "kind": f" {nbsp}{vt}Cooling  unit{feff}\t\n"})
+    assert parsed.kind == "Cooling  unit"  # the ends only: the inside is the person's own spelling
+    assert reject("bar", {**KIND, "kind": f"{nbsp}{feff}  "}).startswith("kind:")
+    assert reject("bar", {**KIND, "kind": ""}).startswith("kind:")
+    assert reject("bar", {key: value for key, value in KIND.items() if key != "kind"}).startswith("kind:")
+    assert validate_config("bar", {**KIND, "kind": "x" * 100}).kind == "x" * 100
+    message = reject("bar", {**KIND, "kind": "x" * 101})
+    assert message.startswith("kind:") and "100" in message and "101" in message
+
+
+@pytest.mark.parametrize("widget_type", ["stat", "timeseries", "gauge", "table"])
+def test_bars_kind_only_applies_to_bar_widgets(widget_type):
+    message = reject(widget_type, {**GAUGE, "bars": "kind", "kind": "Rack"})
+    assert message.startswith("bars:") and "bar" in message
+
+
+def test_bars_kind_needs_the_source_energy_or_cost_and_no_assets():
+    message = reject("bar", {**KIND, "source": "metric", "metric": "active_power_kw", "aggregation": "avg"})
+    assert message.startswith("bars:") and "energy" in message and "cost" in message
+    message = reject("bar", {**KIND, "assets": [1]})
+    assert message.startswith("assets:") and "empty" in message
+
+
+@pytest.mark.parametrize("key,value", [("kind", "Rack"), ("root", 4), ("top", 5), ("top", 11)])
+@pytest.mark.parametrize("bars", ["asset", "time"])
+def test_kind_root_and_top_need_the_bars_of_a_kind(bars, key, value):
+    message = reject("bar", {**ENERGY, "bars": bars, key: value})
+    assert message.startswith(f"{key}:") and "kind" in message
+
+
+@pytest.mark.parametrize("top", [2, 51, 0, -1])
+def test_top_is_between_3_and_50(top):
+    message = reject("bar", {**KIND, "top": top})
+    assert message.startswith("top:") and "3" in message and "50" in message
+
+
+def test_the_new_keys_have_types():
+    assert reject("stat", {**COMPARE, "compare": "yesterday"}).startswith("compare:")
+    assert reject("bar", {**KIND, "root": "hall"}).startswith("root:")
+    assert reject("bar", {**KIND, "top": "ten"}).startswith("top:")
+    assert reject("bar", {**KIND, "kind": 5}).startswith("kind:")
 
 
 # Controller rulings after the plan review (amendments for Task 5).
