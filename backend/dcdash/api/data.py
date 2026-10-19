@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_permission
 from dcdash.api.settings import current_timezone
+from dcdash.core import compute
 from dcdash.core.asset_kinds import icon_for, kind_icons
 from dcdash.core.cost import Cost, cost_by_hour, load_tariffs, no_data, rate_at, summarize
 from dcdash.core.energy import Energy, hourly_energy, total
@@ -77,7 +78,7 @@ async def _energy_cost_today(
     start, end = day_bounds(now, tz)
     result = await hourly_energy(db, tree, start, end)
     tariffs = await load_tariffs(db)
-    priced = cost_by_hour(result, tariffs, tree, tz)
+    priced = await compute.run(cost_by_hour, result, tariffs, tree, tz)  # pure: on the compute thread, the loop stays free
     energies = [e for a in asset_ids if (e := total(result.hours.get(a))) is not None]
     energy = Energy(sum((e.kwh for e in energies), 0.0), any(e.estimated for e in energies)) if energies else None
     parts = [p for a in asset_ids if (p := priced.get(a)) is not None]

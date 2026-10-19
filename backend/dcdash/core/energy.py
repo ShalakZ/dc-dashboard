@@ -3,7 +3,8 @@
 Every energy figure (asset page, billing, dashboards) comes from here. The maths is pure Python on
 `readings_1h` rows so it can be tested without a database; `load_meters` and `read_energy_rows` are the only
 functions that touch one (`read_energy_rows` reads the rollup with a single batched query), `assemble` never does,
-and `hourly_energy` is the two of them and `assemble` in a row.
+and `hourly_energy` is the two of them and `assemble` in a row, with `assemble` on the compute thread
+(core/compute.py) so the event loop stays free.
 """
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
@@ -14,6 +15,7 @@ from typing import NamedTuple
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dcdash.core import compute
 from dcdash.core.metrics import Metric
 from dcdash.core.models import Mapping
 from dcdash.core.tree import AssetTree
@@ -287,24 +289,41 @@ class EnergyRows(NamedTuple):
     first_buckets: dict[int, datetime]
 
 
-def _collect(result: Iterable) -> EnergyRows:
-    """The rows of a `_ROWS` result as `EnergyRows`, built straight from the columns (unpacked in `_ROWS` order)."""
-    rows: dict[int, list[HourRow]] = defaultdict(list)
-    baselines: dict[int, float] = {}
-    first_buckets: dict[int, datetime] = {}
-    for point_id, bucket, min_value, max_value, sum_value, n, last_value, minutes, kind in result:
+def _add_part(
+    part: Iterable,
+    rows: dict[int, list[HourRow]],
+    baselines: dict[int, float],
+    first_buckets: dict[int, datetime],
+) -> None:
+    """Add one chunk of a `_ROWS` result (rows unpacked in `_ROWS` order) to the three dicts. The result is ordered by point and
+    bucket, so appending chunk after chunk keeps every point's rows ascending."""
+    for point_id, bucket, min_value, max_value, sum_value, n, last_value, minutes, kind in part:
         if kind == "baseline":
             baselines[point_id] = last_value
         elif kind == "first":
             first_buckets[point_id] = bucket
         else:
             rows[point_id].append(HourRow(bucket, min_value, max_value, sum_value, n, last_value, minutes))
+
+
+def _collect(result: Iterable) -> EnergyRows:
+    """The rows of a whole `_ROWS` result (or of one chunk of it) as `EnergyRows`."""
+    rows: dict[int, list[HourRow]] = defaultdict(list)
+    baselines: dict[int, float] = {}
+    first_buckets: dict[int, datetime] = {}
+    _add_part(result, rows, baselines, first_buckets)
     return EnergyRows(dict(rows), baselines, first_buckets)
 
 
+# Rows fetched, decoded and filed per turn of the event loop. A request that arrives during a month read waits for one part
+# (tens of milliseconds at this size: 45 ms was the longest gap measured over 172,800 rows), not for the whole month.
+PART_ROWS = 5000
+
+
 async def read_energy_rows(db: AsyncSession, meters: dict[int, Meter], start: datetime, end: datetime) -> EnergyRows:
-    """The rollup rows for the points of `meters`: ONE statement on `readings_1h` (none when there is no meter). `start` and
-    `end` must be timezone-aware, as `hourly_energy` checks. The only thing here that needs a session: `assemble` does not."""
+    """The rollup rows for the points of `meters`: ONE statement on `readings_1h` (none when there is no meter), streamed in
+    parts of `PART_ROWS` rows so the loop is free between parts. `start` and `end` must be timezone-aware, as `hourly_energy`
+    checks. The only thing here that needs a session: `assemble` does not."""
     if not meters:
         return EnergyRows({}, {}, {})
     params = {
@@ -313,7 +332,16 @@ async def read_energy_rows(db: AsyncSession, meters: dict[int, Meter], start: da
         "start": start,
         "end": end,
     }
-    return _collect(await db.execute(_ROWS, params))
+    rows: dict[int, list[HourRow]] = defaultdict(list)
+    baselines: dict[int, float] = {}
+    first_buckets: dict[int, datetime] = {}
+    result = await db.stream(_ROWS, params)
+    try:
+        async for part in result.partitions(PART_ROWS):
+            _add_part(part, rows, baselines, first_buckets)
+    finally:
+        await result.close()
+    return EnergyRows(dict(rows), baselines, first_buckets)
 
 
 async def hourly_energy(db: AsyncSession, tree: AssetTree, start: datetime, end: datetime) -> EnergyResult:
@@ -327,4 +355,4 @@ async def hourly_energy(db: AsyncSession, tree: AssetTree, start: datetime, end:
         raise ValueError("start and end must include a timezone offset")
     meters = await load_meters(db, tree)
     read = await read_energy_rows(db, meters, start, end)
-    return assemble(tree, meters, read.rows, read.baselines, start, end, read.first_buckets)
+    return await compute.run(assemble, tree, meters, read.rows, read.baselines, start, end, read.first_buckets)
