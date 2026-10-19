@@ -100,7 +100,7 @@ def test_variants_add_up_before_kinds_are_compared():
 
 
 def test_blank_and_too_long_kinds_are_ignored():
-    blank = "  \t"
+    blank = " " + chr(0xA0) + " \t"  # spaces, a no-break space and a TAB: all blank to kind_key
     too_long = "K" * (KIND_MAX + 1)
     tree, kinds, metered = world(("A", blank, True), ("B", blank, True), ("C", too_long, True), ("D", too_long, True),
                                  ("F1", "Feed", True))
