@@ -67,10 +67,16 @@ def candidates(tree: AssetTree, kinds: Mapping[int, str], root: int | None, kind
     return outer, len(matching) - len(outer)
 
 
-def kinds_present(tree: AssetTree, kinds: Mapping[int, str], root: int | None) -> list[tuple[str, int]]:
+def kinds_present(
+    tree: AssetTree, kinds: Mapping[int, str], root: int | None, kind: str | None = None
+) -> list[tuple[str, int]]:
     """The kinds of the assets below `root` (same scope as `candidates`, counted BEFORE the nested rule): one entry per
-    `kind_key`, shown with its most frequent spelling, with how many assets have it. Most frequent first, ties by name. A blank
-    kind text is left out."""
+    `kind_key`, shown with its most frequent spelling, with how many assets have it. Most frequent first, ties by `kind_key`
+    (case-insensitive). A blank kind text is left out. A root that is not in the tree has nothing below it: the caller passes
+    `root=None` when it wants the kinds of the whole tree.
+
+    `kind` is the kind the widget is set to: when no asset below the root has it, it is still listed (trimmed, with a count of 0,
+    last), so the "Split by" choice can show what the widget is on."""
     spellings: dict[str, list[str]] = {}
     for asset_id in _below(tree, root):
         if asset_id not in kinds:
@@ -79,7 +85,10 @@ def kinds_present(tree: AssetTree, kinds: Mapping[int, str], root: int | None) -
         if key:
             spellings.setdefault(key, []).append(kinds[asset_id])
     ordered = sorted(spellings.items(), key=lambda item: (-len(item[1]), item[0]))
-    return [(common_spelling(texts), len(texts)) for _key, texts in ordered]
+    present = [(common_spelling(texts), len(texts)) for _key, texts in ordered]
+    if kind is not None and kind_key(kind) and kind_key(kind) not in spellings:
+        present.append((trim_kind(kind), 0))
+    return present
 
 
 @dataclass(frozen=True)

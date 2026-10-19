@@ -115,6 +115,19 @@ def test_kinds_present_counts_below_the_root_only_and_before_the_nested_rule():
     assert kinds_present(tree(), KINDS, 8) == []  # a leaf has nothing below it
 
 
+def test_the_configured_kind_is_listed_even_with_none_under_the_root():
+    assert kinds_present(tree(), KINDS, 3, " Panel ") == [("Rack", 2), ("Panel", 0)]
+    assert kinds_present(tree(), KINDS, 3, "RACK") == [("Rack", 2)]  # already there, by key: unchanged
+    assert kinds_present(tree(), KINDS, 3, "   ") == [("Rack", 2)] and kinds_present(tree(), KINDS, 3, None) == [("Rack", 2)]
+    assert kinds_present(tree(), KINDS, 8, "Chiller") == [("Chiller", 0)]
+    assert kinds_present(tree(), KINDS, 99, "Rack") == [("Rack", 0)]  # a root not in the tree
+
+
+def test_equal_counts_are_ordered_by_name_without_regard_to_case():
+    nodes = [AssetNode(1, None, "S", 0), AssetNode(2, 1, "a", 0), AssetNode(3, 1, "b", 0)]
+    assert kinds_present(AssetTree(nodes), {1: "x", 2: "banana", 3: "Apple"}, 1) == [("Apple", 1), ("banana", 1)]
+
+
 def test_a_tie_between_spellings_goes_to_the_alphabetically_first():
     assert common_spelling(["rack", "Rack", "rack", "Rack"]) == "Rack"
     assert common_spelling(["rack", "Rack", "Rack"]) == "Rack"
