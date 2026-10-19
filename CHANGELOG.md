@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w22 (2026-10-19, MERGE_PENDING)
+## w22 (2026-10-19, dbc5425)
 
 w22 adds a sixth dashboard widget, **Text**: a heading, a paragraph or a divider you write on the dashboard, with no data. Edit, Add widget,
 Type: Text, then Style and Text. The viewer draws a heading as a heading, a paragraph as a card and a divider as a plain line; in edit mode
