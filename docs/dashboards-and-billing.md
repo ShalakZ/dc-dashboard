@@ -137,6 +137,77 @@ Dashboards are shared by everyone.
     drawn with their sum, how many have no data and how many are inside others.
   - **API.** The config keys are `bars: "kind"`, `kind` (1 to 100 characters), `root` (an asset id; null is the whole site) and `top`;
     `assets` must be empty. The answer gains a `breakdown` block (null when unused). A rule broken is a 422 that starts with the field.
+- **A focus asset.** A dashboard can be pointed at one asset, a hall, a row or a rack, and the widgets that follow it then show that
+  asset (see **Widgets that follow the focus**). Until someone chooses a focus a dashboard shows what it always showed.
+  - **Choosing.** The **Focus** button in the dashboard's header, beside the range, opens the dialog **Choose a focus**: the asset
+    picker (**Focus asset**, with the search box and the kind filter described above), a **Whole site** button that goes back to no
+    focus, and **Show** and **Cancel**. What you pick is only a draft until you press **Show**; **Cancel** and Escape change nothing. The
+    button is there only for a role that may see the Assets Tree, and only in view mode. In edit mode the page keeps the focus and says
+    "Widgets that follow the focus show Hall 1." under the trail, so the previews follow it.
+  - **The address.** The focus is held in the address as `?asset=<id>`. A link with it opens the dashboard on that asset, so a focus can
+    be shared. Each change of focus is a new step in the browser's history, so Back walks back through the assets you looked at, and the
+    range you picked for the visit stays. The sidebar, the first page after signing in and the Dashboards list open a dashboard without
+    it: the whole site.
+  - **The trail.** With a focus the trail above the dashboard goes on through the asset's parents: Dashboards / Power / Hall 1 /
+    Row 2 / Rack 05. A click on the dashboard's name shows the whole site (it clears the focus), a click on a parent moves the focus up to
+    it, and the last crumb is the focus itself. When the site has exactly one top-level asset, the trail does not repeat it.
+  - **Open page.** With a focus, the link **Open Hall 1 page** beside the Focus button opens that asset's page in the Assets Tree.
+  - **A link that cannot be followed.** A role that may not see the Assets Tree ignores `?asset`, shows the whole site and says "This
+    link opens the dashboard on one asset. Your role cannot open assets, so it shows the whole site."; the line names nothing. A link to
+    an asset that was deleted, never existed or is not a number shows the whole site too, with "The asset in this link no longer exists,
+    so the dashboard shows the whole site." (the same line for all three, so it does not tell them apart), and the address is cleaned so
+    Back does not return to it.
+- **Widgets that follow the focus.** In the widget form the choice **Show** says what a widget draws: **Assets chosen here** (what every
+  widget did until now), **The focus asset** or **The children of the focus asset**. A widget that follows the focus has no asset picker:
+  the focus chooses its assets.
+  - **Where it applies.** **The focus asset** works for every data type, a stat and a gauge included. **The children of the focus
+    asset** works for a time series, a bar chart of one figure per asset or per time bucket, and a table: one line or bar for each child, in
+    the tree's order, at most 20. A breakdown by kind has no such choice; its **Look under** gains a button **The focus asset** beside
+    **Whole site**, and the live line reads "Under: The focus asset". A comparison always shows one asset, so it takes only the focus
+    asset.
+  - **Children.** With more than 20 children the card shows the first 20 and its footer says "20 of 34 children of Hall 1 shown". An
+    asset with no children gets a sentence in place of the figures ("Seeded pilot hall / Hall 1 / Rack 05 has no children."), and so
+    does a breakdown whose kind is not found under the focus ("No Panels under Hall 1. Choose another kind in Split by.").
+  - **Cards that keep their own assets.** While a focus is set, every data card that does not follow it says so at the end of its
+    footer line: "Its own assets, not Hall 1". A text widget says nothing. Those cards do not move when the focus changes and ask
+    the server for nothing.
+  - **Changing the focus.** A card that follows it keeps its old figures, dimmed and marked busy for a screen reader, until the new
+    ones land, so figures of one asset are never shown plain under the name of another. A focus you looked at a moment ago is drawn at
+    once from what the page remembers, and the card reads it again in the background. **Details** and **CSV** of such a card are for the
+    asset it shows, and Details closes when the focus changes. A card with only a sentence to show has no Details button.
+  - **No focus, and the sites with several top-level assets.** With no focus the dashboard shows the whole site. A site with exactly one
+    top-level asset treats that asset as the focus when none is chosen (a link to it is shown without the `?asset`). With several, a card
+    that shows one asset says "This site has 3 top-level assets: choose a focus to see this figure." (to a role that cannot choose
+    one: "This site has 3 top-level assets, so this figure needs a focus asset, and your role cannot choose one."), a children card
+    lists the top-level assets, and a breakdown by kind looks at the whole site. A month or a comparison added up over several
+    top-level assets is not built yet. A demo seed sits beside your own assets as one more top-level asset, so on such a stack the
+    Power starter asks for a focus until you choose one.
+  - **API.** A widget's config has the key `scope` (`"fixed"` by default, `"focus"` or `"children"`); a stored config leaves it out
+    while it is `fixed`, so every widget saved earlier is stored and fingerprinted as before. A following widget must have `assets`
+    empty (422 "assets: leave the assets empty; the focus chooses them"). `POST /api/widget-data` and `/csv` take the optional `focus`
+    (an asset id) and the answer gains a `focus` block (null for a widget that does not follow): the asset with its path, a `state` of
+    `ok`, `gone` or `choose`, the children shown and counted, and the number of top-level assets. A request that carries `focus`
+    needs See the Assets Tree as well as See dashboards, or it is refused with a 403. A deleted and a never-existing id get the same
+    answer.
+- **Drill-through.** In view mode a click on a bar of a breakdown by kind, or on its name under the chart, narrows the whole
+  dashboard to that asset when it has children, and opens its page when it is a leaf; the tooltip says which ("Click to narrow the
+  dashboard to Rack 05", "Click to open Feed A's page"). The keyboard way is in **Details**: each bar's row has a **Narrow** button
+  (**Narrow to Rack 05** for a screen reader) when the asset has children; it narrows the dashboard, closes the panel and puts you back
+  on that card's Details button, and an asset without children keeps its name link. There is nothing of this in edit mode or in a
+  preview, and none for a role that may not see the Assets Tree.
+- **The Power starter.** **New dashboard**, then **Start from** Power, makes a dashboard with its widgets already on it; **Blank** is
+  the empty dashboard it was before, and opens in the editor as before. Choosing Power sets the range to **This month**, an empty name
+  becomes "Power" (a second one needs another name: the dialog shows the server's "a dashboard with this name already exists"), and the
+  dashboard opens in view mode, not in the editor. On the Dashboards page with no dashboards yet, a role that may build them also
+  sees **Start blank** and **Start from Power**; a viewer sees today's text only. The server makes the dashboard and its widgets in
+  one step and writes one `dashboard.created` audit row, which adds `"recipe": "power"` and the real widget count.
+  - **The five widgets.** A heading, "Power use and cost"; the stats "Energy this month" and "Cost this month", each against the same
+    days of last month (**Comparing with last month**); "Energy by <kind>", a breakdown of energy by the kind that has meters; and the
+    daily chart "Energy by day, against last month". All but the heading follow the focus, so the whole dashboard answers for the site,
+    a hall or a rack depending on the focus (choose it with **Focus**, a click on a bar or a link). Edit it like any other dashboard.
+  - **Which kind.** Panel as soon as any Panel has a meter of its own; else the kind with the most assets that have one (a tie goes to
+    the name that comes first); a site with nothing metered gets Panel. A meter here is a kWh counter or, failing that, power in kW,
+    so the starter is the same whether the panels report kWh or kW. A site with no assets still gets the dashboard.
 - **Look.** Widgets follow the theme like the rest of the app: Light, Dark or Match my device, and each Theme colour, in the profile
   panel. A card in dark mode is a dark card, and the chart text, grid lines, legend and tooltip are drawn in the same colours, so an
   open chart repaints in the new look as soon as you switch, without a reload. A **gauge** is a half-circle arc filled from its minimum
@@ -223,6 +294,9 @@ dashboard, or the Quick find entry. With no default set, the entry opens the lis
 
 Deleting the default dashboard clears the choice (the audit row says so); choosing, switching and clearing it are audited as
 `dashboard.default_changed`. An open page learns of a change within a minute or when you return to its window.
+
+**Make default** works on a Power dashboard ([The Power starter](#dashboards)) like on any other, and the default always opens on the
+whole site, with no focus (the sidebar and the first page after signing in open it without `?asset`).
 
 ## Billing
 
