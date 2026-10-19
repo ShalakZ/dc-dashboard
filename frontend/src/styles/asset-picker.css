@@ -1,0 +1,57 @@
+@layer w6 {
+  /* W23: the asset picker (components/dashboard/AssetPicker.tsx), the widget editor's asset field. Tokens only; every rule is scoped under
+     .asset-picker (never a bare class) and names only classes this piece owns. The three old rules (.asset-picker, .picker-list, .picker-row)
+     moved here from app.css. */
+
+  /* The fieldset sits in a dialog, whose own fieldset rule (app.css) caps it at 480px and ties this selector; this file is imported later in
+     the same layer, so it wins. min-width: 0 lets the long labels inside wrap instead of stretching the dialog. */
+  fieldset.asset-picker { max-width: none; min-width: 0; }
+
+  /* The search box takes the free width; the kind select keeps its own size but never takes more than half the row. */
+  .asset-picker .picker-tools { display: flex; gap: 8px; min-width: 0; }
+  .asset-picker .picker-search { flex: 1 1 auto; min-width: 0; }
+  .asset-picker .picker-kind { flex: none; min-width: 0; max-width: 50%; }
+
+  /* The one live line (count and refusals). It reserves a line even when it is empty, so a message coming or going never moves the list. */
+  .asset-picker .picker-live { margin: 0; min-height: 1lh; font-size: var(--fs-xs); }
+
+  /* The picks. The box has a fixed height (two rows of chips and the gap between them) and scrolls beyond that, so picking more never pushes
+     the list down; a chip is one rectangular line that cuts a long label with an ellipsis (the full label is its title). */
+  .asset-picker .picker-chip-box { height: 60px; min-width: 0; overflow-y: auto; }
+  .asset-picker .picker-chips { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px; margin: 0; padding: 0; list-style: none; }
+  .asset-picker .picker-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; min-width: 0; height: var(--ctl-h-xs); padding: 0 2px 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--fs-sm); }
+  .asset-picker .picker-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .asset-picker .picker-none { display: block; line-height: var(--ctl-h-xs); }
+
+  /* The three small icon buttons (remove a chip, fold a branch, pick everything under a row) share one look: no box, the quiet ink, a tint on
+     hover and focus. They are squares, so a row keeps its height whether or not it has the button. */
+  .asset-picker .picker-chip-x, .asset-picker .picker-fold, .asset-picker .picker-all { display: grid; place-items: center; flex: none; padding: 0; min-height: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
+  .asset-picker .picker-chip-x:hover, .asset-picker .picker-chip-x:focus-visible,
+  .asset-picker .picker-fold:hover:not(:disabled), .asset-picker .picker-fold:focus-visible:not(:disabled),
+  .asset-picker .picker-all:hover:not([aria-disabled="true"]), .asset-picker .picker-all:focus-visible:not([aria-disabled="true"]) { background: var(--accent-tint); color: var(--accent); }
+  .asset-picker .picker-chip-x { width: 22px; height: 22px; }
+  .asset-picker .picker-chip-x svg { width: 14px; height: 14px; }
+  .asset-picker .picker-fold, .asset-picker .picker-fold-sp { width: 22px; height: 22px; }
+  .asset-picker .picker-all, .asset-picker .picker-all-sp { width: 24px; height: 24px; }
+  .asset-picker .picker-fold-sp, .asset-picker .picker-all-sp { flex: none; display: block; }
+
+  /* The list. A fixed height, so nothing below it moves while the search narrows it; it scrolls inside. */
+  .asset-picker .picker-list { height: clamp(160px, 30vh, 240px); margin: 0; padding: 4px; overflow: auto; list-style: none; border: 1px solid var(--border); border-radius: var(--radius); }
+
+  /* A line: the fold button (or an empty spacer of the same size), the label, the pick-all button (or its spacer). --depth indents a child. */
+  .asset-picker .picker-line { display: flex; align-items: center; gap: 4px; min-height: var(--ctl-h-xs); padding-left: calc(var(--depth, 0) * 16px); }
+  .asset-picker .picker-fold svg { transition: transform var(--motion); }
+  .asset-picker .picker-fold[aria-expanded="false"] svg { transform: rotate(-90deg); }
+  .asset-picker .picker-fold:disabled { opacity: 1; cursor: default; }
+  .asset-picker .picker-row { display: flex; gap: 6px; align-items: center; flex: 1 1 auto; min-width: 0; font-weight: 400; overflow-wrap: anywhere; }
+  .asset-picker .picker-row > input { flex: none; }
+  .asset-picker .picker-context { flex: 1 1 auto; min-width: 0; color: var(--text-2); overflow-wrap: anywhere; }
+  .asset-picker .picker-all[aria-disabled="true"] { color: var(--text-disabled); cursor: default; }
+
+  /* The empty message, the "show more" row and the foot (the count and Clear all). */
+  .asset-picker .picker-empty { padding: 6px 8px; }
+  .asset-picker .picker-more { display: flex; align-items: center; gap: 8px; padding: 6px 4px; }
+  .asset-picker .picker-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .asset-picker .picker-foot p { margin: 0; }
+  .asset-picker .picker-clear[aria-disabled="true"], .asset-picker .picker-clear[aria-disabled="true"]:hover { background: none; color: var(--text-disabled); cursor: default; }
+}

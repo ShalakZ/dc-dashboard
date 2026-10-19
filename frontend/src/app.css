@@ -677,9 +677,6 @@
   .editor-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
   .editor-cols > div { display: grid; gap: 8px; align-content: start; }
   .editor-cols h3 { margin: 0; font-size: 14px; }
-  .asset-picker { max-width: none; }
-  .picker-list { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; }
-  .picker-row { display: flex; gap: 6px; align-items: center; }
   .issues { margin: 0; padding-left: 18px; }
   @media (max-width: 700px) {
     .editor-cols { grid-template-columns: minmax(0, 1fr); }

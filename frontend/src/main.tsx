@@ -31,6 +31,7 @@ import "./styles/graph-keys.css";
 import "./styles/graph-source-card.css";
 import "./styles/graph-value-tip.css";
 import "./styles/month-check.css";
+import "./styles/asset-picker.css";
 import { App } from "./App";
 import { AppearanceProvider } from "./auth/AppearanceProvider";
 import { AuthProvider } from "./auth/AuthProvider";
