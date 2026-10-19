@@ -376,6 +376,34 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   by kind, uses Pick all under a row within and over the maximum of 20 (over it nothing is picked and the live line says so), clears the
   search with Escape without closing the dialog, and walks the chips by keyboard (the focus never falls to the page). It checks that a
   stat and a gauge pick one asset, that the list does not move at 1024 x 640 and 800 x 600, and the chips in the dark look.
+- `w24.spec.ts` (its own project, last in the list, after `w23`) checks the month-to-date comparison and the breakdown by kind. Its
+  first cases never depend on today's date: they create their own assets (`W24 Site` with a hall and three racks) and two dashboards
+  (`w24 <run>` with a comparing stat of energy, one of cost, a comparing daily chart and a breakdown by Rack, which they only open, and
+  `w24 <run> edit`, which the editor cases save), answer every `POST /api/widget-data` and its CSV in the page from fixtures with a
+  fixed window ("1 to 17 Oct" against "1 to 17 Sep"), and refuse any write they do not expect (the breakdown cases expect none). The
+  stats are checked word for word: the figure for days 1 to 17, the two window labels, "Same days last month", the change in words and
+  sign ("up 12.4 % (+124.00 kWh)", "down 10.0 %", "no change"), `~` on an estimated side, `*` and its missing percentage on a partial
+  cost, the rate note, the closed-month note, four notes at once ("+3 more in Details", all four in the Details table), the texts for a
+  month closed in another time zone, an asset missing from the closed figures, no readings last month and another currency, and
+  "Nothing to compare yet" on the 1st; the note line keeps its place and the card its seven rows whatever it says. The daily chart is
+  read through its text alternative (the legend is drawn on a canvas) and its hover tooltip, which names both dates of a day and leaves
+  out a day with no readings. The breakdown cases check the line "and 107 more Racks: 1234.50 kWh in all", its marks, "Split by" (it
+  keeps the focus, sends a request whose config has the chosen kind, the CSV follows it, nothing is saved, and a new visit starts from
+  the stored kind), the sentences for a kind nobody meters and for no assets at all. The editor cases tick the comparison box (Widget
+  range locks on This month and the picker turns from checkboxes to radios, unticking restores the range), choose One bar per asset of
+  a kind (Look under, One bar for each, Bars to show, Whole site), read the saved configs back with `GET /api/dashboards/<id>` (the
+  new keys are there only when they are not the default, and a comparing stat starts 3 x 3), and walk the box, the tip and Whole site by
+  keyboard (Escape closes the tip before the dialog). Placement is measured at 1440 x 900, 1024 x 640 and 800 x 600, light and dark:
+  the card's rows and the editor's new fields do not overlap or scroll, Save widget stays in the window, and a skeleton draws the rows
+  of the loaded card. The last three cases (R1 to R3) need the scratch stack: they run only when `COMPOSE_PROJECT_NAME` starts with
+  `dcdash_e2e_` (like `w11.spec.ts` and `w21.spec.ts`) and are skipped otherwise. They raise the raw retention to 90 days, seed the pilot
+  hall inside the stack, make a site-wide rate when there is none, read D and N from the widget-data answer and the expected figures from
+  Billing's day cells (`GET /api/billing/costs`, never fixed values), and check that the compare stats equal those sums in kWh and in
+  cost to the digits shown (the 1st says "Nothing to compare yet" instead), that a breakdown by Rack under Hall 1 says "and 54 more
+  Racks" and that the one under the whole pilot hall splits by Panel ("None of the 8 Panels under Seeded pilot hall has energy
+  readings."). They then close last month through the API, change the rack's rate and check, after a reload, that the card's last side
+  did not move and says "Last month is closed". Last month must be open when they start (the earlier projects leave it so); afterwards
+  they reopen it, delete the rack's and the site rate, the dashboard, the seeded subtree and its source, and put the retention back.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

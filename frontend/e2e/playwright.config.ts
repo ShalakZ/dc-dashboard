@@ -347,5 +347,20 @@ export default defineConfig({
       dependencies: ["w22"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // The month-to-date comparison and the breakdown by kind (a compare stat and daily chart, a bar chart with one bar per asset of a kind and its Split by select, and the editor's
+    // comparison box and Bars choice). Cases 1 to 6 need NOTHING from the stack's data and never depend on today's date: beforeAll makes `W24 Site` > `W24 Hall 1` > three racks and the
+    // dashboards `w24 <run>` (four compare/breakdown cards, only opened) and `w24 <run> edit` (empty; the editor cases add widgets and save it) through the API, every POST /api/widget-data (and
+    // its CSV) is answered through page.route from fixtures with a fixed window ("1 to 17 Oct" against "1 to 17 Sep"), and any write a case does not expect is refused with a 500 and fails it. Its
+    // cases set the admin's look (light navy-gold, dark desert-gold) through PUT /api/me/preferences before a page opens, and afterAll deletes both dashboards and the `W24 Site` subtree and puts the
+    // account's own look back. Each case that needs a window size sets it itself (1440 x 900, 1024 x 640, 800 x 600). CASE R (R1 to R3) needs the scratch stack: it runs only when COMPOSE_PROJECT_NAME
+    // starts with `dcdash_e2e_` (like w11 and w21), raises the raw retention to 90 days, seeds the pilot hall inside the stack (`docker compose exec ... --layout pilot-hall`), makes a site-wide rate when
+    // there is none, reads its expected numbers from Billing's day cells (GET /api/billing/costs), closes last month through the API and changes the rack's rate, and in afterAll reopens last month and
+    // deletes the rates, the dashboard, the seeded subtree and its source and puts the retention back. It expects last month open at its start (w11, w18 and w21 leave it so).
+    {
+      name: "w24",
+      testMatch: "w24.spec.ts",
+      dependencies: ["w23"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });
