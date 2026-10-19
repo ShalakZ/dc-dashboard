@@ -1,0 +1,4 @@
+@layer w6 {
+  /* w25: the dashboard header's focus controls (Focus button, Open page link, the dialog "Choose a focus", the extended trail) and the drill-through words
+     on a breakdown (components/dashboard/DashboardViewer.tsx, FocusDialog.tsx, widgets/BarWidget.tsx). Tokens only. Filled in by tasks T4 and T5. */
+}

@@ -1,0 +1,4 @@
+@layer w6 {
+  /* w25: a dashboard card that follows the focus asset (components/dashboard/WidgetView.tsx, WidgetFrame.tsx): the dimmed body while its new answer loads and
+     the quiet line "Widgets that follow the focus show ...". Tokens only; every rule is scoped by a class this piece owns. Filled in by task T3b. */
+}
