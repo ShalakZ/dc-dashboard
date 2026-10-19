@@ -144,9 +144,11 @@ of the panels-only case below: `--metering feeds|panels` (default `feeds`) and `
   total is the Electrical total. `--panel-unit kwh` (the default) gives each panel an `energy_kwh` counter, so the figures are exact;
   `--panel-unit kw` gives it an `active_power_kw` point only, so the engine estimates the energy and the panels, Electrical, the Site
   and the totals show `~`. `--panel-unit kw` without `--metering panels` is refused. The dry run names the mode and the point count.
-  Like every seed it goes on a scratch stack only; the first run only prints the plan:
+  Like every seed it goes on a scratch stack only. Without `--yes` it only prints the plan (the dry run); the two lines with `--yes`
+  and `DCDASH_ALLOW_SEED_HISTORY=1` write:
 
   ```bash
+  python -m dcdash.seed.history --layout pilot-hall --metering panels
   DCDASH_ALLOW_SEED_HISTORY=1 python -m dcdash.seed.history --layout pilot-hall --metering panels --yes
   DCDASH_ALLOW_SEED_HISTORY=1 python -m dcdash.seed.history --layout pilot-hall --metering panels --panel-unit kw --yes
   ```
