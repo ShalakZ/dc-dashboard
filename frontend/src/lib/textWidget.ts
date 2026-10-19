@@ -84,24 +84,38 @@ function graphemes(line: string): string[] {
 
 /** How many characters of the first line an automatic title keeps. */
 export const AUTO_TITLE_CUT = 40;
+/**
+ * The longest title, in UTF-16 units: the same number as MAX_TEXT of dashboardEdit.ts, which the title check there counts with `.length`.
+ * It is written again here because dashboardEdit.ts imports this file (an import back would be a cycle); textWidget.test.ts holds the two equal.
+ */
+export const AUTO_TITLE_MAX_UNITS = 100;
 const ELLIPSIS = String.fromCodePoint(0x2026);
 
 const STYLE_WORD: Record<TextStyle, string> = { heading: "Heading", paragraph: "Paragraph", divider: "Divider" };
 
-/**
- * The title a new text widget gets until the person types one: the first line of the text cut to 40 characters (+ one ellipsis when
- * cut), else the style word. The first free name among `otherTitles` (case-insensitive): "Heading", "Heading 2", "Heading 3" ...
- */
-export function autoTitle(style: TextStyle, text: string, otherTitles: readonly string[]): string {
-  let base = STYLE_WORD[style];
-  if (style !== "divider") {
-    const line = trimText(withLineFeeds(text)).split("\n")[0] ?? "";
-    const parts = graphemes(trimText(line));
-    if (parts.length > AUTO_TITLE_CUT) base = `${parts.slice(0, AUTO_TITLE_CUT).join("").trimEnd()}${ELLIPSIS}`;
-    else if (parts.length > 0) base = parts.join("");
-  }
-  const taken = new Set(otherTitles.map((title) => title.trim().toLowerCase()));
+/** The first name of `base`, "base 2", "base 3" ... that no other title has (case-insensitive). */
+function firstFreeName(base: string, taken: ReadonlySet<string>): string {
   let candidate = base;
   for (let n = 2; taken.has(candidate.toLowerCase()); n += 1) candidate = `${base} ${n}`;
   return candidate;
+}
+
+/**
+ * The title a new text widget gets until the person types one: the first line of the text cut to 40 characters (+ one ellipsis when
+ * cut), else the style word. The first free name among `otherTitles` (case-insensitive): "Heading", "Heading 2", "Heading 3" ...
+ * A TAB in the first line becomes one space. The result (its " 2" suffix included) never exceeds AUTO_TITLE_MAX_UNITS UTF-16 units:
+ * if the cut line is longer (a cluster can be many units), whole grapheme clusters are dropped from its end, never half of one.
+ */
+export function autoTitle(style: TextStyle, text: string, otherTitles: readonly string[]): string {
+  const taken = new Set(otherTitles.map((title) => title.trim().toLowerCase()));
+  if (style === "divider") return firstFreeName(STYLE_WORD.divider, taken);
+  const line = trimText(withLineFeeds(text)).split("\n")[0] ?? "";
+  const parts = graphemes(trimText(trimText(line).replace(/\t+/g, " ")));
+  if (parts.length === 0) return firstFreeName(STYLE_WORD[style], taken);
+  for (let keep = Math.min(parts.length, AUTO_TITLE_CUT); keep > 0; keep -= 1) {
+    const base = keep === parts.length ? parts.join("") : `${parts.slice(0, keep).join("").trimEnd()}${ELLIPSIS}`;
+    const title = firstFreeName(base, taken);
+    if (title.length <= AUTO_TITLE_MAX_UNITS) return title;
+  }
+  return firstFreeName(STYLE_WORD[style], taken); // the first cluster alone is too long for a title: the style word
 }

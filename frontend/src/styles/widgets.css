@@ -10,6 +10,10 @@
   @media (max-width: 700px) {
     .dash-grid { display: block; }
     .dash-cell { grid-column: auto !important; grid-row: auto !important; height: 280px; margin-bottom: 10px; } /* beats the inline grid placement */
+    /* A heading and a divider take the height of their content here, not a chart's 280px (the text card inside is the cell's only child). */
+    .dash-cell:has(> .widget-text[data-style="divider"]), .dash-cell:has(> .widget-text[data-style="heading"]) { height: auto; }
+    .dash-cell > .widget-text[data-style="divider"] { height: auto; padding: 8px 0; }
+    .dash-cell > .widget-text[data-style="heading"] { min-height: 56px; }
   }
   .dash-grid-edit { margin-top: 8px; }
   .dash-grid-edit .widget-drag-handle { cursor: grab; user-select: none; }
@@ -121,6 +125,8 @@
   .widget-text-body > .widget-text-rule { margin: auto 0; }
   /* The dialog's "N of 200 characters" line: always there for a heading and a paragraph, one line tall, so the count appearing moves nothing. */
   .widget-text-count { min-height: 1lh; margin: 0; color: var(--text-2); font-size: var(--fs-xs); }
+  /* The dialog's list of what is wrong: its slot is always there and one line tall, so a message appearing or going while the person types moves Cancel and Save widget by nothing. */
+  .widget-issues { min-height: 1lh; }
 
   /* ===== The editor grid's library chrome (Task 6). react-grid-layout and react-resizable ship unlayered sheets that load with the lazy editor chunk, after this file, and an
      unlayered rule beats a layered one: so every declaration here is !important (an important declaration in a layer beats the library's normal ones whatever the load order;

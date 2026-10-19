@@ -175,7 +175,7 @@ describe("styles/widgets.css", () => {
       "widget-table", "num", "cell-age",
       "gauge", "gauge-arc", "gauge-svg", "gauge-track", "gauge-fill", "gauge-scale", "gauge-figure", "gauge-name",
       "widget-chart", "widget-preview",
-      "widget-text", "widget-text-heading", "widget-text-paragraph", "widget-text-rule", "widget-text-body", "widget-text-count",
+      "widget-text", "widget-text-heading", "widget-text-paragraph", "widget-text-rule", "widget-text-body", "widget-text-count", "widget-issues",
     ]) expect(named.has(cls), `.${cls}`).toBe(true);
   });
 
@@ -475,6 +475,19 @@ describe("styles/widgets.css", () => {
       expect(bodyOf(".widget-text-count")).toMatch(/min-height:\s*1lh/);
       expect(bodyOf(".widget-text-count")).toMatch(/font-size:\s*var\(--fs-xs\)/);
       expect(bodyOf(".widget-text-count")).toMatch(/color:\s*var\(--text-2\)/);
+    });
+
+    it("the dialog's issue list has a slot that is always there and one line tall, so a message appearing moves nothing (review W2)", () => {
+      expect(bodyOf(".widget-issues")).toMatch(/min-height:\s*1lh/);
+    });
+
+    it("in a narrow window a heading and a divider take their content's height, not a chart's 280px (review W4)", () => {
+      const narrow = (r: Rule) => r.at.some((a) => a.startsWith("@media") && a.includes("max-width: 700px"));
+      expect(bodyOf(".dash-cell", narrow)).toMatch(/height:\s*280px/);
+      const cells = bodyOf('.dash-cell:has(> .widget-text[data-style="divider"]), .dash-cell:has(> .widget-text[data-style="heading"])', narrow);
+      expect(cells).toMatch(/height:\s*auto/);
+      expect(bodyOf('.dash-cell > .widget-text[data-style="divider"]', narrow)).toMatch(/height:\s*auto/);
+      expect(bodyOf('.dash-cell > .widget-text[data-style="heading"]', narrow)).toMatch(/min-height:\s*56px/);
     });
 
     it("the card chrome of a heading or a paragraph is the .widget-frame's own (no second set of card tokens)", () => {

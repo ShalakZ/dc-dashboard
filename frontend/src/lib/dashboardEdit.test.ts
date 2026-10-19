@@ -134,6 +134,30 @@ describe("formIssues (the API's rules, before the API is asked)", () => {
   it("accepts energy_kwh with the latest value", () => {
     expect(formIssues(valid({ type: "table", metric: "energy_kwh", aggregation: "last" }))).toEqual({});
   });
+
+  describe("the characters of a title (the server's rule, review W1)", () => {
+    const REFUSED = { title: "The title cannot contain control characters." };
+    const withChar = (char: string) => valid({ title: `Hall${char}A` });
+
+    it("accepts a TAB inside the title, and a valid emoji pair", () => {
+      expect(formIssues(withChar(String.fromCharCode(9)))).toEqual({});
+      expect(formIssues(withChar(String.fromCodePoint(0x1f600)))).toEqual({});
+      expect(formIssues(withChar(String.fromCodePoint(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467)))).toEqual({});
+    });
+
+    it("refuses NUL, BEL, a line feed, DEL, a C1 control and a lone surrogate, with one sentence", () => {
+      for (const code of [0x00, 0x07, 0x0a, 0x7f, 0x85, 0x9f]) expect(formIssues(withChar(String.fromCharCode(code))), `U+${code.toString(16)}`).toEqual(REFUSED);
+      expect(formIssues(withChar(String.fromCharCode(0xd83d))), "a high surrogate alone").toEqual(REFUSED);
+      expect(formIssues(withChar(String.fromCharCode(0xde00))), "a low surrogate alone").toEqual(REFUSED);
+    });
+
+    it("keeps the empty and the length messages first, and checks a text widget's title the same way", () => {
+      expect(formIssues(valid({ title: "" }))).toEqual({ title: "Enter a title." });
+      expect(formIssues(valid({ title: `${String.fromCharCode(7)}${"x".repeat(100)}` }))).toEqual({ title: "The title can be at most 100 characters." });
+      expect(formIssues({ ...blankForm(), type: "text", title: `Hall${String.fromCharCode(9)}A`, style: "heading", text: "Hall A" })).toEqual({});
+      expect(formIssues({ ...blankForm(), type: "text", title: `Hall${String.fromCharCode(7)}A`, style: "heading", text: "Hall A" })).toEqual(REFUSED);
+    });
+  });
 });
 
 describe("formToFields", () => {

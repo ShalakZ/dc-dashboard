@@ -145,12 +145,16 @@ export interface FormIssues { title?: string; text?: string; assets?: string; ag
 
 const toNumber = (text: string): number => (text.trim() === "" ? NaN : Number(text));
 
+/** What the server refuses in a title (api/dashboards.py): a control character other than TAB, or a lone surrogate (with the u flag only an UNPAIRED one matches, so an emoji is fine). */
+const TITLE_BAD_CHARACTER = /(?!\t)\p{Cc}|\p{Cs}/u;
+
 /** Every rule the API enforces on a widget, as a message per field. An empty object means the form can be saved. */
 export function formIssues(form: WidgetForm): FormIssues {
   const issues: FormIssues = {};
   const title = form.title.trim();
   if (title === "") issues.title = "Enter a title.";
   else if (title.length > MAX_TEXT) issues.title = `The title can be at most ${MAX_TEXT} characters.`;
+  else if (TITLE_BAD_CHARACTER.test(title)) issues.title = "The title cannot contain control characters."; // the server's rule: a TAB is fine
 
   if (form.type === "text") {
     // The text rules are the server's (lib/textWidget). A divider holds no text, so none is checked even if the form still has some; the
