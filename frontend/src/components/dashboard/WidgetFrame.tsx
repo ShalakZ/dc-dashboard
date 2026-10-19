@@ -5,7 +5,8 @@ import { noMetricText, removedText, type SkeletonShape } from "../../lib/widgetF
 import { Icon } from "../Icon";
 import { WidgetSkeleton } from "../Skeleton";
 
-export interface CsvSource { type: DataWidgetType; config: WidgetConfig; range: RangePreset }
+/** `focus` is present only for a card that follows the dashboard's focus asset (w25): the export repeats that request, so it must name the same asset. */
+export interface CsvSource { type: DataWidgetType; config: WidgetConfig; range: RangePreset; focus?: number }
 
 interface Props {
   title: string;
@@ -19,6 +20,10 @@ interface Props {
   hint?: string;
   /** The window an energy or cost widget really covers on a rolling range, e.g. "since 10:00". */
   since?: string;
+  /** A last quiet sentence in the footer line after `since` and `hint` (w25: "Its own assets, not Hall 1", "20 of 34 children of Hall 1 shown"). */
+  note?: string;
+  /** The body still shows the answer for another focus asset while the new one loads (w25): dimmed, and announced as busy, until the real answer lands. */
+  stale?: boolean;
   /** Present = show the CSV button; this is the query the export repeats. */
   csv?: CsvSource;
   /** Present = show the Details button, which calls this with the button itself (the drawer gives focus back to it). It waits (aria-disabled) while the data loads. */
@@ -58,7 +63,7 @@ export function useCsvExport(csv: CsvSource | undefined): { busy: boolean; error
     setBusy(true);
     setError(null);
     try {
-      await downloadCsv("/api/widget-data/csv", { method: "POST", body: { type: csv.type, config: csv.config, range: csv.range } });
+      await downloadCsv("/api/widget-data/csv", { method: "POST", body: csv.focus === undefined ? { type: csv.type, config: csv.config, range: csv.range } : { type: csv.type, config: csv.config, range: csv.range, focus: csv.focus } });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -69,7 +74,7 @@ export function useCsvExport(csv: CsvSource | undefined): { busy: boolean; error
 }
 
 /** The box around every widget: title, Details and CSV buttons, the warning chips, the footer line, and the loading and error states. */
-export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint = "", since = "", csv, details, type, shape, footSpace = false, actions, dragHandle = false, children }: Props) {
+export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint = "", since = "", note = "", stale = false, csv, details, type, shape, footSpace = false, actions, dragHandle = false, children }: Props) {
   const { busy, error: csvError, run: exportCsv } = useCsvExport(csv);
   return (
     <section className="widget-frame" aria-label={title}>
@@ -108,15 +113,17 @@ export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint
         </>
       ) : (
         <>
-          <div className="widget-body">
+          <div className={stale ? "widget-body follow-stale" : "widget-body"} aria-busy={stale ? true : undefined}>
             {error && <p className="widget-error" role="alert"><Icon name="alert" />{error.message}</p>}
             {children}
           </div>
-          {(since || hint) && (
-            <p className="widget-foot">
+          {(since || hint || note) && (
+            <p className={stale ? "widget-foot follow-stale" : "widget-foot"}>
               {since && <small className="widget-since" title={since}>{since}</small>}
               {since && hint && <span className="widget-dot"> · </span>}
               {hint && <small className="widget-hint" title={hint}>{hint}</small>}
+              {note && (since || hint) && <span className="follow-dot"> · </span>}
+              {note && <small className="follow-note" title={note}>{note}</small>}
             </p>
           )}
         </>

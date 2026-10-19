@@ -1,4 +1,4 @@
-import type { Asset } from "../api/types";
+import type { Asset, WidgetConfig } from "../api/types";
 
 /** What the dashboard's `?asset=` parameter says: nothing, an asset id, or something that cannot be one. */
 export type FocusParam = { kind: "none" } | { kind: "id"; id: number } | { kind: "invalid" };
@@ -35,3 +35,34 @@ export function topLevel(assets: Asset[]): Asset[] {
     .filter((asset) => asset.parent_id === null || !ids.has(asset.parent_id))
     .sort((x, y) => x.sort_order - y.sort_order || (x.name < y.name ? -1 : x.name > y.name ? 1 : 0) || x.id - y.id);
 }
+
+/** Does this widget draw the dashboard's focus asset (or its children) instead of assets of its own? Only such a widget sends the focus to the server. */
+export function isFollowing(config: Pick<WidgetConfig, "scope">): boolean {
+  return config.scope === "focus" || config.scope === "children";
+}
+
+/** What a following card says when the site has no assets to look at (a site with nothing in it). */
+export const NO_ASSETS_TEXT = "This site has no assets yet.";
+
+/**
+ * What a card says instead of a figure when the server answers `state: "choose"` (R5): the site has other than one top-level asset and the dashboard has
+ * no focus. `count` is the answer's `top_level`; `allowed` is whether the viewer can choose a focus (it needs the Assets Tree).
+ */
+export function chooseText(count: number | null, allowed: boolean): string {
+  if (count === 0) return NO_ASSETS_TEXT;
+  if (count === null) return "Choose a focus to see this figure.";
+  const assets = `${count} top-level ${count === 1 ? "asset" : "assets"}`;
+  return allowed
+    ? `This site has ${assets}: choose a focus to see this figure.`
+    : `This site has ${assets}, so this figure needs a focus asset, and your role cannot choose one.`;
+}
+
+/** The sentence of a "children" card whose focus asset has no children; `path` is the answer's `focus.asset.path`. */
+export const leafText = (path: string): string => `${path} has no children.`;
+
+/** The footer note of a "children" card that shows only the first of many (R6); with no focus asset it is the site's top-level assets. */
+export const childrenNote = (shown: number, count: number, assetName: string | null): string =>
+  assetName === null ? `${shown} of ${count} top-level assets shown` : `${shown} of ${count} children of ${assetName} shown`;
+
+/** The footer note of a card that keeps its own assets while the dashboard has a focus (R11). */
+export const ownAssetsNote = (focusName: string): string => `Its own assets, not ${focusName}`;

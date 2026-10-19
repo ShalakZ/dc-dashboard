@@ -1,4 +1,12 @@
 @layer w6 {
-  /* w25: a dashboard card that follows the focus asset (components/dashboard/WidgetView.tsx, WidgetFrame.tsx): the dimmed body while its new answer loads and
-     the quiet line "Widgets that follow the focus show ...". Tokens only; every rule is scoped by a class this piece owns. Filled in by task T3b. */
+  /* w25: a dashboard card that follows the focus asset (components/dashboard/WidgetView.tsx, WidgetFrame.tsx). Tokens only; every rule is scoped by a class this
+     file owns, because widgets.css owns .widget-body and .widget-foot. The quiet line "Widgets that follow the focus show ..." joins this file in task T4. */
+
+  /* While the answer for a new focus loads, the card keeps its last figures (never undimmed under a new trail) and shows them dimmed: its body and its footer line.
+     No transition: nothing waits for an end event, so reduced motion needs no second rule. aria-busy="true" on the body says the same to a screen reader. */
+  .follow-stale { opacity: 0.55; }
+
+  /* The footer's last sentence ("Its own assets, not Hall 1", "20 of 34 children of Hall 1 shown") and the dot before it. The dot is not .widget-dot: the narrow card
+     hides that one whenever a marker hint is present (widgets.css), and the sentence must stay apart from the hint. The sentence shrinks with an ellipsis like the others. */
+  .follow-dot { flex: none; }
 }

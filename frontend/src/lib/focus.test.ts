@@ -1,5 +1,5 @@
 import type { Asset } from "../api/types";
-import { FOCUS_DENIED_NOTICE, FOCUS_GONE_NOTICE, parseFocusParam, topLevel, withFocus } from "./focus";
+import { childrenNote, chooseText, FOCUS_DENIED_NOTICE, FOCUS_GONE_NOTICE, isFollowing, leafText, NO_ASSETS_TEXT, ownAssetsNote, parseFocusParam, topLevel, withFocus } from "./focus";
 
 const a = (id: number, parent_id: number | null, name: string, sort_order = 0): Asset => ({
   id, parent_id, name, kind: "generic", sort_order,
@@ -73,5 +73,48 @@ describe("the two sentences", () => {
   it("are the rulings' words", () => {
     expect(FOCUS_GONE_NOTICE).toBe("The asset in this link no longer exists, so the dashboard shows the whole site.");
     expect(FOCUS_DENIED_NOTICE).toBe("This link opens the dashboard on one asset. Your role cannot open assets, so it shows the whole site.");
+  });
+});
+
+describe("isFollowing", () => {
+  it("is true for the focus and the children of the focus, false for fixed and for a config from before w25", () => {
+    expect(isFollowing({ scope: "focus" })).toBe(true);
+    expect(isFollowing({ scope: "children" })).toBe(true);
+    expect(isFollowing({ scope: "fixed" })).toBe(false);
+    expect(isFollowing({})).toBe(false);
+  });
+});
+
+describe("what a following card says (R5, R6, R11)", () => {
+  it("asks for a focus when the site has several top-level assets, in the ruling's words", () => {
+    expect(chooseText(3, true)).toBe("This site has 3 top-level assets: choose a focus to see this figure.");
+  });
+
+  it("says the role cannot choose when it lacks the Assets Tree", () => {
+    expect(chooseText(3, false)).toBe("This site has 3 top-level assets, so this figure needs a focus asset, and your role cannot choose one.");
+  });
+
+  it("says the site is empty for no top-level asset, whoever asks", () => {
+    expect(chooseText(0, true)).toBe("This site has no assets yet.");
+    expect(chooseText(0, false)).toBe("This site has no assets yet.");
+    expect(NO_ASSETS_TEXT).toBe("This site has no assets yet.");
+  });
+
+  it("does not make up a count the answer did not carry, and does not say '1 top-level assets'", () => {
+    expect(chooseText(null, true)).toBe("Choose a focus to see this figure.");
+    expect(chooseText(1, true)).toBe("This site has 1 top-level asset: choose a focus to see this figure.");
+  });
+
+  it("says a leaf has no children, by its path", () => {
+    expect(leafText("Site / Hall 1 / Row 2")).toBe("Site / Hall 1 / Row 2 has no children.");
+  });
+
+  it("counts the children shown of the children there are", () => {
+    expect(childrenNote(20, 34, "Hall 1")).toBe("20 of 34 children of Hall 1 shown");
+    expect(childrenNote(20, 34, null)).toBe("20 of 34 top-level assets shown");
+  });
+
+  it("says a fixed card keeps its own assets", () => {
+    expect(ownAssetsNote("Hall 1")).toBe("Its own assets, not Hall 1");
   });
 });
