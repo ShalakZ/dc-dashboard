@@ -8,6 +8,7 @@
 export const H = 3_600_000;
 export const M = 60_000;
 
+// data widget types only: a text widget makes no widget-data request
 export type WidgetType = "stat" | "gauge" | "table" | "timeseries" | "bar";
 export type Source = "metric" | "energy" | "cost";
 export type Aggregation = "avg" | "min" | "max" | "last" | "sum";
