@@ -27,7 +27,9 @@ Dashboards are shared by everyone.
   the ends are trimmed) and unique: a name already in use is refused with a 409. A widget title is at most 100 characters.
 - **Widgets.** Six types: time series, bar, stat, gauge, table and text. Text is the one type with no data (see **Text widget** below);
   the other five show a metric, energy or cost for up to 20 assets (a stat or a gauge shows one). A metric widget offers only assets
-  that have a mapping for that metric. Custom metrics are not available in widgets; they stay on the asset page.
+  that have a mapping for that metric. Custom metrics are not available in widgets; they stay on the asset page. A stat or a time series
+  of energy or cost can set this month against last month (**Comparing with last month**), and a bar chart of energy or cost can draw one
+  bar for each asset of a kind (**Breakdown by kind**), both below.
 - **Finding assets.** The asset picker of the widget form (**Assets**, or **Asset** for a stat and a gauge) has a **Search assets** box:
   type part of a name or a kind (capitals do not matter) and the list narrows to the matches, with the halls, rows and racks above them;
   the name of a hall or a rack also lists what is inside it, and a line says how many match. Escape clears the text, a second Escape closes
@@ -57,6 +59,84 @@ Dashboards are shared by everyone.
     widget title with a control character other than a tab is refused with a 422. The 24-widget cap and the dashboard list's widget count include text
     widgets.
   - **Audit.** The dashboard-save audit row holds only the widget count and a short digest of the widgets, never the words.
+- **Comparing with last month.** A stat or a time series of Energy or Cost for exactly one asset can set this month so far against the
+  same days of last month. In the widget form tick **Compare with the same days of last month**: the box is offered only for those two
+  types and those two sources; ticking it keeps the first asset picked (the picker then takes one asset and a second pick replaces it),
+  sets **Widget range** to **This month** and locks it there
+  ("A comparison always looks at this month so far, against the same days of last month."), and unticking gives the range back. The widget
+  keeps its own range, so changing the dashboard's range does not move it. A stat that compares starts 3 columns wide and 3 high, and a
+  stat that gains the comparison grows to that size.
+  - **Which days.** Days are the site's local days. "This month so far" means the complete days only, the 1st up to yesterday: today is
+    left out because it is not finished and would change all day. With N complete days the comparison uses D, the smaller of N and the
+    length of last month, on both sides: days 1 to D of this month against days 1 to D of last month. Days this month has and last month
+    did not are left out and the card says so ("29 and 30 March have no matching day in February."). A day of 23 or 25 hours at a clock
+    change counts as one day on its side. On the 1st no day is complete yet: the card says "Nothing to compare yet" and shows no figure.
+  - **Every figure names its window.** The card shows "1 to 17 Oct" under the headline and, under "Same days last month", "1 to 17 Sep". A
+    plain **This month** widget includes today so far and shows a larger number; the two are not meant to match.
+  - **One calculation.** Each day is worked out the way Billing works it out (each local day on its own, with the rate of that day) and the
+    days are added up, so a figure on the card is the sum of Billing's day cells for days 1 to D (see [Billing](#billing)). kWh and cost
+    are two measures: shown separately, never mixed or converted. A stat shows its own source (kWh for Energy, cost for Cost); Details
+    shows both; two stats side by side give both on the dashboard.
+  - **Marks.** `~` (estimated), `*` (a cost with an hour that has no rate; a kWh figure never carries it) and the dash (no readings, or no
+    rate; never a zero) travel with the figure to the card, the chart's line names and tooltip, Details and the CSV.
+  - **The change** is said in words and sign, never by colour alone: "up 12.4 % (+340.00 kWh)", "down 3.1 % (-120.00 kWh)", "no change".
+    The card shows no percentage, and says why on its note line, when last month used nothing ("No percentage: last month used
+    nothing."; for cost "... last month's cost was zero."), when a day has no readings on either side ("No percentage: last month has no
+    readings on 3 of the 17 days."), or, for a cost, when some of it has no rate ("No percentage: some of the cost has no rate."). It shows
+    no change at all, neither amount nor percentage, when a side has no figure ("No readings last month.", "No readings this month."; for
+    cost also "No cost comparison: no rate applies to these days."). An estimated (`~`) side keeps its percentage and its mark.
+  - **Rate note.** When a rate that reaches the asset (its own, an ancestor's or the site default, as far as the meters under it) takes
+    effect after the first day of last month's window and no later than the last day of this month's, the cost says "A rate changed on 5
+    Oct, so the cost change is not only usage." The note only tells you the cost change is not all usage; it does not take the change out.
+  - **A closed last month** is read from its closed figures, the ones Billing shows (see [Closing a month](#closing-a-month)), never
+    worked out again, so the card and Billing cannot disagree after a rate or an asset changed; the card says "Last month is closed:
+    these are its closed figures." An asset that is not in the closed figures (created or moved in after the close) gets "Not in last
+    month's closed figures." and no comparison; a month closed in another site time zone gets "Last month was closed in another time zone,
+    so it cannot be compared day by day." and none; one closed in another currency compares kWh but not cost ("No cost comparison: the
+    currency changed since last month closed."). A reopened month is read live again, as Billing does, and closing or reopening a month
+    refreshes the comparing widgets. **The gap that stays:** a plain **Last month** widget still shows live figures even when that month
+    is closed, so after a change that follows a close it and Billing can disagree; only the comparison reads the closed figures.
+  - **The stat.** The headline, the asset name, the window, **Same days last month** with its figure and window, the change, and one note
+    line: the most important note, with "(+2 more in Details)" when several apply (the whole text is its tooltip). **Details** has a
+    **Comparison** table (This month so far, Same days last month and Change, in Energy and in Cost, the windows by date) and every note
+    in full, prefixed "Energy:" or "Cost:" when only one measure says it.
+  - **The chart.** A time series that compares draws two lines on a day-of-the-month axis, named by their months ("October",
+    "September", with their marks): this month's complete days and last month's days 1 to D, last month's dashed. The buckets are always
+    days, even early in the month. The tooltip names both dates of the day with each figure and its marks; a day with no readings is a gap,
+    never a zero.
+  - **CSV.** Same columns as any widget. A comparing stat has one row for this window and one for last month's same days, dated at their
+    first day; a comparing time series has this month's day rows and last month's day rows. `estimated`, `partial` and `no_data` are
+    filled as usual.
+  - **API.** `POST /api/widget-data` and `/api/widget-data/csv` take the optional config key `compare` (`"none"` or
+    `"same_days_last_month"`) and the answer gains a `compare` block (null when unused). A comparison on another type, on the Metric source,
+    on other than one asset, or whose range is not This month is a 422 whose text starts with the field ("range: a comparison needs the
+    range this month"). The stored config leaves a key out while it holds its default, so every widget saved earlier is stored and
+    fingerprinted exactly as before.
+- **Breakdown by kind.** A bar chart of Energy or Cost can draw one bar for each asset of a kind, for example a bar per Rack or per Panel.
+  In the form set **Bars** to **One bar per asset of a kind** (not offered on the Metric source). The **Assets** picker is replaced by
+  three fields: **Look under** (pick one asset, or press **Whole site**; the bars are the assets of the kind anywhere below it, the asset
+  itself not counted), **One bar for each** (the kind; the asset kinds are suggested, capitals and extra blanks do not matter) and **Bars to
+  show** (3 to 50, 10 by default). If the asset it looks under is deleted later, the form says so and shows Whole site.
+  - **The rule: one measured level at a time.** Choose the level that carries the meters, for example Panels or Racks. Each bar is that
+    asset's own reading. If two levels both have meters (racks and the panels that feed them), a total over both counts the same energy
+    twice. The (i) beside **One bar for each** says the same. Telling the engine which meter is the measured one (meter roles) is not
+    built. The pilot-hall demo data has its meters on the feeds by default, so a breakdown by Rack, Row or Hall draws figures and one by
+    Panel shows no data; `--metering panels` is the other way round (see [Developing](developing.md#the-pilot-hall-a-demo-tree-with-racks)).
+  - **How the bars are made.** The server adds up each asset's figure for the widget's range with the same calculation every other bar
+    widget uses, highest first. The card draws the top bars and one line under the chart: "and 107 more Racks: 1234.50 kWh in all", the
+    sum of the others with its `~` and `*` marks and, when some of them have no figure, "(N with no data)". There is never an "Other" bar.
+  - **No data is not zero.** An asset of the kind with no figure is a dash on the axis, never a zero bar, and comes after the ones with
+    figures. When none has a figure the card says so ("None of the 8 Panels under Seeded pilot hall has energy readings.").
+  - **Inside another.** An asset of the kind inside another asset of the same kind (a rack in a rack) is not a bar of its own: the outer
+    one already holds its energy. The card says how many ("3 Racks are inside other Racks and are counted there.").
+  - **Split by.** Under the chart, **Split by** lists the kinds present under the asset it looks under, with their counts ("Rack (117)").
+    Choosing one redraws the chart for that kind for this visit only, like the dashboard range: it is not saved and not in the address.
+    In the editor and its Preview the choice is shown but cannot be used.
+  - **CSV and Details.** The CSV lists every asset the breakdown counts, in the same order, not only the bars drawn (an asset inside
+    another of its kind has no row of its own: the outer one holds it); the columns are the same. **Details** has a **Breakdown** list: the kind, where it looks, how many assets of the kind, how many bars are drawn, the ones not
+    drawn with their sum, how many have no data and how many are inside others.
+  - **API.** The config keys are `bars: "kind"`, `kind` (1 to 100 characters), `root` (an asset id; null is the whole site) and `top`;
+    `assets` must be empty. The answer gains a `breakdown` block (null when unused). A rule broken is a 422 that starts with the field.
 - **Look.** Widgets follow the theme like the rest of the app: Light, Dark or Match my device, and each Theme colour, in the profile
   panel. A card in dark mode is a dark card, and the chart text, grid lines, legend and tooltip are drawn in the same colours, so an
   open chart repaints in the new look as soon as you switch, without a reload. A **gauge** is a half-circle arc filled from its minimum
@@ -534,6 +614,11 @@ Billing.
 - The currency is one per site, there are no time-of-use tariffs, and custom metrics cannot be used in widgets.
 - A text widget is plain text: a heading holds 200 characters on one line, a paragraph 2,000 (Unicode code points), and a dashboard
   holds 24 widgets of any type, text included.
+- A comparison is month to date only. It does not include today so far, draw the whole of last month as a faint line or give per-day
+  averages; a stat compares one measure (two stats give kWh and cost); it compares one asset; and a plain **Last month** widget still
+  reads live figures for a closed month (see **Comparing with last month**).
+- A breakdown by kind assumes one measured level (meter roles do not exist yet), and a click on a bar goes nowhere yet (no
+  drill-through). The focus asset and the starter dashboard come later.
 - A widget's Details panel says only what the widget's own answer proves. It does not show the source point's address, how many
   readings a figure rests on or alarm limits, nor the width of a time series bucket, nor an average over buckets.
 - Closing a month has limits of its own (one snapshot per close, what a restore does to closed months, a close that lands during an

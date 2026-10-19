@@ -24,7 +24,9 @@ lacks says "No access".
 - **Dashboards** (everyone can read; operators and admins build): needs `dashboards.view`; building needs `dashboards.edit`.
   Shared dashboards of widgets that follow the theme (light, dark and each theme colour; a text widget is a heading, a paragraph or a
   divider you write, with no data); the widget editor's asset picker has a search box, a kind filter and a pick-all button (see
-  [Finding assets](dashboards-and-billing.md#dashboards)); the information button on a card opens
+  [Finding assets](dashboards-and-billing.md#dashboards)); a stat or a time series of energy or cost can compare this month so far with
+  the same days of last month, and a bar chart can draw one bar for each asset of a kind, with a **Split by** choice on the card (see
+  [Comparing with last month and Breakdown by kind](dashboards-and-billing.md#dashboards)); the information button on a card opens
   **Details**, a panel with what the card shows, its time window and freshness, what its markers mean and its figures as text (where a
   figure says "no rate", a person who may open Tariffs gets a link to it there).
   An admin (`dashboards.default`) can mark one as the default, and the sidebar entry and the
