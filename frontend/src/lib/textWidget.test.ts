@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { TextStyle } from "../api/types";
 import {
-  AUTO_TITLE_CUT, TEXT_LIMITS, TEXT_STYLE_LABELS, TRIM_SET, autoTitle, codePointCount, normalizeText, trimText, type TextReason,
+  AUTO_TITLE_CUT, TEXT_LIMITS, TEXT_STYLE_LABELS, TRIM_SET, autoTitle, codePointCount, normalizeText, textLength, trimText, type TextReason,
 } from "./textWidget";
 
 // The same file backend/tests/test_widget_config.py reads. The server and the editor must give every case the same answer. The file is pure
@@ -85,6 +85,17 @@ describe("normalizeText", () => {
     expect(normalizeText("paragraph", "  one\r\ntwo  ")).toEqual({ ok: true, text: "one\ntwo", count: 7 });
     expect(normalizeText("heading", EMOJI.repeat(200))).toMatchObject({ ok: true, count: 200 });
     expect(normalizeText("divider", "  \n ")).toEqual({ ok: true, text: "", count: 0 });
+  });
+});
+
+describe("textLength", () => {
+  it("is the count of the normalized text, also for a text the rules refuse", () => {
+    expect(textLength("  one\r\ntwo  ")).toBe(7); // CRLF is one line feed, the ends are trimmed
+    expect(textLength(EMOJI.repeat(3))).toBe(3);
+    expect(textLength("a".repeat(2500))).toBe(2500); // too long: the counter still says by how much
+    expect(textLength("a\u0000b")).toBe(3); // a control character: refused, still counted
+    expect(textLength(" \n ")).toBe(0);
+    for (const sample of file.cases.filter((c) => c.ok)) expect(textLength(textOf(sample)), sample.name).toBe(sample.count);
   });
 });
 

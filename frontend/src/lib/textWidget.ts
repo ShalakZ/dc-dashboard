@@ -43,6 +43,9 @@ const PARAGRAPH_SEPARATOR = String.fromCodePoint(0x2029);
 const withLineFeeds = (raw: string): string =>
   raw.replace(/\r\n|\r/g, "\n").replaceAll(LINE_SEPARATOR, "\n").replaceAll(PARAGRAPH_SEPARATOR, "\n");
 
+/** The code points the stored text will have (line feeds unified, both ends trimmed): the number the editor's counter shows, also for a text the rules refuse. */
+export const textLength = (raw: string): number => codePointCount(trimText(withLineFeeds(raw)));
+
 /** Every control character except LF and TAB (CR is gone by the time this runs). */
 function hasControl(s: string): boolean {
   for (const ch of s) {

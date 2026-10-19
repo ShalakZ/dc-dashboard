@@ -1,5 +1,5 @@
 @layer w6 {
-  /* w13 dashboard widgets: the card, its states, the five widget types, the editor preview and the editor grid's library chrome. Tokens only (app.css :root, dark values in
+  /* w13 dashboard widgets: the card, its states, the six widget types, the editor preview and the editor grid's library chrome. Tokens only (app.css :root, dark values in
      themes.css): no raw colour, no island, nothing here knows which look is on. Sections are named for the task whose markup they style. The narrow-card rules are the two
      @container blocks at the end (a width threshold belongs in CSS), measured against the card itself: 200px and 280px. Shared names (.big, .num, .muted, .kv, .chip) are
      never written bare here, and the Details panel's wd-* classes are widgets-details.css (app.css.test.ts: one page file cannot restyle another). */
@@ -100,6 +100,27 @@
   /* ===== Editor (Task 6): the dialog's live preview is a real card in a box of the widget's real height; stat and gauge are capped so they read at a realistic size ===== */
   .widget-preview { height: var(--widget-preview-h); } /* a stretched block (a grid item), never fit-content or inline: the card inside is a size container */
   .widget-preview[data-type="stat"], .widget-preview[data-type="gauge"] { max-width: 360px; }
+
+  /* ===== Text widget (w22): a heading, a paragraph or a divider. No data, no skeleton, no footer, no colour of its own: only the card's tokens. ===== */
+  /* View mode has no title bar. A heading and a paragraph are cards (the .widget-frame chrome); a divider is a bare rule across the whole of its cell. */
+  .widget-text { min-width: 0; }
+  .widget-text[data-style="heading"] { padding: var(--widget-pad); overflow-y: auto; } /* a heading too long for its cell scrolls; it is never cut off */
+  .widget-text[data-style="divider"] { display: flex; align-items: center; height: 100%; }
+  /* Two classes (0,2,0): .dialog h2 (0,1,1) would otherwise restyle the heading in the editor's preview. The auto margins centre the line in the card (and, unlike
+     justify-content, let a heading that overflows scroll from its top). */
+  .widget-frame .widget-text-heading { margin: auto 0; color: var(--text); font-size: var(--fs-lg); font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+  .widget-text-paragraph { margin: 0; color: var(--text); font-size: var(--fs-base); line-height: 1.4; overflow-wrap: anywhere; white-space: pre-wrap; }
+  /* The paragraph's text scrolls inside the card when it does not fit (a scroller can be reached from the keyboard, so no tabindex): a long text is never clipped silently. */
+  .widget-text[data-style="paragraph"] > .widget-text-paragraph { flex: 1; min-height: 0; padding: var(--widget-pad); overflow-y: auto; }
+  .widget-text-rule { height: 0; min-width: 0; margin: 0; border: 0; border-top: 1px solid var(--border); }
+  .widget-text[data-style="divider"] > .widget-text-rule { flex: 1; }
+  /* Edit mode: the data cards' header over the same text. The body keeps its side padding but has none above and below: a one-row card is 42px under the 36px header,
+     room for one heading line or two paragraph lines. */
+  .widget-body:has(> .widget-text-body) { padding-top: 0; padding-bottom: 0; }
+  .widget-text-body { display: flex; flex-direction: column; min-height: 100%; }
+  .widget-text-body > .widget-text-rule { margin: auto 0; }
+  /* The dialog's "N of 200 characters" line: always there for a heading and a paragraph, one line tall, so the count appearing moves nothing. */
+  .widget-text-count { min-height: 1lh; margin: 0; color: var(--text-2); font-size: var(--fs-xs); }
 
   /* ===== The editor grid's library chrome (Task 6). react-grid-layout and react-resizable ship unlayered sheets that load with the lazy editor chunk, after this file, and an
      unlayered rule beats a layered one: so every declaration here is !important (an important declaration in a layer beats the library's normal ones whatever the load order;

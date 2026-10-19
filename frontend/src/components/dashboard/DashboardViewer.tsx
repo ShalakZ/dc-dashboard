@@ -3,7 +3,7 @@ import type { Dashboard, RangePreset } from "../../api/types";
 import { RANGE_LABELS, RANGE_PRESETS } from "../../lib/ranges";
 import { LiveValuesContext } from "./LiveValuesContext";
 import { StaticGrid } from "./StaticGrid";
-import { WidgetView } from "./WidgetView";
+import { WidgetCard } from "./WidgetCard";
 
 /** The read-only dashboard: name, range select (this visit only), live indicator, optional Edit button, and the widgets. */
 export function DashboardViewer({ dashboard, timezone, onEdit }: { dashboard: Dashboard; timezone: string; onEdit?: () => void }) {
@@ -32,8 +32,7 @@ export function DashboardViewer({ dashboard, timezone, onEdit }: { dashboard: Da
       ) : (
         <StaticGrid
           items={items}
-          // T3b: WidgetCard (a text widget draws nothing until then)
-          render={(w) => (w.type === "text" ? null : <WidgetView widgetKey={w.key} type={w.type} title={w.title} config={w.config} dashboardRange={range} timezone={timezone} />)}
+          render={(w) => <WidgetCard widget={w} widgetKey={w.key} dashboardRange={range} timezone={timezone} />}
         />
       )}
     </>

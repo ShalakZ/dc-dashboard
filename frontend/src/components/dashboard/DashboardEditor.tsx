@@ -11,7 +11,7 @@ import { Icon } from "../Icon";
 import { TrashButton } from "../TrashButton";
 import { DashboardGrid } from "./DashboardGrid";
 import { WidgetEditor, type EditorFields } from "./WidgetEditor";
-import { WidgetView } from "./WidgetView";
+import { WidgetCard } from "./WidgetCard";
 
 interface Props {
   /** The dashboard as loaded when editing started; its `updated_at` is what Save sends. Later changes to this prop are ignored. */
@@ -104,10 +104,9 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
     setRemoved(null);
   };
 
-  // T3b: WidgetCard (a text widget draws nothing until then)
-  const renderWidget = (d: DraftWidget) => d.type === "text" ? null : (
-    <WidgetView
-      widgetKey={d.key} type={d.type} title={d.title} config={d.config} dashboardRange={range} timezone={timezone}
+  const renderWidget = (d: DraftWidget) => (
+    <WidgetCard
+      widget={d} widgetKey={d.key} dashboardRange={range} timezone={timezone}
       csv={false} details={false} live={false} dragHandle
       actions={
         // The grid does not start a drag from this span (`cancel: ".widget-actions"` in DashboardGrid).
@@ -164,6 +163,7 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
       {dialog && assets.data && metricAssets && (
         <WidgetEditor
           initial={dialog.draft} assets={assets.data} metricAssets={metricAssets} dashboardRange={range} timezone={timezone}
+          otherTitles={drafts.filter((d) => d.key !== dialog.draft?.key).map((d) => d.title)}
           onSave={accept} onClose={() => setDialog(null)}
         />
       )}
