@@ -263,7 +263,7 @@ def test_no_previous_when_the_last_figure_is_missing_or_has_no_readings_or_is_no
     assert change(this, side(0.0, 0.0, no_data_days=DAYS), "kwh", days=DAYS) == Change(abs=None, percent=None, why_none="no_previous")
     for state in ("no_readings", "not_in_closed", "other_zone"):
         result = change(this, side(), "kwh", days=DAYS, last_state=state)
-        assert (result.percent, result.why_none) == (None, "no_previous")
+        assert (result.abs, result.percent, result.why_none) == (None, None, "no_previous")  # no difference against an unusable side
 
 
 def test_no_current_when_this_month_has_no_figure_or_no_readings():
@@ -477,3 +477,12 @@ def test_an_asset_whose_meters_are_its_children_changes_when_any_one_of_them_doe
 
 def test_an_asset_with_no_meter_has_no_rate_change():
     assert rate_change(rows(TariffRow(None, 0.12, date(2026, 10, 5))), TREE, [], after=AFTER, up_to=UP_TO) is None
+
+
+def test_a_feed_rate_counts_for_a_panel_only_while_the_panel_meter_has_not_started():
+    """Before its first reading the panel is what its feed adds up to, priced at the feed's own rate (partial_owns)."""
+    feed_rate = rows(TariffRow(FEED, 0.20, date(2026, 10, 5)))
+    started = contributing_meters(TREE, OWN, PANEL)
+    partial = contributing_meters(TREE, OWN, PANEL, frozenset({PANEL}))
+    assert rate_change(feed_rate, TREE, started, after=AFTER, up_to=UP_TO) is None
+    assert rate_change(feed_rate, TREE, partial, after=AFTER, up_to=UP_TO) == date(2026, 10, 5)

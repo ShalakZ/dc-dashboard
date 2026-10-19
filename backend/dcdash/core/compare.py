@@ -14,14 +14,13 @@ from datetime import date, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
+from dcdash.core.billing_close import COST_PLACES, KWH_PLACES  # the precisions a figure is shown (and compared) at
 from dcdash.core.cost import TariffRow, rate_at
 from dcdash.core.daycost import month_total
 from dcdash.core.timeutil import local_days, month_bounds
 from dcdash.core.tree import AssetTree
 
 Measure = Literal["kwh", "cost"]
-KWH_PLACES = 3  # the precisions a figure is shown at (core/billing_close.py, KWH_PLACES / COST_PLACES)
-COST_PLACES = 2
 
 DayWindow = list[tuple[date, datetime, datetime]]  # what timeutil.local_days returns
 
@@ -128,8 +127,9 @@ def snapshot_entries(
 @dataclass(frozen=True)
 class Change:
     """this - last (`abs`) and its percentage of last, both unrounded (the front end formats); `why_none` says why the
-    percentage is withheld. The percentage is None whenever `why_none` is set; `abs` is given whenever both numbers exist
-    (and, for a cost, share a currency), even when the percentage is withheld."""
+    percentage is withheld. The percentage is None whenever `why_none` is set; `abs` is given whenever both numbers exist,
+    even when the percentage is withheld for missing days, a partial cost or a zero previous figure, but not against a
+    side that was not measured (`currency`, `no_cost`, `no_previous`, `no_current`)."""
 
     abs: float | None
     percent: float | None
@@ -157,6 +157,7 @@ def _why_none(
     if cost and (this.partial or last.partial):
         return "partial"
     previous = _value(last, measure)
+    # (a None here cannot happen: no_cost caught a missing cost above and a kWh figure always exists on an existing Side)
     if previous is None or round(previous, COST_PLACES if cost else KWH_PLACES) == 0:
         return "previous_zero"
     return None
