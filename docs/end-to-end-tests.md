@@ -416,14 +416,17 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   exists, ..." and drop `?asset` from the address. A role made through the API with only `dashboards.view` has no Focus button and no
   Open page link, ignores `?asset` with the line "This link opens the dashboard on one asset. ...", never asks for the asset list, and
   gets a 403 from `POST /api/widget-data` only when the body carries a `focus`. With a second top-level asset (made in the case and
-  removed in it) a card that follows the focus says "This site has N top-level assets: choose a focus to see this figure." (N read from the API) through the
+  removed in it; where the stack already holds one other root, the case first removes `W25 Site`) a card that follows the focus says "This site has N top-level assets: choose a focus to see this figure." (N read from the API) through the
   real server, a children card lists the two roots and a breakdown looks at the whole site; with one top-level asset the sole root is
-  the focus without being chosen. **New dashboard** with **Start from** Power makes the five widgets and opens in view mode, an empty name
+  the focus without being chosen (that case runs only when the stack has at most one root besides `W25 Site` and is skipped on a stack with
+  several leftover roots, as the suite's own stack has). **New dashboard** with **Start from** Power makes the five widgets and opens in view mode, an empty name
   becomes "Power", a second one shows the name-taken line in the dialog, and the compare stats and the breakdown carry the focus when it
   is opened with `?asset=`. The drill-through cases answer the breakdown's `POST /api/widget-data` from a fixture whose bars are real ids
   and click the chart's canvas (the bar is found by its pixels): a bar of an asset with children narrows the focus (the address and the
   trail change), a leaf's bar and an axis name open `/assets/<id>`, and by keyboard Details, Tab to **Narrow to <name>** and Enter
-  narrows, closes the panel and leaves the focus on that card's Details button; edit mode has none of it. The editor case checks the
+  narrows, closes the panel and leaves the focus on that card's Details button; a bar with no figure answers only its axis name and its
+  tooltip says so; on a dashboard where no widget follows the focus a click opens the asset's page and Details has no Narrow buttons; edit
+  mode has none of it. The Power case is skipped when a dashboard called "Power" already exists. The editor case checks the
   quiet line "Widgets that follow the focus show ...", saves a stat set to **The focus asset** and a breakdown whose **Look under** is
   **The focus asset**, reads them back with `GET /api/dashboards/<id>` (`scope: "focus"`, empty assets, no `root`), reopens them with the
   radio checked, and finds a stored fixed widget byte for byte the same after an unrelated save. The last case measures the header's
