@@ -71,7 +71,7 @@ describe("WidgetEditor", () => {
   it("makes a stat single-select, and lists only the assets that have the metric", async () => {
     open();
     await userEvent.selectOptions(screen.getByLabelText("Type"), "stat");
-    expect(screen.getAllByRole("radio")).toHaveLength(2); // the default metric is active power: only assets 5 and 6 are mapped to it
+    expect(within(screen.getByRole("group", { name: "Asset" })).getAllByRole("radio")).toHaveLength(2); // the default metric is active power: only assets 5 and 6 are mapped to it (the scope has radios of its own)
     await userEvent.click(screen.getByRole("radio", { name: "LV Panel 1" }));
     await userEvent.click(screen.getByRole("radio", { name: "LV Panel 2" }));
     expect(screen.getByRole("radio", { name: "LV Panel 1" })).not.toBeChecked();
@@ -605,7 +605,7 @@ describe("a text widget", () => {
     open(draft);
     await choose("stat");
     expect(screen.getByLabelText("Source")).toHaveValue("metric");
-    expect(screen.getAllByRole("radio")).toHaveLength(2);
+    expect(within(screen.getByRole("group", { name: "Asset" })).getAllByRole("radio")).toHaveLength(2);
     expect(screen.getByText("Choose an asset.")).toBeInTheDocument();
   });
 });
@@ -1005,5 +1005,325 @@ describe("one bar per asset of a kind", () => {
     expect(screen.getAllByLabelText(/type/i)).toHaveLength(1);
     expect(screen.getAllByLabelText(/title/i)).toHaveLength(1);
     expect(screen.getAllByLabelText(/metric|aggregation|widget range/i)).toHaveLength(2); // Aggregation and Widget range; the metric field is hidden for energy
+  });
+});
+
+// w25: what the widget follows. A radio group "Show" near the asset field (chosen here, the focus asset, the children of the focus asset); a widget that
+// follows draws no picker; a breakdown by kind keeps Look under and gains a second quiet button, "The focus asset", beside "Whole site".
+describe("what the widget follows (w25)", () => {
+  // user-event's arrow keys on a radio read window.CSS.escape, which jsdom 26 does not have: stub it here only.
+  beforeEach(() => {
+    vi.stubGlobal("CSS", { escape: (s: string) => String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => "\\" + c) });
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const HERE = "Assets chosen here";
+  const FOCUS = "The focus asset";
+  const CHILDREN = "The children of the focus asset";
+  const scopeGroup = () => screen.getByRole("group", { name: "Show" });
+  const scopeRadio = (name: string) => within(scopeGroup()).getByRole("radio", { name });
+  const scopeNames = () => within(scopeGroup()).getAllByRole("radio").map((r) => r.parentElement?.textContent);
+  const checkedScope = () => within(scopeGroup()).getAllByRole("radio").filter((r) => (r as HTMLInputElement).checked).map((r) => r.parentElement?.textContent);
+  const pickerGroup = () => screen.queryByRole("group", { name: "Assets" });
+  const draftOf = (type: "stat" | "timeseries" | "table" | "bar" | "gauge", over: Partial<ReturnType<typeof config>>, title = "Followed") =>
+    toDrafts([widget(1, type, { title, config: config({ assets: [], ...over }) })])[0];
+
+  it("offers chosen here first and checked, then the focus asset, then the children of the focus asset", () => {
+    open();
+    expect(scopeNames()).toEqual([HERE, FOCUS, CHILDREN]);
+    expect(checkedScope()).toEqual([HERE]);
+    expect(pickerGroup()).toBeInTheDocument();
+  });
+
+  it("offers the children only to a widget that can draw many assets, and not with the comparison", async () => {
+    open();
+    for (const [type, names] of [
+      ["stat", [HERE, FOCUS]], ["gauge", [HERE, FOCUS]], ["table", [HERE, FOCUS, CHILDREN]], ["bar", [HERE, FOCUS, CHILDREN]], ["timeseries", [HERE, FOCUS, CHILDREN]],
+    ] as const) {
+      await choose("Type", type);
+      expect(scopeNames(), type).toEqual(names);
+    }
+    await choose("Source", "energy"); // a time series on energy: the comparison box appears
+    expect(screen.getAllByRole("button", { name: "What does this mean?" }), "the group adds no tip of its own: the comparison has the only one").toHaveLength(1);
+    await userEvent.click(screen.getByRole("checkbox", { name: COMPARE }));
+    expect(scopeNames()).toEqual([HERE, FOCUS]);
+    await userEvent.click(screen.getByRole("checkbox", { name: COMPARE }));
+    expect(scopeNames()).toEqual([HERE, FOCUS, CHILDREN]);
+  });
+
+  it("draws no group for a text widget, and finds the scope again when the type comes back", async () => {
+    open();
+    await userEvent.click(screen.getByRole("radio", { name: CHILDREN }));
+    await choose("Type", "text");
+    expect(screen.queryByRole("group", { name: "Show" })).not.toBeInTheDocument();
+    await choose("Type", "table");
+    expect(checkedScope()).toEqual([CHILDREN]);
+  });
+
+  it("takes the picker out of the page for the focus asset, says what it shows, and saves without assets", async () => {
+    const { calls, onSave } = open();
+    await userEvent.type(screen.getByLabelText("Title"), "Hall power");
+    expect(save()).toBeDisabled();
+    await userEvent.click(screen.getByRole("radio", { name: FOCUS }));
+    expect(checkedScope()).toEqual([FOCUS]);
+    expect(pickerGroup()).not.toBeInTheDocument(); // out of the DOM, not hidden
+    expect(screen.queryByLabelText("Search assets")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.getByText(/^Shows the asset chosen as the dashboard's focus\./)).toBeInTheDocument();
+    expect(screen.queryByText("Choose at least one asset.")).not.toBeInTheDocument();
+    expect(save()).toBeEnabled();
+    const body = { type: "timeseries", range: "24h", config: { ...power, assets: [], scope: "focus" } };
+    await waitFor(() => expect(previews(calls).map((c) => c.body)).toContainEqual(body));
+    await userEvent.click(save());
+    expect(onSave).toHaveBeenCalledWith({ type: "timeseries", title: "Hall power", config: { ...power, assets: [], scope: "focus" } });
+  });
+
+  it("says in plain words what the children are, per type, and what happens with no focus", async () => {
+    open();
+    await userEvent.click(screen.getByRole("radio", { name: CHILDREN }));
+    expect(screen.getByText(/^Shows the children of the focus asset, one line each\./)).toHaveTextContent("With no focus it shows the top-level assets.");
+    await choose("Type", "table");
+    expect(screen.getByText(/one row each/)).toBeInTheDocument();
+    await choose("Type", "bar");
+    expect(screen.getByText(/one bar each/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: FOCUS }));
+    expect(screen.getByText(/^Shows the asset chosen as the dashboard's focus\./)).toHaveTextContent("With no focus it shows the site's only top-level asset, or asks for a focus when there are several.");
+  });
+
+  it("saves the children of the focus for a table, with no assets", async () => {
+    const { onSave } = open();
+    await choose("Type", "table");
+    await userEvent.type(screen.getByLabelText("Title"), "Per child");
+    await userEvent.click(screen.getByRole("radio", { name: CHILDREN }));
+    await userEvent.click(save());
+    expect(saved(onSave)).toEqual({
+      type: "table", title: "Per child",
+      config: { assets: [], source: "metric", metric: "active_power_kw", aggregation: "avg", range: null, bars: "asset", min: 0, max: null, scope: "children" },
+    });
+  });
+
+  it("keeps the picked assets while the widget follows, and shows them again when chosen here comes back", async () => {
+    const { onSave } = open();
+    await userEvent.type(screen.getByLabelText("Title"), "T");
+    await userEvent.click(screen.getByRole("checkbox", { name: "LV Panel 1" }));
+    await userEvent.click(screen.getByRole("radio", { name: FOCUS }));
+    await userEvent.click(save());
+    expect(saved(onSave).config).toMatchObject({ assets: [], scope: "focus" });
+    await userEvent.click(screen.getByRole("radio", { name: HERE }));
+    expect(screen.getByRole("checkbox", { name: "LV Panel 1" })).toBeChecked();
+    await userEvent.click(save());
+    expect(saved(onSave).config).toMatchObject({ assets: [5] });
+    expect(saved(onSave).config).not.toHaveProperty("scope");
+  });
+
+  it("leaves the scope key out of every widget that is not changed to follow", async () => {
+    const { onSave } = open();
+    await userEvent.type(screen.getByLabelText("Title"), "T");
+    await userEvent.click(screen.getByRole("checkbox", { name: "LV Panel 1" }));
+    await userEvent.click(save());
+    expect(saved(onSave).config).not.toHaveProperty("scope");
+    expect(saved(onSave).config).toEqual(power);
+  });
+
+  it("turns the children into the focus asset when the type becomes a stat, and when the comparison is ticked", async () => {
+    open();
+    await userEvent.click(screen.getByRole("radio", { name: CHILDREN }));
+    await choose("Type", "stat");
+    expect(checkedScope()).toEqual([FOCUS]);
+    expect(within(scopeGroup()).queryByRole("radio", { name: CHILDREN })).not.toBeInTheDocument();
+    await choose("Type", "timeseries");
+    await choose("Source", "cost");
+    await userEvent.click(screen.getByRole("radio", { name: CHILDREN }));
+    await userEvent.click(screen.getByRole("checkbox", { name: COMPARE }));
+    expect(checkedScope()).toEqual([FOCUS]);
+  });
+
+  it("shows no group in the breakdown by kind (Look under is its control) and turns the children into the focus asset on the way in", async () => {
+    openW24();
+    await choose("Type", "bar");
+    await choose("Source", "energy");
+    await userEvent.click(screen.getByRole("radio", { name: CHILDREN }));
+    await choose("Bars", "kind");
+    expect(screen.queryByRole("group", { name: "Show" })).not.toBeInTheDocument();
+    expect(screen.getByText("Under: The focus asset")).toBeInTheDocument();
+    await choose("Bars", "time");
+    expect(checkedScope()).toEqual([FOCUS]);
+  });
+
+  it("opens a saved Power-style widget (the focus asset, no assets, a comparison) and saves it unchanged", async () => {
+    const draft = draftOf("stat", { source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month", scope: "focus" }, "Energy this month");
+    const { onSave } = open(draft);
+    expect(checkedScope()).toEqual([FOCUS]);
+    expect(pickerGroup()).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Widget range")).toBeDisabled();
+    expect(screen.queryByText(/Choose an asset|exactly one asset/)).not.toBeInTheDocument();
+    expect(save()).toBeEnabled();
+    await userEvent.click(save());
+    expect(onSave).toHaveBeenCalledWith({ type: "stat", title: "Energy this month", config: draft.config });
+  });
+
+  it("opens a saved widget that follows the children, and saves it unchanged", async () => {
+    const draft = draftOf("timeseries", { scope: "children" });
+    const { onSave } = open(draft);
+    expect(checkedScope()).toEqual([CHILDREN]);
+    await userEvent.click(save());
+    expect(onSave).toHaveBeenCalledWith({ type: "timeseries", title: "Followed", config: draft.config });
+  });
+
+  it("keeps a comparison's range rule for a widget that follows", async () => {
+    const draft = draftOf("stat", { source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month", scope: "focus" });
+    open(draft);
+    await userEvent.click(screen.getByRole("checkbox", { name: COMPARE })); // untick: the range comes back as it was
+    expect(screen.getByLabelText("Widget range")).toBeEnabled();
+    await userEvent.selectOptions(screen.getByLabelText("Widget range"), "7d");
+    await userEvent.click(screen.getByRole("checkbox", { name: COMPARE })); // tick again: this month
+    expect(screen.getByLabelText("Widget range")).toHaveValue("this_month");
+    expect(save()).toBeEnabled();
+  });
+
+  it("moves with the arrow keys from the keyboard, and keeps the focus on the radio", async () => {
+    open();
+    scopeRadio(HERE).focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(checkedScope()).toEqual([FOCUS]);
+    expect(scopeRadio(FOCUS)).toHaveFocus();
+    expect(pickerGroup()).not.toBeInTheDocument();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(checkedScope()).toEqual([CHILDREN]);
+    expect(scopeRadio(CHILDREN)).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}{ArrowUp}");
+    expect(checkedScope()).toEqual([HERE]);
+    expect(scopeRadio(HERE)).toHaveFocus();
+    expect(pickerGroup()).toBeInTheDocument();
+  });
+
+  it("is one Tab stop between the fields before it and the picker after it", async () => {
+    open();
+    screen.getByLabelText("Widget range").focus();
+    await userEvent.tab();
+    expect(scopeRadio(HERE)).toHaveFocus(); // the checked one is the stop; the others are reached by the arrows
+    await userEvent.tab();
+    expect(screen.getByLabelText("Search assets")).toHaveFocus();
+  });
+
+  it("has no name that a lookup by substring would find twice", () => {
+    open();
+    expect(screen.getAllByRole("group", { name: /show/i })).toHaveLength(1);
+    expect(screen.getAllByRole("radio", { name: /chosen here/i })).toHaveLength(1);
+    expect(screen.getAllByLabelText(/type/i)).toHaveLength(1);
+    expect(screen.getAllByLabelText(/title/i)).toHaveLength(1);
+    expect(screen.getAllByLabelText(/source/i)).toHaveLength(1);
+    expect(screen.queryAllByLabelText(/look under|one bar for each|bars to show/i)).toHaveLength(0); // none of the kind fields is here
+    expect(screen.getAllByRole("group", { name: "Assets" })).toHaveLength(1); // exactly one picker
+    expect(scopeRadio(HERE).closest("label"), "label.inline is the comparison box's alone (an e2e lookup finds it by that)").not.toHaveClass("inline");
+  });
+
+  it("ties the sentence of a scope that follows to the group, and has none for the chosen assets", async () => {
+    open();
+    expect(scopeGroup()).not.toHaveAttribute("aria-describedby");
+    await userEvent.click(screen.getByRole("radio", { name: FOCUS }));
+    expect(scopeGroup()).toHaveAccessibleDescription(/^Shows the asset chosen as the dashboard's focus\./);
+  });
+
+  describe("a breakdown by kind", () => {
+    const lookUnder = () => screen.getByRole("group", { name: "Look under" });
+    const whole = () => screen.getByRole("button", { name: "Whole site" });
+    const focusButton = () => screen.getByRole("button", { name: FOCUS });
+    async function kindMode(initial: DraftWidget | null = null) {
+      const opened = openW24(initial);
+      if (!initial) {
+        await choose("Type", "bar");
+        await choose("Source", "energy");
+        await choose("Bars", "kind");
+        await userEvent.type(screen.getByLabelText("Title"), "Racks");
+        await userEvent.type(screen.getByLabelText("One bar for each"), "Rack");
+      }
+      return opened;
+    }
+
+    it("gains a quiet button The focus asset beside Whole site, with the same aria-disabled pattern", async () => {
+      await kindMode();
+      expect(focusButton()).toHaveAttribute("type", "button");
+      expect(focusButton()).toHaveClass("quiet", "whole-site"); // the editor's one aria-disabled look
+      expect(focusButton()).toBeEnabled();
+      expect(focusButton()).not.toHaveAttribute("aria-disabled");
+      expect(whole()).toHaveAttribute("aria-disabled", "true");
+      expect(screen.getByText("Under: Whole site")).toBeInTheDocument();
+      expect(focusButton().parentElement).toBe(whole().parentElement); // beside it, in the same row
+    });
+
+    it("looks under the focus: the live line says so, nothing is picked, and the config has the scope and no root", async () => {
+      const { onSave, calls } = await kindMode();
+      await userEvent.click(within(lookUnder()).getByRole("radio", { name: "MV2" }));
+      expect(screen.getByText("Under: MV2")).toBeInTheDocument();
+      await userEvent.click(focusButton());
+      expect(screen.getByText("Under: The focus asset")).toBeInTheDocument();
+      expect(within(lookUnder()).getByRole("radio", { name: "MV2" })).not.toBeChecked();
+      expect(focusButton()).toHaveAttribute("aria-disabled", "true");
+      expect(whole()).not.toHaveAttribute("aria-disabled");
+      expect(focusButton()).toHaveFocus(); // never the page
+      await userEvent.click(focusButton()); // already the focus asset: nothing happens
+      expect(focusButton()).toHaveFocus();
+      await userEvent.click(save());
+      expect(saved(onSave)).toEqual({
+        type: "bar", title: "Racks",
+        config: { assets: [], source: "energy", metric: null, aggregation: "sum", range: null, bars: "kind", min: 0, max: null, kind: "Rack", scope: "focus" },
+      });
+      await waitFor(() => expect(previews(calls).map((c) => c.body)).toContainEqual({
+        type: "bar", range: "24h",
+        config: { assets: [], source: "energy", metric: null, aggregation: "sum", range: null, bars: "kind", min: 0, max: null, kind: "Rack", scope: "focus" },
+      }));
+    });
+
+    it("goes back to a place of its own when one is picked, and to the whole site with Whole site", async () => {
+      const { onSave } = await kindMode();
+      await userEvent.click(focusButton());
+      await userEvent.click(within(lookUnder()).getByRole("radio", { name: "MV2" }));
+      expect(screen.getByText("Under: MV2")).toBeInTheDocument();
+      expect(focusButton()).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(save());
+      expect(saved(onSave).config).toMatchObject({ root: 2 });
+      expect(saved(onSave).config).not.toHaveProperty("scope");
+      await userEvent.click(focusButton());
+      await userEvent.click(whole());
+      expect(screen.getByText("Under: Whole site")).toBeInTheDocument();
+      expect(whole()).toHaveAttribute("aria-disabled", "true");
+      expect(whole()).toHaveFocus();
+      await userEvent.click(save());
+      expect(saved(onSave).config).not.toHaveProperty("scope");
+      expect(saved(onSave).config).not.toHaveProperty("root");
+    });
+
+    it("opens a saved breakdown under the focus, says so, and saves it unchanged", async () => {
+      const draft = draftOf("bar", { source: "cost", metric: null, aggregation: "sum", range: "this_month", bars: "kind", kind: "Rack", top: 5, scope: "focus" }, "Racks");
+      const { onSave } = await kindMode(draft);
+      expect(screen.getByText("Under: The focus asset")).toBeInTheDocument();
+      expect(focusButton()).toHaveAttribute("aria-disabled", "true");
+      expect(whole()).not.toHaveAttribute("aria-disabled");
+      expect(within(lookUnder()).queryAllByRole("radio").filter((r) => (r as HTMLInputElement).checked)).toHaveLength(0);
+      await userEvent.click(save());
+      expect(saved(onSave)).toEqual({ type: "bar", title: "Racks", config: draft.config });
+    });
+
+    it("says the removed place only while the widget looks at the whole site, not under the focus", async () => {
+      const draft = toDrafts([widget(1, "bar", {
+        title: "Racks", config: config({ assets: [], source: "energy", metric: null, aggregation: "sum", bars: "kind", kind: "Rack", root: 99 }),
+      })])[0];
+      await kindMode(draft);
+      const note = screen.getByText(/looked under was removed/);
+      expect(note).toBeVisible();
+      await userEvent.click(focusButton());
+      expect(note).not.toBeVisible();
+      await userEvent.click(whole());
+      expect(note).toBeVisible();
+    });
+
+    it("has no name that a lookup by substring would find twice", async () => {
+      await kindMode();
+      expect(screen.getAllByRole("button", { name: /whole site/i })).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: /focus asset/i })).toHaveLength(1);
+      expect(screen.getAllByRole("group", { name: /look under/i })).toHaveLength(1);
+      expect(screen.getAllByLabelText("Search assets")).toHaveLength(1);
+    });
   });
 });

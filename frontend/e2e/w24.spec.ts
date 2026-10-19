@@ -1207,14 +1207,14 @@ test("5. by keyboard: Tab runs through the comparison box and its tip, Space tic
   await fieldOf(dialog, "Source").selectOption("energy");
   await settled(page);
 
-  // Tab from Title through the fields to the comparison box, its tip and the picker.
+  // Tab from Title through the fields to the comparison box, its tip, the scope radios (one stop: the checked one) and the picker.
   await fieldOf(dialog, "Title").focus();
   const seen: string[] = [];
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 7; i++) {
     await page.keyboard.press("Tab");
     seen.push(await focusedName(page));
   }
-  expect(seen, "the Tab order").toEqual(["Source", "Aggregation", "Widget range", COMPARE_LABEL, "What does this mean?", "Search assets"]);
+  expect(seen, "the Tab order").toEqual(["Source", "Aggregation", "Widget range", COMPARE_LABEL, "What does this mean?", "Assets chosen here", "Search assets"]);
 
   // Space on the box ticks it; the focus stays on the box; unticking by Space restores the range.
   await compareBox(dialog).focus();
