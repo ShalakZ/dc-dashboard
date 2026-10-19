@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w23 (2026-10-19, MERGE)
+## w23 (2026-10-19, 83acfa4)
 
 w23 rebuilds the asset picker of the widget editor (Edit, Add widget): a **Search assets** box (part of a name or a kind), a **Filter by kind**
 list, a tree that opens folded when it has more than 60 rows, the picks as removable tags above the list, and **Pick all under** a row (within the
