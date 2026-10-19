@@ -5,7 +5,6 @@ core/cost.py, so they equal what the asset page and the dashboards show. A month
 read from the snapshot stored at that moment (`billing_closes.figures`, the exact output of month_costs()), so moving an
 asset, editing a rate or deleting a source cannot change it; the page also gets `live`, what today's tree and rates
 would give. Reopening goes back to live figures and keeps the old snapshot."""
-import bisect
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -21,8 +20,9 @@ from dcdash.api.deps import account_vanished_is_401, current_user, get_db, requi
 from dcdash.api.settings import current_timezone
 from dcdash.core.audit import audit
 from dcdash.core.billing_close import csv_rows, has_data, is_complete, live_delta, root_totals
-from dcdash.core.cost import Cost, HourCost, cost_by_hour, load_tariffs, no_data, rate_at, summarize
+from dcdash.core.cost import cost_by_hour, load_tariffs, rate_at
 from dcdash.core.csvout import write_csv
+from dcdash.core.daycost import day_entries, month_total
 from dcdash.core.energy import hourly_energy, load_meters
 from dcdash.core.models import BillingClose, User
 from dcdash.core.settings_store import get_currency
@@ -43,49 +43,6 @@ _FIRST_BUCKET = text("SELECT min(bucket) FROM readings_1h WHERE point_id = ANY(C
 def _now() -> datetime:
     """The clock; tests replace it."""
     return datetime.now(timezone.utc)
-
-
-def _figure(cost: Cost, day_hours: list[HourCost]) -> dict[str, Any]:
-    """One day entry. `no_data` is True when not one hour of the day was recorded, so its 0 kWh (and, under a
-    rate, 0.00 cost) is the absence of figures rather than a measured zero."""
-    return {
-        "kwh": cost.kwh,
-        "cost": cost.cost,
-        "estimated": cost.estimated,
-        "partial": cost.partial,
-        "no_data": no_data(day_hours),
-    }
-
-
-def _month_total(entries: list[dict[str, Any] | None]) -> dict[str, Any] | None:
-    """The month figure, built from the day entries that are returned, so it always equals what the days show:
-    kwh = their sum, cost = the sum of the costs they have (None if none has one), estimated and partial = any,
-    no_data = every one of them has no data. None when no day has an entry (an asset with no energy figure, or a
-    month that has not begun)."""
-    shown = [entry for entry in entries if entry is not None]
-    if not shown:
-        return None
-    costs = [entry["cost"] for entry in shown if entry["cost"] is not None]
-    return {
-        "kwh": sum(entry["kwh"] for entry in shown),
-        "cost": sum(costs) if costs else None,
-        "estimated": any(entry["estimated"] for entry in shown),
-        "partial": any(entry["partial"] for entry in shown),
-        "no_data": all(entry["no_data"] for entry in shown),
-    }
-
-
-def _split_by_day(
-    hours: dict[datetime, HourCost], day_starts: list[datetime], end: datetime
-) -> list[list[HourCost]]:
-    """The hours of each local day. `day_starts` are the ascending, aware start instants of the days and
-    `end` is where the last one ends; an hour outside [day_starts[0], end) belongs to no day."""
-    per_day: list[list[HourCost]] = [[] for _ in day_starts]
-    for bucket, hour in hours.items():
-        index = bisect.bisect_right(day_starts, bucket) - 1
-        if index >= 0 and bucket < end:
-            per_day[index].append(hour)
-    return per_day
 
 
 async def month_costs(db: AsyncSession, month: str | None) -> dict[str, Any]:
@@ -112,21 +69,17 @@ async def month_costs(db: AsyncSession, month: str | None) -> dict[str, Any]:
     priced = cost_by_hour(energy, tariffs, tree, tz_name)
 
     days = local_days(start, end, tz_name)
-    day_starts = [first for _, first, _ in days]
     today = now.astimezone(zone).date()
     first_day, last_day = days[0][0], days[-1][0]
     rate_day = today if first_day <= today <= last_day else last_day
 
     assets = []
     for asset_id in tree.preorder():
-        hours = priced.get(asset_id)
-        entries: list[dict[str, Any] | None] = [None] * len(days)
-        if hours is not None:
-            for index, day_hours in enumerate(_split_by_day(hours, day_starts, end)):
-                if day_starts[index] <= now:  # local days after today stay null
-                    # A day with no energy hours used nothing: it costs 0 where a rate is in effect that day.
-                    on_day = rate_at(tariffs, tree, asset_id, days[index][0]) is not None
-                    entries[index] = _figure(summarize(day_hours, rate_in_effect=on_day), day_hours)
+        # A day with no energy hours used nothing: it costs 0 where a rate is in effect that day.
+        entries = day_entries(
+            priced.get(asset_id), days, now=now,
+            rate_on=lambda day, a=asset_id: rate_at(tariffs, tree, a, day) is not None,
+        )
         assets.append({
             "asset_id": asset_id,
             "parent_id": tree.nodes[asset_id].parent_id,
@@ -134,7 +87,7 @@ async def month_costs(db: AsyncSession, month: str | None) -> dict[str, Any]:
             "path": tree.path(asset_id),
             "rate_per_kwh": rate_at(tariffs, tree, asset_id, rate_day),
             "days": entries,
-            "total": _month_total(entries),
+            "total": month_total(entries),
         })
     return {
         "month": month,
