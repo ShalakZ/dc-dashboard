@@ -28,8 +28,22 @@ snapshot's configuration is not the one the request keyed on, the task raises `_
 (at most three attempts; the last one never coalesces and stores nothing unless it matches). Concurrent requests for one key
 await ONE task through `asyncio.shield`; a request that is cancelled does not cancel the task; a failing task raises in every
 waiter and stores nothing. A `require_fresh` request never joins a task that began before it asked: it computes privately and
-its result replaces the stored entry. Every computation carries a sequence stamp taken before its snapshot, and an entry is
-never replaced by an older computation (a slow normal task finishing after a fresh one must not roll the entry back).
+its result replaces the stored entry. Every computation carries a sequence stamp taken right after its snapshot's first
+statement (the moment Postgres takes the snapshot), and an entry is never replaced by an older computation (a slow normal task
+finishing after a fresh one must not roll the entry back).
+
+The data check of an expired entry is single-flight too: the first request that finds a key expired reads the data fingerprint
+on its own session and every other request for that key awaits that one check (`_checked`); a `require_fresh` request always
+checks on its own.
+
+Keep-warm. A request that finds a value older than the TTL would pay the data check (and, if the data moved, a whole
+recompute) on its own path, and a card that refetches every TTL seconds lands just past the TTL almost every time. So whenever
+an entry is stored or its check is renewed, one timer is set for 0.6 x TTL later; it re-checks the data on the cache's own
+engine and, if the data changed, recomputes with the very `compute` the entry was made with, as an ordinary shared task. The
+next request then finds a value that was checked a few seconds ago. It stops by itself: a key nobody used for
+`KEEP_WARM_SECONDS` is left to expire, and a background recompute does not count as a use. Nothing is served past the TTL (a
+request still compares the age of the last check with it); a failure in the background is logged once and leaves the entry to
+expire; at TTL 0 or with the cache off nothing is scheduled.
 
 Stored values are READ-ONLY BY CONTRACT: the very same object is handed to every reader, so nobody may mutate it.
 
@@ -39,6 +53,7 @@ environment variables are read at call time.
 """
 import asyncio
 import itertools
+import logging
 import os
 import time
 from collections import OrderedDict
@@ -47,6 +62,7 @@ from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from typing import Any, TypeVar
 
 from sqlalchemy import text
@@ -56,17 +72,26 @@ from dcdash.core.config import get_settings
 from dcdash.core.metrics import Metric
 
 T = TypeVar("T")
+log = logging.getLogger(__name__)
 
 MAX_ENTRIES = 16
 DEFAULT_TTL_SECONDS = 30.0
 MAX_ATTEMPTS = 3  # the third never coalesces and stores nothing unless its snapshot matches the request's
 CONCURRENT_COMPUTATIONS = 2  # also the cache's pool size; the pool allows one more connection than this
+WARM_FRACTION = 0.6  # of the TTL: how long after a check the background revalidation runs
+KEEP_WARM_SECONDS = 600.0  # a key nobody used for this long is no longer kept warm
 
-_COUNTERS = ("hits", "misses", "computes", "revalidations", "replaced", "evicted", "retries")
+_COUNTERS = (
+    "hits", "misses", "computes", "revalidations", "replaced", "evicted", "retries", "warm_checks", "warm_recomputes",
+)
 
 
 class _StaleSnapshot(Exception):
     """The snapshot a computation ran in saw a different configuration than the request that asked for it."""
+
+
+class _CheckAbandoned(Exception):
+    """The request that was running a shared data check ended before it finished; whoever waited for it starts over."""
 
 
 @dataclass
@@ -75,11 +100,16 @@ class _Entry:
     data_fp: str
     checked_at: float  # `_monotonic()` taken BEFORE the data fingerprint was read, so the TTL is never stretched
     stamp: int  # the sequence number of the computation that made it (see `_put`)
+    compute: Callable[[AsyncSession], Awaitable[Any]]  # what made it; the background recompute runs it again
+    last_used: float  # `_monotonic()` of the last request that was served from this key (see `_warm`)
+    timer: asyncio.TimerHandle | None = None  # the pending background revalidation, if any
 
 
 _store: OrderedDict[tuple, _Entry] = OrderedDict()  # least recently used first
 _inflight: dict[tuple, asyncio.Task] = {}
 _tasks: set[asyncio.Task] = set()  # every task this module started: in flight, private or winding down
+_warming: dict[tuple, asyncio.Task] = {}  # the background revalidation of a key, at most one at a time
+_checks: dict[tuple, asyncio.Future] = {}  # the data check a request is running for a key, which the others await
 _stats: dict[str, int] = dict.fromkeys(_COUNTERS, 0)
 _stamps = itertools.count(1)
 _generation = 0
@@ -117,8 +147,10 @@ def ttl_seconds() -> float:
 
 def stats() -> dict[str, int]:
     """Counters since the last `clear()`: hits (served from the store), misses (went on to compute or to join a computation),
-    computes (computations that ran), revalidations (data fingerprints compared against a stored entry), replaced (entries
-    overwritten), evicted (least-recently-used removals), retries (restarts after a stale snapshot)."""
+    computes (computations that ran), revalidations (data fingerprints a request read for a stored entry; requests that wait
+    for another's check are not counted), replaced (entries overwritten), evicted (least-recently-used removals), retries
+    (restarts after a stale snapshot), warm_checks (background revalidations that completed) and warm_recomputes
+    (computations a background revalidation started because the data had changed)."""
     return dict(_stats)
 
 
@@ -143,9 +175,12 @@ def _bind_loop() -> asyncio.AbstractEventLoop:
             if _engine is not None:
                 with suppress(Exception):
                     _engine.sync_engine.dispose(close=False)
+            _cancel_timers()
             _store.clear()
             _inflight.clear()
             _tasks.clear()
+            _warming.clear()
+            _checks.clear()
         _loop, _engine, _maker, _semaphore_ = running, None, None, None
     return running
 
@@ -291,40 +326,74 @@ async def _data_fingerprint(session: AsyncSession, start: datetime, end: datetim
 # ---- the store -------------------------------------------------------------------------------------------------------------
 
 
+def _disarm(entry: _Entry) -> None:
+    if entry.timer is not None:
+        entry.timer.cancel()
+        entry.timer = None
+
+
+def _cancel_timers() -> None:
+    for entry in _store.values():
+        _disarm(entry)
+
+
 def _put(key: tuple, entry: _Entry) -> None:
     old = _store.get(key)
     if old is not None:
         if old.stamp > entry.stamp:  # a computation that began later is already stored: never roll an entry back
             return
         _stats["replaced"] += 1
+        _disarm(old)
     _store[key] = entry
     _store.move_to_end(key)
     while len(_store) > MAX_ENTRIES:
-        _store.popitem(last=False)
+        _, gone = _store.popitem(last=False)
+        _disarm(gone)
         _stats["evicted"] += 1
+    _arm(key, entry)
+
+
+def _used(key: tuple) -> None:
+    """A request was served from `key` (by a computation it started or joined): it counts as a use for keep-warm."""
+    entry = _store.get(key)
+    if entry is not None:
+        entry.last_used = _monotonic()
 
 
 def clear() -> None:
-    """Empty the store and cancel every task, at once (a task that is already past its last await still ends, but the
-    generation counter keeps it from storing). Best effort: nothing waits for the tasks; `aclear` does."""
+    """Empty the store and cancel every task and timer, at once (a task that is already past its last await still ends, but
+    the generation counter keeps it from storing). Best effort: nothing waits for the tasks; `aclear` does."""
     global _generation
     _generation += 1
     for task in list(_tasks):
         task.cancel()
+    _cancel_timers()
     _store.clear()
     _inflight.clear()
+    _warming.clear()
+    _checks.clear()
     for name in _COUNTERS:
         _stats[name] = 0
 
 
 async def aclear() -> None:
     """`clear()`, then wait until every task has ended (tests, shutdown)."""
+    _bind_loop()  # before anything else: what belonged to an earlier loop goes now, not in the middle of a request
     tasks = list(_tasks)
     clear()
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
+    for _ in range(5):  # a task that was started while those ended (a request's retry) is cancelled too
+        if not _tasks:
+            break
+        late = list(_tasks)
+        for task in late:
+            task.cancel()
+        await asyncio.gather(*late, return_exceptions=True)
     _tasks.clear()
     _inflight.clear()
+    _warming.clear()
+    _checks.clear()
     for name in _COUNTERS:
         _stats[name] = 0
 
@@ -357,14 +426,18 @@ async def _run(
     compute: Callable[[AsyncSession], Awaitable[Any]],
     generation: int,
     strict: bool,
+    idle_since: float | None = None,
 ) -> Any:
-    """The body of a computation task: one snapshot with the fingerprints and the value in it."""
+    """The body of a computation task: one snapshot with the fingerprints and the value in it. `idle_since` is the
+    `last_used` of the entry a background recompute replaces (a request that asked made it: now)."""
     async with _semaphore():
         async with _sessions()() as session:
-            stamp = next(_stamps)  # before the snapshot's first statement
             started = _monotonic()
             await session.execute(_SNAPSHOT)
             matches = await _config_fingerprint(session) == key[4]
+            # Postgres takes the snapshot at this first SELECT, so the stamp is taken now: not before the SET TRANSACTION,
+            # where a task that reaches its first SELECT later would get the older stamp for the newer data.
+            stamp = next(_stamps)
             if strict and not matches:
                 raise _StaleSnapshot
             data_fp = await _data_fingerprint(session, start, end)
@@ -373,13 +446,13 @@ async def _run(
     # An entry is labelled by what its snapshot saw: it is stored only under a key whose configuration is that one, and only
     # if nothing cleared the cache since the task began.
     if matches and generation == _generation:
-        _put(key, _Entry(value, data_fp, started, stamp))
+        _put(key, _Entry(value, data_fp, started, stamp, compute, _monotonic() if idle_since is None else idle_since))
     return value
 
 
 def _spawn(key: tuple, start: datetime, end: datetime, compute: Callable[[AsyncSession], Awaitable[Any]],
-           strict: bool, shared: bool) -> asyncio.Task:
-    task = asyncio.get_running_loop().create_task(_run(key, start, end, compute, _generation, strict))
+           strict: bool, shared: bool, idle_since: float | None = None) -> asyncio.Task:
+    task = asyncio.get_running_loop().create_task(_run(key, start, end, compute, _generation, strict, idle_since))
     _tasks.add(task)
 
     def done(finished: asyncio.Task) -> None:
@@ -396,6 +469,9 @@ def _spawn(key: tuple, start: datetime, end: datetime, compute: Callable[[AsyncS
 
 
 async def _await_task(task: asyncio.Task) -> Any:
+    # A failing task raises the SAME exception object in every waiter. That is harmless: since Python 3.11 a future re-raises
+    # with the traceback saved when it completed, so a hundred waiters do not grow `__traceback__` (it stays a few frames).
+    # A waiter that keeps the exception and reads its traceback later may see another waiter's frames; nobody does.
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
@@ -403,6 +479,108 @@ async def _await_task(task: asyncio.Task) -> Any:
         if task.cancelled() and not asyncio.current_task().cancelling():
             raise RuntimeError("the figure computation was cancelled") from None
         raise
+
+
+# ---- the data check of an expired entry: one at a time per key -------------------------------------------------------------
+
+
+def _check_done(key: tuple, finished: asyncio.Future) -> None:
+    if _checks.get(key) is finished:
+        del _checks[key]
+    if not finished.cancelled():
+        finished.exception()  # retrieved: a failure that nobody waited for is not logged as "never retrieved"
+
+
+async def _checked(db: AsyncSession, key: tuple) -> tuple[str, float]:
+    """The data fingerprint of the key's window and the `_monotonic()` taken before it was read, from ONE check per key at a
+    time: the first request that finds the key expired reads it on its own session (the request pool, as before) and every
+    other request for the key awaits that read. A failure raises in all of them and is kept by none. The read is not a task
+    of its own (it would hold the first request's session after that request ended); if its request is cancelled, its waiters
+    start over and one of them reads."""
+    while True:
+        running = _checks.get(key)
+        if running is None or running.done():
+            break
+        try:
+            return await asyncio.shield(running)
+        except _CheckAbandoned:
+            continue
+    mine = asyncio.get_running_loop().create_future()
+    _checks[key] = mine
+    mine.add_done_callback(partial(_check_done, key))
+    _stats["revalidations"] += 1
+    asked = _monotonic()
+    try:
+        fingerprint = await _data_fingerprint(db, key[1], key[2])
+    except Exception as exc:
+        mine.set_exception(exc)
+        raise
+    except BaseException:  # cancelled
+        mine.set_exception(_CheckAbandoned())
+        raise
+    mine.set_result((fingerprint, asked))
+    return fingerprint, asked
+
+
+# ---- keep-warm -------------------------------------------------------------------------------------------------------------
+
+
+def _arm(key: tuple, entry: _Entry) -> None:
+    """Set the one timer of a stored entry (replacing a pending one): the background revalidation runs WARM_FRACTION x TTL from
+    now. Nothing at TTL 0, with the cache off, or for an entry that is no longer the stored one."""
+    _disarm(entry)
+    ttl = ttl_seconds()
+    if ttl > 0 and enabled() and _store.get(key) is entry:
+        entry.timer = asyncio.get_running_loop().call_later(WARM_FRACTION * ttl, _fire, key, entry, _generation)
+
+
+def _fire(key: tuple, entry: _Entry, generation: int) -> None:
+    """The timer went off, in the loop: start the background revalidation unless it has no purpose any more, or one is
+    running for the key."""
+    _disarm(entry)  # `entry.timer is None` from now on: nothing is pending unless `_warm` sets the next one
+    if generation != _generation or _store.get(key) is not entry or key in _warming or not enabled():
+        return
+    task = asyncio.get_running_loop().create_task(_warm(key, entry, generation))
+    _tasks.add(task)
+    _warming[key] = task
+
+    def done(finished: asyncio.Task) -> None:
+        _tasks.discard(finished)
+        if _warming.get(key) is finished:
+            del _warming[key]
+        if not finished.cancelled():
+            finished.exception()
+
+    task.add_done_callback(done)
+
+
+async def _warm(key: tuple, entry: _Entry, generation: int) -> None:
+    """Re-check an entry in the background: equal data renews it, changed data starts the computation a request would have
+    started, as a shared task, and its result replaces the entry. It does not hold the semaphore or a session while it waits
+    for that computation (`_run` takes its own)."""
+    if _monotonic() - entry.last_used > KEEP_WARM_SECONDS:
+        return  # nobody has asked for this key for a long while: let it expire
+    try:
+        async with _semaphore():
+            async with _sessions()() as session:
+                asked = _monotonic()
+                fingerprint = await _data_fingerprint(session, key[1], key[2])
+        if generation != _generation or _store.get(key) is not entry:
+            return  # cleared, or replaced (its replacement has a timer of its own)
+        _stats["warm_checks"] += 1
+        if fingerprint == entry.data_fp:
+            entry.checked_at = max(entry.checked_at, asked)
+            _arm(key, entry)
+            return
+        task = _inflight.get(key)
+        if task is None or task.done():
+            task = _spawn(key, key[1], key[2], entry.compute, strict=True, shared=True, idle_since=entry.last_used)
+            _stats["warm_recomputes"] += 1
+        await asyncio.shield(task)  # its result is stored (and the next timer set) by `_run`
+    except _StaleSnapshot:
+        pass  # the configuration moved on: this key is out of date and a request will make the new one
+    except Exception as exc:  # nothing is rescheduled: the entry expires at the TTL and the next request recomputes inline
+        log.warning("figure cache keep-warm failed for %s: %s", key[0], type(exc).__name__)
 
 
 async def get_or_compute(
@@ -418,6 +596,7 @@ async def get_or_compute(
     `db` is the request's session and is used only for the two cheap fingerprint statements. `compute(session)` receives the
     cache's own session (a repeatable-read snapshot) and must return a compact, read-only value.
     """
+    _bind_loop()  # first: a new event loop forgets the old one's state now, never between a task's registration and its start
     if not enabled():
         return await _compute_uncached(compute)
     fresh = _fresh.get()
@@ -428,14 +607,21 @@ async def get_or_compute(
         if entry is not None:
             if not fresh and _monotonic() - entry.checked_at < ttl_seconds():
                 _store.move_to_end(key)
+                entry.last_used = _monotonic()
                 _stats["hits"] += 1
                 return entry.value
-            _stats["revalidations"] += 1
-            asked = _monotonic()
-            if await _data_fingerprint(db, start, end) == entry.data_fp:
+            if fresh:  # on the spot and alone: it must not rely on a check that began before it asked
+                _stats["revalidations"] += 1
+                asked = _monotonic()
+                fingerprint = await _data_fingerprint(db, start, end)
+            else:
+                fingerprint, asked = await _checked(db, key)
+            if fingerprint == entry.data_fp:
                 entry.checked_at = max(entry.checked_at, asked)
+                entry.last_used = _monotonic()
                 if key in _store:
                     _store.move_to_end(key)
+                _arm(key, entry)  # (does nothing if the entry was replaced meanwhile)
                 _stats["hits"] += 1
                 return entry.value
         if not missed:
@@ -450,7 +636,10 @@ async def get_or_compute(
                 task = _spawn(key, start, end, compute, strict=not last, shared=False)
             elif task is None or task.done():
                 task = _spawn(key, start, end, compute, strict=True, shared=True)
-            return await _await_task(task)
+            value = await _await_task(task)
         except _StaleSnapshot:
             _stats["retries"] += 1
+            continue
+        _used(key)  # whoever asked, a request was served from this key
+        return value
     raise AssertionError("unreachable")  # the last attempt is not strict

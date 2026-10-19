@@ -5,13 +5,14 @@ The payload is a realistic one: the tree's order, the hourly energy (canonicalis
 change of the engine's value types cannot hide a difference) and the tariffs, all loaded from the session the cache hands over.
 """
 import asyncio
+import logging
 import math
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import event, text
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from dcdash.core import db as db_module
 from dcdash.core import energy, figure_cache
@@ -259,6 +260,7 @@ async def test_a_hit_is_the_identical_object_and_equals_a_cold_compute(db):
     assert first == await cold()
     assert figure_cache.stats() == {  # revalidations 1: the test TTL is 0, so the second request compared the data
         "hits": 1, "misses": 1, "computes": 1, "revalidations": 1, "replaced": 0, "evicted": 0, "retries": 0,
+        "warm_checks": 0, "warm_recomputes": 0,  # keep-warm is off at TTL 0
     }
 
 
@@ -723,3 +725,406 @@ async def test_the_settings_are_read_at_call_time(monkeypatch):
     assert figure_cache.ttl_seconds() == 0.0
     monkeypatch.setenv("DCDASH_FIGURE_CACHE", "0")
     assert not figure_cache.enabled()
+
+
+# ---- one data check per key at a time (review B-I1) ---------------------------------------------------------------------------
+
+
+@contextmanager
+def slowed_data_check(monkeypatch, seconds=0.2, fail=False):
+    """Every data fingerprint takes `seconds` (and then fails, if asked); the list counts the calls, on either engine."""
+    real = figure_cache._data_fingerprint
+    calls: list[int] = []
+
+    async def slow(session, start, end):
+        calls.append(1)
+        await asyncio.sleep(seconds)
+        if fail:
+            raise ConnectionError("the database went away")
+        return await real(session, start, end)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(figure_cache, "_data_fingerprint", slow)
+        yield calls
+
+
+async def test_four_requests_on_an_expired_entry_run_one_data_check(db, monkeypatch):
+    await World(db).build()
+    first = await ask()  # the test TTL is 0: the entry is expired for every later request
+    with slowed_data_check(monkeypatch) as calls, watch() as (request_side, cache_side):
+        results = await asyncio.gather(*(ask() for _ in range(4)))
+    assert all(result is first for result in results)
+    assert len(calls) == 1
+    assert sum("figure_cache data" in statement for statement in request_side) == 1
+    assert cache_side == []
+    assert figure_cache.stats()["hits"] == 4 and figure_cache.stats()["revalidations"] == 1
+    assert not figure_cache._checks
+
+
+async def test_a_failed_shared_check_raises_in_every_waiter_and_is_not_kept(db, monkeypatch):
+    await World(db).build()
+    first = await ask()
+    with slowed_data_check(monkeypatch, 0.1, fail=True) as calls:
+        results = await asyncio.gather(*(ask() for _ in range(4)), return_exceptions=True)
+    assert len(calls) == 1
+    assert all(isinstance(result, ConnectionError) for result in results)
+    await asyncio.sleep(0)
+    assert not figure_cache._checks
+    assert await ask() is first  # the next request checks afresh and the entry is still good
+
+
+async def test_a_waiter_takes_over_when_the_request_running_the_check_is_cancelled(db, monkeypatch):
+    await World(db).build()
+    first = await ask()
+    with slowed_data_check(monkeypatch, 0.3) as calls:
+        owner = asyncio.create_task(ask())
+        await wait_until(lambda: len(calls) == 1)
+        waiters = [asyncio.create_task(ask()) for _ in range(2)]
+        await asyncio.sleep(0.1)  # they have read the configuration and wait for the owner's check
+        owner.cancel()
+        results = await asyncio.wait_for(asyncio.gather(*waiters), 10)
+        with pytest.raises(asyncio.CancelledError):
+            await owner
+    assert all(result is first for result in results)
+    assert len(calls) == 2  # the owner's, cancelled, and ONE more that both waiters share
+
+
+async def test_a_fresh_request_checks_privately_and_does_not_join_a_running_check(db, monkeypatch):
+    await World(db).build()
+    first = await ask()
+    with slowed_data_check(monkeypatch, 0.3) as calls:
+        normal = asyncio.create_task(ask())
+        await wait_until(lambda: len(calls) == 1)
+        with figure_cache.require_fresh():
+            fresh = await ask()
+        assert await normal is first and fresh is first
+    assert len(calls) == 2
+
+
+# ---- the stamp follows the snapshot, and a second event loop (review B-M1, B-M2) ---------------------------------------------
+
+
+async def test_the_stamp_is_taken_after_the_snapshots_first_statement(db, monkeypatch):
+    world = await World(db).build()
+    key = ("energy", START, END, ("UTC",), await config_fp())
+    real = figure_cache._config_fingerprint
+    parked, release = asyncio.Event(), asyncio.Event()
+    seen: list[int] = []
+
+    async def gated(session):
+        seen.append(1)
+        if len(seen) == 1:  # the task that began first reaches its first statement last: its snapshot is the later one
+            parked.set()
+            await release.wait()
+        return await real(session)
+
+    monkeypatch.setattr(figure_cache, "_config_fingerprint", gated)
+    generation = figure_cache._generation
+    slow = asyncio.create_task(figure_cache._run(key, START, END, payload(), generation, False))
+    try:
+        await parked.wait()
+        older = await figure_cache._run(key, START, END, payload(), generation, False)  # a whole snapshot, before the other's
+        await insert_readings(db, world.p_alpha, START + 2 * HOUR + 30 * MINUTE, 1, [1006.9])
+        await settle_rollups(db)
+        release.set()
+        newer = await slow
+    finally:
+        release.set()
+        slow.cancel()
+    assert newer != older
+    assert figure_cache._store[key].value == newer  # the later snapshot has the later stamp and replaces the entry
+
+
+async def test_a_second_event_loop_in_one_process_starts_clean_and_its_first_requests_coalesce(database_url):
+    async def one_loop():
+        engine = create_async_engine(get_settings().sqlalchemy_url, pool_size=2, max_overflow=2)
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        calls: list[int] = []
+
+        async def compute(session):
+            calls.append(1)
+            await asyncio.sleep(0.2)
+            return "value"
+
+        async def request():
+            async with maker() as session:
+                return await figure_cache.get_or_compute(session, "loop", START, END, ("UTC",), compute)
+
+        try:
+            results = await asyncio.gather(*(request() for _ in range(4)))
+            return results, len(calls)
+        finally:
+            await figure_cache.dispose()
+            await engine.dispose()
+
+    # each in a thread of its own: two event loops one after the other, the module state left behind by the first
+    for _ in range(2):
+        results, computed = await asyncio.to_thread(asyncio.run, one_loop())
+        assert results == ["value"] * 4 and computed == 1
+
+
+# ---- keep-warm: revalidate and recompute BEFORE the TTL runs out ---------------------------------------------------------------
+
+
+async def wait_until(predicate, timeout=10.0):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        assert loop.time() < deadline, "timed out waiting for the condition"
+        await asyncio.sleep(0.01)
+
+
+def fake_clock(monkeypatch, start=100.0):
+    """The cache's clock stands still until the test moves it (the timers use the loop's real clock)."""
+    now = [start]
+    monkeypatch.setattr(figure_cache, "_monotonic", lambda: now[0])
+    return now
+
+
+def the_entry():
+    ((key, entry),) = figure_cache._store.items()
+    return key, entry
+
+
+async def test_keep_warm_rechecks_before_the_ttl_runs_out_so_the_next_request_reads_no_readings(db, monkeypatch):
+    await World(db).build()
+    now = fake_clock(monkeypatch)
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "0.3")
+    first = await ask()
+    _, entry = the_entry()
+    assert entry.timer is not None and entry.checked_at == 100.0
+    now[0] = 100.2  # the check will take this as the moment it asked
+    await wait_until(lambda: entry.checked_at > 100.0)
+    assert entry.checked_at == 100.2 and figure_cache.stats()["warm_checks"] >= 1
+    assert figure_cache.stats()["warm_recomputes"] == 0 and figure_cache.stats()["computes"] == 1
+    now[0] = 100.4  # 0.4 s after the computation, 0.2 s after the renewal
+    with watch() as (request_side, _):
+        assert await ask() is first
+    assert len(request_side) == 1 and "figure_cache config" in request_side[0]  # no data statement on the request's session
+
+
+async def test_keep_warm_recomputes_a_changed_window_so_the_next_request_is_a_hit(db, monkeypatch):
+    world = await World(db).build()
+    now = fake_clock(monkeypatch)
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "0.3")
+    calls: list[int] = []
+    inner = payload()
+
+    async def compute(session):
+        calls.append(1)
+        return await inner(session)
+
+    old = await ask(compute=compute)
+    await insert_readings(db, world.p_alpha, START + 2 * HOUR + 30 * MINUTE, 1, [1006.9])
+    await settle_rollups(db)
+    now[0] = 100.2
+    await wait_until(lambda: the_entry()[1].value != old)
+    new = the_entry()[1].value
+    assert new == await cold() and len(calls) == 2  # the stored compute ran again
+    assert figure_cache.stats()["warm_recomputes"] == 1 and figure_cache.stats()["computes"] == 2
+
+    async def never(session):
+        raise AssertionError("the request must not compute")
+
+    with watch() as (request_side, _):
+        assert await ask(compute=never) is new
+    assert len(request_side) == 1 and "figure_cache config" in request_side[0]
+    assert figure_cache.stats()["computes"] == 2 and figure_cache.stats()["warm_recomputes"] == 1
+
+
+async def test_keep_warm_stops_for_a_key_nobody_has_used_for_a_while(db, monkeypatch):
+    await World(db).build()
+    now = fake_clock(monkeypatch)
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "0.3")
+    monkeypatch.setattr(figure_cache, "KEEP_WARM_SECONDS", 5.0)
+    first = await ask()
+    _, entry = the_entry()
+    assert entry.timer is not None
+    now[0] = 106.0  # six seconds without a request
+    await wait_until(lambda: entry.timer is None)  # the timer fired ...
+    await asyncio.sleep(0.05)
+    assert figure_cache.stats()["warm_checks"] == 0 and not figure_cache._warming  # ... and did nothing
+    assert entry.timer is None  # and scheduled nothing
+    now[0] = 106.5  # the entry has expired: the next request checks the data itself
+    with watch() as (request_side, _):
+        assert await ask() is first
+    assert any("figure_cache data" in statement for statement in request_side)
+    assert figure_cache.stats()["revalidations"] == 1
+
+
+async def test_a_background_recompute_does_not_count_as_use(db, monkeypatch):
+    """Under live data every check finds a change; if each recompute reset the idle clock the key would stay warm forever."""
+    world = await World(db).build()
+    now = fake_clock(monkeypatch)
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "0.3")
+    monkeypatch.setattr(figure_cache, "KEEP_WARM_SECONDS", 5.0)
+    old = await ask()
+    await insert_readings(db, world.p_alpha, START + 2 * HOUR + 30 * MINUTE, 1, [1006.9])
+    await settle_rollups(db)
+    now[0] = 103.0  # three seconds idle: still warm
+    await wait_until(lambda: the_entry()[1].value != old)
+    _, entry = the_entry()
+    assert entry.last_used == 100.0  # inherited from the entry it replaced, not "now"
+    now[0] = 106.0  # six seconds since anyone asked
+    await wait_until(lambda: entry.timer is None)  # the next timer fired and stopped: the key went idle
+    await asyncio.sleep(0.05)
+    assert figure_cache.stats()["warm_recomputes"] == 1 and not figure_cache._warming
+
+
+async def test_a_request_that_joins_a_background_recompute_counts_as_use(db, monkeypatch):
+    world = await World(db).build()
+    now = fake_clock(monkeypatch)
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "0.3")
+    started = asyncio.Event()
+    inner = payload()
+    calls: list[int] = []
+
+    async def compute(session):
+        calls.append(1)
+        if len(calls) == 2:
+            started.set()
+            await asyncio.sleep(0.2)
+        return await inner(session)
+
+    old = await ask(compute=compute)
+    await insert_readings(db, world.p_alpha, START + 2 * HOUR + 30 * MINUTE, 1, [1006.9])
+    await settle_rollups(db)
+    now[0] = 100.2
+    await started.wait()  # the background recompute is running
+    now[0] = 103.0
+    joined = await ask(compute=compute)  # joins it (the entry is past its TTL, the data differs)
+    assert joined != old and len(calls) == 2
+    assert the_entry()[1].last_used == 103.0
+
+
+async def test_a_failing_background_check_is_logged_once_and_the_entry_expires_at_the_ttl(db, monkeypatch, caplog):
+    world = await World(db).build()
+    now = fake_clock(monkeypatch)
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "0.3")
+    first = await ask()
+    _, entry = the_entry()
+    real = figure_cache._data_fingerprint
+    failures = [1]
+
+    async def flaky(session, start, end):
+        if failures and session.bind is figure_cache._get_engine():  # the cache's side, once
+            failures.pop()
+            raise ConnectionError("password=hunter2 host=db.internal")
+        return await real(session, start, end)
+
+    monkeypatch.setattr(figure_cache, "_data_fingerprint", flaky)
+    caplog.set_level(logging.WARNING, logger="dcdash.core.figure_cache")
+    now[0] = 100.2
+    await wait_until(lambda: not failures and entry.timer is None and not figure_cache._warming)
+    await asyncio.sleep(0.4)  # nothing is rescheduled: no second attempt, no second line
+    records = [record for record in caplog.records if record.name == "dcdash.core.figure_cache"]
+    assert len(records) == 1 and records[0].levelno == logging.WARNING
+    assert "ConnectionError" in records[0].getMessage() and "hunter2" not in caplog.text
+    assert entry.checked_at == 100.0 and entry.timer is None and not figure_cache._warming
+    assert figure_cache.stats()["warm_checks"] == 0
+    await insert_readings(db, world.p_alpha, START + 2 * HOUR + 30 * MINUTE, 1, [1006.9])
+    await settle_rollups(db)
+    now[0] = 100.5  # past the TTL of the last good check: the request does the work itself
+    computes = figure_cache.stats()["computes"]
+    with watch() as (request_side, _):
+        value = await ask()
+    assert any("figure_cache data" in statement for statement in request_side)
+    assert value != first and value == await cold() and figure_cache.stats()["computes"] == computes + 1
+
+
+async def test_a_failing_background_recompute_is_logged_once_and_keeps_the_old_entry(db, monkeypatch, caplog):
+    world = await World(db).build()
+    now = fake_clock(monkeypatch)
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "0.3")
+    calls: list[int] = []
+    inner = payload()
+
+    async def compute(session):
+        calls.append(1)
+        if len(calls) > 1:
+            raise RuntimeError("boom")
+        return await inner(session)
+
+    first = await ask(compute=compute)
+    _, entry = the_entry()
+    caplog.set_level(logging.WARNING, logger="dcdash.core.figure_cache")
+    await insert_readings(db, world.p_alpha, START + 2 * HOUR + 30 * MINUTE, 1, [1006.9])
+    await settle_rollups(db)
+    now[0] = 100.2
+    await wait_until(lambda: len(calls) == 2 and entry.timer is None and not figure_cache._warming)
+    await asyncio.sleep(0.4)
+    records = [record for record in caplog.records if record.name == "dcdash.core.figure_cache"]
+    assert len(records) == 1 and "RuntimeError" in records[0].getMessage()
+    assert the_entry()[1] is entry and entry.value is first and entry.checked_at == 100.0 and len(calls) == 2
+
+
+async def test_clearing_cancels_the_keep_warm_timers(db, monkeypatch):
+    await World(db).build()
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "0.3")
+    await ask()
+    _, entry = the_entry()
+    timer = entry.timer
+    assert timer is not None and not timer.cancelled()
+    await figure_cache.aclear()
+    assert timer.cancelled() and not figure_cache._warming and not figure_cache._tasks
+    with watch() as (_, cache_side):
+        await asyncio.sleep(0.4)  # longer than the timer would have taken
+    assert cache_side == [] and figure_cache.stats()["warm_checks"] == 0
+
+
+async def test_clearing_cancels_a_background_task_that_is_running(db, monkeypatch):
+    await World(db).build()
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "0.3")
+    await ask()
+    real = figure_cache._data_fingerprint
+    entered, gate = asyncio.Event(), asyncio.Event()
+
+    async def blocked(session, start, end):
+        entered.set()
+        await gate.wait()
+        return await real(session, start, end)
+
+    monkeypatch.setattr(figure_cache, "_data_fingerprint", blocked)
+    await asyncio.wait_for(entered.wait(), 10)  # the timer fired and the background check waits inside its statement
+    assert len(figure_cache._warming) == 1
+    await figure_cache.aclear()
+    assert not figure_cache._warming and not figure_cache._tasks and not figure_cache._store
+
+
+async def test_one_background_task_per_key(db, monkeypatch):
+    await World(db).build()
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "1000")  # the real timer stays out of the way
+    await ask()
+    key, entry = the_entry()
+    real = figure_cache._data_fingerprint
+    gate = asyncio.Event()
+    calls: list[int] = []
+
+    async def blocked(session, start, end):
+        calls.append(1)
+        await gate.wait()
+        return await real(session, start, end)
+
+    monkeypatch.setattr(figure_cache, "_data_fingerprint", blocked)
+    figure_cache._fire(key, entry, figure_cache._generation)
+    figure_cache._fire(key, entry, figure_cache._generation)  # a second timer for the same key finds one running
+    await wait_until(lambda: len(calls) == 1)
+    await asyncio.sleep(0.05)
+    assert len(calls) == 1 and len(figure_cache._warming) == 1
+    gate.set()
+    await wait_until(lambda: not figure_cache._warming)
+    assert figure_cache.stats()["warm_checks"] == 1
+
+
+async def test_nothing_is_scheduled_at_ttl_zero_or_with_the_cache_off(db, monkeypatch):
+    await World(db).build()
+    await ask()  # the conftest TTL is 0
+    _, entry = the_entry()
+    assert entry.timer is None
+    figure_cache.clear()
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "0.3")
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE", "0")
+    await ask()
+    assert not figure_cache._store and not figure_cache._warming
+    await asyncio.sleep(0.3)
+    assert figure_cache.stats() == dict.fromkeys(figure_cache._COUNTERS, 0)
