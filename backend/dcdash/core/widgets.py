@@ -1,8 +1,9 @@
 """Widget configuration (spec 10.5) and the figures a widget draws (spec 10.6).
 
-`validate_config` is the only entry point for configs that come from a client. Messages are plain
-text that names the field ("assets: at most 20 assets per widget (got 21)") so the editor can show them.
-`compute_widget` answers POST /api/widget-data and its CSV export for a validated config.
+`validate_config` is the entry point for configs that come from a client (`validate_data_config` for the five types that
+draw figures, `validate_text_config` for the Text widget, which holds no data). Messages are plain text that names the
+field ("assets: at most 20 assets per widget (got 21)") so the editor can show them.
+`compute_widget` answers POST /api/widget-data and its CSV export for a validated data config.
 """
 import bisect
 import math
@@ -29,7 +30,17 @@ from dcdash.core.timeutil import (
 )
 from dcdash.core.tree import AssetTree
 
-WIDGET_TYPES = ("timeseries", "bar", "stat", "gauge", "table")
+WIDGET_TYPES = ("timeseries", "bar", "stat", "gauge", "table", "text")
+DATA_WIDGET_TYPES = tuple(widget_type for widget_type in WIDGET_TYPES if widget_type != "text")  # the ones that draw figures
+TEXT_STYLES = ("heading", "paragraph", "divider")
+TEXT_LIMITS = {"heading": 200, "paragraph": 2000}  # in Unicode code points; a divider holds no text
+# The characters trimmed from both ends of a text: exactly the `trim_set` of tests/fixtures/text_widget_samples.json, which the
+# editor (frontend/src/lib/textWidget.ts) also reads. Python's bare strip() is not used: it and JavaScript's trim() differ on U+FEFF.
+# (TAB, LF, space, NBSP, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000, U+FEFF; built from code points so
+# that the source stays pure ASCII.)
+TRIM_SET = "".join(
+    chr(code) for code in (0x09, 0x0A, 0x20, 0xA0, 0x1680, *range(0x2000, 0x200B), 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF)
+)
 MAX_ASSETS = 20
 METRIC_AGGREGATIONS = ("avg", "min", "max", "last")
 SINGLE_ASSET_TYPES = ("stat", "gauge")
@@ -130,9 +141,64 @@ def _check_type_rules(widget_type: str, config: WidgetConfig) -> None:
             raise ValueError(f"max: must be greater than min (min is {config.min:g}, max is {config.max:g})")
 
 
-def validate_config(widget_type: str, config: dict[str, Any]) -> WidgetConfig:
-    """Parse and check a widget config; raise ValueError with a readable message naming the field."""
-    if widget_type not in WIDGET_TYPES:
+_LINE_SEPARATORS = (chr(0x2028), chr(0x2029))  # LINE SEPARATOR and PARAGRAPH SEPARATOR: line breaks like LF
+
+
+def _code_point(char: str) -> str:
+    return f"U+{ord(char):04X}"
+
+
+def normalize_text(style: str, raw: str) -> str:
+    """The text a Text widget stores, or ValueError (a message that starts "text:"). The rules are the editor's too
+    (frontend/src/lib/textWidget.ts), held to the same answers by tests/fixtures/text_widget_samples.json. Order: (1) CRLF,
+    a lone CR, U+2028 and U+2029 become LF; (2) control characters (all but TAB and LF) and lone surrogates are refused;
+    (3) both ends are trimmed with TRIM_SET; (4) Unicode code points are counted with len(): a heading is 1 to 200 and one
+    line, a paragraph 1 to 2000, a divider has none."""
+    if style not in TEXT_STYLES:
+        raise ValueError(f"style: {style!r} is not a text style; use one of {_either(TEXT_STYLES)}")
+    text = raw.replace("\r\n", "\n").replace("\r", "\n")
+    for separator in _LINE_SEPARATORS:
+        text = text.replace(separator, "\n")
+    for char in text:
+        code = ord(char)
+        if code <= 0x08 or 0x0B <= code <= 0x1F or 0x7F <= code <= 0x9F:
+            raise ValueError(f"text: contains a control character ({_code_point(char)})")
+    for char in text:
+        if 0xD800 <= ord(char) <= 0xDFFF:  # a surrogate in a Python str is never half of a pair: the JSON parser joined those
+            raise ValueError(f"text: contains a character that cannot be stored ({_code_point(char)})")
+    text = text.strip(TRIM_SET)
+    if style == "divider":
+        if text:
+            raise ValueError("text: a divider has no text")
+        return ""
+    if not text:
+        raise ValueError(f"text: a {style} cannot be empty")
+    if style == "heading" and "\n" in text:
+        raise ValueError("text: a heading is one line; remove the line break")
+    if len(text) > TEXT_LIMITS[style]:
+        raise ValueError(f"text: a {style} can have at most {TEXT_LIMITS[style]} characters (got {len(text)})")
+    return text
+
+
+class TextConfig(BaseModel):
+    """The config of a Text widget: a heading, a paragraph or a divider. It holds no data, so none of WidgetConfig's fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    style: Literal["heading", "paragraph", "divider"]
+    text: str
+
+    @model_validator(mode="after")
+    def _normalized(self) -> Self:
+        self.text = normalize_text(self.style, self.text)  # what is stored is the normalized text
+        return self
+
+
+def validate_data_config(widget_type: str, config: dict[str, Any]) -> WidgetConfig:
+    """Parse and check the config of a widget that draws figures; raise ValueError with a readable message naming the field."""
+    if widget_type == "text":
+        raise ValueError("type: a text widget has no data")
+    if widget_type not in DATA_WIDGET_TYPES:
         raise ValueError(f"type: {widget_type!r} is not a widget type; use one of {', '.join(WIDGET_TYPES)}")
     try:
         parsed = WidgetConfig.model_validate(config)
@@ -140,6 +206,21 @@ def validate_config(widget_type: str, config: dict[str, Any]) -> WidgetConfig:
         raise ValueError(_readable(error)) from None
     _check_type_rules(widget_type, parsed)
     return parsed
+
+
+def validate_text_config(config: dict[str, Any]) -> TextConfig:
+    """Parse and check the config of a Text widget; the returned text is the normalized one."""
+    try:
+        return TextConfig.model_validate(config)
+    except ValidationError as error:
+        raise ValueError(_readable(error)) from None
+
+
+def validate_config(widget_type: str, config: dict[str, Any]) -> WidgetConfig | TextConfig:
+    """Parse and check any widget config that comes from a client: a TextConfig for "text", else a WidgetConfig."""
+    if widget_type == "text":
+        return validate_text_config(config)
+    return validate_data_config(widget_type, config)
 
 
 # ---- widget data -------------------------------------------------------------------------------------------

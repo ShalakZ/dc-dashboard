@@ -1,10 +1,10 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useDefaultDashboard } from "../api/queries";
-import type { WidgetType } from "../api/types";
+import type { DataWidgetType } from "../api/types";
 import { downloadCsv } from "../lib/download";
 import { progress } from "../lib/progress";
-import { authed, config, dashboard, dataFor, valueRow, valuesData, widget, widgetDataRoute } from "../test/dashboardFixtures";
+import { authed, config, dashboard, dataFor, textWidget, valueRow, valuesData, widget, widgetDataRoute } from "../test/dashboardFixtures";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
@@ -86,6 +86,26 @@ describe("DashboardPage (view)", () => {
     expect(await table.findByText("LV Panel 2")).toBeInTheDocument();
     expect(table.getByText("~4.25")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Hall A" })).toBeInTheDocument();
+  });
+
+  it("draws text widgets beside a data widget with exactly one data request, and the stream is the data widget's alone", async () => {
+    const mixed = [
+      textWidget(10, "heading", "Cooling plant", { title: "Plant heading", x: 0, y: 0, w: 12, h: 1 }),
+      current,
+      textWidget(11, "paragraph", "Chillers 1 and 2\nrun in duty and standby.", { title: "Plant notes", x: 3, y: 1, w: 9, h: 2 }),
+      textWidget(12, "divider", "", { title: "Divider", x: 0, y: 3, w: 12, h: 1 }),
+    ];
+    const calls = open("viewer", { "GET /api/dashboards/3": { body: dashboard({ widgets: mixed }) } });
+    await within(await region("Current power")).findByText("10.50");
+    // A text heading is an h2 of its own, like the data card's title; the paragraph is a named region and the divider a separator with no name.
+    expect(screen.getAllByRole("heading").map((h) => `${h.tagName.toLowerCase()}:${h.textContent}`)).toEqual(["h1:Hall A", "h2:Cooling plant", "h2:Current power"]);
+    expect(screen.getByRole("region", { name: "Plant notes" })).toHaveTextContent(/Chillers 1 and 2\s*run in duty and standby\./);
+    expect(screen.getAllByRole("region").map((r) => r.getAttribute("aria-label")).sort()).toEqual(["Current power", "Plant notes"]); // the heading and the divider are no regions
+    expect(screen.getByRole("separator")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Details for (Plant|Divider)/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Download CSV for (Plant|Divider)/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(FakeEventSource.open).toHaveLength(1)); // the stat's stream
+    expect(dataRequests(calls).map((r) => r.type)).toEqual(["stat"]); // exactly one request: the text widgets asked for nothing
   });
 
   it("shows the trail Dashboards / Hall A above the page: the list is a link, the dashboard is the current page", async () => {
@@ -186,7 +206,7 @@ describe("DashboardPage (view)", () => {
     open("viewer", {
       "GET /api/dashboards/3": { body: dashboard({ widgets: [trend, energy, stat, gauge] }) },
       "POST /api/widget-data": ({ body }) => {
-        const { type } = body as { type: WidgetType };
+        const { type } = body as { type: DataWidgetType };
         return { body: type === "gauge" ? valuesData({ type: "gauge", values: [valueRow({ asset_id: 6, name: "LV Panel 2", value: 4, point_id: 8 })] }) : dataFor(type) };
       },
     });
@@ -222,7 +242,7 @@ describe("DashboardPage (view)", () => {
   it("shows a warning chip for removed assets and still draws the rest (Review Focus 5, UI side)", async () => {
     open("viewer", {
       "POST /api/widget-data": ({ body }) => {
-        const type = (body as { type: WidgetType }).type;
+        const type = (body as { type: DataWidgetType }).type;
         return { body: type === "stat" ? valuesData({ missing: [99] }) : dataFor(type) };
       },
     });
@@ -235,7 +255,7 @@ describe("DashboardPage (view)", () => {
   it("shows a failing widget's error inside that widget only", async () => {
     open("viewer", {
       "POST /api/widget-data": ({ body }) => {
-        const type = (body as { type: WidgetType }).type;
+        const type = (body as { type: DataWidgetType }).type;
         return type === "table" ? { status: 500, body: { detail: "query failed" } } : { body: dataFor(type) };
       },
     });

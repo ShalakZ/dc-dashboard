@@ -517,7 +517,7 @@ describe("the open row of the asset tree is told apart from a pick (W7s)", () =>
 });
 
 describe("the dashboard widgets are not in app.css (w13)", () => {
-  // The widgets' rules (the card, the five types, the editor preview, the grid library's chrome and the wrapping of a long asset name in a table)
+  // The widgets' rules (the card, the six types, the editor preview, the grid library's chrome and the wrapping of a long asset name in a table)
   // are styles/widgets.css, and their pins are styles/widgets.css.test.ts.
   const widgetSelector = /\.(widget-|stat(?![\w-])|stat-|gauge|dash-grid|dash-cell|react-grid|react-resizable|chip-(long|short))/;
   it("names no widget, stat, gauge or grid-library class in any selector", () => {

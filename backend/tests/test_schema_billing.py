@@ -10,7 +10,7 @@ from dcdash.core.models import Dashboard, Tariff, Widget
 from tests.helpers import make_asset, refresh_policies
 
 PRESETS = ["1h", "6h", "24h", "7d", "30d", "today", "yesterday", "this_month", "last_month"]
-WIDGET_TYPES = ["timeseries", "bar", "stat", "gauge", "table"]
+WIDGET_TYPES = ["timeseries", "bar", "stat", "gauge", "table", "text"]
 DAY = date(2026, 10, 1)
 
 
@@ -119,8 +119,8 @@ async def test_every_widget_type_is_accepted(db, type_):
     await add_widget(db, await add_dashboard(db), type_)
 
 
-@pytest.mark.parametrize("bad", ["pie", "", "Stat", "line"])
-async def test_a_widget_type_outside_the_five_is_rejected(db, bad):
+@pytest.mark.parametrize("bad", ["pie", "", "Stat", "line", "Text"])
+async def test_a_widget_type_outside_the_six_is_rejected(db, bad):
     dashboard = await add_dashboard(db)
     with pytest.raises(asyncpg.CheckViolationError):
         await add_widget(db, dashboard, bad)

@@ -150,12 +150,30 @@ async def name_taken(db: AsyncSession, name: str, except_id: int | None = None) 
     return await db.scalar(query.limit(1)) is not None
 
 
+def _title_char_problem(char: str) -> str | None:
+    """A title is one line of plain text: a TAB is allowed, no other control character, no lone surrogate. The database
+    cannot store a NUL, and an answer that echoes a lone surrogate cannot be encoded."""
+    code = ord(char)
+    if code == 0x09:
+        return None
+    if code <= 0x1F or 0x7F <= code <= 0x9F:
+        return f"contains a control character (U+{code:04X})"
+    if 0xD800 <= code <= 0xDFFF:
+        return f"contains a character that cannot be stored (U+{code:04X})"
+    return None
+
+
 def checked_configs(widgets: Sequence[WidgetIn]) -> list[dict[str, Any]]:
     """Validate every widget before anything is written; the normalized configs are what gets stored."""
     if len(widgets) > MAX_WIDGETS:
         raise HTTPException(422, f"a dashboard can have at most {MAX_WIDGETS} widgets (got {len(widgets)})")
     configs = []
     for number, widget in enumerate(widgets, start=1):
+        problems = [(char, _title_char_problem(char)) for char in widget.title]
+        bad_title = next((reason for _, reason in problems if reason), None)
+        if bad_title:  # the label shows the title with each offending character replaced by U+FFFD
+            shown = "".join(chr(0xFFFD) if reason else char for char, reason in problems)
+            raise HTTPException(422, f'widget {number} ("{shown}"): title: {bad_title}')
         label = f'widget {number} ("{widget.title}")'
         if widget.x + widget.w > GRID_COLUMNS:
             raise HTTPException(

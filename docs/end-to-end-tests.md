@@ -364,6 +364,12 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   `COMPOSE_PROJECT_NAME` starts with `dcdash_e2e_`, skipped otherwise), seeds the three-panel history inside the stack, reads the real
   endpoint through the real drawer and checks that the headline, the count, the groups and the paths equal what the API answered, and
   that Panel B is listed as estimated; it removes the seed through the API afterwards.
+- `w22.spec.ts` (its own project, last in the list, after `w21`, the tail of the chain) checks the Text widget. It creates its own
+  dashboard `w22 <run>`, deletes it at the end and restores the look preference. It adds a heading, a paragraph and a divider through
+  the dialog, saves and reloads, in light and dark, and checks that no `/api/widget-data` request is made for a text widget. In edit mode
+  it checks the title bar, moving, resizing to one row and a 1-row heading at 1024 px wide. It drives the dialog by keyboard, checks the
+  counter (an emoji counts once) and the API refusals: a NUL in a title or a text, a CRLF kept as a line feed, and `type: "text"` on
+  `POST /api/widget-data` and `/api/widget-data/csv`.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

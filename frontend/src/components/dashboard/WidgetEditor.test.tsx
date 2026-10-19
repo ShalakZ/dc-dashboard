@@ -1,8 +1,8 @@
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Metric } from "../../api/types";
 import { toDrafts, type DraftWidget } from "../../lib/layout";
-import { assetList, authed, config, widget, widgetDataRoute } from "../../test/dashboardFixtures";
+import { assetList, authed, config, textWidget, widget, widgetDataRoute } from "../../test/dashboardFixtures";
 import { mockFetch } from "../../test/fetchMock";
 import { renderWithProviders } from "../../test/render";
 import { LiveValuesContext } from "./LiveValuesContext";
@@ -15,12 +15,12 @@ type Call = { method: string; path: string; body: unknown };
 /** Assets 5 and 6 are mapped to active power; nothing else is mapped to anything (what the discovery graph says in these tests). */
 const POWER = new Map<Metric, Set<number>>([["active_power_kw", new Set([5, 6])]]);
 
-function open(initial: DraftWidget | null = null, metricAssets: Map<Metric, Set<number>> = POWER) {
+function open(initial: DraftWidget | null = null, metricAssets: Map<Metric, Set<number>> = POWER, otherTitles: string[] = []) {
   const calls = mockFetch({ ...authed("operator"), "POST /api/widget-data": widgetDataRoute });
   const onSave = vi.fn();
   const onClose = vi.fn();
   renderWithProviders(
-    <WidgetEditor initial={initial} assets={assetList} metricAssets={metricAssets} dashboardRange="24h" timezone="Asia/Qatar" onSave={onSave} onClose={onClose} />,
+    <WidgetEditor initial={initial} assets={assetList} metricAssets={metricAssets} dashboardRange="24h" timezone="Asia/Qatar" otherTitles={otherTitles} onSave={onSave} onClose={onClose} />,
   );
   return { calls, onSave, onClose };
 }
@@ -272,7 +272,7 @@ describe("the preview", () => {
     // The same stat config drawn once the way a dashboard draws it, once in the dialog's preview: the card has the same shape and text.
     const [draft] = toDrafts([widget(1, "stat", { title: "Hall power", config: config({ aggregation: "last" }) })]);
     mockFetch({ ...authed("operator"), "POST /api/widget-data": widgetDataRoute });
-    renderWithProviders(<WidgetView widgetKey="1" type="stat" title="Hall power" config={draft.config} dashboardRange="24h" timezone="Asia/Qatar" />);
+    renderWithProviders(<WidgetView widgetKey="1" type="stat" title="Hall power" config={config({ aggregation: "last" })} dashboardRange="24h" timezone="Asia/Qatar" />);
     const dashboardCard = await screen.findByRole("region", { name: "Hall power" });
     await within(dashboardCard).findByText("10.50");
     const shape = (card: HTMLElement) => {
@@ -308,12 +308,275 @@ describe("the preview", () => {
     const register = vi.fn();
     renderWithProviders(
       <LiveValuesContext.Provider value={{ values: new Map(), connected: false, register }}>
-        <WidgetEditor initial={draft} assets={assetList} metricAssets={POWER} dashboardRange="24h" timezone="Asia/Qatar" onSave={vi.fn()} onClose={vi.fn()} />
+        <WidgetEditor initial={draft} assets={assetList} metricAssets={POWER} dashboardRange="24h" timezone="Asia/Qatar" otherTitles={[]} onSave={vi.fn()} onClose={vi.fn()} />
       </LiveValuesContext.Provider>,
     );
     await screen.findByText(/10\.5/); // the stat's figure: the preview is up
     const owners = register.mock.calls.map(([owner]) => owner);
     expect(owners.length).toBeGreaterThan(0);
     expect(owners).not.toContain(draft.key);
+  });
+});
+
+describe("a text widget", () => {
+  const EMOJI = String.fromCodePoint(0x1f600);
+  const type = () => screen.getByLabelText("Type");
+  const title = () => screen.getByLabelText("Title");
+  const text = () => screen.getByLabelText("Text");
+  const typeText = async (words: string) => {
+    await userEvent.click(text());
+    await userEvent.paste(words);
+  };
+  const choose = async (kind: string) => userEvent.selectOptions(type(), kind);
+  const style = (name: string) => userEvent.selectOptions(screen.getByLabelText("Style"), name);
+  const preview = () => document.querySelector<HTMLElement>(".widget-preview");
+
+  it("is the last choice of Type, and shows Type, Title, Style and Text only", async () => {
+    open();
+    expect(optionTexts("Type")).toEqual(["Time series", "Bar chart", "Stat", "Gauge", "Table", "Text"]);
+    await choose("text");
+    expect(screen.getByLabelText("Style")).toHaveValue("heading");
+    expect(optionTexts("Style")).toEqual(["Heading", "Paragraph", "Divider"]);
+    expect(text().tagName).toBe("TEXTAREA");
+    expect(text()).toHaveAttribute("rows", "5");
+    expect(text()).not.toHaveAttribute("maxlength");
+    for (const hidden of ["Source", "Metric", "Aggregation", "Widget range", "Bars", "Gauge minimum", "Gauge maximum"]) expect(screen.queryByLabelText(hidden)).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument(); // the asset picker
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.queryByText(/mapping for/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/removed asset/)).not.toBeInTheDocument();
+    expect(screen.getAllByLabelText(/type/i)).toHaveLength(1); // no new label may match an existing lookup by substring
+    expect(screen.getAllByLabelText(/title/i)).toHaveLength(1);
+  });
+
+  it("keeps the focus on Title when it opens and on Type when the type changes", async () => {
+    open();
+    expect(title()).toHaveFocus();
+    await choose("text");
+    expect(type()).toHaveFocus();
+    await choose("stat");
+    expect(type()).toHaveFocus();
+  });
+
+  it("counts characters in a line of its own under the text, tied to it, and not announced", async () => {
+    open();
+    await choose("text");
+    expect(text()).toHaveAccessibleDescription("0 of 200 characters");
+    const counter = screen.getByText("0 of 200 characters");
+    expect(counter).toHaveAttribute("id", text().getAttribute("aria-describedby"));
+    expect(counter).not.toHaveAttribute("aria-live");
+    expect(counter).not.toHaveAttribute("role");
+    expect(counter.closest("[aria-live]")).toBeNull();
+    expect(counter.className).toContain("widget-text-count"); // the stylesheet reserves its line (min-height: 1lh)
+    await style("paragraph");
+    expect(screen.getByText("0 of 2,000 characters")).toBeInTheDocument();
+    await typeText(`a${EMOJI}b`);
+    expect(screen.getByText("3 of 2,000 characters")).toBeInTheDocument();
+  });
+
+  it("counts an emoji once and the normalized text, not what was typed", async () => {
+    open();
+    await choose("text");
+    await typeText(EMOJI);
+    expect(screen.getByText("1 of 200 characters")).toBeInTheDocument();
+    await userEvent.clear(text());
+    await typeText(`  ${EMOJI}${EMOJI}  `);
+    expect(screen.getByText("2 of 200 characters")).toBeInTheDocument(); // the ends are trimmed
+    await style("paragraph");
+    await userEvent.clear(text());
+    await typeText("one\r\ntwo");
+    expect(screen.getByText("7 of 2,000 characters")).toBeInTheDocument(); // CRLF is one line feed
+  });
+
+  it("has no text and no counter for a divider, and gives them back with the style", async () => {
+    open();
+    await choose("text");
+    await typeText("kept");
+    await style("divider");
+    expect(screen.queryByLabelText("Text")).not.toBeInTheDocument();
+    expect(screen.queryByText(/characters$/)).not.toBeInTheDocument();
+    await style("heading");
+    expect(text()).toHaveValue("kept");
+    expect(screen.getByText("4 of 200 characters")).toBeInTheDocument();
+  });
+
+  it("refuses a heading with a line break, and a text that is too long, and says why", async () => {
+    const { onSave } = open();
+    await choose("text");
+    await userEvent.type(text(), "one{Enter}two");
+    expect(screen.getByRole("list")).toHaveTextContent("A heading is one line.");
+    expect(save()).toBeDisabled();
+    expect(screen.getByText("Complete the form to see a preview.")).toBeInTheDocument();
+    await style("paragraph");
+    expect(save()).toBeEnabled(); // a paragraph may have line breaks
+    await userEvent.clear(text());
+    await typeText("a".repeat(2001));
+    expect(screen.getByText("2,001 of 2,000 characters")).toBeInTheDocument(); // the counter says by how much
+    expect(screen.getByText("The text can be at most 2,000 characters.")).toBeInTheDocument();
+    expect(save()).toBeDisabled();
+    await userEvent.click(save());
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("saves the style and the normalized text: heading, paragraph, divider", async () => {
+    const { onSave } = open();
+    await choose("text");
+    await typeText("  Cooling plant ");
+    await userEvent.click(save());
+    expect(onSave).toHaveBeenLastCalledWith({ type: "text", title: "Cooling plant", config: { style: "heading", text: "Cooling plant" } });
+    await style("paragraph");
+    await userEvent.clear(text());
+    await typeText("  one\r\ntwo  ");
+    await userEvent.click(save());
+    expect(onSave).toHaveBeenLastCalledWith({ type: "text", title: "one", config: { style: "paragraph", text: "one\ntwo" } });
+    await style("divider");
+    await userEvent.click(save());
+    expect(onSave).toHaveBeenLastCalledWith({ type: "text", title: "Divider", config: { style: "divider", text: "" } }); // the typed text is not sent
+  });
+
+  it("needs no text for a divider, even though text was typed before the style changed", async () => {
+    open();
+    await choose("text");
+    expect(save()).toBeDisabled(); // a heading needs its text
+    await style("divider");
+    expect(save()).toBeEnabled();
+    expect(within(preview()!).getByRole("separator")).toBeInTheDocument();
+  });
+
+  describe("the title", () => {
+    it("follows the text until the person types a title", async () => {
+      open();
+      await choose("text");
+      expect(title()).toHaveValue("Heading");
+      await typeText("Cooling plant");
+      expect(title()).toHaveValue("Cooling plant");
+      await style("paragraph");
+      await userEvent.clear(text());
+      await typeText("First line\nsecond line");
+      expect(title()).toHaveValue("First line");
+      await userEvent.clear(title());
+      await userEvent.type(title(), "Mine");
+      await userEvent.clear(text());
+      await typeText("Another text");
+      expect(title()).toHaveValue("Mine");
+      await style("divider");
+      expect(title()).toHaveValue("Mine");
+    });
+
+    it("cuts a long first line at 40 characters with one ellipsis", async () => {
+      open();
+      await choose("text");
+      await typeText("a".repeat(45));
+      expect(title()).toHaveValue(`${"a".repeat(40)}…`);
+    });
+
+    it("takes the first free name among the other widgets' titles", async () => {
+      open(null, POWER, ["Divider", "Hall A"]);
+      await choose("text");
+      await style("divider");
+      expect(title()).toHaveValue("Divider 2");
+      await style("heading");
+      await typeText("Hall A");
+      expect(title()).toHaveValue("Hall A 2"); // two headings with one first line
+    });
+
+    it("is cleared when the type changes to a data type before the title was typed, and a typed title is kept", async () => {
+      open();
+      await choose("text");
+      await typeText("Cooling plant");
+      expect(title()).toHaveValue("Cooling plant");
+      await choose("stat");
+      expect(title()).toHaveValue("");
+      await choose("text");
+      expect(title()).toHaveValue("Cooling plant"); // the text came back with the type, and so does its automatic title
+      await userEvent.type(title(), "!");
+      await choose("table");
+      expect(title()).toHaveValue("Cooling plant!");
+    });
+
+    it("keeps a data widget's title when it becomes a text widget and back", async () => {
+      open();
+      await userEvent.type(title(), "Hall power");
+      await choose("text");
+      expect(title()).toHaveValue("Hall power");
+      await choose("bar");
+      expect(title()).toHaveValue("Hall power");
+    });
+
+    it("does not prefill when an existing text widget is edited", async () => {
+      const [draft] = toDrafts([textWidget(1, "paragraph", "Some words", { title: "Notes" })]);
+      const { onSave } = open(draft, POWER, ["Notes 2"]);
+      expect(screen.getByRole("dialog", { name: "Edit widget" })).toBeInTheDocument();
+      expect(title()).toHaveValue("Notes");
+      expect(screen.getByLabelText("Style")).toHaveValue("paragraph");
+      expect(text()).toHaveValue("Some words");
+      await userEvent.clear(text());
+      await typeText("Other words");
+      await style("heading");
+      expect(title()).toHaveValue("Notes");
+      await choose("stat");
+      expect(title()).toHaveValue("Notes");
+      await choose("text");
+      await userEvent.click(save());
+      expect(onSave).toHaveBeenCalledWith({ type: "text", title: "Notes", config: { style: "heading", text: "Other words" } });
+    });
+  });
+
+  describe("the preview", () => {
+    it("draws at once, from the form, and asks the API nothing", async () => {
+      const { calls } = open();
+      await choose("text");
+      expect(screen.getByText("Complete the form to see a preview.")).toBeInTheDocument();
+      await typeText("Cooling plant");
+      // No debounce: the card is there in the same step as the text.
+      expect(preview()).toHaveAttribute("data-type", "text");
+      expect(within(preview()!).getByRole("heading", { level: 2, name: "Cooling plant" })).toBeInTheDocument();
+      await style("paragraph");
+      expect(within(preview()!).getByRole("region", { name: "Cooling plant" })).toHaveTextContent("Cooling plant");
+      await style("divider");
+      expect(within(preview()!).getByRole("separator")).toBeInTheDocument();
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); }); // longer than the data preview's delay; the settled copy of the form updates inside it
+      expect(previews(calls)).toHaveLength(0);
+      expect(within(preview()!).queryByRole("button")).not.toBeInTheDocument();
+    });
+
+    it("shows the text literally", async () => {
+      open();
+      await choose("text");
+      await style("paragraph");
+      await typeText("<b>x</b>");
+      expect(preview()!.querySelector("b")).toBeNull();
+      expect(within(preview()!).getByText("<b>x</b>")).toBeInTheDocument();
+    });
+  });
+
+  it("restores the data form after Text -> Time series, and the text after Time series -> Text", async () => {
+    const { onSave } = open();
+    await userEvent.type(title(), "Hall power");
+    await userEvent.click(screen.getByRole("checkbox", { name: "LV Panel 1" }));
+    await userEvent.selectOptions(screen.getByLabelText("Source"), "energy");
+    await choose("text");
+    await typeText("Words");
+    await choose("timeseries");
+    expect(screen.getByLabelText("Source")).toHaveValue("energy");
+    expect(screen.getByRole("checkbox", { name: "LV Panel 1" })).toBeChecked();
+    expect(title()).toHaveValue("Hall power");
+    expect(screen.queryByLabelText("Text")).not.toBeInTheDocument();
+    await choose("text");
+    expect(text()).toHaveValue("Words");
+    await choose("timeseries");
+    await userEvent.click(save());
+    expect(onSave).toHaveBeenCalledWith({
+      type: "timeseries", title: "Hall power", config: { ...power, source: "energy", metric: null, aggregation: "sum" },
+    });
+  });
+
+  it("opens a text widget with the data form blank behind it", async () => {
+    const [draft] = toDrafts([textWidget(1, "heading", "Plant", { title: "Plant" })]);
+    open(draft);
+    await choose("stat");
+    expect(screen.getByLabelText("Source")).toHaveValue("metric");
+    expect(screen.getAllByRole("radio")).toHaveLength(2);
+    expect(screen.getByText("Choose an asset.")).toBeInTheDocument();
   });
 });

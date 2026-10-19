@@ -290,6 +290,90 @@ describe("editing", () => {
     expect((putBody(calls) as { widgets: unknown[] }).widgets).toEqual([{ type: "stat", title: "Current power", config: now.config, x: 4, y: 0, w: 9, h: 5 }]);
   });
 
+  describe("a text widget", () => {
+    const widgetDataPosts = (calls: Call[]) => calls.filter((c) => c.method === "POST" && c.path === "/api/widget-data");
+    /** The types the data requests asked about, once each: the stat card is the only data widget here, so a request of any other type would be a text widget's. */
+    const askedAbout = (calls: Call[]) => [...new Set(widgetDataPosts(calls).map((c) => (c.body as { type: string }).type))];
+    /** Add a text widget of `style` through the dialog (the Type select, then Style and Text), and press Save widget. */
+    async function addText(style: "heading" | "paragraph" | "divider", words: string) {
+      await userEvent.click(add());
+      await userEvent.selectOptions(screen.getByLabelText("Type"), "text");
+      await userEvent.selectOptions(screen.getByLabelText("Style"), style);
+      if (style !== "divider") {
+        await userEvent.click(screen.getByLabelText("Text"));
+        await userEvent.paste(words);
+      }
+      await userEvent.click(screen.getByRole("button", { name: "Save widget" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    }
+
+    it("adds a heading through the dialog with the default size, names its Edit and Delete buttons by the title, and saves type text", async () => {
+      const { calls } = open("operator");
+      await startEditing();
+      await waitFor(() => expect(widgetDataPosts(calls).length).toBeGreaterThan(0)); // the stat card's own requests (the viewer's, then the editor's)
+      await addText("heading", "Cooling plant");
+      const card = within(await screen.findByRole("region", { name: "Cooling plant" }));
+      expect(card.getByRole("button", { name: "Edit Cooling plant" })).toBeInTheDocument();
+      expect(card.getByRole("button", { name: "Delete Cooling plant" })).toBeInTheDocument();
+      expect(card.getByRole("heading", { level: 2, name: "Cooling plant" })).toHaveClass("widget-title"); // the title; the heading text is a styled div
+      await userEvent.click(saveButton());
+      const size = defaultSize("text", "heading");
+      expect(size).toEqual({ w: 6, h: 2 });
+      expect((putBody(calls) as { widgets: unknown[] }).widgets).toEqual([
+        { type: "stat", title: "Current power", config: now.config, x: 0, y: 0, w: 3, h: 2 },
+        { type: "text", title: "Cooling plant", config: { style: "heading", text: "Cooling plant" }, ...nextPosition(toDrafts(base.widgets), size), ...size },
+      ]);
+      expect(askedAbout(calls)).toEqual(["stat"]); // adding and saving a text widget asked for no data
+    });
+
+    it("adds a divider 12 wide and 1 high, with no text", async () => {
+      const { calls } = open("operator");
+      await startEditing();
+      await addText("divider", "");
+      expect(await screen.findByRole("region", { name: "Divider" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Edit Divider" })).toBeInTheDocument();
+      await userEvent.click(saveButton());
+      const size = defaultSize("text", "divider");
+      expect(size).toEqual({ w: 12, h: 1 });
+      expect((putBody(calls) as { widgets: unknown[] }).widgets[1]).toEqual({
+        type: "text", title: "Divider", config: { style: "divider", text: "" }, ...nextPosition(toDrafts(base.widgets), size), ...size,
+      });
+    });
+
+    it("numbers a second automatic title, edits a text widget in place, and deletes it", async () => {
+      const { calls } = open("operator");
+      await startEditing();
+      await addText("divider", "");
+      await addText("divider", "");
+      expect(screen.getByRole("button", { name: "Edit Divider" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Edit Divider 2" })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Edit Divider 2" })); // opening it must not offer its own title as taken
+      expect(screen.getByRole("dialog", { name: "Edit widget" })).toBeInTheDocument();
+      expect(screen.getByLabelText("Title")).toHaveValue("Divider 2");
+      await userEvent.selectOptions(screen.getByLabelText("Style"), "paragraph");
+      expect(screen.getByLabelText("Title")).toHaveValue("Divider 2"); // an existing title is never prefilled
+      await userEvent.click(screen.getByLabelText("Text"));
+      await userEvent.paste("Some words");
+      await userEvent.click(screen.getByRole("button", { name: "Save widget" }));
+      await userEvent.click(screen.getByRole("button", { name: "Delete Divider" }));
+      expect(screen.queryByRole("region", { name: "Divider" })).not.toBeInTheDocument();
+      await userEvent.click(saveButton());
+      const widgets = (putBody(calls) as { widgets: { type: string; title: string; config: unknown }[] }).widgets;
+      expect(widgets.map((w) => w.title)).toEqual(["Current power", "Divider 2"]);
+      expect(widgets[1]).toMatchObject({ type: "text", config: { style: "paragraph", text: "Some words" } });
+    });
+
+    it("sends a request for the stat card only: the text cards ask for no data", async () => {
+      const { calls } = open("operator");
+      await startEditing();
+      await addText("paragraph", "Line one\nline two");
+      await addText("heading", "Plant");
+      await screen.findByRole("region", { name: "Plant" });
+      await new Promise((resolve) => setTimeout(resolve, 350)); // past the data preview's delay
+      expect(askedAbout(calls)).toEqual(["stat"]);
+    });
+  });
+
   it("will not add a 25th widget", async () => {
     const full = dashboard({ widgets: Array.from({ length: 24 }, (_, i) => widget(i + 1, "stat", { title: `W${i + 1}`, x: 0, y: i * 2, w: 3, h: 2 })) });
     open("operator", "/dashboards/3", { "GET /api/dashboards/3": { body: full } });

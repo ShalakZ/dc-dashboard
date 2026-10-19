@@ -11,7 +11,7 @@ import { Icon } from "../Icon";
 import { TrashButton } from "../TrashButton";
 import { DashboardGrid } from "./DashboardGrid";
 import { WidgetEditor, type EditorFields } from "./WidgetEditor";
-import { WidgetView } from "./WidgetView";
+import { WidgetCard } from "./WidgetCard";
 
 interface Props {
   /** The dashboard as loaded when editing started; its `updated_at` is what Save sends. Later changes to this prop are ignored. */
@@ -73,9 +73,11 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
     const key = newKey();
     if (!target) setRemoved(null);
     setDrafts((current) => {
-      if (target) return current.map((d) => (d.key === target.key ? { ...d, ...fields } : d));
-      const size = defaultSize(fields.type);
-      return compactVertical([...current, { key, ...fields, ...size, ...nextPosition(current, size) }]);
+      // Each branch spreads one member of the `fields` union, so the result is a draft of one kind (type and config stay together).
+      if (target) return current.map((d): DraftWidget => (d.key !== target.key ? d : fields.type === "text" ? { ...d, ...fields } : { ...d, ...fields }));
+      const size = defaultSize(fields.type, fields.type === "text" ? fields.config.style : undefined);
+      const placed = { key, ...size, ...nextPosition(current, size) };
+      return compactVertical<DraftWidget>([...current, fields.type === "text" ? { ...placed, ...fields } : { ...placed, ...fields }]);
     });
     setDialog(null);
   };
@@ -103,8 +105,8 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
   };
 
   const renderWidget = (d: DraftWidget) => (
-    <WidgetView
-      widgetKey={d.key} type={d.type} title={d.title} config={d.config} dashboardRange={range} timezone={timezone}
+    <WidgetCard
+      widget={d} widgetKey={d.key} dashboardRange={range} timezone={timezone}
       csv={false} details={false} live={false} dragHandle
       actions={
         // The grid does not start a drag from this span (`cancel: ".widget-actions"` in DashboardGrid).
@@ -161,6 +163,7 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
       {dialog && assets.data && metricAssets && (
         <WidgetEditor
           initial={dialog.draft} assets={assets.data} metricAssets={metricAssets} dashboardRange={range} timezone={timezone}
+          otherTitles={drafts.filter((d) => d.key !== dialog.draft?.key).map((d) => d.title)}
           onSave={accept} onClose={() => setDialog(null)}
         />
       )}

@@ -175,6 +175,7 @@ describe("styles/widgets.css", () => {
       "widget-table", "num", "cell-age",
       "gauge", "gauge-arc", "gauge-svg", "gauge-track", "gauge-fill", "gauge-scale", "gauge-figure", "gauge-name",
       "widget-chart", "widget-preview",
+      "widget-text", "widget-text-heading", "widget-text-paragraph", "widget-text-rule", "widget-text-body", "widget-text-count", "widget-issues",
     ]) expect(named.has(cls), `.${cls}`).toBe(true);
   });
 
@@ -311,7 +312,7 @@ describe("styles/widgets.css", () => {
     });
 
     it("only the first column wraps a long name; the figure never splits and the age may drop under it", () => {
-      const wrapping = rules.filter((r) => /overflow-wrap:\s*anywhere/.test(r.body)).map((r) => r.selector);
+      const wrapping = rules.filter((r) => /overflow-wrap:\s*anywhere/.test(r.body) && !r.selector.includes("widget-text")).map((r) => r.selector); // (the text widget wraps its own words: see below)
       expect(wrapping).toEqual([".widget-table td:first-child"]);
       expect(bodyOf(".widget-table .cell-age")).toMatch(/display:\s*inline-block/);
       expect(bodyOf(".widget-table .cell-age")).toMatch(/white-space:\s*nowrap/);
@@ -426,6 +427,71 @@ describe("styles/widgets.css", () => {
 
     it("the edit header is the grab area", () => {
       expect(bodyOf(".dash-grid-edit .widget-drag-handle")).toMatch(/cursor:\s*grab/);
+    });
+  });
+
+  describe("the text widget (w22)", () => {
+    const textRules = rules.filter((r) => /\.widget-text/.test(r.selector));
+
+    it("adds no custom property, no colour of its own, no italic, monospace or pill shape (the file-wide guards cover the rest)", () => {
+      expect(textRules.length).toBeGreaterThan(5);
+      for (const rule of textRules) {
+        expect(rule.body, `"${rule.selector}"`).not.toMatch(/(^|[;\s])--[\w-]+\s*:/);
+        expect(rule.body, `"${rule.selector}"`).not.toMatch(/999px|border-radius:\s*50%/);
+      }
+    });
+
+    it("the heading rule has two classes (0,2,0) so .dialog h2 cannot restyle it in the editor preview; 18px / 600, wrapping anywhere, centred by auto margins", () => {
+      const heading = rules.filter((r) => /\.widget-text-heading/.test(r.selector));
+      expect(heading.map((r) => r.selector)).toEqual([".widget-frame .widget-text-heading"]);
+      expect(heading[0].body).toMatch(/font-size:\s*var\(--fs-lg\)/);
+      expect(heading[0].body).toMatch(/font-weight:\s*600/);
+      expect(heading[0].body).toMatch(/overflow-wrap:\s*anywhere/);
+      expect(heading[0].body).toMatch(/margin:\s*auto 0/);
+    });
+
+    it("a paragraph keeps its line breaks, wraps anywhere, and scrolls inside the card instead of being cut off", () => {
+      expect(bodyOf(".widget-text-paragraph")).toMatch(/white-space:\s*pre-wrap/);
+      expect(bodyOf(".widget-text-paragraph")).toMatch(/overflow-wrap:\s*anywhere/);
+      expect(bodyOf(".widget-text-paragraph")).toMatch(/font-size:\s*var\(--fs-base\)/);
+      expect(bodyOf('.widget-text[data-style="paragraph"] > .widget-text-paragraph')).toMatch(/overflow-y:\s*auto/);
+      expect(bodyOf('.widget-text[data-style="heading"]')).toMatch(/overflow-y:\s*auto/);
+    });
+
+    it("a divider in view mode is a bare rule across its cell: no ground, border or shadow, one --border line, centred", () => {
+      const cell = bodyOf('.widget-text[data-style="divider"]');
+      expect(cell).toMatch(/display:\s*flex/);
+      expect(cell).toMatch(/align-items:\s*center/);
+      expect(cell).toMatch(/height:\s*100%/);
+      expect(cell).not.toMatch(/background|box-shadow|border/);
+      expect(bodyOf(".widget-text-rule")).toMatch(/border:\s*0/);
+      expect(bodyOf(".widget-text-rule")).toMatch(/border-top:\s*1px solid var\(--border\)/);
+    });
+
+    it("in edit mode the body has no vertical padding (a one-row card is 42px under the 36px header) and the counter line is one line tall", () => {
+      const body = bodyOf(".widget-body:has(> .widget-text-body)");
+      expect(body).toMatch(/padding-top:\s*0/);
+      expect(body).toMatch(/padding-bottom:\s*0/);
+      expect(bodyOf(".widget-text-count")).toMatch(/min-height:\s*1lh/);
+      expect(bodyOf(".widget-text-count")).toMatch(/font-size:\s*var\(--fs-xs\)/);
+      expect(bodyOf(".widget-text-count")).toMatch(/color:\s*var\(--text-2\)/);
+    });
+
+    it("the dialog's issue list has a slot that is always there and one line tall, so a message appearing moves nothing (review W2)", () => {
+      expect(bodyOf(".widget-issues")).toMatch(/min-height:\s*1lh/);
+    });
+
+    it("in a narrow window a heading and a divider take their content's height, not a chart's 280px (review W4)", () => {
+      const narrow = (r: Rule) => r.at.some((a) => a.startsWith("@media") && a.includes("max-width: 700px"));
+      expect(bodyOf(".dash-cell", narrow)).toMatch(/height:\s*280px/);
+      const cells = bodyOf('.dash-cell:has(> .widget-text[data-style="divider"]), .dash-cell:has(> .widget-text[data-style="heading"])', narrow);
+      expect(cells).toMatch(/height:\s*auto/);
+      expect(bodyOf('.dash-cell > .widget-text[data-style="divider"]', narrow)).toMatch(/height:\s*auto/);
+      expect(bodyOf('.dash-cell > .widget-text[data-style="heading"]', narrow)).toMatch(/min-height:\s*56px/);
+    });
+
+    it("the card chrome of a heading or a paragraph is the .widget-frame's own (no second set of card tokens)", () => {
+      for (const rule of textRules) expect(rule.body, `"${rule.selector}"`).not.toMatch(/--widget-(bg|border|shadow|radius)/);
     });
   });
 

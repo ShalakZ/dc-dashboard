@@ -1,6 +1,7 @@
 """Migration 0012 (W11): the table `billing_closes` (a closed billing month: the figures month_costs() gave at close time).
 
-The head is pinned here, by the newest migration's test (test_schema_roles_kinds.py pins only that 0011 follows 0010)."""
+This test pins only that 0012 follows 0011 (test_schema_roles_kinds.py does the same for 0011); the head is pinned by the
+newest migration's test (test_schema_widget_text.py)."""
 import asyncpg
 import pytest
 
@@ -80,11 +81,8 @@ async def reopen(db, close_id: int) -> None:
 
 # ---- the head ---------------------------------------------------------------------------------------------------------------
 
-def test_the_migration_follows_0011_and_is_the_only_head():
-    assert "0011 -> 0012" in run_alembic("history", "-r", "0011:0012").stdout
-    heads = run_alembic("heads")
-    assert heads.returncode == 0, heads.stderr
-    assert [line.split()[0] for line in heads.stdout.splitlines() if line.strip()] == ["0012"]
+def test_the_migration_follows_0011():
+    assert "0011 -> 0012" in run_alembic("history", "-r", "0011:0012").stdout  # the one head is pinned by the newest migration's test
 
 
 # ---- up: the table and what it holds ----------------------------------------------------------------------------------------

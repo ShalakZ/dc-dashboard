@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useWidgetData } from "../../api/queries";
-import type { RangePreset, WidgetConfig, WidgetType } from "../../api/types";
+import type { RangePreset, WidgetConfig, DataWidgetType } from "../../api/types";
 import { isLiveWidget, pointIdsOf } from "../../lib/live";
 import { isRolling } from "../../lib/ranges";
 import { flagsOf, markerHint, sinceText } from "../../lib/widgetFormat";
@@ -12,7 +12,7 @@ import { WidgetFrame } from "./WidgetFrame";
 export interface WidgetViewProps {
   /** Unique within the page; names this widget in the live registry. */
   widgetKey: string;
-  type: WidgetType;
+  type: DataWidgetType;
   title: string;
   config: WidgetConfig;
   /** The range a widget without its own `config.range` inherits. */

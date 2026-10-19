@@ -1,7 +1,7 @@
 """Migration 0011 (W7o): data only. The new permission `assets.kinds` ("Manage asset kinds") is appended to every custom role that
 holds `assets.edit`, because until now `assets.edit` was what allowed every change to the asset kinds list.
 
-This test pins only that 0011 follows 0010; the head is pinned by the newest migration's test (test_schema_billing_closes.py)."""
+This test pins only that 0011 follows 0010; the head is pinned by the newest migration's test (test_schema_widget_text.py)."""
 import importlib.util
 from pathlib import Path
 

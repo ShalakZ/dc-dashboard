@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from billing_helpers import add_counter, add_tariff, at, set_currency, set_zone
-from helpers import insert_readings, login_as, make_asset, make_mapping, make_point, make_source, settle_rollups
+from helpers import insert_readings, login_as, make_asset, make_mapping, make_point, make_role, make_source, settle_rollups
 
 from dcdash.api import widget_data as widget_data_api
 from dcdash.core.db import get_sessionmaker
@@ -764,6 +764,42 @@ async def test_viewer_may_read_and_anonymous_may_not(client, db):
     await login_as(client, db, "viewer")
     for path in PATHS:
         assert (await client.post(path, json=widget_body("stat", [asset]))).status_code == 200
+
+
+TEXT_CONFIG = {"style": "heading", "text": "Hall A"}
+
+
+@pytest.mark.parametrize("path", PATHS)
+@pytest.mark.parametrize("config", [TEXT_CONFIG, {}, {"style": "banner", "text": 5}, config_of([1])])
+async def test_a_text_widget_has_no_data_on_either_route(client, db, path, config):
+    # The refusal is the specific one whatever the config holds: it comes before the config is looked at.
+    await login_as(client, db, "viewer")
+    response = await client.post(path, json={"type": "text", "config": config, "range": "24h"})
+    assert response.status_code == 422 and response.json()["detail"] == "a text widget has no data"
+
+
+@pytest.mark.parametrize("path", PATHS)
+async def test_a_text_widget_request_still_needs_a_session_and_dashboards_view(client, db, path):
+    body = {"type": "text", "config": TEXT_CONFIG, "range": "24h"}
+    assert (await client.post(path, json=body)).status_code == 401
+    await make_role(db, "assets only", ["assets.view"])
+    await login_as(client, db, "assets only", username="a")
+    assert (await client.post(path, json=body)).status_code == 403  # the permission is checked first, as for every type
+    await client.post("/api/logout")
+    await login_as(client, db, "viewer")
+    assert (await client.post(path, json=body)).status_code == 422
+
+
+@pytest.mark.parametrize("path", PATHS)
+async def test_the_data_widgets_and_the_unknown_type_answer_as_before_next_to_text(client, db, path):
+    asset = await seed_standard(db)
+    await login_as(client, db, "viewer")
+    for widget_type in ("timeseries", "bar", "stat", "gauge", "table"):
+        extra = {"max": 100.0, "aggregation": "last"} if widget_type == "gauge" else {}
+        body = {"type": widget_type, "config": config_of([asset], **extra), "range": "24h"}
+        assert (await client.post(path, json=body)).status_code == 200, widget_type
+    pie = await client.post(path, json={"type": "pie", "config": config_of([asset]), "range": "24h"})
+    assert pie.status_code == 422 and "unknown widget type: pie" in str(pie.json()["detail"])
 
 
 INVALID = [

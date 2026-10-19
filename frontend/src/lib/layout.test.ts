@@ -1,15 +1,21 @@
 import { verticalCompactor } from "react-grid-layout";
-import type { Widget, WidgetConfig, WidgetType } from "../api/types";
+import type { DataWidget, TextStyle, TextWidget, WidgetConfig, WidgetType } from "../api/types";
 import { applyGrid, columnsOf, compactVertical, defaultSize, GRID_COLS, newKey, nextPosition, toDrafts, toGrid, type DraftWidget } from "./layout";
 
 const config: WidgetConfig = {
   assets: [1], source: "energy", metric: null, aggregation: "sum", range: null, bars: "asset", min: 0, max: null,
 };
-const widget = (id: number, over: Partial<Widget> = {}): Widget => ({
+const widget = (id: number, over: Partial<DataWidget> = {}): DataWidget => ({
   id, type: "stat", title: `w${id}`, config, x: 0, y: 0, w: 3, h: 2, ...over,
 });
-const draft = (key: string, over: Partial<DraftWidget> = {}): DraftWidget => ({
+const draft = (key: string, over: Partial<Omit<DataWidget, "id">> = {}): DraftWidget => ({
   key, type: "stat", title: key, config, x: 0, y: 0, w: 3, h: 2, ...over,
+});
+const textWidget = (id: number, style: TextStyle, over: Partial<TextWidget> = {}): TextWidget => ({
+  id, type: "text", title: `t${id}`, config: { style, text: style === "divider" ? "" : "Hall A" }, x: 0, y: 0, w: 6, h: 2, ...over,
+});
+const textDraft = (key: string, style: TextStyle, over: Partial<Omit<TextWidget, "id">> = {}): DraftWidget => ({
+  key, type: "text", title: key, config: { style, text: style === "divider" ? "" : "Hall A" }, x: 0, y: 0, w: 6, h: 2, ...over,
 });
 
 describe("toDrafts / toGrid", () => {
@@ -18,11 +24,18 @@ describe("toDrafts / toGrid", () => {
     expect(drafts).toEqual([{ key: "7", type: "stat", title: "w7", config, x: 3, y: 2, w: 3, h: 2 }]);
   });
 
+  it("keeps a text widget whole (its type and its text config), drops the id and normalises the rectangle like any other", () => {
+    const drafts = toDrafts([textWidget(9, "heading", { x: 10, y: -2, w: 6, h: 0 })]);
+    expect(drafts).toEqual([{ key: "9", type: "text", title: "t9", config: { style: "heading", text: "Hall A" }, x: 10, y: 0, w: 2, h: 1 }]);
+    expect(toDrafts([textWidget(4, "divider")])).toEqual([textDraft("4", "divider", { title: "t4" })]);
+  });
+
   it("maps drafts to grid items with per-type minimum sizes", () => {
-    const grid = toGrid([draft("7", { x: 3, y: 2, w: 4, h: 3 }), draft("8", { type: "timeseries" })]);
+    const grid = toGrid([draft("7", { x: 3, y: 2, w: 4, h: 3 }), draft("8", { type: "timeseries" }), textDraft("9", "paragraph")]);
     expect(grid).toEqual([
       { i: "7", x: 3, y: 2, w: 4, h: 3, minW: 2, minH: 2 },
       { i: "8", x: 0, y: 0, w: 3, h: 2, minW: 3, minH: 3 },
+      { i: "9", x: 0, y: 0, w: 6, h: 2, minW: 2, minH: 1 }, // a text card may shrink to one row
     ]);
   });
 
@@ -34,9 +47,26 @@ describe("toDrafts / toGrid", () => {
     expect(defaultSize("table")).toEqual({ w: 6, h: 4 });
   });
 
-  it.each<WidgetType>(["timeseries", "bar", "stat", "gauge", "table"])("a new %s fits its own minimum and the grid", (type) => {
-    const size = defaultSize(type);
-    const item = toGrid([draft("k", { type, ...size })])[0];
+  it("a new text widget is 6 x 2, and a divider is a full-width rule one row high", () => {
+    expect(defaultSize("text")).toEqual({ w: 6, h: 2 });
+    expect(defaultSize("text", "heading")).toEqual({ w: 6, h: 2 });
+    expect(defaultSize("text", "paragraph")).toEqual({ w: 6, h: 2 });
+    expect(defaultSize("text", "divider")).toEqual({ w: 12, h: 1 });
+    expect(defaultSize("stat", "divider")).toEqual({ w: 3, h: 2 }); // the style only matters for text
+  });
+
+  it("hands out a copy of the default size", () => {
+    const size = defaultSize("text", "divider");
+    size.w = 1;
+    expect(defaultSize("text", "divider")).toEqual({ w: 12, h: 1 });
+  });
+
+  it.each<[WidgetType, TextStyle | undefined]>([
+    ["timeseries", undefined], ["bar", undefined], ["stat", undefined], ["gauge", undefined], ["table", undefined],
+    ["text", "heading"], ["text", "paragraph"], ["text", "divider"],
+  ])("a new %s (%s) fits its own minimum and the grid", (type, style) => {
+    const size = defaultSize(type, style);
+    const item = toGrid([type === "text" ? textDraft("k", style ?? "heading", size) : draft("k", { type, ...size })])[0];
     expect(size.w).toBeGreaterThanOrEqual(item.minW ?? 0);
     expect(size.h).toBeGreaterThanOrEqual(item.minH ?? 0);
     expect(size.w).toBeLessThanOrEqual(GRID_COLS);

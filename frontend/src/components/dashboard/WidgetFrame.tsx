@@ -1,11 +1,11 @@
 import { useState, type ReactNode } from "react";
-import type { RangePreset, WidgetConfig, WidgetType } from "../../api/types";
+import type { RangePreset, WidgetConfig, DataWidgetType } from "../../api/types";
 import { downloadCsv } from "../../lib/download";
 import { noMetricText, removedText } from "../../lib/widgetFormat";
 import { Icon } from "../Icon";
 import { WidgetSkeleton } from "../Skeleton";
 
-export interface CsvSource { type: WidgetType; config: WidgetConfig; range: RangePreset }
+export interface CsvSource { type: DataWidgetType; config: WidgetConfig; range: RangePreset }
 
 interface Props {
   title: string;
@@ -24,7 +24,7 @@ interface Props {
   /** Present = show the Details button, which calls this with the button itself (the drawer gives focus back to it). It waits (aria-disabled) while the data loads. */
   details?: (opener: HTMLElement) => void;
   /** The widget's type: the shape of the loading skeleton. */
-  type?: WidgetType;
+  type?: DataWidgetType;
   /** Keep the footer line's room while loading, for a widget whose "since" line is known before its data (rolling energy and cost). */
   footSpace?: boolean;
   /** Extra header buttons (the editor's Edit and Delete); the caller wraps them in `.widget-actions`. */

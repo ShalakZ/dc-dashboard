@@ -7,7 +7,7 @@ import type {
   Asset, AssetImpact, AssetKind, AssetKindIn, AssetKindPatch, StarterPackResult, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingReopened, BillingSettings, Connector, MonthCheck, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
   FleetSummary, GeneralSettings, GraphModel, Metric, MoveBody, MovePreview, MoveResult, PermissionRow, PointRow, RangePreset, RemoveSourcesResult, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, SourceImpact, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
-  WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
+  WidgetData, DataWidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
 } from "./types";
 
 export const keys = {
@@ -689,7 +689,7 @@ export function useDeleteDashboard() {
  * figures stay, but only for the same widget: after a change of type or config (the editor's preview) the old answer
  * belongs to another kind of widget, so nothing is shown until the new one arrives.
  */
-export const useWidgetData = (type: WidgetType, config: WidgetConfig, preset: RangePreset, enabled = true) =>
+export const useWidgetData = (type: DataWidgetType, config: WidgetConfig, preset: RangePreset, enabled = true) =>
   useQuery({
     queryKey: [...keys.widgetData, type, config, preset] as const,
     enabled,

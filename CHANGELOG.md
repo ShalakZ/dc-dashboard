@@ -4,7 +4,7 @@ What each release (a merged wave) changed, newest first. Each section is headed 
 
 A release that needs an upgrade note carries it as a `###` entry: the schema revision it leads to when there is a migration, what
 changes and what you will notice, the pre-checks to run before it, how to verify it, whether its downgrade is lossless (which decides
-whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 18 releases have such an
+whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 19 releases have such an
 entry; 9 of them have no migration. The other releases need nothing beyond the usual steps of
 [Upgrading and going back](docs/upgrading.md); they have one or two lines here. Phase 1A, Phase 1C and Phase 2 brought migrations 0001
 to 0003, from before the release notes (see [Migrations in order](docs/upgrading.md#migrations-in-order)).
@@ -14,6 +14,26 @@ this page) and working up. **To go back,** use the commit each entry names ("the
 heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
+
+## w22 (2026-10-19, MERGE_PENDING)
+
+w22 adds a sixth dashboard widget, **Text**: a heading, a paragraph or a divider you write on the dashboard, with no data. Edit, Add widget,
+Type: Text, then Style and Text. The viewer draws a heading as a heading, a paragraph as a card and a divider as a plain line; in edit mode
+it keeps the usual title bar. Plain text only (no HTML, markdown or links); a heading holds 200 characters on one line, a paragraph 2,000.
+Migration `0013`, no new permission, no new route. `POST /api/widget-data` and its CSV answer 422 for a text widget, and a widget title
+with a control character other than a tab is refused with a 422 (a NUL was a server error). The save's audit row keeps a digest of the widgets, never the
+words. Rules and limits: [Dashboards and billing](docs/dashboards-and-billing.md).
+
+### Upgrading to w22 (migration 0013)
+
+Schema `0012` to `0013`. Downgrade: **lossless while no text widget exists; it refuses while one does** (the message names the
+dashboards: remove their text widgets in the dashboard editor, then downgrade). The code to go back to is `c73aca4` (the main before w22).
+Migration `0013` widens the allowed widget types from five to six (the `widgets_type_known` CHECK); it writes no row and needs no pre-check.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4: `docker compose up -d --build`.
+3. **Verify.** `docker compose exec api alembic current` prints `0013 (head)`; Add widget offers Type: Text.
+4. **Going back.** Follow [Upgrading and going back](docs/upgrading.md) with `<previous>` = `0012` and `<old commit>` = `c73aca4`.
 
 ## w21 (2026-10-18, 56da1bf)
 

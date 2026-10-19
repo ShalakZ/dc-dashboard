@@ -414,16 +414,28 @@ export interface MonthCheck {
   };
 }
 
-export const WIDGET_TYPES = ["timeseries", "bar", "stat", "gauge", "table"] as const;
+export const WIDGET_TYPES = ["timeseries", "bar", "stat", "gauge", "table", "text"] as const;
 export type WidgetType = (typeof WIDGET_TYPES)[number];
+/** The five types that show data: everything that fetches takes this, so the compiler finds every data consumer. */
+export type DataWidgetType = Exclude<WidgetType, "text">;
 export type WidgetSource = "metric" | "energy" | "cost";
 export type WidgetAggregation = "avg" | "min" | "max" | "last" | "sum";
 export interface WidgetConfig {
   assets: number[]; source: WidgetSource; metric: Metric | null; aggregation: WidgetAggregation;
   range: RangePreset | null; bars: "asset" | "time"; min: number; max: number | null;
 }
-export interface Widget { id: number; type: WidgetType; title: string; config: WidgetConfig; x: number; y: number; w: number; h: number }
-export type WidgetIn = Omit<Widget, "id">;
+/** What a text widget shows: a heading, a paragraph or a divider, plain text only (a divider holds no text). */
+export const TEXT_STYLES = ["heading", "paragraph", "divider"] as const;
+export type TextStyle = (typeof TEXT_STYLES)[number];
+export interface TextConfig { style: TextStyle; text: string }
+/** `Omit` that keeps a union apart (the plain one collapses a union to its common keys). */
+export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+interface WidgetBase { id: number; title: string; x: number; y: number; w: number; h: number }
+export interface DataWidget extends WidgetBase { type: DataWidgetType; config: WidgetConfig }
+export interface TextWidget extends WidgetBase { type: "text"; config: TextConfig }
+/** A saved widget, discriminated by `type`: narrow on `type === "text"` before reading `config`. */
+export type Widget = DataWidget | TextWidget;
+export type WidgetIn = DistributiveOmit<Widget, "id">;
 export interface Dashboard { id: number; name: string; range: RangePreset; updated_at: string; widgets: Widget[] }
 export interface DashboardListItem { id: number; name: string; range: RangePreset; widget_count: number; updated_at: string }
 /** The dashboard people land on; `null` when none is set. */
@@ -446,7 +458,7 @@ export interface WidgetValue {
   no_data: boolean; ts: string | null; stale: boolean;
 }
 export interface WidgetData {
-  type: WidgetType; mode: "series" | "values"; source: WidgetSource; metric: Metric | null; unit: string | null;
+  type: DataWidgetType; mode: "series" | "values"; source: WidgetSource; metric: Metric | null; unit: string | null;
   range: { preset: RangePreset; start: string; end: string }; tier: SeriesTier | null; bucket: "hour" | "day" | null;
   series: WidgetSeries[]; values: WidgetValue[]; missing: number[]; no_metric: number[];
 }

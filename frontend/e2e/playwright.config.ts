@@ -324,5 +324,16 @@ export default defineConfig({
       dependencies: ["w20"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
     },
+    // The Text widget (a heading, a paragraph or a divider; no data). It MAKES ITS OWN DASHBOARDS (`w22 <run>` and `w22 <run> dark`) through POST /api/dashboards in beforeAll and deletes both in afterAll,
+    // also after a failed case, and talks to the real API (nothing is mocked). Its cases add the three styles through the Add widget dialog and read them back after a reload (light and dark), check that
+    // a page of text widgets sends no /api/widget-data request, move and resize cards in edit mode (also at 1024 x 640), walk the dialog by keyboard, count an emoji as one character, and see the
+    // server refuse a NUL, a heading with a line break and a text widget's data routes (PUT writes nothing that stays; the one valid CRLF save is undone). They set the admin's look (light navy-gold,
+    // dark desert-gold) through PUT /api/me/preferences before a page opens, and afterAll puts it back to light navy-gold. The cases are serial: the later ones work on the cards of case 1.
+    {
+      name: "w22",
+      testMatch: "w22.spec.ts",
+      dependencies: ["w21"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

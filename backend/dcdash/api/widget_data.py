@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dcdash.api.deps import get_db, require_permission
 from dcdash.core.csvout import write_csv
 from dcdash.core.timeutil import RANGE_PRESETS
-from dcdash.core.widgets import WIDGET_TYPES, SiteZoneError, WidgetResult, compute_widget, validate_config
+from dcdash.core.widgets import WIDGET_TYPES, SiteZoneError, WidgetResult, compute_widget, validate_data_config
 
 router = APIRouter(prefix="/api", tags=["widget-data"], dependencies=[Depends(require_permission("dashboards.view"))])
 CSV_HEADER = ("asset", "source", "unit", "timestamp", "value", "estimated", "partial", "no_data")
@@ -42,8 +42,10 @@ class WidgetDataRequest(BaseModel):
 
 
 async def _compute(body: WidgetDataRequest, db: AsyncSession) -> WidgetResult:
+    if body.type == "text":  # a Text widget has no figures: refused before its config is even looked at
+        raise HTTPException(422, "a text widget has no data")
     try:
-        config = validate_config(body.type, body.config)
+        config = validate_data_config(body.type, body.config)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     try:
