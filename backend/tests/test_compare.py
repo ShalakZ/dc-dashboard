@@ -260,7 +260,7 @@ def test_the_reasons_come_in_the_documented_order():
 def test_no_previous_when_the_last_figure_is_missing_or_has_no_readings_or_is_not_comparable():
     this = side()
     assert change(this, None, "kwh", days=DAYS) == Change(None, None, "no_previous")
-    assert change(this, side(0.0, 0.0, no_data_days=DAYS), "kwh", days=DAYS) == Change(abs=100.0, percent=None, why_none="no_previous")
+    assert change(this, side(0.0, 0.0, no_data_days=DAYS), "kwh", days=DAYS) == Change(abs=None, percent=None, why_none="no_previous")
     for state in ("no_readings", "not_in_closed", "other_zone"):
         result = change(this, side(), "kwh", days=DAYS, last_state=state)
         assert (result.percent, result.why_none) == (None, "no_previous")
@@ -268,8 +268,8 @@ def test_no_previous_when_the_last_figure_is_missing_or_has_no_readings_or_is_no
 
 def test_no_current_when_this_month_has_no_figure_or_no_readings():
     assert change(None, side(), "kwh", days=DAYS) == Change(None, None, "no_current")
-    result = change(side(0.0, 0.0, no_data_days=DAYS), side(), "cost", days=DAYS)
-    assert (result.abs, result.percent, result.why_none) == (-20.0, None, "no_current")
+    result = change(side(0.0, 0.0, no_data_days=DAYS), side(), "cost", days=DAYS)  # a difference against an absence is withheld too
+    assert (result.abs, result.percent, result.why_none) == (None, None, "no_current")
 
 
 def test_missing_days_on_either_side_withhold_the_percentage_but_not_the_difference():

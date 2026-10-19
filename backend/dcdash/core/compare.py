@@ -180,7 +180,9 @@ def change(
     why = _why_none(this, last, measure, days, last_state, same_currency)
     current, previous = _value(this, measure), _value(last, measure)
     difference = None
-    if current is not None and previous is not None and (measure == "kwh" or same_currency):
+    # A difference against a side that was not measured (no readings at all, a missing cost, another currency) would be a
+    # difference against an absence, so it is withheld with the percentage; with missing days or a partial cost it is kept.
+    if current is not None and previous is not None and why not in ("currency", "no_cost", "no_previous", "no_current"):
         difference = current - previous
     percent = None
     if why is None and current is not None and previous is not None:
