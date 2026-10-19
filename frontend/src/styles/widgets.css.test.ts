@@ -253,6 +253,13 @@ describe("styles/widgets.css", () => {
       expect(follow.some((r) => /\.widget-(foot|dot|hint|since)\b/.test(r.selector)), "the file owns only its own classes").toBe(false);
     });
 
+    it("the dot before that sentence is the sentence's own ::before, so it clips with the sentence and never dangles at the end of the line (re-review 2)", () => {
+      const follow = parseRules(stripComments(readFileSync("src/styles/focus-follow.css", "utf8")));
+      const dot = follow.filter((r) => r.selector === ".follow-note-after::before").map((r) => r.body).join(" ");
+      expect(dot).toMatch(/content:\s*"· "/);
+      expect(follow.some((r) => r.selector.includes(".follow-dot")), "no flex item of its own to be left behind").toBe(false);
+    });
+
     it("a waiting icon button looks disabled and takes the hover wash back, and is never a native :disabled (it may hold the focus the click gave it)", () => {
       expect(bodyOf('.widget-tools .icon-btn[aria-disabled="true"]')).toMatch(/opacity:\s*0\.55/);
       expect(bodyOf('.widget-tools .icon-btn[aria-disabled="true"]')).toMatch(/cursor:\s*not-allowed/);

@@ -810,6 +810,25 @@ describe("a focus asset in edit mode", () => {
     expect(where(router)).toBe("/dashboards/3?asset=2");
   });
 
+  it("a blocked click on the Dashboards crumb leaves nothing waiting: after Leave and discard, the Focus dialog's Show keeps the keyboard focus on the Focus button (re-review 1)", async () => {
+    const { router } = open("operator", "/dashboards/3");
+    await startEditing();
+    await userEvent.type(screen.getByLabelText("Dashboard name"), "x");
+    await userEvent.click(within(trail()).getByRole("link", { name: "Dashboards" }));
+    const blocked = await screen.findByRole("alertdialog", { name: "Unsaved changes" });
+    await userEvent.click(within(blocked).getByRole("button", { name: "Keep editing" }));
+    expect(where(router)).toBe("/dashboards/3");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Leave and discard changes" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Focus" }));
+    const dialog = await screen.findByRole("dialog", { name: "Choose a focus" });
+    await userEvent.click(await within(dialog).findByRole("radio", { name: "MV2" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Show" }));
+    await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "MV2"]));
+    expect(within(trail()).getByText("MV2")).not.toHaveFocus();
+    expect(screen.getByRole("button", { name: "Focus" })).toHaveFocus();
+  });
+
   it("leaving edit mode with a focus keeps it: the viewer has the Focus button and the Open page link", async () => {
     const { router } = open("operator", "/dashboards/3?asset=5");
     await startEditing();

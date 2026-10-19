@@ -420,7 +420,10 @@ describe("WidgetView with a focus: the footer line", () => {
     const note = await screen.findByText("Its own assets, not Hall 1");
     expect(note).toHaveClass("follow-note");
     expect(note.parentElement).toHaveClass("widget-foot");
-    expect(note.parentElement).toHaveTextContent("since 10:00 · Its own assets, not Hall 1");
+    // The dot between the two lines is generated content of the note (focus-follow.css), so it is not in the text; the note knows something comes before it.
+    expect(note).toHaveClass("follow-note-after");
+    expect(note.previousElementSibling).toHaveTextContent("since 10:00");
+    expect(note.parentElement).toHaveTextContent("since 10:00Its own assets, not Hall 1");
   });
 
   it("says nothing until the focus asset's name is known, but keeps the line's room (an empty line), and has none with no focus", async () => {

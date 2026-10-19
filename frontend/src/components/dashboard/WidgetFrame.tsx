@@ -124,8 +124,8 @@ export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint
               {since && <small className="widget-since" title={since}>{since}</small>}
               {since && hint && <span className="widget-dot"> · </span>}
               {hint && <small className="widget-hint" title={hint}>{hint}</small>}
-              {note && (since || hint) && <span className="follow-dot"> · </span>}
-              {note && <small className="follow-note" title={note}>{note}</small>}
+              {/* The dot before the sentence is the sentence's own (focus-follow.css draws it as ::before when something comes first), so it shrinks and goes with the sentence. */}
+              {note && <small className={since || hint ? "follow-note follow-note-after" : "follow-note"} title={note}>{note}</small>}
             </p>
           ) : footKeep && <p className="widget-foot" aria-hidden="true" />}
         </>

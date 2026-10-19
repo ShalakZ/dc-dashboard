@@ -1,5 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
+import { useBlocker } from "react-router";
 import { useDefaultDashboard } from "../api/queries";
 import type { Asset, DataWidgetType } from "../api/types";
 import { downloadCsv } from "../lib/download";
@@ -389,7 +391,7 @@ describe("DashboardPage with a focus asset (the header)", () => {
   const forest = [node(1, null, "Site A"), node(2, 1, "Hall 1"), node(3, 2, "Row 2"), node(9, null, "Site B", 1)];
 
   /** A data router, so a test can read the address, see how it changed and go back. One fixed stat widget: it never follows a focus. */
-  function openAt(entry: string, { role = "viewer", assets = deep, over = {}, hold }: { role?: string; assets?: Asset[]; over?: Routes; hold?: (method: string, path: string) => boolean } = {}) {
+  function openAt(entry: string, { role = "viewer", assets = deep, over = {}, hold, extra }: { role?: string; assets?: Asset[]; over?: Routes; hold?: (method: string, path: string) => boolean; extra?: ReactNode } = {}) {
     const calls = mockFetch({
       ...authed(role),
       "GET /api/dashboards/3": { body: dashboard({ widgets: [current] }) },
@@ -398,7 +400,7 @@ describe("DashboardPage with a focus asset (the header)", () => {
       ...over,
     });
     const held = hold ? holdFetch(hold) : { release: () => {} };
-    const view = renderWithDataRouter(<DashboardPage />, { route: entry, path: "/dashboards/:id" });
+    const view = renderWithDataRouter(<><DashboardPage />{extra}</>, { route: entry, path: "/dashboards/:id" });
     return { calls, ...view, release: held.release, where: () => view.router.state.location.pathname + view.router.state.location.search };
   }
   const trail = () => screen.getByRole("navigation", { name: "Breadcrumb" });
@@ -504,11 +506,42 @@ describe("DashboardPage with a focus asset (the header)", () => {
       expect(within(trail()).getByText("Hall A")).toHaveAttribute("aria-current", "page");
     });
 
-    it("a click on a crumb does the same, and the Dashboards crumb (it leaves the page) is not touched", async () => {
+    it("a click on a crumb does the same", async () => {
       openAt("/dashboards/3?asset=4");
       await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1", "Row 2", "Rack 5"]));
       await userEvent.click(within(trail()).getByRole("link", { name: "Hall 1" }));
       expect(within(trail()).getByText("Hall 1")).toHaveFocus();
+    });
+
+    describe("a crumb whose navigation is refused (re-review 1)", () => {
+      /** A guard that can refuse any navigation, like the editor's unsaved-changes guard does for another page: `refuse.on` is read when the navigation is tried. */
+      const refuse = { on: false };
+      function Refuse() {
+        useBlocker(() => refuse.on);
+        return null;
+      }
+      afterEach(() => { refuse.on = false; });
+
+      async function showHall2() {
+        await userEvent.click(await screen.findByRole("button", { name: "Focus" }));
+        const dialog = await screen.findByRole("dialog", { name: "Choose a focus" });
+        await userEvent.click(await within(dialog).findByRole("radio", { name: "Hall 2" }));
+        await userEvent.click(within(dialog).getByRole("button", { name: "Show" }));
+        await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 2"]));
+        expect(within(trail()).getByText("Hall 2")).not.toHaveFocus();
+        expect(screen.getByRole("button", { name: "Focus" })).toHaveFocus();
+      }
+
+      it("leaves nothing waiting for the next change of the focus: the Focus dialog's Show gives the keyboard focus back to the Focus button", async () => {
+        const { where } = openAt("/dashboards/3?asset=4", { extra: <Refuse /> });
+        await waitFor(() => expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1", "Row 2", "Rack 5"]));
+        refuse.on = true;
+        await userEvent.click(within(trail()).getByRole("link", { name: "Hall 1" }));
+        refuse.on = false;
+        expect(where()).toBe("/dashboards/3?asset=4"); // refused: the page did not move
+        expect(crumbs()).toEqual(["Dashboards", "Hall A", "Hall 1", "Row 2", "Rack 5"]);
+        await showHall2();
+      });
     });
 
     it("Back, and the Focus dialog, change the focus without moving the keyboard focus to the trail", async () => {

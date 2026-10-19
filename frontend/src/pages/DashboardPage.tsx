@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState, type MouseEvent } from "react";
-import { useLocation, useNavigate, useParams } from "react-router";
+import { useHref, useLocation, useNavigate, useParams } from "react-router";
 import { ApiError } from "../api/client";
 import { keys, useDashboard, useSite } from "../api/queries";
 import type { Dashboard } from "../api/types";
@@ -30,24 +30,35 @@ export function DashboardPage() {
  * a focus it goes on through the focus asset's ancestors: the name then links to the whole site, each ancestor to the dashboard at that asset, and the
  * focus asset is the current page. The links only change `?asset=`, so in edit mode the editor stays mounted. It sits inside the focus provider.
  * The link that was just used is replaced by plain text (the crumb it led to is now the current page), which would drop keyboard focus to the page body: after a
- * plain click or an Enter on a crumb, focus goes to the new current crumb. Back, Forward and the Focus dialog change the focus without moving it.
+ * plain click or an Enter on a crumb that stays on this dashboard, focus goes to the new current crumb. Back, Forward and the Focus dialog change the focus without moving it,
+ * and so does "Dashboards", which leaves the page (the editor's unsaved-changes guard may refuse it, and then no link was replaced).
  */
 function DashboardCrumbs({ id, name }: { id: number; name: string }) {
   const { focus, assets } = useFocus();
   const { search } = useLocation();
+  const path = `/dashboards/${id}`;
+  const stays = useHref(path);
   const current = useRef<HTMLSpanElement>(null);
-  const followed = useRef(false);
+  // Set by a click on a crumb that stays here, with the focus it was clicked at; the next change of the focus reads it once, and every other case clears it.
+  const followed = useRef<{ from: number | null } | null>(null);
   useEffect(() => {
-    if (!followed.current) return;
-    followed.current = false;
-    current.current?.focus();
+    const armed = followed.current;
+    followed.current = null;
+    if (armed && armed.from !== focus) current.current?.focus();
   }, [focus]);
-  // A click that opens a new tab or window (a modifier key) changes nothing here.
+  // A crumb whose navigation did not happen (refused, or cancelled by something else) replaced no link and changed no focus, so its flag must not wait for a later change
+  // that has nothing to do with it. Whatever takes keyboard focus after the click (a dialog, a button) ends the wait; a navigation that did happen is read before that.
+  useEffect(() => {
+    const clear = () => { followed.current = null; };
+    document.addEventListener("focusin", clear, true);
+    return () => document.removeEventListener("focusin", clear, true);
+  }, []);
+  // A click that opens a new tab or window (a modifier key) changes nothing here, nor does one that something else already cancelled.
   const onFollow = (event: MouseEvent<HTMLAnchorElement>) => {
-    followed.current = event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+    const plain = event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.defaultPrevented;
+    followed.current = plain && event.currentTarget.pathname === stays ? { from: focus } : null;
   };
   const chain = focus !== null && assets ? focusTrail(assets, focus) : [];
-  const path = `/dashboards/${id}`;
   if (chain.length === 0) return <Crumbs trail={[{ label: "Dashboards", to: "/dashboards" }, { label: name }]} currentRef={current} onFollow={onFollow} />;
   const at = (asset: number | null) => path + withFocus(search, asset);
   return (

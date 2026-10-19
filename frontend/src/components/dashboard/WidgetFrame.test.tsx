@@ -250,4 +250,18 @@ describe("WidgetFrame", () => {
     said.unmount();
     expect(frame().container.querySelector(".widget-foot")).toBeNull(); // not asked: nothing, as before
   });
+
+  it("the dot before the footer's last sentence is the sentence's own (a class on the note), so the two shrink and vanish together; a lone note has none (re-review 2)", () => {
+    const notes = (props: Partial<React.ComponentProps<typeof WidgetFrame>>) => {
+      const { container, unmount } = frame({ note: "Its own assets, not Hall 1", ...props });
+      const note = container.querySelector(".follow-note");
+      const got = { note, after: note?.classList.contains("follow-note-after"), text: note?.textContent, dots: container.querySelectorAll(".follow-dot").length };
+      unmount();
+      return got;
+    };
+    for (const before of [{ since: "since 10:00" }, { hint: "~ estimated" }, { since: "since 10:00", hint: "~ estimated" }]) {
+      expect(notes(before), JSON.stringify(before)).toMatchObject({ after: true, text: "Its own assets, not Hall 1", dots: 0 });
+    }
+    expect(notes({}), "alone").toMatchObject({ after: false, text: "Its own assets, not Hall 1", dots: 0 });
+  });
 });
