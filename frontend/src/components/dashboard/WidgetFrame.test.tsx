@@ -220,4 +220,34 @@ describe("WidgetFrame", () => {
     expect(button).toHaveFocus();
     expect(details).not.toHaveBeenCalled();
   });
+
+  it("holds the Details button back while the body shows the answer for another focus (stale) too, and lets go when it is the real answer", async () => {
+    const details = vi.fn();
+    const { rerender } = frame({ details, stale: true });
+    const button = screen.getByRole("button", { name: "Details for Hall power" });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).not.toBeDisabled();
+    await userEvent.click(button);
+    expect(button).toHaveFocus();
+    expect(details).not.toHaveBeenCalled();
+    rerender(<WidgetFrame title="Hall power" loading={false} error={null} missing={0} details={details}><p>body</p></WidgetFrame>);
+    expect(button).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(button);
+    expect(details).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the footer line's room after loading when asked, as an empty line a screen reader skips; a line with words is the same line", () => {
+    const { container, unmount } = frame({ footKeep: true });
+    const foot = container.querySelector(".widget-foot");
+    expect(foot).toHaveAttribute("aria-hidden", "true");
+    expect(foot?.textContent).toBe("");
+    expect(foot?.previousElementSibling).toHaveClass("widget-body");
+    unmount();
+    const said = frame({ footKeep: true, note: "Its own assets, not Hall 1" });
+    expect(said.container.querySelectorAll(".widget-foot")).toHaveLength(1);
+    expect(said.container.querySelector(".widget-foot")).not.toHaveAttribute("aria-hidden");
+    expect(said.container.querySelector(".widget-foot")).toHaveTextContent("Its own assets, not Hall 1");
+    said.unmount();
+    expect(frame().container.querySelector(".widget-foot")).toBeNull(); // not asked: nothing, as before
+  });
 });

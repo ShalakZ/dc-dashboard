@@ -547,6 +547,31 @@ describe("DashboardPage with a focus asset (the header)", () => {
       expect(screen.queryByRole("link", { name: /^Open .* page$/ })).not.toBeInTheDocument();
     });
 
+    it("a change of focus through the dialog costs a widget with its own assets no request, and a widget that follows the focus exactly one", async () => {
+      const followed = widget(7, "table", { title: "Hall figures", config: config({ assets: [], source: "energy", metric: null, aggregation: "sum", scope: "focus" }), x: 6, y: 0, w: 6, h: 3 });
+      const { calls, where } = openAt("/dashboards/3", { over: { "GET /api/dashboards/3": { body: dashboard({ widgets: [current, followed] }) } } });
+      await within(await region("Current power")).findByText("10.50");
+      const table = within(await region("Hall figures"));
+      await table.findByText("LV Panel 2");
+      const asked = (type: string) => (dataRequests(calls) as { type: string; focus?: number }[]).filter((r) => r.type === type);
+      expect(asked("stat")).toHaveLength(1);
+      expect(asked("table")).toHaveLength(1);
+      expect(asked("table")[0].focus).toBeUndefined();
+      await userEvent.click(await focusButton());
+      const dialog = await screen.findByRole("dialog", { name: "Choose a focus" });
+      await userEvent.click(await within(dialog).findByRole("radio", { name: "Hall 2" }));
+      await userEvent.click(within(dialog).getByRole("button", { name: "Show" }));
+      expect(where()).toBe("/dashboards/3?asset=5");
+      await waitFor(() => expect(asked("table")).toHaveLength(2));
+      expect(asked("table")[1].focus).toBe(5);
+      // The fixed widget has seen the new focus (its footer names it) and the following one has its answer: nothing more is on its way.
+      await within(await region("Current power")).findByText("Its own assets, not Hall 2");
+      await waitFor(() => expect(document.querySelector(".widget-body[aria-busy]")).toBeNull());
+      expect(asked("table")).toHaveLength(2);
+      expect(asked("stat")).toHaveLength(1);
+      expect(asked("stat")[0].focus).toBeUndefined();
+    });
+
     it("Cancel leaves the address and the trail alone", async () => {
       const { where, router } = openAt("/dashboards/3?asset=2");
       await userEvent.click(await focusButton());

@@ -26,7 +26,7 @@ interface Props {
   stale?: boolean;
   /** Present = show the CSV button; this is the query the export repeats. */
   csv?: CsvSource;
-  /** Present = show the Details button, which calls this with the button itself (the drawer gives focus back to it). It waits (aria-disabled) while the data loads. */
+  /** Present = show the Details button, which calls this with the button itself (the drawer gives focus back to it). It waits (aria-disabled) while the data loads, and while the body is the previous focus's answer (`stale`). */
   details?: (opener: HTMLElement) => void;
   /** The widget's type: the shape of the loading skeleton. */
   type?: DataWidgetType;
@@ -34,6 +34,8 @@ interface Props {
   shape?: SkeletonShape;
   /** Keep the footer line's room while loading, for a widget whose "since" line is known before its data (rolling energy and cost). */
   footSpace?: boolean;
+  /** Keep the footer line's room in the loaded card too, as an empty line, when it has nothing to say now but may have the next moment (w25: a note about the focus that comes and goes), so the body does not move. */
+  footKeep?: boolean;
   /** Extra header buttons (the editor's Edit and Delete); the caller wraps them in `.widget-actions`. */
   actions?: ReactNode;
   /** Mark the header as the grab area of the editor's grid. */
@@ -74,7 +76,7 @@ export function useCsvExport(csv: CsvSource | undefined): { busy: boolean; error
 }
 
 /** The box around every widget: title, Details and CSV buttons, the warning chips, the footer line, and the loading and error states. */
-export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint = "", since = "", note = "", stale = false, csv, details, type, shape, footSpace = false, actions, dragHandle = false, children }: Props) {
+export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint = "", since = "", note = "", stale = false, csv, details, type, shape, footSpace = false, footKeep = false, actions, dragHandle = false, children }: Props) {
   const { busy, error: csvError, run: exportCsv } = useCsvExport(csv);
   return (
     <section className="widget-frame" aria-label={title}>
@@ -92,7 +94,7 @@ export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint
           {details && (
             <button
               type="button" className="icon-btn widget-details-btn" aria-label={`Details for ${title}`} aria-haspopup="dialog"
-              aria-disabled={loading ? true : undefined} onClick={(e) => { if (!loading) details(e.currentTarget); }}
+              aria-disabled={loading || stale ? true : undefined} onClick={(e) => { if (!loading && !stale) details(e.currentTarget); }}
             >
               <Icon name="info" />
             </button>
@@ -117,7 +119,7 @@ export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint
             {error && <p className="widget-error" role="alert"><Icon name="alert" />{error.message}</p>}
             {children}
           </div>
-          {(since || hint || note) && (
+          {(since || hint || note) ? (
             <p className={stale ? "widget-foot follow-stale" : "widget-foot"}>
               {since && <small className="widget-since" title={since}>{since}</small>}
               {since && hint && <span className="widget-dot"> · </span>}
@@ -125,7 +127,7 @@ export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint
               {note && (since || hint) && <span className="follow-dot"> · </span>}
               {note && <small className="follow-note" title={note}>{note}</small>}
             </p>
-          )}
+          ) : footKeep && <p className="widget-foot" aria-hidden="true" />}
         </>
       )}
     </section>

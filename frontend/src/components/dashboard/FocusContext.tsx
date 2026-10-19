@@ -64,8 +64,8 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   // moment later), so that N cards reporting the same gone asset, or a doubled effect, make one navigation and not N.
   const here = useRef({ key: location.key, pathname: location.pathname, search: location.search, hash: location.hash, state: location.state as unknown, raw });
   if (here.current.key !== location.key) here.current = { key: location.key, pathname: location.pathname, search: location.search, hash: location.hash, state: location.state, raw };
-  const live = useRef({ allowed, navigate });
-  live.current = { allowed, navigate };
+  const live = useRef({ allowed, navigate, fresh });
+  live.current = { allowed, navigate, fresh };
 
   /** Remove `asset` from the address by `replace`, but only if it still reads `expected` (a later change or an earlier call wins); `sentence` also says why. */
   const clear = useCallback((expected: string, sentence: boolean) => {
@@ -90,9 +90,13 @@ export function FocusProvider({ children }: { children: ReactNode }) {
     }
   }, [allowed, parsed, raw, fresh, clear]);
 
-  const setFocus = useCallback((id: number | null) => {
+  const setFocus = useCallback((chosen: number | null) => {
     const now = here.current;
     if (!live.current.allowed) return;
+    // The only top-level asset is the whole site (R5): choosing it is choosing no focus. Only a fresh list may say so, as in the effect above, and mapping it here
+    // lets the no-op check below stop a push that the effect would at once replace away (Back would land on the same page).
+    const roots = live.current.fresh ? topLevel(live.current.fresh) : [];
+    const id = chosen !== null && roots.length === 1 && roots[0].id === chosen ? null : chosen;
     const current = parseFocusParam(now.raw);
     if ((current.kind === "id" ? current.id : null) === id) return;
     const search = withFocus(now.search, id);

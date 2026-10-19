@@ -234,6 +234,26 @@ describe("WidgetView with a focus: dimming", () => {
     expect(bodyOfCard()).not.toHaveAttribute("aria-busy");
   });
 
+  it("does not open the Details panel on the previous focus's figures while the new answer loads, and opens it on the new ones once it lands", async () => {
+    mockFetch({ "POST /api/widget-data": byFocus });
+    const view = show(at(7));
+    await screen.findByText("Row 7");
+    const gate = holdFetch(everything);
+    view.again(at(9));
+    const button = screen.getByRole("button", { name: "Details for Hall" });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).not.toBeDisabled();
+    await userEvent.click(button);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    gate.release();
+    await screen.findByText("Row 9");
+    expect(screen.getByRole("button", { name: "Details for Hall" })).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(screen.getByRole("button", { name: "Details for Hall" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getAllByText("Row 9").length).toBeGreaterThan(0);
+    expect(within(dialog).queryByText("Row 7")).not.toBeInTheDocument();
+  });
+
   it("never dims a card with its own assets, whatever else changes", async () => {
     mockFetch({ "POST /api/widget-data": byFocus });
     const view = show(at(7), { config: { ...FIXED, range: null }, dashboardRange: "7d" as RangePreset });
@@ -311,6 +331,51 @@ describe("WidgetView with a focus: the sentences", () => {
     noButton();
   });
 
+  it("does not say 'choose a focus' once a focus is picked: the dimmed body is empty until the real answer lands", async () => {
+    mockFetch({ "POST /api/widget-data": (req) => ((req.body as { focus?: number }).focus === undefined ? choose(3) : byFocus(req)) });
+    const view = show(at(null));
+    await screen.findByText("This site has 3 top-level assets: choose a focus to see this figure.");
+    const gate = holdFetch(everything);
+    view.again(at(1));
+    expect(screen.queryByText(/choose a focus/)).not.toBeInTheDocument();
+    expect(bodyOfCard()).toBeEmptyDOMElement();
+    expect(bodyOfCard()).toHaveClass("follow-stale");
+    expect(bodyOfCard()).toHaveAttribute("aria-busy", "true");
+    noButton();
+    gate.release();
+    await screen.findByText("Row 1");
+    expect(bodyOfCard()).not.toHaveClass("follow-stale");
+    expect(screen.getByRole("button", { name: "Details for Hall" })).toBeInTheDocument();
+  });
+
+  it("does not say the asset it just left has no children while the answer for the next one loads", async () => {
+    const leaf = { body: answerFor(undefined, { values: [], focus: block(8, { asset: { id: 8, name: "Feed A", path: "Site / Rack 05 / Feed A" }, children: { shown: 0, count: 0 } }) }) };
+    mockFetch({ "POST /api/widget-data": (req) => ((req.body as { focus?: number }).focus === 8 ? leaf : byFocus(req)) });
+    const view = show(at(8), { config: CHILDREN });
+    await screen.findByText("Site / Rack 05 / Feed A has no children.");
+    const gate = holdFetch(everything);
+    view.again(at(5), { config: CHILDREN });
+    expect(screen.queryByText(/has no children/)).not.toBeInTheDocument();
+    expect(bodyOfCard()).toBeEmptyDOMElement();
+    expect(bodyOfCard()).toHaveClass("follow-stale");
+    gate.release();
+    await screen.findByText("Row 5");
+    expect(screen.queryByText(/has no children/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the previous figures, dimmed, when the previous answer had some (no sentence takes their place)", async () => {
+    mockFetch({ "POST /api/widget-data": byFocus });
+    const view = show(at(7), { config: CHILDREN });
+    await screen.findByText("Row 7");
+    const gate = holdFetch(everything);
+    view.again(at(null), { config: CHILDREN });
+    expect(screen.getByText("Row 7")).toBeInTheDocument();
+    expect(bodyOfCard()).toHaveClass("follow-stale");
+    expect(document.querySelector(".widget-empty")).toBeNull();
+    gate.release();
+    await screen.findByText("Row site");
+  });
+
   it("draws the figures of an ordinary answer, with the Details button", async () => {
     mockFetch({ "POST /api/widget-data": byFocus });
     show(at(7), { config: CHILDREN });
@@ -331,11 +396,13 @@ describe("WidgetView with a focus: the footer line", () => {
     expect(note.parentElement).toHaveTextContent("since 10:00 · Its own assets, not Hall 1");
   });
 
-  it("says nothing until the focus asset's name is known, and nothing with no focus", async () => {
+  it("says nothing until the focus asset's name is known, but keeps the line's room (an empty line), and has none with no focus", async () => {
     mockFetch({ "POST /api/widget-data": byFocus });
     const view = show(ctxOf({ focus: 7, name: null }), { config: FIXED });
     await screen.findByText("Row site");
-    expect(footOfCard()).toBeNull();
+    expect(footOfCard()).toHaveAttribute("aria-hidden", "true");
+    expect(footOfCard()?.textContent).toBe("");
+    expect(screen.queryByText(/Its own assets/)).not.toBeInTheDocument();
     view.again(at(null), { config: FIXED });
     expect(footOfCard()).toBeNull();
     view.again(at(7), { config: FIXED });
@@ -349,6 +416,39 @@ describe("WidgetView with a focus: the footer line", () => {
     expect(footOfCard()).toHaveAttribute("aria-hidden", "true");
     gate.release();
     expect(await screen.findByText("Its own assets, not Hall 7")).toBeInTheDocument();
+  });
+
+  it("reserves the line on the focus, not on the name: with the asset list still loading, both the loading card and the loaded one hold the room, and the note fills the same line", async () => {
+    mockFetch({ "POST /api/widget-data": byFocus });
+    const gate = holdFetch(everything);
+    const view = show(ctxOf({ focus: 7, name: null }), { config: FIXED });
+    expect(footOfCard()).toHaveAttribute("aria-hidden", "true"); // the skeleton's line
+    gate.release();
+    await screen.findByText("Row site");
+    const reserved = footOfCard();
+    expect(reserved).toHaveAttribute("aria-hidden", "true"); // the loaded card's empty line, before the name arrives
+    view.again(at(7), { config: FIXED });
+    expect(await screen.findByText("Its own assets, not Hall 7")).toBeInTheDocument();
+    expect(footOfCard()).toBe(reserved);
+    expect(footOfCard()).not.toHaveAttribute("aria-hidden");
+  });
+
+  it("holds the line of a card that shows the children of the focus whether or not it has a count to say: Hall 1 (a note) to Row 2 (none) and the skeleton", async () => {
+    const children = { 1: { shown: 20, count: 34 }, 2: { shown: 5, count: 5 } } as const;
+    mockFetch({ "POST /api/widget-data": ({ body }) => { const id = (body as { focus: 1 | 2 }).focus; return { body: answerFor(id, { focus: block(id, { children: children[id] }) }) }; } });
+    const view = show(at(1), { config: CHILDREN });
+    await screen.findByText("20 of 34 children of Hall 1 shown");
+    view.again(at(2), { config: CHILDREN });
+    await screen.findByText("Row 2");
+    expect(footOfCard()).toHaveAttribute("aria-hidden", "true"); // no note for Row 2, and the line is still there
+    expect(footOfCard()?.textContent).toBe("");
+    view.unmount();
+    client.clear();
+    const loading = holdFetch(everything);
+    show(at(1), { config: CHILDREN });
+    expect(footOfCard()).toHaveAttribute("aria-hidden", "true"); // the skeleton holds it too
+    loading.release();
+    await screen.findByText("20 of 34 children of Hall 1 shown");
   });
 
   it("does not say it on a card that follows the focus", async () => {
@@ -371,10 +471,18 @@ describe("WidgetView with a focus: the footer line", () => {
     expect(await screen.findByText("20 of 34 top-level assets shown")).toBeInTheDocument();
   });
 
-  it("says nothing when all the children are shown", async () => {
+  it("says nothing when all the children are shown (the line stays, empty)", async () => {
     mockFetch({ "POST /api/widget-data": { body: answerFor(undefined, { focus: block(1, { children: { shown: 5, count: 5 } }) }) } });
     show(at(1), { config: CHILDREN });
     await screen.findByRole("table");
+    expect(footOfCard()).toHaveAttribute("aria-hidden", "true");
+    expect(footOfCard()?.textContent).toBe("");
+  });
+
+  it("holds no line for a card that follows the focus itself (scope focus) when it has nothing to say", async () => {
+    mockFetch({ "POST /api/widget-data": byFocus });
+    show(at(7));
+    await screen.findByText("Row 7");
     expect(footOfCard()).toBeNull();
   });
 });

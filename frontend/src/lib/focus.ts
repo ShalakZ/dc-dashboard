@@ -50,7 +50,7 @@ export const NO_ASSETS_TEXT = "This site has no assets yet.";
  */
 export function chooseText(count: number | null, allowed: boolean): string {
   if (count === 0) return NO_ASSETS_TEXT;
-  if (count === null) return "Choose a focus to see this figure.";
+  if (count === null) return allowed ? "Choose a focus to see this figure." : "This figure needs a focus asset, and your role cannot choose one.";
   const assets = `${count} top-level ${count === 1 ? "asset" : "assets"}`;
   return allowed
     ? `This site has ${assets}: choose a focus to see this figure.`

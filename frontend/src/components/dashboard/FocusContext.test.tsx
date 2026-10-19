@@ -261,6 +261,18 @@ describe("FocusProvider: a list that was cached before the screen mounted (F1)",
     await waitFor(() => expect(router.state.location.search).toBe(""));
     expect(screen.queryByText(FOCUS_GONE_NOTICE)).not.toBeInTheDocument();
   });
+
+  it("does not take the sole top-level asset of the old list for the whole site when it is chosen: only a fresh list may say so", async () => {
+    const { held, router } = openCached(single, { body: forest }, "/x?asset=2");
+    await screen.findByTestId("focus");
+    act(() => ctx.setFocus(1));
+    await waitFor(() => expect(router.state.location.search).toBe("?asset=1")); // the cached list may be stale: the choice stands
+    held.release();
+    await waitFor(() => expect(text("assets")).toBe("3"));
+    await pause();
+    expect(router.state.location.search).toBe("?asset=1"); // the fresh list has two roots
+    expect(text("focus")).toBe("1");
+  });
 });
 
 describe("FocusProvider: setFocus and reportGone", () => {
@@ -360,6 +372,53 @@ describe("FocusProvider: setFocus and reportGone", () => {
     expect(navigations()).toBe(1);
     expect(router.state.historyAction).toBe("REPLACE");
     expect(screen.getAllByText(FOCUS_GONE_NOTICE)).toHaveLength(1);
+  });
+
+  describe("choosing the only top-level asset (the whole site)", () => {
+    /** Loads the asset list beside the provider, as the Focus dialog does: the provider's own read is off (no asset in the address) but it sees a list fetched after it mounted. */
+    function Loader() {
+      useAssets();
+      return null;
+    }
+    function openWithList(entry: string, list: Asset[]) {
+      const calls = mockFetch({ ...authed("viewer"), "GET /api/assets": { body: list } });
+      const view = renderWithDataRouter(<Known><FocusProvider><Probe /><Loader /></FocusProvider></Known>, { route: entry, path: "/x" });
+      const keys = new Set<string>([view.router.state.location.key]);
+      view.router.subscribe((state) => keys.add(state.location.key));
+      return { calls, ...view, where: () => view.router.state.location.pathname + view.router.state.location.search, navigations: () => keys.size - 1 };
+    }
+
+    it("is the whole site already: a fresh list that shows the id is the only root makes no navigation, so Back has no duplicate entry to land on", async () => {
+      const { where, navigations, router } = openWithList("/x", single);
+      await waitFor(() => expect(text("assets")).toBe("3"));
+      act(() => ctx.setFocus(1));
+      await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+      expect(where()).toBe("/x");
+      expect(navigations()).toBe(0);
+      expect(router.state.historyAction).toBe("POP");
+      expect(text("focus")).toBe("null");
+    });
+
+    it("from a focus below it goes to the address without the parameter in one push, never through ?asset=<the root>", async () => {
+      const { where, navigations, router } = openWithList("/x?asset=2&range=7d", single);
+      await waitFor(() => expect(text("assets")).toBe("3"));
+      act(() => ctx.setFocus(1));
+      await waitFor(() => expect(where()).toBe("/x?range=7d"));
+      await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+      expect(navigations()).toBe(1);
+      expect(router.state.historyAction).toBe("PUSH");
+      expect(text("focus")).toBe("null");
+      await act(async () => { await router.navigate(-1); });
+      expect(where()).toBe("/x?asset=2&range=7d");
+    });
+
+    it("still pushes a root when the site has several", async () => {
+      const { where, router } = openWithList("/x", forest);
+      await waitFor(() => expect(text("assets")).toBe("3"));
+      act(() => ctx.setFocus(1));
+      await waitFor(() => expect(where()).toBe("/x?asset=1"));
+      expect(router.state.historyAction).toBe("PUSH");
+    });
   });
 
   it("keeps setFocus and reportGone the same functions across renders", async () => {

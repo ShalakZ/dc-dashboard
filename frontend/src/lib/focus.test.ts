@@ -105,6 +105,10 @@ describe("what a following card says (R5, R6, R11)", () => {
     expect(chooseText(1, true)).toBe("This site has 1 top-level asset: choose a focus to see this figure.");
   });
 
+  it("does not tell a role that cannot choose to choose, even when the answer carried no count (R3)", () => {
+    expect(chooseText(null, false)).toBe("This figure needs a focus asset, and your role cannot choose one.");
+  });
+
   it("says a leaf has no children, by its path", () => {
     expect(leafText("Site / Hall 1 / Row 2")).toBe("Site / Hall 1 / Row 2 has no children.");
   });
