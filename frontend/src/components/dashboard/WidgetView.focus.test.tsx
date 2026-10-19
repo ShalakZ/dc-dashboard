@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import type { RangePreset, WidgetData, WidgetFocus } from "../../api/types";
 import { downloadCsv } from "../../lib/download";
-import { config, valueRow, valuesData } from "../../test/dashboardFixtures";
+import { breakdownBlock, breakdownData, config, valueRow, valuesData } from "../../test/dashboardFixtures";
 import { mockFetch } from "../../test/fetchMock";
 import { holdFetch } from "../../test/holdFetch";
 import { FocusContext, type FocusState } from "./FocusContext";
@@ -15,6 +15,12 @@ import { WidgetView, type WidgetViewProps } from "./WidgetView";
 const held = { ids: new Set<string>(["assets.view"]) };
 vi.mock("../../auth/AuthProvider", () => ({ useAuth: () => ({ can: (id: string) => held.ids.has(id) }) }));
 vi.mock("../../lib/download", () => ({ downloadCsv: vi.fn() }));
+
+vi.mock("echarts-for-react", () => ({
+  default: (props: { option: { series?: { type?: string }[] } }) => (
+    <pre data-testid="chart" data-kind={props.option.series?.[0]?.type}>{JSON.stringify(props.option)}</pre>
+  ),
+}));
 
 const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}><MemoryRouter>{children}</MemoryRouter></QueryClientProvider>;
@@ -206,6 +212,26 @@ describe("WidgetView with a focus: dimming", () => {
     expect(bodyOfCard()).toHaveAttribute("aria-busy", "true");
     gate.release();
     await screen.findByText("Row 9");
+  });
+
+  it("does not dim the breakdown's Split by either: the pick keeps the old bars undimmed until the new ones land (the focus is the same)", async () => {
+    const lookUnder = config({ assets: [], source: "energy", metric: null, aggregation: "sum", bars: "kind", kind: "Rack", range: "this_month", scope: "focus" });
+    mockFetch({
+      "POST /api/widget-data": ({ body }) => {
+        const { config: asked, focus } = body as { config: { kind: string }; focus: number };
+        return { body: breakdownData(1, { values: [valueRow({ asset_id: 10, name: `${asked.kind} A`, value: 7, point_id: null })], breakdown: breakdownBlock({ kind: asked.kind }), focus: block(focus) }) };
+      },
+    });
+    show(at(7), { type: "bar", config: lookUnder });
+    expect(await screen.findByTestId("chart")).toHaveTextContent("Rack A");
+    const gate = holdFetch(everything);
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Split by" }), "Panel");
+    expect(screen.getByTestId("chart")).toHaveTextContent("Rack A"); // the previous answer, kept
+    expect(bodyOfCard()).not.toHaveAttribute("aria-busy");
+    expect(bodyOfCard()).not.toHaveClass("follow-stale");
+    gate.release();
+    await waitFor(() => expect(screen.getByTestId("chart")).toHaveTextContent("Panel A"));
+    expect(bodyOfCard()).not.toHaveAttribute("aria-busy");
   });
 
   it("never dims a card with its own assets, whatever else changes", async () => {
