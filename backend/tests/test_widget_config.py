@@ -1,9 +1,17 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from dcdash.core.metrics import Metric
 from dcdash.core.timeutil import RANGE_PRESETS
-from dcdash.core.widgets import WIDGET_TYPES, WidgetConfig, validate_config
+from dcdash.core.widgets import (
+    DATA_WIDGET_TYPES, TEXT_LIMITS, TEXT_STYLES, TRIM_SET, WIDGET_TYPES, TextConfig, WidgetConfig, normalize_text,
+    validate_config, validate_data_config, validate_text_config,
+)
 
+# The rules of a Text widget's text, shared with the editor's vitest (frontend/src/lib/textWidget.test.ts). Pure ASCII.
+SAMPLES = json.loads((Path(__file__).parent / "fixtures" / "text_widget_samples.json").read_text(encoding="ascii"))
 BASE = {"assets": [1], "source": "metric", "metric": "active_power_kw", "aggregation": "avg"}
 GAUGE = {**BASE, "aggregation": "last", "max": 100.0}  # valid for every widget type
 
@@ -19,8 +27,9 @@ def reject(widget_type: str, config: dict) -> str:
     return str(caught.value)
 
 
-def test_the_five_widget_types():
-    assert WIDGET_TYPES == ("timeseries", "bar", "stat", "gauge", "table")
+def test_the_six_widget_types_and_the_five_that_draw_data():
+    assert WIDGET_TYPES == ("timeseries", "bar", "stat", "gauge", "table", "text")
+    assert DATA_WIDGET_TYPES == ("timeseries", "bar", "stat", "gauge", "table")
 
 
 @pytest.mark.parametrize("widget_type", ["timeseries", "bar", "table"])
@@ -174,7 +183,7 @@ def test_bar_widgets_accept_both_bar_modes():
         assert validate_config("bar", make(bars=bars)).bars == bars
 
 
-@pytest.mark.parametrize("widget_type", WIDGET_TYPES)
+@pytest.mark.parametrize("widget_type", DATA_WIDGET_TYPES)
 def test_the_default_bars_value_is_accepted_everywhere(widget_type):
     assert validate_config(widget_type, {**GAUGE, "bars": "asset"}).bars == "asset"
 
@@ -189,7 +198,7 @@ def test_unknown_keys_are_refused():
 
 def test_unknown_widget_type():
     message = reject("pie", make())
-    assert message.startswith("type:") and "pie" in message and "gauge" in message
+    assert message.startswith("type:") and "pie" in message and "gauge" in message and "text" in message
 
 
 def test_several_problems_are_reported_together_in_plain_words():
@@ -256,3 +265,108 @@ def test_bars_over_time_on_energy_and_cost_take_sum_only(source):
     assert validate_config("bar", make(bars="time", source=source, metric=None, aggregation="sum")).bars == "time"
     message = reject("bar", make(bars="time", source=source, metric=None, aggregation="avg"))
     assert message.startswith("aggregation:") and "sum" in message
+
+
+# ---- the Text widget (w22): a heading, a paragraph or a divider; no data ---------------------------------------------------
+
+CASES = SAMPLES["cases"]
+
+
+def typed(case: dict) -> str:
+    """The text a sample feeds in: written out, or one string repeated."""
+    return case["text"] if "text" in case else case["repeat"][0] * case["repeat"][1]
+
+
+def stored(case: dict) -> str:
+    return case["stored"] if "stored" in case else case["stored_repeat"][0] * case["stored_repeat"][1]
+
+
+def test_the_sample_file_is_pure_ascii_and_shares_the_servers_constants():
+    raw = (Path(__file__).parent / "fixtures" / "text_widget_samples.json").read_bytes()
+    assert raw.isascii()
+    assert TRIM_SET == SAMPLES["trim_set"]
+    assert TEXT_LIMITS == SAMPLES["limits"] == {"heading": 200, "paragraph": 2000}
+    assert TEXT_STYLES == ("heading", "paragraph", "divider")
+    assert {case["style"] for case in CASES} == set(TEXT_STYLES)  # every style has samples
+    assert {case["reason"] for case in CASES if not case["ok"]} == set(SAMPLES["server_message_contains"])  # every reason too
+
+
+@pytest.mark.parametrize("case", CASES, ids=[case["name"] for case in CASES])
+def test_every_sample_of_the_shared_file_gets_the_same_answer_on_the_server(case):
+    config = {"style": case["style"], "text": typed(case)}
+    if case["ok"]:
+        parsed = validate_config("text", config)
+        assert isinstance(parsed, TextConfig)
+        assert parsed.style == case["style"] and parsed.text == stored(case)
+        assert len(parsed.text) == case["count"]
+        assert parsed.model_dump(mode="json") == {"style": case["style"], "text": stored(case)}
+        assert normalize_text(case["style"], typed(case)) == stored(case)
+        assert validate_text_config(parsed.model_dump(mode="json")).text == stored(case)  # what is stored is stable
+    else:
+        message = reject("text", config)
+        assert message.startswith("text:"), message
+        assert SAMPLES["server_message_contains"][case["reason"]] in message, message
+        with pytest.raises(ValueError):
+            normalize_text(case["style"], typed(case))
+
+
+def test_the_messages_name_the_character_and_the_limits():
+    assert reject("text", {"style": "paragraph", "text": "a" + chr(0) + "b"}) == "text: contains a control character (U+0000)"
+    assert reject("text", {"style": "paragraph", "text": "ab" + chr(0x7F)}) == "text: contains a control character (U+007F)"
+    assert reject("text", {"style": "paragraph", "text": "ab" + chr(0x85)}) == "text: contains a control character (U+0085)"
+    assert reject("text", {"style": "heading", "text": "x" + chr(0xD800)}) == "text: contains a character that cannot be stored (U+D800)"
+    assert reject("text", {"style": "heading", "text": " "}) == "text: a heading cannot be empty"
+    assert reject("text", {"style": "paragraph", "text": ""}) == "text: a paragraph cannot be empty"
+    assert reject("text", {"style": "heading", "text": "a" * 201}) == "text: a heading can have at most 200 characters (got 201)"
+    assert reject("text", {"style": "paragraph", "text": "a" * 2001}) == "text: a paragraph can have at most 2000 characters (got 2001)"
+    assert reject("text", {"style": "heading", "text": "a\nb"}) == "text: a heading is one line; remove the line break"
+    assert reject("text", {"style": "divider", "text": "x"}) == "text: a divider has no text"
+
+
+def test_the_first_control_character_is_the_one_named():
+    assert reject("text", {"style": "paragraph", "text": "a" + chr(1) + "b" + chr(2)}).endswith("(U+0001)")
+
+
+def test_a_control_character_wins_over_a_lone_surrogate_as_in_the_editor():
+    assert "control character" in reject("text", {"style": "paragraph", "text": chr(0xD800) + chr(0)})
+
+
+def test_a_text_config_takes_exactly_a_style_and_a_text():
+    assert validate_config("text", {"style": "divider", "text": ""}).model_dump(mode="json") == {"style": "divider", "text": ""}
+    assert reject("text", {"style": "heading", "text": "x", "colour": "red"}).startswith("colour:")
+    assert reject("text", {"text": "x"}).startswith("style:")
+    assert reject("text", {"style": "heading"}).startswith("text:")
+    assert reject("text", {"style": "banner", "text": "x"}).startswith("style:")
+    assert reject("text", {"style": "Heading", "text": "x"}).startswith("style:")  # exactly lower case
+    assert reject("text", {"style": "heading", "text": 5}).startswith("text:")
+    assert reject("text", {"style": "heading", "text": None}).startswith("text:")
+    assert reject("text", {"style": ["heading"], "text": "x"}).startswith("style:")
+    assert "\n" not in reject("text", {})
+
+
+def test_a_text_widget_never_accepts_a_data_config_and_a_data_widget_never_a_text_config():
+    message = reject("text", make())
+    assert "style:" in message and "validation error" not in message  # the data fields are extra, the text fields are missing
+    for widget_type in DATA_WIDGET_TYPES:
+        message = reject(widget_type, {"style": "heading", "text": "Hall A"})
+        assert "assets:" in message and "Field required" in message and "style:" in message, widget_type
+
+
+def test_the_split_entry_points_each_know_their_own_types():
+    assert isinstance(validate_data_config("stat", make(aggregation="last")), WidgetConfig)
+    assert isinstance(validate_text_config({"style": "heading", "text": "Hall A"}), TextConfig)
+    assert isinstance(validate_config("stat", make(aggregation="last")), WidgetConfig)
+    with pytest.raises(ValueError, match="type: a text widget has no data"):
+        validate_data_config("text", {"style": "heading", "text": "Hall A"})
+    with pytest.raises(ValueError, match="type: 'pie' is not a widget type; use one of .*text"):
+        validate_data_config("pie", make())
+    with pytest.raises(ValueError, match="style:"):
+        validate_text_config(make())
+    with pytest.raises(ValueError, match="style: 'banner'"):
+        normalize_text("banner", "x")
+
+
+def test_a_trimmed_character_inside_the_text_is_kept():
+    assert validate_config("text", {"style": "paragraph", "text": "a" + chr(0xA0) + "b" + chr(0xFEFF) + "c"}).text == (
+        "a" + chr(0xA0) + "b" + chr(0xFEFF) + "c"
+    )

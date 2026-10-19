@@ -4,8 +4,9 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
-from dcdash.api.dashboards import DASHBOARD_CAP_LOCK
+from dcdash.api.dashboards import DASHBOARD_CAP_LOCK, WidgetIn, checked_configs
 from dcdash.core.pg import CONFIG_CHANNEL
 from helpers import listening, login_as, make_asset
 
@@ -570,3 +571,236 @@ async def test_a_name_taken_by_a_transaction_in_progress_is_409(client, db, oper
     assert response.status_code == 409 and "already exists" in response.json()["detail"]
     assert await db.fetchval("SELECT count(*) FROM dashboards") == 2
     assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action <> 'dashboard.created'") == 0
+
+
+# ---- the Text widget (w22): a heading, a paragraph or a divider next to the widgets that draw data -------------------------
+
+EMOJI = chr(0x1F600)
+
+
+def text_widget(title: str, style: str, text: str, **place) -> dict:
+    return widget(title, "text", {"style": style, "text": text}, **place)
+
+
+async def save_raw(client, dashboard: dict, widgets: list[dict]):
+    """`save`, with the body written by json.dumps (every special character an escape), so a NUL or a lone surrogate can travel."""
+    body = {
+        "name": dashboard["name"], "range": dashboard["range"], "updated_at": dashboard["updated_at"], "widgets": widgets,
+    }
+    return await client.put(
+        f"/api/dashboards/{dashboard['id']}", content=json.dumps(body), headers={"content-type": "application/json"}
+    )
+
+
+async def test_text_widgets_are_saved_next_to_a_data_widget_and_come_back_normalized(client, db):
+    await login_as(client, db, "operator")
+    dash = await create(client)
+    widgets = [
+        widget("Power", y=0),
+        text_widget("Heading", "heading", "  Hall A \n", y=3, w=12, h=1),
+        text_widget("Note", "paragraph", "one\r\ntwo\r\n\r\nthree\rfour", y=4, w=6, h=2),
+        text_widget("Divider", "divider", "  \r\n ", y=6, w=12, h=1),
+    ]
+    response = await save(client, dash, widgets)
+    assert response.status_code == 200, response.text
+    saved = response.json()
+    assert [w["type"] for w in saved["widgets"]] == ["stat", "text", "text", "text"]
+    assert saved["widgets"][0]["config"]["source"] == "metric"  # the data widget is stored as before
+    assert [w["config"] for w in saved["widgets"][1:]] == [
+        {"style": "heading", "text": "Hall A"},  # trimmed
+        {"style": "paragraph", "text": "one\ntwo\n\nthree\nfour"},  # a CRLF paste and a lone CR are stored as LF
+        {"style": "divider", "text": ""},
+    ]
+    assert await fetch(client, dash) == saved
+    assert [(w["x"], w["y"], w["w"], w["h"]) for w in saved["widgets"][1:]] == [(0, 3, 12, 1), (0, 4, 6, 2), (0, 6, 12, 1)]
+    stored = await db.fetch("SELECT type, config FROM widgets WHERE type = 'text' ORDER BY y")
+    assert [r["config"] for r in stored] == [w["config"] for w in saved["widgets"][1:]]
+    # What a client loaded can be sent back unchanged.
+    again = await save(client, saved, [as_input(w) for w in saved["widgets"]])
+    assert again.status_code == 200 and [w["config"] for w in again.json()["widgets"]] == [w["config"] for w in saved["widgets"]]
+
+
+async def test_the_edges_of_the_text_limits(client, db):
+    await login_as(client, db, "operator")
+    dash = await create(client)
+    ok = await save(client, dash, [
+        text_widget("Heading", "heading", EMOJI * 200),
+        text_widget("Paragraph", "paragraph", EMOJI * 2000, y=3),
+        text_widget("Tabs", "paragraph", "\tindented\tline\t", y=6),
+    ])
+    assert ok.status_code == 200, ok.text
+    texts = [w["config"]["text"] for w in ok.json()["widgets"]]
+    assert texts[0] == EMOJI * 200 and texts[1] == EMOJI * 2000  # counted in characters, not UTF-16 units or bytes
+    assert texts[2] == "indented\tline"  # a tab inside stays, at the ends it is trimmed
+
+
+BAD_TEXTS = {
+    "a NUL": ("paragraph", "a" + chr(0) + "b", ["text:", "control character", "U+0000"]),
+    "another control character": ("paragraph", "a" + chr(7) + "b", ["text:", "control character", "U+0007"]),
+    "a vertical tab": ("heading", "Hall" + chr(0x0B), ["text:", "control character", "U+000B"]),
+    "a heading with a line break": ("heading", "Hall\nA", ["text:", "heading is one line"]),
+    "a heading with a CRLF": ("heading", "Hall\r\nA", ["text:", "heading is one line"]),
+    "a divider with text": ("divider", "x", ["text:", "divider has no text"]),
+    "an empty heading": ("heading", " \n ", ["text:", "heading cannot be empty"]),
+    "an empty paragraph": ("paragraph", "", ["text:", "paragraph cannot be empty"]),
+    "a heading of 201 characters": ("heading", "h" * 201, ["text:", "at most 200", "got 201"]),
+    "2001 emoji": ("paragraph", EMOJI * 2001, ["text:", "at most 2000", "got 2001"]),
+    "a lone surrogate (raw JSON a\\ud800b)": (
+        "paragraph", "a" + chr(0xD800) + "b", ["text:", "cannot be stored", "U+D800"],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(BAD_TEXTS.values()), ids=list(BAD_TEXTS))
+async def test_a_bad_text_is_a_422_that_names_the_widget_and_the_text_and_saves_nothing(client, db, case):
+    style, text, fragments = case
+    await login_as(client, db, "operator")
+    stored = (await save(client, await create(client), [widget("Good")])).json()
+    response = await save_raw(client, stored, [widget("Fine"), text_widget("Note", style, text, y=3)])
+    assert response.status_code == 422, response.text  # a 422, never a 500
+    assert isinstance(response.json()["detail"], str)
+    message = detail_text(response)
+    assert message.startswith('widget 2 ("Note"): '), message
+    for fragment in fragments:
+        assert fragment in message, message
+    assert await fetch(client, stored) == stored
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'dashboard.updated'") == 1
+
+
+async def test_a_text_widget_config_takes_exactly_a_style_and_a_text(client, db):
+    await login_as(client, db, "operator")
+    dash = await create(client)
+    for config, fragment in (
+        ({"style": "heading", "text": "x", "colour": "red"}, "colour"),
+        ({"text": "x"}, "style"),
+        ({"style": "banner", "text": "x"}, "style"),
+        ({"style": "heading", "text": 5}, "text"),
+        (dict(STAT), "style"),  # a data config is no text config
+    ):
+        response = await save(client, dash, [widget("Bad", "text", config)])
+        assert response.status_code == 422 and fragment in detail_text(response), (config, response.text)
+    data_with_text = await save(client, dash, [widget("Bad", "stat", {"style": "heading", "text": "x"})])
+    assert data_with_text.status_code == 422 and "assets" in detail_text(data_with_text)
+    assert await fetch(client, dash) == dash
+
+
+async def test_the_audit_row_of_a_save_counts_text_widgets_and_never_holds_their_words(client, db):
+    await login_as(client, db, "operator")
+    dash = await create(client, "Ops")
+    words = ("Quarterly", "Zebrafinch", "Kestrelmoss")
+    saved = await save(client, dash, [
+        widget("Power"),
+        text_widget("Heading", "heading", words[0] + " capacity", y=3),
+        text_widget("Note", "paragraph", f"{words[1]}\r\n{words[2]}", y=4),
+        text_widget("Divider", "divider", "", y=6),
+    ])
+    assert saved.status_code == 200, saved.text
+    rows = await db.fetch("SELECT detail FROM audit_log WHERE action = 'dashboard.updated'")
+    assert len(rows) == 1
+    detail = rows[0]["detail"]
+    assert detail["after"]["widgets"] == 4 and detail["before"]["widgets"] == 0
+    assert len(detail["after"]["widgets_hash"]) == 12 and detail["after"]["widgets_hash"] != detail["before"]["widgets_hash"]
+    dump = json.dumps(detail)
+    for word in words:
+        assert word not in dump
+    everything = " ".join(r["d"] for r in await db.fetch("SELECT detail::text AS d FROM audit_log"))
+    assert not any(word in everything for word in words)
+    # Changing only the words is still a change the audit row shows (the hash), without showing the words.
+    edited = await save(client, saved.json(), [
+        widget("Power"),
+        text_widget("Heading", "heading", "Another heading", y=3),
+        text_widget("Note", "paragraph", f"{words[1]}\r\n{words[2]}", y=4),
+        text_widget("Divider", "divider", "", y=6),
+    ])
+    assert edited.status_code == 200
+    second = (await db.fetch("SELECT detail FROM audit_log WHERE action = 'dashboard.updated' ORDER BY id"))[1]["detail"]
+    assert second["before"]["widgets_hash"] == detail["after"]["widgets_hash"]
+    assert second["after"]["widgets_hash"] != second["before"]["widgets_hash"]
+    assert "Another" not in json.dumps(second)
+
+
+async def test_the_cap_of_24_widgets_counts_text_widgets_and_the_list_counts_them_too(client, db):
+    await login_as(client, db, "operator")
+    dash = await create(client)
+
+    def mixed(count: int) -> list[dict]:
+        return [
+            text_widget(f"T{n}", "divider", "", x=(n % 3) * 4, y=(n // 3) * 3) if n % 3 == 0
+            else widget(f"W{n}", x=(n % 3) * 4, y=(n // 3) * 3)
+            for n in range(count)
+        ]
+
+    ok = await save(client, dash, mixed(24))
+    assert ok.status_code == 200, ok.text
+    assert sum(w["type"] == "text" for w in ok.json()["widgets"]) == 8
+    over = await save(client, ok.json(), mixed(24) + [text_widget("25th", "heading", "one more", y=30)])
+    assert over.status_code == 422 and "24" in detail_text(over)
+    assert await db.fetchval("SELECT count(*) FROM widgets") == 24
+    listed = (await client.get("/api/dashboards")).json()
+    assert [d["widget_count"] for d in listed] == [24]  # eight of them text widgets
+
+
+async def test_the_list_counts_a_dashboard_of_text_widgets_only(client, db):
+    await login_as(client, db, "operator")
+    dash = await create(client)
+    await save(client, dash, [text_widget("A", "heading", "Hall A"), text_widget("B", "divider", "", y=3)])
+    assert [d["widget_count"] for d in (await client.get("/api/dashboards")).json()] == [2]
+
+
+# What a title may hold. Probe (w22): a NUL in a title answered with an uncaught database error (a 500 in production); a lone
+# surrogate was already a 422 from the request model; a TAB or a line feed was stored. A title is one line: all are refused now.
+
+BAD_TITLES = {
+    "a NUL": ("a" + chr(0) + "b", "contains a control character (U+0000)"),
+    "a BEL": ("a" + chr(7) + "b", "contains a control character (U+0007)"),
+    "a TAB": ("a\tb", "contains a control character (U+0009)"),
+    "a line feed": ("a\nb", "contains a control character (U+000A)"),
+    "DEL": ("a" + chr(0x7F), "contains a control character (U+007F)"),
+    "a C1 control": ("a" + chr(0x85) + "b", "contains a control character (U+0085)"),
+}
+
+
+@pytest.mark.parametrize("case", list(BAD_TITLES.values()), ids=list(BAD_TITLES))
+@pytest.mark.parametrize("kind", ["data", "text"])
+async def test_a_title_with_a_control_character_is_a_422_not_a_crash(client, db, kind, case):
+    title, reason = case
+    await login_as(client, db, "operator")
+    dash = await create(client)
+    bad = widget(title) if kind == "data" else text_widget(title, "heading", "Hall A")
+    response = await save_raw(client, dash, [widget("Fine"), {**bad, "y": 3}])
+    assert response.status_code == 422, response.text
+    shown = "".join(chr(0xFFFD) if ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F else c for c in title)
+    assert response.json()["detail"] == f'widget 2 ("{shown}"): title: {reason}'
+    assert await fetch(client, dash) == dash
+    assert await db.fetchval("SELECT count(*) FROM widgets") == 0
+
+
+@pytest.mark.parametrize("kind", ["data", "text"])
+async def test_a_lone_surrogate_in_a_title_is_a_422_never_a_500(client, db, kind):
+    await login_as(client, db, "operator")
+    dash = await create(client)
+    title = "a" + chr(0xD800) + "b"
+    bad = widget(title) if kind == "data" else text_widget(title, "heading", "Hall A")
+    response = await save_raw(client, dash, [bad])
+    assert response.status_code == 422, response.text
+    assert "title" in json.dumps(response.json()["detail"])
+    assert await fetch(client, dash) == dash
+
+
+def test_the_title_check_also_refuses_a_lone_surrogate_that_reached_it():
+    # The request model already refuses one; this proves the check holds if that ever changes (and that its answer encodes).
+    bad = WidgetIn.model_construct(**{**widget("a" + chr(0xD800) + "b"), "title": "a" + chr(0xD800) + "b"})
+    with pytest.raises(HTTPException) as caught:
+        checked_configs([bad])
+    assert caught.value.status_code == 422
+    assert caught.value.detail == f'widget 1 ("a{chr(0xFFFD)}b"): title: contains a character that cannot be stored (U+D800)'
+    caught.value.detail.encode("utf-8")  # no lone surrogate in what is sent back
+
+
+async def test_ordinary_titles_with_unicode_are_still_fine(client, db):
+    await login_as(client, db, "operator")
+    dash = await create(client)
+    titles = ["Hall " + EMOJI, "Cairo " + "".join(map(chr, (0x0627, 0x0644, 0x0642, 0x0627, 0x0647, 0x0631, 0x0629))), "A" + chr(0xA0) + "B"]
+    saved = await save(client, dash, [widget(t, y=3 * n) for n, t in enumerate(titles)])
+    assert saved.status_code == 200, saved.text
+    assert [w["title"] for w in saved.json()["widgets"]] == titles
