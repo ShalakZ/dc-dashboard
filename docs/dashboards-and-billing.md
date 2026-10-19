@@ -34,11 +34,12 @@ Dashboards are shared by everyone.
   the dialog. **Filter by kind** gives All kinds or one kind with its count, for example Rack (117), for the assets the widget can offer.
   A list of more than 60 rows opens folded like the Assets Tree; a search or a kind opens the way to every match; **Show 200 more** adds
   to a long result. Picks show as tags above the list, in the order picked (the x removes one, **Clear all** all of them, **N selected (up
-  to 20)** counts them); a stat or a gauge takes one asset and a second pick replaces it. **Pick all under**, at the right of a row, picks
+  to 20)** counts them); a tag shows the name and the end of the parent path when the path is long ("Feed A (… / Row 1 / Rack 05)") and
+  the full name is its tooltip; a stat or a gauge takes one asset and a second pick replaces it. **Pick all under**, at the right of a row, picks
   every matching asset below it, in tree order, if they all fit in the 20; if not it picks nothing and says how many there are and how
   much room is left ("34 assets under Hall 1, room for 17: nothing was picked"). For a metric widget the rows above an asset with the
-  metric are greyed, with no tick box, and Pick all under there picks only the assets that have it. Tab goes search, kind list, tags,
-  **Clear all**, then the rows; Space ticks.
+  metric are greyed, with no tick box, and Pick all under there picks only the assets that have it. Tab goes search, **Filter by kind**,
+  the tags' x buttons, the rows (fold arrow, tick box, **Pick all under**), **Show more** if there is one, then **Clear all**; Space ticks.
 - **Text widget.** A heading, a paragraph or a divider that you write on the dashboard. **Edit**, **Add widget**, Type: **Text**, then
   **Style** (Heading, Paragraph or Divider) and **Text**. It has no asset, source, metric, range, CSV, Details or live values, and the
   dashboard asks the server for no data for it. The viewer draws a heading as a heading (no card title), a paragraph as a card and a

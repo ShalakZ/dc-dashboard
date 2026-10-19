@@ -6,9 +6,10 @@ import { expect, test, type APIRequestContext, type Browser, type Locator, type 
 // IT MAKES ITS OWN DATA: beforeAll creates, through POST /api/assets, `W23 Site` > `W23 Hall 1` and `W23 Hall 2` > `W23 Row 1`..`W23 Row 3` under each hall > `W23 Rack 01`..`W23 Rack 10` under each
 // row (69 assets; the same names repeat under the two halls, so the picker labels them with their parent path), and the dashboard `w23 <run>` (the dialog is only opened and cancelled, nothing is
 // saved). afterAll deletes the dashboard and the whole `W23 Site` subtree, also after a failed case (and sweeps what an earlier run that stopped half way left). The cases are SERIAL. Every case
-// stores its own look (PUT /api/me/preferences) before the page opens; afterAll puts it back to Light and Navy and gold. Nothing is mocked: the page talks to the real API of the stack. In every
+// stores its own look (PUT /api/me/preferences) before the page opens; beforeAll reads the account's look and afterAll puts exactly that back. Nothing is mocked: the page talks to the real API of the stack. In every
 // dialog the widget is a Bar chart on the Energy source, so every asset of the stack is offered (and, with the other projects' assets, there are more than 60: the picker opens folded). Names are
-// matched by SUBSTRING, so every lookup is `exact: true`.
+// matched by SUBSTRING, so every lookup is `exact: true`. A chip SHOWS the name and the parent path cut at its start to the last two segments (`W23 Rack 05 (… / W23 Hall 1 / W23 Row 2)`, see
+// `chipText`), while its tooltip and the name of its Remove button keep the full label.
 //   1   find by typing: `w23 rack 05` says `6 match` and lists six checkboxes named like `W23 Rack 05 (W23 Site / W23 Hall 1 / W23 Row 2)`; ticking one makes a chip with a Remove button; Escape in
 //       the box clears the search and keeps the dialog, the pick is in place (its branch open, its box ticked); a second Escape, in the empty box, closes the dialog and leaves the page in edit mode.
 //   2   kind and search: the kind filter counts what the search finds (Rack 30, Row 3, Hall 1 for `w23 hall 2`, and 34 for all kinds: the hall and what is inside it).
@@ -48,12 +49,26 @@ test.describe.configure({ mode: "serial" });
 
 let dashboardId = 0;
 let siteId = 0;
+/** The look the account had before this spec (read from GET /api/me in beforeAll); afterAll stores exactly this one. */
+let originalLook: Look = LIGHT;
 
 /** The names and labels the picker gives the assets (lib/pickerRows.ts: a name used twice carries its parent path). */
 const rackName = (n: number) => `W23 Rack ${String(n).padStart(2, "0")}`;
 const rowLabel = (hall: number, row: number) => `W23 Row ${row} (${SITE} / W23 Hall ${hall})`;
 const rackLabel = (hall: number, row: number, n: number) => `${rackName(n)} (${SITE} / W23 Hall ${hall} / W23 Row ${row})`;
 const hallLabel = (hall: number) => `W23 Hall ${hall}`;
+
+/**
+ * What a chip shows for the full label "<name> (<parent path>)": the name and the path cut at its START to the last two segments when it has more than two
+ * ("Feed A (Seeded pilot hall / Hall 1 / Pod A / Row 1 / Rack 05)" shows as "Feed A (… / Row 1 / Rack 05)"); a path of two segments or fewer, and a label
+ * without a path, are shown unchanged. The ellipsis is U+2026. The chip's tooltip and its Remove button's name keep the full label.
+ */
+function chipText(full: string): string {
+  const parts = /^(.+?) \((.+)\)$/.exec(full);
+  if (!parts) return full;
+  const segments = parts[2].split(" / ");
+  return segments.length > 2 ? `${parts[1]} (… / ${segments.slice(-2).join(" / ")})` : full;
+}
 
 /** Runs `use` with the request context of a fresh browser context in which the admin is signed in. */
 async function asAdmin<T>(browser: Browser, use: (request: APIRequestContext) => Promise<T>): Promise<T> {
@@ -91,6 +106,8 @@ async function removeSites(request: APIRequestContext): Promise<void> {
 test.beforeAll(async ({ browser }) => {
   test.setTimeout(300_000);
   await asAdmin(browser, async (request) => {
+    const me = await json<{ preferences: Look }>(request, "/api/me");
+    originalLook = { mode: me.preferences.mode, theme: me.preferences.theme }; // what the account had before this spec; afterAll puts exactly this back
     const prefs = await request.put("/api/me/preferences", { data: LIGHT });
     expect(prefs.ok(), `starting from the light look: ${prefs.status()} ${await prefs.text()}`).toBe(true);
     const listed = await json<{ id: number; name: string }[]>(request, "/api/dashboards");
@@ -115,7 +132,7 @@ test.beforeAll(async ({ browser }) => {
 test.afterAll(async ({ browser }) => {
   test.setTimeout(300_000);
   await asAdmin(browser, async (request) => {
-    await request.put("/api/me/preferences", { data: LIGHT });
+    await request.put("/api/me/preferences", { data: originalLook });
     if (dashboardId) await request.delete(`/api/dashboards/${dashboardId}`);
     await removeSites(request); // the whole subtree, whether or not beforeAll got to the end
   });
@@ -258,8 +275,9 @@ test("1. light: a rack is found by typing, picked and shown as a chip; Escape cl
   const label = rackLabel(1, 2, 5);
   await tickOf(picker, label).check();
   await expect(chipsOf(picker)).toHaveCount(1);
-  await expect(chipsOf(picker).first()).toHaveText(label);
-  await expect(removeOf(picker, label), "the chip has a Remove button").toBeVisible();
+  await expect(chipsOf(picker).first(), "the chip shows the name and the end of the path").toHaveText(chipText(label));
+  await expect(chipsOf(picker).first(), "and its tooltip is the full label").toHaveAttribute("title", label);
+  await expect(removeOf(picker, label), "the chip has a Remove button named with the full label").toBeVisible();
   await expect(countOf(picker, 1)).toBeVisible();
 
   // Escape in the box: the box is empty, the dialog is still there, the focus stays in the box.
@@ -396,7 +414,7 @@ test("4. by keyboard: Tab runs from the search box to the kind list and the firs
   const [a, b, c] = [rackLabel(1, 1, 5), rackLabel(1, 2, 5), rackLabel(1, 3, 5)];
   for (const label of [a, b, c]) await tickOf(picker, label).check();
   await expect(chips).toHaveCount(3);
-  expect(await chips.allTextContents(), "the chips come in the order of the picks").toEqual([a, b, c]);
+  expect(await chips.allTextContents(), "the chips come in the order of the picks").toEqual([a, b, c].map(chipText));
 
   await search.focus();
   await page.keyboard.press("Tab");
@@ -431,7 +449,7 @@ test("4. by keyboard: Tab runs from the search box to the kind list and the firs
   await page.keyboard.press("Space");
   await expect(tickOf(picker, space)).toBeChecked();
   await expect(chips).toHaveCount(1);
-  await expect(chips.first()).toHaveText(space);
+  await expect(chips.first()).toHaveText(chipText(space));
   await expect(tickOf(picker, space), "the focus stays on the box").toBeFocused();
 });
 
@@ -461,13 +479,13 @@ test("5. a stat picks one asset (radios, a group named Asset, no Pick all under,
   const first = rackLabel(1, 1, 5);
   await picker.getByRole("radio", { name: first, exact: true }).check();
   await expect(chips).toHaveCount(1);
-  await expect(chips.first()).toHaveText(first);
+  await expect(chips.first()).toHaveText(chipText(first));
   await expect(picker.getByRole("button", { name: /^Remove / }), "the only chip has no Remove button").toHaveCount(0);
 
   const second = rackLabel(2, 3, 5);
   await picker.getByRole("radio", { name: second, exact: true }).check();
   await expect(chips, "the next pick replaces the first").toHaveCount(1);
-  await expect(chips.first()).toHaveText(second);
+  await expect(chips.first()).toHaveText(chipText(second));
   await expect(picker.getByRole("radio", { name: first, exact: true })).not.toBeChecked();
   await expect(picker.getByRole("button", { name: /^Remove / })).toHaveCount(0);
 
@@ -580,7 +598,7 @@ test("7. dark: a pick shows as a chip whose ground differs from the dialog's, an
   await tickOf(picker, label).check();
   const chip = chipsOf(picker).first();
   await expect(chip).toBeVisible();
-  await expect(chip).toHaveText(label);
+  await expect(chip).toHaveText(chipText(label));
   await expect(removeOf(picker, label)).toBeVisible();
   const chipGround = await chip.evaluate((el) => getComputedStyle(el).backgroundColor);
   expect(chipGround, "the chip's ground differs from the dialog's, so it can be seen").not.toBe(ground);
