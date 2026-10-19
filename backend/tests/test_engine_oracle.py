@@ -8,19 +8,25 @@ compared in ITERATION order, and the data is non-dyadic and of mixed magnitude (
 from `+=`). Each side runs on its own classes: the rows, meters and tariffs of a world are plain tuples, turned into
 `reference_engine.HourRow(*t)` for the oracle and `energy.HourRow(*t)` for the live code.
 """
+import dataclasses
+import inspect
 import random
-from collections import Counter
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from itertools import count
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import event
 
 import reference_engine as ref
 from dcdash.core import cost, daycost, energy
+from dcdash.core.db import get_engine, get_sessionmaker
 from dcdash.core.timeutil import local_days
 from dcdash.core.tree import AssetNode, AssetTree
+from helpers import insert_readings, make_asset, make_mapping, make_point, make_source, settle_rollups
 
 WORLDS = 300  # per test function
 UTC = timezone.utc
@@ -556,3 +562,154 @@ def test_the_world_families_cover_the_rate_and_zone_cases():
         no_site_rate += not any(o is None for o in owners)
     assert zones == {"UTC", "Europe/London", "Europe/Berlin", "Asia/Kolkata"}
     assert min(with_override, with_change, starts_mid_window) > 20 and no_site_rate > 0
+
+
+# ---- the split read, the tuple row, the integer casts: checked against the oracle's own read and loop -----------------------
+
+
+def test_hour_row_is_a_tuple_with_the_oracles_fields_in_the_oracles_order():
+    names = tuple(f.name for f in dataclasses.fields(ref.HourRow))
+    assert energy.HourRow._fields == names == ("bucket", "min_value", "max_value", "sum_value", "n", "last_value", "minutes")
+    values = (datetime(2026, 6, 10, 3, tzinfo=UTC), 1.37, 9.11, 4.4, 12, 7.7, 40)
+    new, old = energy.HourRow(*values), ref.HourRow(*values)
+    bucket, low, high, total_, n, last, minutes = new  # unpacks as a 7-tuple
+    assert (bucket, low, high, total_, n, last, minutes) == values and len(new) == 7
+    assert tuple(getattr(old, name) for name in names) == tuple(new) == values
+    assert all(getattr(new, name) == getattr(old, name) for name in names)
+    assert energy.HourRow(bucket=values[0], min_value=1.37, max_value=9.11, sum_value=4.4, n=12, last_value=7.7, minutes=40) == new
+    with pytest.raises(AttributeError):
+        new.n = 13  # immutable, as the frozen dataclass was
+
+
+def test_assemble_is_pure_and_needs_no_session_or_event_loop():
+    assert not inspect.iscoroutinefunction(energy.assemble)
+    assert "db" not in inspect.signature(energy.assemble).parameters
+    world = gen_world(11)
+    meters = {a: energy.Meter(*m) for a, m in world.meters.items()}
+    raw = [  # the rows of the world as a _ROWS result would hand them over: tuples, ints already
+        (point, *t[:7], "row") for point, ts in world.rows.items() for t in ts
+    ] + [(point, world.span[0] - HOUR, 0.0, 0.0, 0.0, 0, value, 0, "baseline") for point, value in world.baselines.items()]
+    raw += [(point, bucket, 0.0, 0.0, 0.0, 0, 0.0, 0, "first") for point, bucket in world.first_buckets.items()]
+    assert world.rows and world.baselines and world.first_buckets  # the seed was chosen so that all three kinds are there
+    read = energy._collect(raw)
+    assert isinstance(read, energy.EnergyRows) and read.baselines == world.baselines and read.first_buckets == world.first_buckets
+    assert read.rows == {p: [energy.HourRow(*t) for t in ts] for p, ts in world.rows.items()}
+    assert all(isinstance(row, energy.HourRow) and type(row.n) is int for ts in read.rows.values() for row in ts)
+
+    def run():
+        return energy.assemble(world.tree, meters, read.rows, read.baselines, world.start, world.end, read.first_buckets)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:  # the compute thread of a later task: no loop, no session
+        threaded = pool.submit(run).result()
+    assert canon_energy(threaded) == canon_energy(run()) == canon_energy(run_energy(world, OLD))
+
+
+DB_T0 = datetime(2026, 6, 10, 0, 0, tzinfo=UTC)
+DB_HOURS = 72
+
+
+async def build_database_world(db) -> None:
+    """Non-dyadic readings: a counter with a baseline before the window and a reset; a counter with a gap in the window;
+    a scaled power meter; a silent power meter; a parent whose own counter starts mid-window."""
+    source = await make_source(db)
+    site = await make_asset(db, "Site")
+    hall = await make_asset(db, "Hall", site)
+    feed_a = await make_asset(db, "Feed A", hall)
+    feed_b = await make_asset(db, "Feed B", hall)
+    panel_c = await make_asset(db, "Panel C", hall)
+    silent = await make_asset(db, "Silent", site)
+    for asset, name, metric, interval, scale in (
+        (feed_a, "a", "energy_kwh", 60, 1.0), (feed_b, "b", "energy_kwh", 60, 1.0), (panel_c, "c", "active_power_kw", 60, 3.7),
+        (silent, "s", "active_power_kw", 60, 1.0), (hall, "h", "energy_kwh", 60, 0.001),
+    ):
+        await make_mapping(db, await make_point(db, source, name), asset, metric, interval, scale)
+    points = {r["asset_id"]: r["point_id"] for r in await db.fetch("SELECT asset_id, point_id FROM mappings")}
+    await insert_readings(db, points[feed_a], DB_T0 - 5 * HOUR, 60, [1000.37])  # the baseline, five hours before
+    values = [1000.37 + 0.2371 * i for i in range(90)] + [2.5 + 0.113 * i for i in range(90)] + [40.1 + 0.371 * i for i in range(100)]
+    await insert_readings(db, points[feed_a], DB_T0, 900, values)  # a reset in hour 22
+    await insert_readings(db, points[feed_b], DB_T0, 1200, [55.5 + 0.1731 * i for i in range(30)])  # hours 0-9, then a gap
+    await insert_readings(db, points[feed_b], DB_T0 + 20 * HOUR, 1200, [70.7 + 0.4177 * i for i in range(90)])
+    await insert_readings(db, points[panel_c], DB_T0 + 2 * HOUR, 150, [3.17 + 0.0113 * (i % 37) for i in range(24 * 60)])
+    await insert_readings(db, points[hall], DB_T0 + 30 * HOUR, 1800, [9000.01 + 3.3137 * i for i in range(60)])  # starts mid-window
+    await settle_rollups(db)
+
+
+async def old_hourly_energy(session, tree, start, end):
+    """`hourly_energy` as it was on main a62fce0: the oracle's own statement, `int()` on n and minutes, the oracle's assemble."""
+    meters = await energy.load_meters(session, tree)
+    rows: dict[int, list] = defaultdict(list)
+    baselines, first_buckets = {}, {}
+    if meters:
+        params = {
+            "ids": sorted({m.point_id for m in meters.values()}),
+            "counter_ids": sorted({m.point_id for m in meters.values() if m.counter}),
+            "start": start,
+            "end": end,
+        }
+        for row in await session.execute(ref._ROWS, params):
+            if row.kind == "baseline":
+                baselines[row.point_id] = row.last_value
+            elif row.kind == "first":
+                first_buckets[row.point_id] = row.bucket
+            else:
+                rows[row.point_id].append(
+                    ref.HourRow(row.bucket, row.min_value, row.max_value, row.sum_value, int(row.n), row.last_value, int(row.minutes))
+                )
+    old_meters = {a: ref.Meter(m.point_id, m.scale, m.interval_seconds, m.counter) for a, m in meters.items()}
+    return ref.assemble(tree, old_meters, rows, baselines, start, end, first_buckets)
+
+
+async def test_the_split_read_and_assemble_equal_the_oracles_hourly_energy_on_real_rows(db):
+    await build_database_world(db)
+    start, end = DB_T0, DB_T0 + DB_HOURS * HOUR
+    async with get_sessionmaker()() as session:
+        tree = await AssetTree.load(session)
+        meters = await energy.load_meters(session, tree)
+        read = await energy.read_energy_rows(session, meters, start, end)
+        split = energy.assemble(tree, meters, read.rows, read.baselines, start, end, read.first_buckets)
+        whole = await energy.hourly_energy(session, tree, start, end)
+        old = await old_hourly_energy(session, tree, start, end)
+        old_rows = [tuple(r) for r in await session.execute(ref._ROWS, _rows_params(meters, start, end))]
+        new_rows = [tuple(r) for r in await session.execute(energy._ROWS, _rows_params(meters, start, end))]
+
+    assert canon_energy(split) == canon_energy(whole) == canon_energy(old)
+    assert old_rows == new_rows and len(new_rows) > 100  # the casts change the type of n and minutes, not a value
+    assert {row[8] for row in new_rows} == {"row", "baseline", "first"}
+    assert all(type(row[5]) is int and type(row[7]) is int for row in new_rows)  # Python ints from asyncpg, no Decimal
+    assert any(type(row[5]) is not int for row in old_rows)  # the oracle's statement still returns the numeric sum
+    assert all(type(r.n) is int and type(r.minutes) is int for ts in read.rows.values() for r in ts)
+    assert len(read.baselines) == 1 and len(read.first_buckets) == 4  # the silent meter has no bucket; hall, a, b, c have
+    assert sum(len(ts) for ts in read.rows.values()) > 100
+    silent = next(a for a, n in tree.nodes.items() if n.name == "Silent")
+    assert len(whole.hours[silent]) == DB_HOURS and not any(h.has_data for h in whole.hours[silent].values())  # estimated zeros
+
+
+def _rows_params(meters, start, end):
+    return {
+        "ids": sorted({m.point_id for m in meters.values()}),
+        "counter_ids": sorted({m.point_id for m in meters.values() if m.counter}),
+        "start": start,
+        "end": end,
+    }
+
+
+async def test_reading_rows_costs_one_statement_and_none_without_a_meter(db):
+    await build_database_world(db)
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    async with get_sessionmaker()() as session:
+        tree = await AssetTree.load(session)
+        meters = await energy.load_meters(session, tree)
+        sync_engine = get_engine().sync_engine
+        event.listen(sync_engine, "before_cursor_execute", record)
+        try:
+            empty = await energy.read_energy_rows(session, {}, DB_T0, DB_T0 + DB_HOURS * HOUR)
+            assert statements == [] and empty == energy.EnergyRows({}, {}, {})
+            await energy.read_energy_rows(session, meters, DB_T0, DB_T0 + DB_HOURS * HOUR)
+        finally:
+            event.remove(sync_engine, "before_cursor_execute", record)
+
+    assert len(statements) == 1 and "readings_1h" in statements[0]
