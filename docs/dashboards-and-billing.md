@@ -25,9 +25,26 @@ Dashboards are shared by everyone.
 
 - **Size.** A dashboard holds up to 24 widgets, and the site up to 50 dashboards. A dashboard name is 1 to 100 characters (spaces at
   the ends are trimmed) and unique: a name already in use is refused with a 409. A widget title is at most 100 characters.
-- **Widgets.** Five types: time series, bar, stat, gauge and table. A widget shows a metric, energy or cost for up to 20 assets (a stat
-  or a gauge shows one). A metric widget offers only assets that have a mapping for that metric. Custom metrics are not available in
-  widgets; they stay on the asset page.
+- **Widgets.** Six types: time series, bar, stat, gauge, table and text. Text is the one type with no data (see **Text widget** below);
+  the other five show a metric, energy or cost for up to 20 assets (a stat or a gauge shows one). A metric widget offers only assets
+  that have a mapping for that metric. Custom metrics are not available in widgets; they stay on the asset page.
+- **Text widget.** A heading, a paragraph or a divider that you write on the dashboard. **Edit**, **Add widget**, Type: **Text**, then
+  **Style** (Heading, Paragraph or Divider) and **Text**. It has no asset, source, metric, range, CSV, Details or live values, and the
+  dashboard asks the server for no data for it. The viewer draws a heading as a heading (no card title), a paragraph as a card and a
+  divider as a plain line; in edit mode every text widget keeps the normal title bar (grip, title, Edit, Delete). A new heading or
+  paragraph is 6 columns by 2 rows, a divider 12 by 1; the smallest is 2 by 1.
+  - **Title.** Still required: it names the card for a screen reader and for the Edit and Delete buttons. The form fills it in from the
+    text (the first line, 40 characters; "Divider", "Divider 2" and so on) until you type your own.
+  - **Plain text only.** No HTML, no markdown, no links: `<b>x</b>` shows as typed. Line breaks are kept (a pasted CRLF becomes a
+    line feed; U+2028 and U+2029 count as line breaks) and both ends are trimmed. A heading is 1 to 200 characters on one line, a
+    paragraph 1 to 2,000, a divider has no text. Control characters (all except tab and line feed) and unpaired surrogates are
+    refused. Characters are counted as Unicode code points: an emoji counts 1, an emoji with a skin tone 2, a family emoji 5. The form
+    and the server apply the same rules; the server is the judge.
+  - **API.** `PUT /api/dashboards/{id}` accepts `type: "text"` with `config: {"style": "heading"|"paragraph"|"divider", "text": "..."}`
+    (any other key is refused). `POST /api/widget-data` and `/api/widget-data/csv` answer 422 `a text widget has no data` for it. A
+    widget title with a control character is refused with a 422. The 24-widget cap and the dashboard list's widget count include text
+    widgets.
+  - **Audit.** The dashboard-save audit row holds only the widget count and a short digest of the widgets, never the words.
 - **Look.** Widgets follow the theme like the rest of the app: Light, Dark or Match my device, and each Theme colour, in the profile
   panel. A card in dark mode is a dark card, and the chart text, grid lines, legend and tooltip are drawn in the same colours, so an
   open chart repaints in the new look as soon as you switch, without a reload. A **gauge** is a half-circle arc filled from its minimum
@@ -503,6 +520,8 @@ Billing.
 - One counter reset per hour is recovered exactly; a second one inside the same hour may understate that hour.
 - Energy estimated from power is an estimate, not a measurement.
 - The currency is one per site, there are no time-of-use tariffs, and custom metrics cannot be used in widgets.
+- A text widget is plain text: a heading holds 200 characters on one line, a paragraph 2,000 (Unicode code points), and a dashboard
+  holds 24 widgets of any type, text included.
 - A widget's Details panel says only what the widget's own answer proves. It does not show the source point's address, how many
   readings a figure rests on or alarm limits, nor the width of a time series bucket, nor an average over buckets.
 - Closing a month has limits of its own (one snapshot per close, what a restore does to closed months, a close that lands during an

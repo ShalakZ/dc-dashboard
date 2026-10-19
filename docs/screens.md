@@ -22,7 +22,8 @@ lacks says "No access".
 - **Asset kinds** (everyone reads, admins change): the Asset kinds button of the Assets Tree (`/assets/kinds`). Reading needs
   `assets.view`; adding, renaming, re-iconing and deleting kinds needs `assets.kinds`. See [Asset kinds](assets-and-kinds.md#asset-kinds).
 - **Dashboards** (everyone can read; operators and admins build): needs `dashboards.view`; building needs `dashboards.edit`.
-  Shared dashboards of widgets that follow the theme (light, dark and each theme colour); the information button on a card opens
+  Shared dashboards of widgets that follow the theme (light, dark and each theme colour; a text widget is a heading, a paragraph or a
+  divider you write, with no data); the information button on a card opens
   **Details**, a panel with what the card shows, its time window and freshness, what its markers mean and its figures as text (where a
   figure says "no rate", a person who may open Tariffs gets a link to it there).
   An admin (`dashboards.default`) can mark one as the default, and the sidebar entry and the

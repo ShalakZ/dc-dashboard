@@ -146,7 +146,7 @@ message appeared as described), and lost what came after the dump.
 
 ## Migrations in order
 
-The files are in `backend/migrations/versions/`; each revises the one before it, and `0012` is the head. The release-note entry of a
+The files are in `backend/migrations/versions/`; each revises the one before it, and `0013` is the head. The release-note entry of a
 migration says how to apply it, how to verify it and the commit to go back to.
 
 | Revision | What it does | Downgrade | Release note |
@@ -163,6 +163,7 @@ migration says how to apply it, how to verify it and the commit to go back to.
 | `0010` | the asset kinds registry (`asset_kinds`), seeded from the kinds assets already use | lossless except the registry (icons go back to the keyword guess) | [W7m](../CHANGELOG.md#upgrading-to-w7m-migration-0010) |
 | `0011` | data only: the permission Manage asset kinds (`assets.kinds`) for the custom roles that could change kinds | lossless for the data; only which permissions a custom role lists changes | [W7o](../CHANGELOG.md#upgrading-to-w7o-migration-0011) |
 | `0012` | close month: the `billing_closes` table (a closed billing month's stored figures) | lossless for everything that existed before; a downgrade drops the closed months (and a restore of an older dump brings back the older set) | [W11](../CHANGELOG.md#upgrading-to-w11-migration-0012) |
+| `0013` | text widget: the widget type CHECK allows `text` | lossless while no text widget exists; refuses while one does: remove them first | [w22](../CHANGELOG.md#upgrading-to-w22-migration-0013) |
 
 Waves without a migration also have entries in the CHANGELOG (for example W7p, no migration): read them too, they can name checks.
 
