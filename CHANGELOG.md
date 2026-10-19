@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w24 (2026-10-19, MERGE)
+## w24 (2026-10-19, 9874792)
 
 w24 adds two things to dashboard widgets. A stat or a time series of energy or cost for one asset can **compare this month so far with the
 same days of last month** (complete days only, the same number on both sides; each figure names its window and equals the sum of Billing's
