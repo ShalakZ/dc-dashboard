@@ -18,8 +18,10 @@ No row is read or written: every existing widget stays as it is.
 Down, in one transaction: locks `widgets`, then refuses if any `text` widget exists. A text widget cannot be kept under the old
 constraint, and nothing is ever deleted by a migration, so the downgrade stops with a message that says how many text widgets
 there are, which dashboards hold them (id and name, at most ten) and what to do (remove them in the dashboard editor, then run
-the downgrade again). With none, it drops `widgets_type_known` and adds back `widgets_type_check` with the five types in the
-order migration 0004 wrote them, so the schema is exactly the one at 0012: the same constraint name and the same definition.
+the downgrade again). With none, it drops every CHECK over the `type` column (found the way the upgrade finds them, so a
+renamed `widgets_type_known` goes too) and adds back `widgets_type_check` with the five types in the order migration 0004
+wrote them, so the schema is exactly the one at 0012: the same constraint name and the same definition. Each CHECK dropped
+is named in a NOTICE, so the output of the upgrade or the downgrade lists it.
 If `widgets` is already gone (an operator dropped it by hand), the downgrade does nothing, as 0004's own downgrade drops the
 table with IF EXISTS, so a downgrade through 0013 to an older revision still runs.
 
@@ -45,6 +47,7 @@ BEGIN
               (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.widgets'::regclass AND attname = 'type')
           ]::int2[]
     LOOP
+        RAISE NOTICE 'migration 0013 dropped the CHECK %', type_check.conname;
         EXECUTE format('ALTER TABLE public.widgets DROP CONSTRAINT %I', type_check.conname);
     END LOOP;
 END
@@ -53,13 +56,14 @@ $$
 
 UP = [
     DROP_TYPE_CHECKS,
-    "ALTER TABLE widgets ADD CONSTRAINT widgets_type_known "
+    "ALTER TABLE public.widgets ADD CONSTRAINT widgets_type_known "
     "CHECK (type IN ('timeseries', 'bar', 'stat', 'gauge', 'table', 'text'))",
 ]
 
 DOWN = [
-    "ALTER TABLE widgets DROP CONSTRAINT IF EXISTS widgets_type_known",
-    "ALTER TABLE widgets ADD CONSTRAINT widgets_type_check CHECK (type IN ('timeseries', 'bar', 'stat', 'gauge', 'table'))",
+    DROP_TYPE_CHECKS,
+    "ALTER TABLE public.widgets ADD CONSTRAINT widgets_type_check "
+    "CHECK (type IN ('timeseries', 'bar', 'stat', 'gauge', 'table'))",
 ]
 
 LISTED_DASHBOARDS = 10
@@ -67,16 +71,16 @@ LISTED_DASHBOARDS = 10
 
 def _refuse_to_keep_text_widgets(bind) -> None:
     """Stop the downgrade, before anything is changed, if a text widget exists (the old constraint would refuse it)."""
-    count = bind.execute(sa.text("SELECT count(*) FROM widgets WHERE type = 'text'")).scalar_one()
+    count = bind.execute(sa.text("SELECT count(*) FROM public.widgets WHERE type = 'text'")).scalar_one()
     if count == 0:
         return
     holders = bind.execute(
         sa.text(
             "SELECT d.id, d.name FROM dashboards d "
-            "WHERE EXISTS (SELECT 1 FROM widgets w WHERE w.dashboard_id = d.id AND w.type = 'text') ORDER BY d.id"
+            "WHERE EXISTS (SELECT 1 FROM public.widgets w WHERE w.dashboard_id = d.id AND w.type = 'text') ORDER BY d.id"
         )
     ).all()
-    listed = ", ".join(f"{row.id} {row.name}" for row in holders[:LISTED_DASHBOARDS])
+    listed = ", ".join(f"{row.id} {row.name!r}" for row in holders[:LISTED_DASHBOARDS])
     if len(holders) > LISTED_DASHBOARDS:
         listed += f", and {len(holders) - LISTED_DASHBOARDS} more"
     held = "1 text widget exists" if count == 1 else f"{count} text widgets exist"
@@ -85,7 +89,7 @@ def _refuse_to_keep_text_widgets(bind) -> None:
         "the downgrade of migration 0013 was stopped before it changed anything: "
         f"{held}, {in_dashboards} (id and name): {listed}. The older database cannot hold a text widget, and a migration "
         "never deletes one. Remove the text widgets in the dashboard editor (Edit, then Delete on each text card), then run "
-        "the downgrade again. The database is still at revision 0013."
+        "the downgrade again. Nothing was changed: the database is still at the revision it was at before this downgrade."
     )
 
 
@@ -98,7 +102,7 @@ def downgrade() -> None:
     bind = op.get_bind()
     if not bind.execute(sa.text("SELECT to_regclass('public.widgets') IS NOT NULL")).scalar_one():
         return  # the table is already gone (migration 0004 drops it with IF EXISTS too): nothing to protect, nothing to restore
-    op.execute("LOCK TABLE widgets IN ACCESS EXCLUSIVE MODE")
+    op.execute("LOCK TABLE public.widgets IN ACCESS EXCLUSIVE MODE")
     _refuse_to_keep_text_widgets(bind)
     for statement in DOWN:
         op.execute(statement)
