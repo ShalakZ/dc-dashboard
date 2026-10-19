@@ -9,7 +9,9 @@ import type { Asset, WidgetConfig, WidgetData, DataWidgetType } from "../../api/
 import { downloadCsv } from "../../lib/download";
 import type { LiveValue } from "../../lib/stream";
 import { parseRules, stripComments } from "../../test/cssTools";
-import { config, seriesData, seriesPoint, valueRow, valuesData } from "../../test/dashboardFixtures";
+import {
+  breakdownBlock, breakdownData, compareAsset, compareBlock, compareChange, compareSide, compareStatData, config, seriesData, seriesPoint, valueRow, valuesData,
+} from "../../test/dashboardFixtures";
 import { LiveValuesContext } from "./LiveValuesContext";
 import { WidgetDetails, type WidgetDetailsProps } from "./WidgetDetails";
 
@@ -498,5 +500,85 @@ describe("WidgetDetails: Download CSV", () => {
     await act(async () => { fail(new Error("boom")); });
     expect(within(dialog()).getByRole("alert")).toHaveTextContent("CSV export failed: boom");
     expect(button).not.toHaveAttribute("aria-disabled");
+  });
+});
+
+describe("WidgetDetails: a comparison and a breakdown (w24)", () => {
+  const COMPARE = (): WidgetConfig => config({ source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" });
+  const KIND = (): WidgetConfig => config({ assets: [], source: "energy", metric: null, aggregation: "sum", range: "this_month", bars: "kind", kind: "Rack" });
+
+  it("lists both measures for both windows by date, the changes and a note for each thing worth saying", () => {
+    const data = compareStatData({
+      compare: compareBlock({
+        left_out_days: ["2026-10-31"], last_month: { month: "2026-09", closed: true },
+        assets: [compareAsset({ this: compareSide({ kwh: 12.3, cost: 4.5, estimated: true, partial: true }), kwh: compareChange({ abs: 2.5, percent: 25 }), cost: compareChange({ abs: 1, why_none: "partial" }) })],
+      }),
+    });
+    const { dialog } = open("stat", data, COMPARE());
+    const view = within(dialog());
+    expect(view.getByRole("heading", { name: "Comparison" })).toBeInTheDocument();
+    const rows = view.getAllByRole("row").map((row) => within(row).queryAllByRole("cell").map((c) => c.textContent));
+    expect(rows).toContainEqual(["This month so far", "2026-10-01 to 2026-10-17", "~12.30", "~4.50*"]);
+    expect(rows).toContainEqual(["Same days last month", "2026-09-01 to 2026-09-17", "1300.00", "260.00"]);
+    expect(rows).toContainEqual(["Change", "", "up 25.0 % (+2.50 kWh)", "up 1.00 QAR"]);
+    expect(view.getByRole("columnheader", { name: "Cost (QAR)" })).toBeInTheDocument();
+    expect(view.getByText("Cost: No percentage: some of the cost has no rate.")).toBeInTheDocument();
+    expect(view.getByText("31 October has no matching day in September.")).toBeInTheDocument();
+    expect(view.getByText("Last month is closed: these are its closed figures.")).toBeInTheDocument();
+    // the markers the figures use are explained here too
+    expect(view.getByText("~ estimated from power, not measured")).toBeInTheDocument();
+  });
+
+  it("explains a star and a dash of the cost column on an energy widget, where the card draws neither (and so its footer says nothing of them)", () => {
+    const side = compareSide({ partial: true });
+    const { dialog } = open("stat", compareStatData({ compare: compareBlock({ assets: [compareAsset({ this: side, last: compareSide({ cost: null }) })] }) }), COMPARE());
+    const view = within(dialog());
+    const rows = view.getAllByRole("row").map((row) => within(row).queryAllByRole("cell").map((c) => c.textContent));
+    expect(rows).toContainEqual(["This month so far", "2026-10-01 to 2026-10-17", "1500.00", "300.00*"]);
+    expect(rows).toContainEqual(["Same days last month", "2026-09-01 to 2026-09-17", "1500.00", "—"]);
+    expect(view.getByText("* partial: some energy in the period had no rate, so the cost is incomplete")).toBeInTheDocument();
+    expect(view.getByText("— no rate: no tariff applies to this figure")).toBeInTheDocument();
+  });
+
+  it("says nothing of a star or a missing rate when the cost column has neither", () => {
+    const { dialog } = open("stat", compareStatData(), COMPARE());
+    expect(within(dialog()).queryByText(/^\* partial/)).not.toBeInTheDocument();
+    expect(within(dialog()).queryByText(/^— no rate/)).not.toBeInTheDocument();
+  });
+
+  it("says 'Nothing to compare yet' on the first of the month, with no table", () => {
+    const data = compareStatData({ compare: compareBlock({ state: "nothing_yet", elapsed_days: 0, days: 0, this_window: null, last_window: null, assets: [] }), values: [] });
+    const { dialog } = open("stat", data, COMPARE());
+    expect(within(dialog()).getByText("Nothing to compare yet")).toBeInTheDocument();
+    expect(within(dialog()).queryByRole("columnheader", { name: "Dates" })).not.toBeInTheDocument();
+  });
+
+  it("lists the counts of a breakdown: bars, those left out with their total, those with no data and those inside others", () => {
+    const data = breakdownData(3, { breakdown: breakdownBlock({ inside_others: 3, no_data: 2, more: { count: 10, with_value: 7, value: 40, estimated: true, partial: false } }) });
+    const { dialog } = open("bar", data, KIND());
+    const view = within(dialog());
+    expect(view.getByRole("heading", { name: "Breakdown" })).toBeInTheDocument();
+    const list = view.getByText("Looking under").closest("dl")!;
+    const pairs = [...list.querySelectorAll(":scope > div")].map((row) => [row.querySelector("dt")!.textContent, row.querySelector("dd")!.textContent]);
+    expect(pairs).toEqual([
+      ["Kind", "Rack"], ["Looking under", "Hall 1"], ["Assets of this kind", "117"], ["Bars drawn", "10"],
+      ["Not drawn", "10 Racks: ~40.00 kWh in all (3 with no data)"], ["With no data", "2"],
+      ["Inside others", "3 Racks are inside other Racks and are counted there."],
+    ]);
+  });
+
+  it("says the whole site when there is no root, and leaves out the rows that have nothing to say", () => {
+    const data = breakdownData(3, { breakdown: breakdownBlock({ root: null, more: { count: 0, with_value: 0, value: null, estimated: false, partial: false } }) });
+    const { dialog } = open("bar", data, KIND());
+    const view = within(dialog());
+    expect(view.getByText("The whole site", { selector: "dd" })).toBeInTheDocument();
+    expect(view.queryByText("Not drawn")).not.toBeInTheDocument();
+    expect(view.queryByText("Inside others")).not.toBeInTheDocument();
+  });
+
+  it("has neither section for an ordinary widget", () => {
+    const { dialog } = open("stat", valuesData({ type: "stat" }), LAST());
+    expect(within(dialog()).queryByRole("heading", { name: "Comparison" })).not.toBeInTheDocument();
+    expect(within(dialog()).queryByRole("heading", { name: "Breakdown" })).not.toBeInTheDocument();
   });
 });

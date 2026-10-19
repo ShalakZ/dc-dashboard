@@ -596,14 +596,16 @@ export const useBillingMonthCheck = (month: string | null) =>
  * The returned promise lets `mutateAsync` resolve once the month's costs, the months list and the audit log have been read again, so a caller that
  * closes its dialog then finds the page in its new state. It does NOT wait for the month check: that is a big read the dialog has no use for, and a
  * slow or stuck one would keep the dialog open on a month that is already closed. The check is refreshed in the background (`void`), and its count
- * on the page moves when the answer arrives. Not `COST_DEPENDENT`: widgets read live figures, which a close does not change.
+ * on the page moves when the answer arrives. The widgets' data is refreshed in the background too (w24): a plain `last_month` widget reads live figures,
+ * which a close does not change, but a widget that compares with last month reads the frozen figures of a closed month, so closing or reopening moves it.
+ * Not the whole of `COST_DEPENDENT`: nothing else in it depends on a close.
  */
 function useBillingCloseMutation<Result>(action: "close" | "reopen") {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: ({ month, note }: { month: string; note: string }) => api.post<Result>(`/api/billing/months/${month}/${action}`, { note }),
     onSettled: () => {
-      void invalidate(keys.billingMonthCheckAll);
+      void invalidate(keys.billingMonthCheckAll, keys.widgetData);
       return invalidate(keys.billingCostsAll, keys.billingMonths, keys.auditAll);
     },
   });
@@ -684,10 +686,15 @@ export function useDeleteDashboard() {
   });
 }
 
+/** A widget config as a cache key, without its `kind`: two configs that differ only in the kind a breakdown by kind splits by are the same widget. */
+const withoutKind = (config: WidgetConfig): string => hashKey([{ ...config, kind: undefined }]);
+
 /**
  * `preset` is the effective range (the caller resolves inheritance). Refetches every 30 s. While a new range loads the old
  * figures stay, but only for the same widget: after a change of type or config (the editor's preview) the old answer
- * belongs to another kind of widget, so nothing is shown until the new one arrives.
+ * belongs to another kind of widget, so nothing is shown until the new one arrives. The one exception is the `kind` of a breakdown
+ * by kind (w24): the viewer's "Split by" changes it, and the card keeps the previous bars (it does not swap to a skeleton, so the select stays
+ * where it is and keeps its focus) until the new answer lands.
  */
 export const useWidgetData = (type: DataWidgetType, config: WidgetConfig, preset: RangePreset, enabled = true) =>
   useQuery({
@@ -696,7 +703,7 @@ export const useWidgetData = (type: DataWidgetType, config: WidgetConfig, preset
     refetchInterval: 30_000,
     placeholderData: (previous, previousQuery) => {
       const before = previousQuery?.queryKey; // [..keys.widgetData, type, config, preset]
-      return before && before[1] === type && hashKey([before[2]]) === hashKey([config]) ? previous : undefined;
+      return before && before[1] === type && withoutKind(before[2] as WidgetConfig) === withoutKind(config) ? previous : undefined;
     },
     queryFn: () => api.post<WidgetData>("/api/widget-data", { type, config, range: preset }),
   });

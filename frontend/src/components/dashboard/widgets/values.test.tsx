@@ -1,5 +1,7 @@
 import { render, screen } from "@testing-library/react";
-import { config, valueRow, valuesData } from "../../../test/dashboardFixtures";
+import {
+  compareAsset, compareBlock, compareChange, compareSide, compareStatData, config, valueRow, valuesData,
+} from "../../../test/dashboardFixtures";
 import { LiveValuesContext } from "../LiveValuesContext";
 import { GaugeWidget, gaugeFillPath } from "./GaugeWidget";
 import { StatWidget } from "./StatWidget";
@@ -241,5 +243,118 @@ describe("table", () => {
   it("says so when there are no assets", () => {
     render(<TableWidget data={valuesData({ type: "table", values: [] })} />);
     expect(screen.getByText("No assets.")).toBeInTheDocument();
+  });
+});
+
+describe("stat, compared with the same days of last month (w24)", () => {
+  const show = (data = compareStatData()) => render(<StatWidget data={data} live={false} />);
+  const text = (container: HTMLElement, selector: string) => container.querySelector(selector)?.textContent;
+  const withAsset = (over: Parameters<typeof compareAsset>[0], block: Parameters<typeof compareBlock>[0] = {}, data: Parameters<typeof compareStatData>[0] = {}) =>
+    compareStatData({ compare: compareBlock({ ...block, assets: [compareAsset(over)] }), ...data });
+
+  it("draws the headline as before, then the window, last month's same days with their window, the change and an empty reserved note line", () => {
+    const { container } = show();
+    expect(container.querySelector(".stat.stat-compare > .big > .stat-num")).toHaveTextContent("1500.00");
+    expect(container.querySelector(".big")).toHaveTextContent("1500.00 kWh");
+    expect(container.querySelector(".stat-name")).toHaveTextContent("LV Panel 1");
+    const windows = [...container.querySelectorAll(".stat-window")].map((el) => el.textContent);
+    expect(windows).toEqual(["1 to 17 Oct", "1 to 17 Sep"]);
+    expect(text(container, ".stat-last-label")).toBe("Same days last month");
+    expect(text(container, ".stat-last-fig")).toBe("1300.00 kWh");
+    expect(text(container, ".stat-change")).toBe("up 15.4 % (+200.00 kWh)");
+    const note = container.querySelector(".stat-note");
+    expect(note).not.toBeNull(); // the slot is there with nothing in it, so a note appearing moves nothing
+    expect(note).toBeEmptyDOMElement();
+  });
+
+  it("orders the rows: figure, name, window, last month, its window, change, note", () => {
+    const { container } = show();
+    const classes = [...container.querySelector(".stat")!.children].map((el) => el.className.split(" ")[0]);
+    expect(classes).toEqual(["big", "stat-name", "stat-window", "stat-last", "stat-window", "stat-change", "stat-note"]);
+  });
+
+  it("compares cost with the currency, and shows the marks of each side where they belong", () => {
+    const data = withAsset(
+      { this: compareSide({ cost: 4.5, estimated: true, partial: true }), last: compareSide({ cost: 3, partial: true }), cost: compareChange({ abs: 1.5, why_none: "partial" }) },
+      {}, { source: "cost", unit: "QAR", values: [valueRow({ value: 4.5, estimated: true, partial: true, point_id: null })] },
+    );
+    const { container } = show(data);
+    expect(container.querySelector(".big")).toHaveTextContent("~4.50* QAR");
+    expect(text(container, ".stat-last-fig")).toBe("3.00* QAR");
+    expect(text(container, ".stat-change")).toBe("up 1.50 QAR");
+    expect(text(container, ".stat-note")).toBe("No percentage: some of the cost has no rate.");
+  });
+
+  it("marks an estimated kWh side with ~ and never with a star, even when its cost is partial", () => {
+    const { container } = show(withAsset({ last: compareSide({ kwh: 1300, estimated: true, partial: true }) }));
+    expect(text(container, ".stat-last-fig")).toBe("~1300.00 kWh");
+  });
+
+  it("shows one line for the notes: the reason first, how many more wait in Details, and every note in the title", () => {
+    const data = withAsset(
+      { cost: compareChange({ abs: 4, why_none: "partial" }), rate_change: { date: "2026-10-05" } },
+      { left_out_days: ["2026-10-31"], last_month: { month: "2026-09", closed: true } },
+      { source: "cost", unit: "QAR" },
+    );
+    const { container } = show(data);
+    const note = container.querySelector(".stat-note")!;
+    expect(note).toHaveTextContent("No percentage: some of the cost has no rate. (+3 more in Details)");
+    expect(note.getAttribute("title")).toContain("A rate changed on 5 Oct, so the cost change is not only usage.");
+    expect(note.getAttribute("title")).toContain("31 October has no matching day in September.");
+    expect(note.getAttribute("title")).toContain("Last month is closed: these are its closed figures.");
+  });
+
+  it("gives the rate note only to cost", () => {
+    const { container } = show(withAsset({ rate_change: { date: "2026-10-05" } }));
+    expect(text(container, ".stat-note")).toBe("");
+  });
+
+  it("says why a percentage is withheld, and shows the amount alone", () => {
+    const data = withAsset({ last: compareSide({ kwh: 1300, no_data_days: 3 }), kwh: compareChange({ abs: 200, why_none: "missing_days" }) });
+    const { container } = show(data);
+    expect(text(container, ".stat-change")).toBe("up 200.00 kWh");
+    expect(text(container, ".stat-note")).toBe("No percentage: last month has no readings on 3 of the 17 days.");
+  });
+
+  it("says no change for an amount that is nothing at the shown precision", () => {
+    const { container } = show(withAsset({ kwh: compareChange({ abs: 0, percent: 0 }) }));
+    expect(text(container, ".stat-change")).toBe("no change");
+  });
+
+  it("draws a dash, never a zero, for a last month without readings, and the reason", () => {
+    const { container } = show(withAsset({ last: compareSide({ kwh: 0, no_data_days: 17 }), kwh: compareChange({ why_none: "no_previous" }) }));
+    expect(text(container, ".stat-last-fig")).toBe("—");
+    expect(text(container, ".stat-change")).toBe("—");
+    expect(text(container, ".stat-note")).toBe("No readings last month.");
+  });
+
+  it("says a closed month's asset is not in its closed figures, instead of the percentage's reason", () => {
+    const data = withAsset({ last: null, last_state: "not_in_closed", kwh: compareChange({ why_none: "no_previous" }) }, { last_month: { month: "2026-09", closed: true } });
+    const { container } = show(data);
+    expect(text(container, ".stat-last-fig")).toBe("—");
+    expect(text(container, ".stat-note")).toBe("Not in last month's closed figures.");
+  });
+
+  it("says a closed month on its own", () => {
+    const { container } = show(withAsset({}, { last_month: { month: "2026-09", closed: true } }));
+    expect(text(container, ".stat-note")).toBe("Last month is closed: these are its closed figures.");
+  });
+
+  it("says only 'Nothing to compare yet' on the first of the month", () => {
+    const { container } = show(compareStatData({ compare: compareBlock({ state: "nothing_yet", elapsed_days: 0, days: 0, this_window: null, last_window: null, assets: [] }), values: [] }));
+    expect(container.querySelector(".stat")).toHaveTextContent(/^Nothing to compare yet$/);
+    expect(container.querySelector(".big")).toBeNull();
+  });
+
+  it("falls back to the plain stat when the asset is gone (the comparison has no asset and the answer no row)", () => {
+    const { container } = show(compareStatData({ compare: compareBlock({ assets: [] }), values: [] }));
+    expect(container.querySelector(".stat-num")).toHaveTextContent("—");
+    expect(container.querySelector(".stat-last")).toBeNull();
+  });
+
+  it("is exactly the old stat when there is no comparison", () => {
+    const { container } = render(<StatWidget data={valuesData({ compare: null, breakdown: null })} live={false} />);
+    expect(container.querySelector(".stat")).not.toHaveClass("stat-compare");
+    expect(container.querySelector(".stat-last, .stat-change, .stat-note, .stat-window")).toBeNull();
   });
 });

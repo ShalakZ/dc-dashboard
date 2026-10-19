@@ -56,6 +56,13 @@
   .widget-sk[data-type="timeseries"] .sk-block, .widget-sk[data-type="bar"] .sk-block { flex: 1; height: auto; min-height: 0; }
   .widget-sk[data-type="gauge"] .sk-block { height: auto; margin: 0 auto; aspect-ratio: 2 / 1; border-radius: 999px 999px 0 0; }
   .widget-sk[data-type="gauge"] > span { text-align: center; } /* the figure's and the name's lines sit under the dial, as the real ones do */
+  /* w24: the skeleton of a card with more rows than its type's plain shape draws the same rows at the same heights, so nothing moves when the data lands.
+     A comparing stat: the 2px gap of .stat-compare; a breakdown by kind: the chart block, the one reserved line and the 28px "Split by" row, 4px apart. */
+  .widget-sk-compare { gap: 2px; }
+  .widget-sk-compare .sk-compare-last { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; }
+  .widget-sk-kind { gap: 4px; }
+  .widget-sk-kind .sk-split { display: flex; flex: none; align-items: center; gap: 8px; }
+  .widget-sk[data-type="bar"] .sk-split .sk-block, .widget-sk[data-type="bar"] > .sk-block + .sk-block { flex: none; }
 
   /* ===== Stat (Task 3): the figure, its unit, the asset name, and the age of a stale reading ===== */
   .stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -68,6 +75,17 @@
   .stat-age { display: flex; align-items: center; gap: 4px; color: var(--text-2); font-size: var(--fs-xs); line-height: 16px; }
   .stat-age svg.i { width: 12px; height: 12px; }
   .stat-age small, .widget-table .cell-age small { font-size: inherit; }
+
+  /* ===== A stat that compares with the same days of last month (w24): the window, last month's figure, the change and ONE reserved note line. Seven rows, each one line
+     with an ellipsis (the whole text is in its title and in Details), so the card fits 3 x 3 at every width and a note appearing moves nothing. ===== */
+  .stat-compare { gap: 2px; }
+  .stat-window { overflow: hidden; color: var(--text-2); font-size: var(--fs-xs); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+  .stat-last { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; margin-top: 4px; font-size: var(--fs-sm); line-height: 1.4; }
+  .stat-last-label { min-width: 0; overflow: hidden; color: var(--text-2); text-overflow: ellipsis; white-space: nowrap; }
+  .stat-last-fig { flex: none; max-width: 60%; overflow: hidden; color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .stat-change { overflow: hidden; color: var(--text); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+  .stat-note { min-height: 1lh; overflow: hidden; color: var(--text-2); font-size: var(--fs-xs); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+  .stat-nothing { margin: 0; color: var(--text-2); font-size: var(--fs-sm); }
 
   /* ===== Table (Task 3): edge to edge, the head row on its own ground, 32px rows, the value column right aligned ===== */
   .widget-table { width: 100%; margin: 0; border-collapse: separate; border-spacing: 0; font-size: var(--fs-sm); }
@@ -100,6 +118,16 @@
 
   /* ===== Charts (Task 4): the canvas box ===== */
   .widget-chart { height: 100%; min-width: 0; min-height: 140px; }
+
+  /* ===== A breakdown by kind (w24): the chart (or the sentence in its place), ONE reserved line for "and N more ..." and the "Split by" row, in a column that fills the body.
+     The line keeps its height when empty, and the select is 28px, so nothing moves when either changes. ===== */
+  .widget-bars { display: flex; flex-direction: column; gap: 4px; height: 100%; min-width: 0; min-height: 0; }
+  .widget-bars > .widget-chart { flex: 1 1 0; height: auto; min-height: 120px; } /* 120px, not the plain chart's 140: with the line (16px), the select (28px) and two 4px gaps a 3-row card (176px of body under its footer line) holds it without a scroll */
+  .widget-bars > .widget-empty { display: flex; flex: 1 1 0; align-items: center; justify-content: center; min-height: 120px; }
+  .bars-note { flex: none; min-height: 1lh; margin: 0; overflow: hidden; color: var(--text-2); font-size: var(--fs-xs); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+  .bars-split { display: flex; flex: none; align-items: center; gap: 8px; min-width: 0; }
+  .bars-split label { display: block; flex: none; color: var(--text-2); font-size: var(--fs-xs); font-weight: 400; } /* the app's label is a bold grid */
+  .bars-split select { flex: 0 1 auto; min-width: 0; max-width: 100%; min-height: 28px; padding: 0 8px; font-size: var(--fs-xs); }
 
   /* ===== Editor (Task 6): the dialog's live preview is a real card in a box of the widget's real height; stat and gauge are capped so they read at a realistic size ===== */
   .widget-preview { height: var(--widget-preview-h); } /* a stretched block (a grid item), never fit-content or inline: the card inside is a size container */

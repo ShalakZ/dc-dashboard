@@ -50,6 +50,16 @@ describe("WidgetFrame", () => {
     expect(region.querySelector("button, a, input, [tabindex]")).toBeNull();
   });
 
+  it("draws the skeleton variant it is given (a comparing stat, a breakdown by kind), in the same one region", () => {
+    const { unmount } = frame({ loading: true, type: "stat", shape: "compare-stat" });
+    expect(screen.getByRole("status")).toHaveClass("widget-sk", "widget-sk-compare");
+    expect(screen.getByRole("status")).toHaveAttribute("data-type", "stat");
+    unmount();
+    frame({ loading: true, type: "bar", shape: "kind-bars" });
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.getByRole("status")).toHaveClass("widget-sk-kind");
+  });
+
   it("reserves the footer line while loading only when asked, so the body does not shrink when a since line arrives (energy and cost)", () => {
     const { container, unmount } = frame({ loading: true, type: "stat" });
     expect(container.querySelector(".widget-foot")).toBeNull();

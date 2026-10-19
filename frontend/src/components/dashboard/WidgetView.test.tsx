@@ -5,8 +5,11 @@ import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import type { WidgetData } from "../../api/types";
 import { downloadCsv } from "../../lib/download";
-import { config, dataFor, seriesData, seriesPoint, valueRow, valuesData } from "../../test/dashboardFixtures";
+import {
+  breakdownBlock, breakdownData, compareAsset, compareBlock, compareSide, compareStatData, config, dataFor, seriesData, seriesPoint, valueRow, valuesData,
+} from "../../test/dashboardFixtures";
 import { mockFetch } from "../../test/fetchMock";
+import { holdFetch } from "../../test/holdFetch";
 import { WidgetView, type WidgetViewProps } from "./WidgetView";
 
 // Only the Details drawer asks who is signed in (and only when it is open); the card and the other cases need neither.
@@ -301,5 +304,131 @@ describe("WidgetView: Details", () => {
     const [card, drawer] = vi.mocked(downloadCsv).mock.calls;
     expect(drawer).toEqual(card);
     expect(drawer[1]).toEqual({ method: "POST", body: { type: "bar", config: energyConfig, range: "24h" } });
+  });
+});
+
+describe("WidgetView: a breakdown by kind and a comparison (w24)", () => {
+  const kindConfig = (over: Partial<ReturnType<typeof config>> = {}) => config({ assets: [], source: "energy", metric: null, aggregation: "sum", bars: "kind", kind: "Rack", range: "this_month", ...over });
+  /** The answer for the kind that was asked: its own name, one bar named for it. */
+  const byKind = ({ body }: { url: string; body: unknown }) => {
+    const kind = (body as { config: { kind: string } }).config.kind;
+    return { body: breakdownData(1, { values: [valueRow({ asset_id: 10, name: `${kind} A`, value: 7, point_id: null })], breakdown: breakdownBlock({ kind }) }) };
+  };
+  const split = () => screen.getByRole("combobox", { name: "Split by" });
+  const asked = (calls: { body: unknown }[]) => calls.map((c) => (c.body as { config: { kind: string } }).config.kind);
+
+  it("asks again with the kind picked, keeping the old bars and the select (and its focus) until the new answer lands", async () => {
+    const calls = mockFetch({ "POST /api/widget-data": byKind });
+    show({ type: "bar", config: kindConfig() });
+    expect(await screen.findByTestId("chart")).toHaveTextContent("Rack A");
+    const select = split();
+    expect(select).toHaveValue("Rack");
+    const gate = holdFetch((method, path) => method === "POST" && path === "/api/widget-data");
+    select.focus();
+    await userEvent.selectOptions(select, "Panel");
+    expect(split()).toBe(select); // the very element: nothing swapped for a skeleton
+    expect(select).toHaveFocus();
+    expect(select).toHaveValue("Panel");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chart")).toHaveTextContent("Rack A"); // the previous answer, until the new one arrives
+    gate.release();
+    await waitFor(() => expect(screen.getByTestId("chart")).toHaveTextContent("Panel A"));
+    expect(asked(calls)).toEqual(["Rack", "Panel"]);
+    expect(split()).toBe(select);
+    expect(select).toHaveFocus();
+  });
+
+  it("downloads the CSV, and lists in Details, for the kind being shown, not the saved one", async () => {
+    mockFetch({ "POST /api/widget-data": byKind });
+    show({ type: "bar", config: kindConfig() });
+    await screen.findByTestId("chart");
+    await userEvent.selectOptions(split(), "Panel");
+    await waitFor(() => expect(screen.getByTestId("chart")).toHaveTextContent("Panel A"));
+    await userEvent.click(screen.getByRole("button", { name: "Download CSV for Hall" }));
+    expect(vi.mocked(downloadCsv).mock.calls[0][1]).toMatchObject({ body: { config: { bars: "kind", kind: "Panel" } } });
+    await userEvent.click(screen.getByRole("button", { name: "Details for Hall" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "Breakdown" })).toBeInTheDocument();
+    expect(within(dialog).getByText("Panel", { selector: "dd" })).toBeInTheDocument();
+  });
+
+  it("does not remember the pick for the next visit or after the saved kind changes", async () => {
+    const calls = mockFetch({ "POST /api/widget-data": byKind });
+    const first = show({ type: "bar", config: kindConfig() });
+    await screen.findByTestId("chart");
+    await userEvent.selectOptions(split(), "Panel");
+    await waitFor(() => expect(screen.getByTestId("chart")).toHaveTextContent("Panel A"));
+    first.rerender(<WidgetView {...props({ type: "bar", config: kindConfig({ kind: "Row" }) })} />); // the widget was edited: its saved kind is now Row
+    await waitFor(() => expect(screen.getByTestId("chart")).toHaveTextContent("Row A"));
+    expect(asked(calls).at(-1)).toBe("Row");
+    expect(split()).toHaveValue("Row");
+    first.unmount();
+    client.clear();
+    show({ type: "bar", config: kindConfig() }); // a new visit
+    await screen.findByTestId("chart");
+    expect(split()).toHaveValue("Rack");
+  });
+
+  it("shows Split by in edit mode and the preview but cannot be changed there", async () => {
+    mockFetch({ "POST /api/widget-data": byKind });
+    show({ type: "bar", config: kindConfig(), details: false, live: false, csv: false });
+    await screen.findByTestId("chart");
+    expect(split()).toBeDisabled();
+  });
+
+  it("asks for the stored config exactly (no kind added) for any other widget", async () => {
+    const calls = mockFetch({ "POST /api/widget-data": { body: valuesData({ type: "bar", source: "energy", metric: null, unit: "kWh" }) } });
+    show({ type: "bar", config: config({ source: "energy", metric: null }) });
+    await screen.findByTestId("chart");
+    expect((calls[0].body as { config: object }).config).not.toHaveProperty("kind");
+  });
+
+  it("draws the skeleton of a comparing stat and of a breakdown by kind while the first answer is held", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    const compare = show({ type: "stat", config: config({ source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" }) });
+    expect(screen.getByRole("status")).toHaveClass("widget-sk", "widget-sk-compare");
+    compare.unmount();
+    client.clear();
+    show({ type: "bar", config: kindConfig() });
+    expect(screen.getByRole("status")).toHaveClass("widget-sk", "widget-sk-kind");
+  });
+
+  it("explains the ~ of an estimated side in the footer of a comparing stat", async () => {
+    const data = compareStatData({ compare: compareBlock({ assets: [compareAsset({ last: compareSide({ estimated: true }) })] }) });
+    mockFetch({ "POST /api/widget-data": { body: data } });
+    show({ type: "stat", config: config({ source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" }) });
+    expect(await screen.findByText("~ estimated")).toHaveClass("widget-hint");
+  });
+
+  it("draws no star on an energy comparison whatever flag the answer carries, in the headline, the footer or the Details panel (a star is a cost mark)", async () => {
+    const data = compareStatData({
+      values: [valueRow({ value: 1500, point_id: null, partial: true })],
+      compare: compareBlock({ assets: [compareAsset({ this: compareSide({ partial: true }) })] }),
+    });
+    mockFetch({ "POST /api/widget-data": { body: data } });
+    const { container } = show({ type: "stat", config: config({ source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" }) });
+    await screen.findByText("1500.00");
+    expect(container.querySelector(".big")).toHaveTextContent(/^1500\.00 ?kWh$/);
+    expect(container.querySelector(".widget-foot")).toBeNull(); // nothing to explain on the card
+    await userEvent.click(screen.getByRole("button", { name: "Details for Hall" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByText("* partial: some energy in the period had no rate, so the cost is incomplete")).toBeInTheDocument(); // the cost column's own star is explained once, in the table's notes
+    expect(within(dialog).queryByText("partial", { selector: "small" })).not.toBeInTheDocument(); // not as a state of the energy figure
+  });
+
+  it("lists both windows, both measures, the changes and every note in Details", async () => {
+    const data = compareStatData({ compare: compareBlock({ left_out_days: ["2026-10-31"], assets: [compareAsset({ rate_change: { date: "2026-10-05" } })] }) });
+    mockFetch({ "POST /api/widget-data": { body: data } });
+    show({ type: "stat", config: config({ source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" }) });
+    await screen.findByText("1500.00");
+    await userEvent.click(screen.getByRole("button", { name: "Details for Hall" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "Comparison" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("cell", { name: "2026-10-01 to 2026-10-17" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("cell", { name: "2026-09-01 to 2026-09-17" })).toBeInTheDocument();
+    expect(within(dialog).getByText("up 15.4 % (+200.00 kWh)")).toBeInTheDocument();
+    expect(within(dialog).getByText("up 15.4 % (+40.00 QAR)")).toBeInTheDocument();
+    expect(within(dialog).getByText("31 October has no matching day in September.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Cost: A rate changed on 5 Oct, so the cost change is not only usage.")).toBeInTheDocument();
   });
 });

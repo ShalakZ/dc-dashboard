@@ -1,5 +1,6 @@
 import type {
-  Asset, Dashboard, DataWidget, DataWidgetType, TextStyle, TextWidget, WidgetConfig, WidgetData, WidgetPoint, WidgetValue,
+  Asset, CompareAsset, CompareChange, CompareSide, Dashboard, DataWidget, DataWidgetType, TextStyle, TextWidget, WidgetBreakdown, WidgetCompare,
+  WidgetConfig, WidgetData, WidgetPoint, WidgetValue,
 } from "../api/types";
 import { userFor } from "./users";
 
@@ -86,3 +87,55 @@ export function dataFor(type: DataWidgetType): WidgetData {
   }
 }
 export const widgetDataRoute = ({ body }: { url: string; body: unknown }) => ({ body: dataFor((body as { type: DataWidgetType }).type) });
+
+/** One side of a comparison (17 days, none without readings, an exact kWh and cost) unless overridden. */
+export const compareSide = (over: Partial<CompareSide> = {}): CompareSide => ({
+  kwh: 1500, cost: 300, estimated: false, partial: false, no_data_days: 0, ...over,
+});
+/** The change of one measure: no figure and no reason unless given. */
+export const compareChange = (over: Partial<CompareChange> = {}): CompareChange => ({ abs: null, percent: null, why_none: null, ...over });
+/** The comparison of asset 5: 1500 kWh against 1300 kWh (+200, +15.4 %), 300 against 260 (+40, +15.4 %), a plain last month with no notes. */
+export const compareAsset = (over: Partial<CompareAsset> = {}): CompareAsset => ({
+  asset_id: 5, name: "LV Panel 1", this: compareSide(), last: compareSide({ kwh: 1300, cost: 260 }), last_state: "ok",
+  kwh: compareChange({ abs: 200, percent: 15.4 }), cost: compareChange({ abs: 40, percent: 15.4 }), rate_change: null, last_points: [], ...over,
+});
+/** 17 days of October against the same 17 days of September, nothing left out, the previous month open. */
+export const compareBlock = (over: Partial<WidgetCompare> = {}): WidgetCompare => ({
+  mode: "same_days_last_month", state: "ok", elapsed_days: 17, days: 17,
+  this_window: { from: "2026-10-01", to: "2026-10-17" }, last_window: { from: "2026-09-01", to: "2026-09-17" },
+  left_out_days: [], last_month: { month: "2026-09", closed: false }, currency: "QAR", assets: [compareAsset()], ...over,
+});
+const MONTH_RANGE = { preset: "this_month", start: "2026-10-01T00:00:00+03:00", end: "2026-10-18T00:00:00+03:00" } as const;
+/** A compare stat: asset 5's October figure (days 1 to 17) in `values`, and the comparison in `compare`. Energy in kWh unless `source` is overridden. */
+export const compareStatData = (over: Partial<WidgetData> = {}): WidgetData => ({
+  type: "stat", mode: "values", source: "energy", metric: null, unit: "kWh", range: { ...MONTH_RANGE }, tier: null, bucket: "day", series: [],
+  values: [valueRow({ value: 1500, point_id: null })], missing: [], no_metric: [], compare: compareBlock(), breakdown: null, ...over,
+});
+/** A compare daily chart: `days` points for this month (1 to N) and `last` for last month (1 to D), all valid kWh unless a point is overridden. */
+export const compareSeriesData = (n = 3, d = 3, over: Partial<WidgetData> = {}): WidgetData => {
+  const day = (month: string, i: number, value: number | null, extra: Partial<WidgetPoint> = {}) =>
+    seriesPoint({ ts: `${month}-${String(i + 1).padStart(2, "0")}T00:00:00+03:00`, value, no_data: value === null, ...extra });
+  return {
+    type: "timeseries", mode: "series", source: "energy", metric: null, unit: "kWh", range: { ...MONTH_RANGE }, tier: null, bucket: "day",
+    series: [{ asset_id: 5, name: "LV Panel 1", estimated: false, partial: false, points: Array.from({ length: n }, (_, i) => day("2026-10", i, 100 + i)) }],
+    values: [], missing: [], no_metric: [],
+    compare: compareBlock({
+      elapsed_days: n, days: d, this_window: { from: "2026-10-01", to: `2026-10-${String(d).padStart(2, "0")}` },
+      last_window: { from: "2026-09-01", to: `2026-09-${String(d).padStart(2, "0")}` },
+      assets: [compareAsset({ last_points: Array.from({ length: d }, (_, i) => day("2026-09", i, 90 + i)) })],
+    }),
+    breakdown: null, ...over,
+  };
+};
+/** A breakdown by Rack: 117 racks under "Hall 1", 10 shown, 107 more worth 1234.5 kWh. */
+export const breakdownBlock = (over: Partial<WidgetBreakdown> = {}): WidgetBreakdown => ({
+  kind: "Rack", root: { id: 2, name: "Hall 1" }, count: 117, shown: 10,
+  more: { count: 107, with_value: 107, value: 1234.5, estimated: false, partial: false },
+  no_data: 0, inside_others: 0, kinds: [{ kind: "Rack", count: 117 }, { kind: "Panel", count: 8 }], ...over,
+});
+/** A bar widget by kind: `n` bars, highest first, with the breakdown block. */
+export const breakdownData = (n = 3, over: Partial<WidgetData> = {}): WidgetData => ({
+  type: "bar", mode: "values", source: "energy", metric: null, unit: "kWh", range: { ...MONTH_RANGE }, tier: null, bucket: null, series: [],
+  values: Array.from({ length: n }, (_, i) => valueRow({ asset_id: 10 + i, name: `Rack ${i + 1}`, value: 100 - i * 10, point_id: null })),
+  missing: [], no_metric: [], compare: null, breakdown: breakdownBlock(), ...over,
+});

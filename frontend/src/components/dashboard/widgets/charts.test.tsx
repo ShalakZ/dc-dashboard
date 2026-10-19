@@ -1,12 +1,15 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { WidgetData } from "../../../api/types";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
 import { escapeHtml, shortLabel } from "../../../lib/widgetFormat";
-import { seriesData, seriesPoint, valueRow, valuesData } from "../../../test/dashboardFixtures";
+import {
+  breakdownBlock, breakdownData, compareAsset, compareBlock, compareSeriesData, compareSide, seriesData, seriesPoint, valueRow, valuesData,
+} from "../../../test/dashboardFixtures";
 import { barAxisLayout, DEFAULT_CHART_WIDTH, GRID_SIDES_PX, LABEL_LINE_PX } from "./barAxis";
 import { BarWidget, barOption } from "./BarWidget";
 import { LIGHT_CHART, type ChartTheme } from "./chartTheme";
-import { bucketMs, markIsolated, timeSeriesOption, tooltipFormatter, TimeSeriesWidget, withGaps } from "./TimeSeriesWidget";
+import { bucketMs, compareOption, markIsolated, timeSeriesOption, tooltipFormatter, TimeSeriesWidget, withGaps } from "./TimeSeriesWidget";
 
 vi.mock("echarts-for-react", () => ({
   default: (props: { option: { series?: { type?: string }[] } }) => (
@@ -810,5 +813,213 @@ describe("the charts follow the theme (W13)", () => {
       });
       expect(colours()).toBe("#a3adbd");
     });
+  });
+});
+
+describe("the daily chart of a comparison (w24)", () => {
+  interface CompareSeries { id: string; name: string; type: string; lineStyle: { type: string }; connectNulls: boolean; data: (number | null | { value: number; symbol: string })[] }
+  interface CompareOpt { legend: { show: boolean; data: string[] }; xAxis: { type: string; data: string[] }; series: CompareSeries[]; tooltip: { formatter: (params: unknown) => string } }
+  const opt = (data = compareSeriesData(3, 3)) => compareOption(data, TZ) as unknown as CompareOpt;
+  const tip = (option: CompareOpt, dataIndex: number) =>
+    option.tooltip.formatter([{ dataIndex, seriesIndex: 0, marker: "" }, { dataIndex, seriesIndex: 1, marker: "" }]);
+  /** The tooltip's rows as "date | figure": a row is a div of two spans, the date on the left and the figure with its state in words on the right. */
+  const rows = (html: string) => [...new DOMParser().parseFromString(html, "text/html").body.querySelectorAll(":scope > div")]
+    .map((row) => [...row.children].map((cell) => (cell.textContent ?? "").replace(/\s+/g, " ").trim()).join(" | "));
+
+  it("is a category axis by day of the month with two lines named by their months, last month dashed", () => {
+    const option = opt(compareSeriesData(3, 3));
+    expect(option.xAxis).toMatchObject({ type: "category", data: ["1", "2", "3"] });
+    expect(option.series.map((s) => [s.name, s.type, s.lineStyle.type])).toEqual([["October", "line", "solid"], ["September", "line", "dashed"]]);
+    expect(option.legend).toMatchObject({ show: true, data: ["October", "September"] });
+    expect(option.series[0].data).toEqual([100, 101, 102]);
+    expect(option.series[1].data).toEqual([90, 91, 92]);
+  });
+
+  it("spans the larger of the two windows, with a gap where a side has no day", () => {
+    const option = opt(compareSeriesData(31, 28));
+    expect(option.xAxis.data).toHaveLength(31);
+    expect(option.series[1].data.slice(27, 31)).toEqual([117, null, null, null]);
+    const wide = opt(compareSeriesData(2, 5));
+    expect(wide.xAxis.data).toHaveLength(5);
+    expect(wide.series[0].data.slice(2)).toEqual([null, null, null]);
+  });
+
+  it("draws a day with no readings as a gap and never as a zero", () => {
+    const data = compareSeriesData(4, 4);
+    data.series[0].points[1] = seriesPoint({ ts: "2026-10-02T00:00:00+03:00", value: null, no_data: true });
+    data.compare!.assets[0].last_points[2] = seriesPoint({ ts: "2026-09-03T00:00:00+03:00", value: 0, no_data: true });
+    const option = opt(data);
+    expect(option.series[0].data[1]).toBeNull();
+    expect(option.series[1].data[2]).toBeNull();
+    expect(option.series.every((s) => s.connectNulls === false)).toBe(true);
+  });
+
+  it("gives a lone point a dot of its own (the 2nd of the month has one day on each line)", () => {
+    const option = opt(compareSeriesData(1, 1));
+    expect(option.series[0].data).toEqual([{ value: 100, symbol: "circle", symbolSize: 6 }]);
+    expect(option.series[1].data).toEqual([{ value: 90, symbol: "circle", symbolSize: 6 }]);
+    const joined = opt(compareSeriesData(3, 3));
+    expect(joined.series[0].data.every((d) => typeof d === "number")).toBe(true);
+  });
+
+  it("names both dates of the day in the tooltip, each with its figure", () => {
+    expect(rows(tip(opt(), 2))).toEqual(["3 Oct | 102.00 kWh", "3 Sep | 92.00 kWh"]);
+  });
+
+  it("marks each side's figure: ~ for an estimate, the state in words, and * for a partial cost", () => {
+    const data = compareSeriesData(2, 2, { source: "cost", unit: "QAR" });
+    data.series[0].points[1] = seriesPoint({ ts: "2026-10-02T00:00:00+03:00", value: 5, estimated: true, partial: true });
+    data.compare!.assets[0].last_points[1] = seriesPoint({ ts: "2026-09-02T00:00:00+03:00", value: 4, estimated: true });
+    expect(rows(tip(opt(data), 1))).toEqual(["2 Oct | ~5.00* QAR estimated, partial", "2 Sep | ~4.00 QAR estimated"]);
+  });
+
+  it("shows one row only for a day the other month does not have, a dash for a day with no rate, and nothing for a day with no readings", () => {
+    const wide = compareSeriesData(3, 2);
+    expect(rows(tip(opt(wide), 2))).toEqual(["3 Oct | 102.00 kWh"]);
+    const cost = compareSeriesData(2, 2, { source: "cost", unit: "QAR" });
+    cost.series[0].points[0] = seriesPoint({ ts: "2026-10-01T00:00:00+03:00", value: null });
+    expect(rows(tip(opt(cost), 0))).toEqual(["1 Oct | — no rate", "1 Sep | 90.00 QAR"]);
+    const silent = compareSeriesData(2, 2);
+    silent.series[0].points[0] = seriesPoint({ ts: "2026-10-01T00:00:00+03:00", value: null, no_data: true });
+    silent.compare!.assets[0].last_points[0] = seriesPoint({ ts: "2026-09-01T00:00:00+03:00", value: null, no_data: true });
+    expect(tip(opt(silent), 0)).toBe("");
+  });
+
+  it("escapes nothing it did not build: the day labels are plain text from the windows", () => {
+    expect(tip(opt(), 0)).not.toContain("<script");
+  });
+
+  it("names the legend entries with the sides' marks", () => {
+    const data = compareSeriesData(2, 2);
+    data.compare!.assets[0] = compareAsset({ this: compareSide({ estimated: true }), last: compareSide(), last_points: data.compare!.assets[0].last_points });
+    expect(opt(data).legend.data).toEqual(["October ~", "September"]);
+  });
+
+  describe("the widget", () => {
+    it("draws the comparison chart as a picture with a name, and keeps the existing path for a series without a comparison", () => {
+      const { unmount } = render(<TimeSeriesWidget data={compareSeriesData(3, 3)} timezone={TZ} />);
+      expect(screen.getByRole("img")).toHaveAccessibleName("Line chart comparing October with September, day by day for LV Panel 1. Energy in kWh. Open Details for the figures.");
+      const drawn = JSON.parse(screen.getByTestId("chart").textContent!) as { xAxis: { type: string } };
+      expect(drawn.xAxis.type).toBe("category");
+      unmount();
+      render(<TimeSeriesWidget data={seriesData({ compare: null })} timezone={TZ} />);
+      expect(JSON.parse(screen.getByTestId("chart").textContent!).xAxis.type).toBe("time");
+    });
+
+    it("still draws when this month has no readings yet but last month has", () => {
+      const data = compareSeriesData(3, 3);
+      data.series[0].points = data.series[0].points.map((p) => ({ ...p, value: null, no_data: true }));
+      render(<TimeSeriesWidget data={data} timezone={TZ} />);
+      expect(screen.getByTestId("chart")).toBeInTheDocument();
+    });
+
+    it("says there is no data when neither month has any", () => {
+      const data = compareSeriesData(2, 2);
+      data.series[0].points = data.series[0].points.map((p) => ({ ...p, value: null, no_data: true }));
+      data.compare!.assets[0].last_points = data.compare!.assets[0].last_points.map((p) => ({ ...p, value: null, no_data: true }));
+      render(<TimeSeriesWidget data={data} timezone={TZ} />);
+      expect(screen.getByText("No data in this range.")).toHaveClass("widget-empty");
+    });
+
+    it("says 'Nothing to compare yet' in the chart's place on the first of the month", () => {
+      render(<TimeSeriesWidget data={compareSeriesData(0, 0, { series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: [] }], compare: compareBlock({ state: "nothing_yet", elapsed_days: 0, days: 0, this_window: null, last_window: null, assets: [] }) })} timezone={TZ} />);
+      expect(screen.getByText("Nothing to compare yet")).toHaveClass("widget-empty");
+      expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe("the breakdown by kind (w24)", () => {
+  const show = (data = breakdownData(3), props: { kind?: string; onKind?: (kind: string) => void; splitDisabled?: boolean } = {}) =>
+    render(<BarWidget data={data} timezone={TZ} {...props} />);
+  const select = () => screen.getByRole("combobox", { name: "Split by" });
+  const none = { count: 0, with_value: 0, value: null, estimated: false, partial: false };
+
+  it("draws the bars it was given, the one line under them, and Split by", () => {
+    const { container } = show(breakdownData(3, { breakdown: breakdownBlock({ inside_others: 2 }) }));
+    const option = JSON.parse(screen.getByTestId("chart").textContent!) as { series: { data: number[] }[]; xAxis: { data: string[] } };
+    expect(option.xAxis.data).toEqual(["Rack 1", "Rack 2", "Rack 3"]);
+    expect(option.series[0].data).toEqual([100, 90, 80]);
+    expect(screen.getByRole("img")).toHaveAccessibleName(/^Bar chart of 3 of 117 Racks under Hall 1\./);
+    expect(container.querySelector(".bars-note")).toHaveTextContent("and 107 more Racks: 1234.50 kWh in all 2 Racks are inside other Racks and are counted there.");
+    expect(container.querySelector(".widget-bars")!.children).toHaveLength(3);
+    expect(select()).toBeEnabled();
+  });
+
+  it("keeps the line's slot when there is nothing to say", () => {
+    const { container } = show(breakdownData(3, { breakdown: breakdownBlock({ more: none }) }));
+    const note = container.querySelector(".bars-note");
+    expect(note).not.toBeNull();
+    expect(note).toBeEmptyDOMElement();
+  });
+
+  it("draws a bar with no figure as no bar (energy: the tooltip says no data) or a dash mark (cost: no rate), and never as a zero", () => {
+    const energy = breakdownData(3, { values: [valueRow({ asset_id: 10, name: "Rack 1", value: 5, point_id: null }), valueRow({ asset_id: 11, name: "Rack 2", value: null, no_data: true, point_id: null })] });
+    show(energy);
+    const drawn = JSON.parse(screen.getByTestId("chart").textContent!) as { series: { data: (number | null)[] }[] };
+    expect(drawn.series[0].data).toEqual([5, null]);
+    const tipOf = (data: typeof energy) => (barOption(data, TZ) as unknown as { tooltip: { formatter: (p: unknown) => string } }).tooltip.formatter([{ dataIndex: 1, seriesIndex: 0 }]);
+    expect(tipOf(energy)).toContain("no data");
+    const cost = breakdownData(3, { source: "cost", unit: "QAR", values: [valueRow({ asset_id: 10, name: "Rack 1", value: 5, point_id: null }), valueRow({ asset_id: 11, name: "Rack 2", value: null, point_id: null })] });
+    const option = barOption(cost, TZ) as unknown as { series: { data: (number | null)[]; markPoint: { data: { coord: number[] }[] } }[] };
+    expect(option.series[0].data).toEqual([5, null]);
+    expect(option.series[0].markPoint.data).toEqual([{ coord: [1, 0] }]);
+  });
+
+  it("lists the kinds with their counts and shows the current one", () => {
+    show(breakdownData(3), { kind: "Panel" });
+    expect(within(select()).getAllByRole("option").map((o) => o.textContent)).toEqual(["Rack (117)", "Panel (8)"]);
+    expect(select()).toHaveValue("Panel");
+  });
+
+  it("adds a current kind the list does not hold, first", () => {
+    show(breakdownData(3), { kind: "Row" });
+    expect(within(select()).getAllByRole("option").map((o) => o.textContent)).toEqual(["Row (0)", "Rack (117)", "Panel (8)"]);
+    expect(select()).toHaveValue("Row");
+  });
+
+  it("calls back with the kind picked", async () => {
+    const onKind = vi.fn();
+    show(breakdownData(3), { kind: "Rack", onKind });
+    await userEvent.selectOptions(select(), "Panel");
+    expect(onKind).toHaveBeenCalledWith("Panel");
+  });
+
+  it("shows Split by but cannot be changed where the card is not a live one", () => {
+    show(breakdownData(3), { splitDisabled: true });
+    expect(select()).toBeDisabled();
+  });
+
+  it("says none of the assets has readings, in the chart's place, and still offers Split by so the viewer can leave", () => {
+    const data = breakdownData(2, {
+      values: [valueRow({ value: null, no_data: true, point_id: null }), valueRow({ asset_id: 11, value: null, no_data: true, point_id: null })],
+      breakdown: breakdownBlock({ kind: "Panel", root: { id: 1, name: "Seeded pilot hall" }, count: 8, more: none, no_data: 8, kinds: [{ kind: "Panel", count: 8 }, { kind: "Rack", count: 117 }] }),
+    });
+    const { container } = show(data, { kind: "Panel" });
+    expect(screen.getByText("None of the 8 Panels under Seeded pilot hall has energy readings.")).toHaveClass("widget-empty");
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(container.querySelector(".widget-bars")!.children).toHaveLength(3);
+    expect(select()).toBeEnabled();
+  });
+
+  it("says there are none of the kind, naming the root", () => {
+    const data = breakdownData(0, { breakdown: breakdownBlock({ kind: "Panel", root: { id: 2, name: "Hall 1" }, count: 0, more: none, kinds: [{ kind: "Rack", count: 117 }] }) });
+    show(data, { kind: "Panel" });
+    expect(screen.getByText("No Panels under Hall 1.")).toHaveClass("widget-empty");
+    expect(select()).toBeEnabled();
+  });
+
+  it("keeps the same select element when the answer changes from bars to a sentence (it keeps its focus)", async () => {
+    const { rerender } = show(breakdownData(3), { kind: "Rack" });
+    const before = select();
+    before.focus();
+    rerender(<BarWidget data={breakdownData(0, { breakdown: breakdownBlock({ count: 0, more: none }) })} timezone={TZ} kind="Panel" />);
+    expect(select()).toBe(before);
+    expect(before).toHaveFocus();
+  });
+
+  it("is the old bar chart for a values answer without a breakdown", () => {
+    const { container } = render(<BarWidget data={valuesData({ type: "bar", breakdown: null })} timezone={TZ} />);
+    expect(container.querySelector(".widget-bars, .bars-split")).toBeNull();
   });
 });

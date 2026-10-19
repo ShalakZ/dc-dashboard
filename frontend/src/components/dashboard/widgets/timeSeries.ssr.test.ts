@@ -6,11 +6,11 @@
 // a choice when a name gains a flag, the dash of a bucket with no rate sits in its own series' slot, and the colours are the theme's.
 import * as echarts from "echarts";
 import { shortLabel } from "../../../lib/widgetFormat";
-import { seriesData, seriesPoint } from "../../../test/dashboardFixtures";
+import { compareSeriesData, seriesData, seriesPoint } from "../../../test/dashboardFixtures";
 import { barOption } from "./BarWidget";
 import { LIGHT_CHART, type ChartTheme } from "./chartTheme";
 import { withLegendSelection } from "./legendSelection";
-import { timeSeriesOption } from "./TimeSeriesWidget";
+import { compareOption, timeSeriesOption } from "./TimeSeriesWidget";
 
 vi.mock("echarts-for-react", () => ({ default: () => null }));
 
@@ -429,5 +429,59 @@ describe("the bar chart, drawn by the real chart library", () => {
     const dash = [...svg.matchAll(/<text\b[^>]*fill="([^"]*)"[^>]*>—<\/text>/g)];
     expect(dash).toHaveLength(1);
     expect(dash[0][1]).toBe("#a3adbd");
+  });
+});
+
+describe("the daily chart of a comparison, drawn by the real chart library (w24)", () => {
+  const THIS = LIGHT_CHART.palette[0]; // seriesLook(theme, 0, 2)
+  const LAST = LIGHT_CHART.palette[1];
+  const drawn = (data = compareSeriesData(5, 5)) => draw(compareOption(data, "Asia/Qatar"));
+  const strokes = (paths: Drawn[], color: string) => paths.filter((p) => p.stroke === color && p.strokeOpacity !== "0" && p.d.includes("L"));
+
+  it("draws both lines, one in each series colour, last month's dashed", () => {
+    const paths = drawn();
+    expect(strokes(paths, THIS)).toHaveLength(1);
+    expect(strokes(paths, LAST)).toHaveLength(1);
+    expect(strokes(paths, THIS)[0].dash).toBeNull();
+    expect(strokes(paths, LAST)[0].dash).not.toBeNull();
+    expect(segments(strokes(paths, THIS)[0])).toBe(4); // five days, four segments
+  });
+
+  it("breaks the line at a day with no readings instead of bridging it or dropping to zero", () => {
+    const data = compareSeriesData(5, 5);
+    data.series[0].points[2] = seriesPoint({ ts: "2026-10-03T00:00:00+03:00", value: null, no_data: true });
+    const lines = strokes(drawn(data), THIS);
+    expect(lines).toHaveLength(1); // one path of two pieces: days 1-2 and days 4-5, with a move-to between them and no segment across day 3
+    expect((lines[0].d.match(/M/g) ?? []).length).toBe(2);
+    expect(segments(lines[0])).toBe(2);
+  });
+
+  it("draws the one day of the 2nd of the month as a dot on each line (a line of one point has no segment)", () => {
+    const data = compareSeriesData(1, 1);
+    const paths = drawn(data);
+    expect(dotsOf(paths, THIS)).toHaveLength(1);
+    expect(dotsOf(paths, LAST)).toHaveLength(1);
+  });
+
+  it("draws a dot for a day cut off by gaps on both sides, and none for a day with a neighbour", () => {
+    const data = compareSeriesData(5, 5);
+    data.series[0].points[1] = seriesPoint({ ts: "2026-10-02T00:00:00+03:00", value: null, no_data: true });
+    data.series[0].points[3] = seriesPoint({ ts: "2026-10-04T00:00:00+03:00", value: null, no_data: true });
+    const paths = drawn(data);
+    expect(dotsOf(paths, THIS)).toHaveLength(3); // days 1, 3 and 5 stand alone
+  });
+
+  it("keeps the legend choice by position when the names gain a flag on a refetch", () => {
+    const chart = echarts.init(null, undefined, { renderer: "svg", ssr: true, width: 600, height: 300 });
+    chart.setOption(compareOption(compareSeriesData(5, 5), "Asia/Qatar"), { notMerge: true });
+    chart.dispatchAction({ type: "legendToggleSelect", name: "September" });
+    const selected = (chart.getOption() as { legend: { selected: Record<string, boolean> }[] }).legend[0].selected;
+    expect(selected).toEqual({ October: true, September: false });
+    const flagged = compareSeriesData(5, 5);
+    flagged.compare!.assets[0].last = { ...flagged.compare!.assets[0].last!, estimated: true };
+    chart.setOption(withLegendSelection(compareOption(flagged, "Asia/Qatar"), [0, 1], { 0: selected.October, 1: selected.September }), { notMerge: true });
+    const after = (chart.getOption() as { legend: { selected: Record<string, boolean> }[] }).legend[0].selected;
+    expect(after).toEqual({ October: true, "September ~": false });
+    chart.dispose();
   });
 });

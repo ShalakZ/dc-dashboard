@@ -6,6 +6,8 @@ import type { Asset, WidgetConfig, WidgetData, DataWidgetType } from "../../api/
 import { useAuth } from "../../auth/AuthProvider";
 import { meets } from "../../auth/need";
 import { useNow } from "../../hooks/useNow";
+import { insideOthersText, kindNoun, moreFigure } from "../../lib/breakdown";
+import { changeLine, costMarkMeanings, detailNotes, measureUnit, NOTHING_YET, sideText, windowDates } from "../../lib/compare";
 import { TYPE_LABELS } from "../../lib/dashboardEdit";
 import { liveOrFetched } from "../../lib/live";
 import {
@@ -50,6 +52,89 @@ function FreshnessRow({ row, name, follows, latest, now, timezone }: {
       <dt>{name}</dt>
       <dd>{freshnessLine(reading.ts, now, timezone, reading.stale, latest)}</dd>
     </div>
+  );
+}
+
+/**
+ * The comparison with the same days of last month: BOTH measures for both windows (the windows by date), the changes, and every note in full (the card
+ * shows one line of them). A cost the rates did not reach and a side without readings are dashes, as on the card.
+ */
+function ComparisonSection({ data }: { data: WidgetData }) {
+  const compare = data.compare!;
+  const costUnit = measureUnit("cost", compare.currency);
+  return (
+    <>
+      <h3 className="wd-heading">Comparison</h3>
+      {compare.state === "nothing_yet" || compare.assets.length === 0 ? (
+        <p className="wd-note">{NOTHING_YET}</p>
+      ) : compare.assets.map((asset) => {
+        const notes = detailNotes(compare, asset);
+        return (
+          <div key={asset.asset_id}>
+            <div className="wd-table-wrap">
+              <table className="wd-table">
+                <caption>{asset.name}</caption>
+                <thead>
+                  <tr>
+                    <th>Period</th>
+                    <th>Dates</th>
+                    <th className="num">Energy (kWh)</th>
+                    <th className="num">{costUnit ? `Cost (${costUnit})` : "Cost"}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>This month so far</td>
+                    <td>{compare.this_window ? windowDates(compare.this_window) : DASH}</td>
+                    <td className="num">{sideText(asset.this, "kwh", compare.days)}</td>
+                    <td className="num">{sideText(asset.this, "cost", compare.days)}</td>
+                  </tr>
+                  <tr>
+                    <td>Same days last month</td>
+                    <td>{compare.last_window ? windowDates(compare.last_window) : DASH}</td>
+                    <td className="num">{sideText(asset.last, "kwh", compare.days)}</td>
+                    <td className="num">{sideText(asset.last, "cost", compare.days)}</td>
+                  </tr>
+                  <tr>
+                    <td>Change</td>
+                    <td />
+                    <td className="num">{changeLine(asset.kwh, "kWh")}</td>
+                    <td className="num">{changeLine(asset.cost, costUnit)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            {notes.length > 0 && <ul className="wd-list wd-markers">{notes.map((text) => <li key={text}>{text}</li>)}</ul>}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/** The counts behind a breakdown by kind: what the chart draws, what it leaves out and why. */
+function BreakdownSection({ data }: { data: WidgetData }) {
+  const b = data.breakdown!;
+  const left = moreFigure(b, data.unit);
+  const inside = insideOthersText(b);
+  return (
+    <>
+      <h3 className="wd-heading">Breakdown</h3>
+      <dl className="kv wd-kv">
+        <div><dt>Kind</dt><dd>{b.kind}</dd></div>
+        <div><dt>Looking under</dt><dd>{b.root?.name ?? "The whole site"}</dd></div>
+        <div><dt>Assets of this kind</dt><dd>{b.count}</dd></div>
+        <div><dt>Bars drawn</dt><dd>{b.shown}</dd></div>
+        {b.more.count > 0 && (
+          <div>
+            <dt>Not drawn</dt>
+            <dd>{`${b.more.count} ${kindNoun(b.kind, b.more.count)}: ${left.text}${left.text === DASH ? "" : " in all"}${left.without > 0 ? ` (${left.without} with no data)` : ""}`}</dd>
+          </div>
+        )}
+        <div><dt>With no data</dt><dd>{b.no_data}</dd></div>
+        {inside && <div><dt>Inside others</dt><dd>{inside}</dd></div>}
+      </dl>
+    </>
   );
 }
 
@@ -101,7 +186,7 @@ export function WidgetDetails({ title, type, data, config, timezone, following, 
   const fresh = data.mode === "values" && data.source === "metric" && config.aggregation === "last" && (type === "stat" || type === "gauge" || type === "table");
   const rows: AssetRow[] = assetRows(data).map((row) => ({ ...row, states: fresh ? row.states.filter((s) => s !== "stale") : row.states })); // "stale" is the Freshness section's
   const summary = seriesSummary(data, config);
-  const meanings = markerMeanings(data);
+  const meanings = [...markerMeanings(data), ...costMarkMeanings(data)]; // the cost column of a comparison of energy has marks the card does not draw
   // The "no rate" line sits after the "~" and "*" lines (the fixed order of `markerMeanings`); it offers the page that fixes it
   // to a role that may open that page (the sidebar's own check), never to one that would be refused.
   const flags = flagsOf(data);
@@ -180,6 +265,9 @@ export function WidgetDetails({ title, type, data, config, timezone, following, 
           <div><dt>Range</dt><dd>{rangeWords(data.range.preset)}</dd></div>
           <div><dt>Data</dt><dd>{figuresText(data, config)}</dd></div>
         </dl>
+
+        {data.compare && <ComparisonSection data={data} />}
+        {data.breakdown && <BreakdownSection data={data} />}
 
         {fresh && (
           <>

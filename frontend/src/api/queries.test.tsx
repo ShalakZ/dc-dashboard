@@ -390,6 +390,31 @@ describe("phase 3 queries", () => {
     expect(result.current.data?.source).toBe("energy");
   });
 
+  it("keeps the old bars when only the kind of a breakdown by kind changes (the Split by select must not be swapped for a skeleton), but nothing for any other change (w24)", async () => {
+    const kind: WidgetConfig = { assets: [], source: "energy", metric: null, aggregation: "sum", range: "this_month", bars: "kind", min: 0, max: null, kind: "Rack" };
+    const calls = mockFetch({
+      "POST /api/widget-data": ({ body }) => {
+        const { config } = body as { config: { kind: string; top?: number } };
+        return {
+          body: {
+            type: "bar", mode: "values", source: "energy", metric: null, unit: "kWh", range: { preset: "this_month", start: "s", end: "e" }, tier: null, bucket: null,
+            series: [], values: [], missing: [], no_metric: [], compare: null, breakdown: { kind: config.kind },
+          },
+        };
+      },
+    });
+    const { result, rerender } = renderHook(({ config }: { config: WidgetConfig }) => useWidgetData("bar", config, "this_month"), { wrapper: stableWrapper(), initialProps: { config: kind } });
+    await waitFor(() => expect(result.current.data?.breakdown?.kind).toBe("Rack"));
+    rerender({ config: { ...kind, kind: "Panel" } }); // only the kind
+    expect(result.current.isPlaceholderData).toBe(true);
+    expect(result.current.data?.breakdown?.kind).toBe("Rack");
+    await waitFor(() => expect(result.current.data?.breakdown?.kind).toBe("Panel"));
+    rerender({ config: { ...kind, kind: "Panel", top: 5 } }); // the kind and something else: another widget
+    expect(result.current.data).toBeUndefined();
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(calls.map((c) => (c.body as { config: { kind: string } }).config.kind)).toEqual(["Rack", "Panel", "Panel"]);
+  });
+
   it("saves a dashboard with one PUT, updates the cached dashboard and refreshes only the list", async () => {
     const stored = { id: 5, name: "Hall A", range: "24h", updated_at: "2026-10-08T10:00:00Z", widgets: [] };
     const saved = { ...stored, name: "Hall B", updated_at: "2026-10-08T10:00:01Z" };
@@ -1407,6 +1432,32 @@ describe("closing and reopening a billing month (W11)", () => {
     expect(result.current.check.isFetching).toBe(true); // ... and is still waiting, yet the close has already resolved
     held.release();
     await waitFor(() => expect(result.current.check.isFetching).toBe(false));
+  });
+
+  // w24: a widget that compares with last month reads the frozen figures of a closed month, so a close or a reopen moves it. The dialog does not wait for that read.
+  it.each([
+    ["close", useCloseBillingMonth, 201, {}],
+    ["reopen", useReopenBillingMonth, 200, { month: "2026-09", reopened_at: "2026-10-15T10:00:00Z" }],
+  ] as const)("a %s reads the widgets' data again, in the background: it resolves while that read is still waiting", async (action, hook, status, reply) => {
+    const stat: WidgetConfig = { assets: [5], source: "energy", metric: null, aggregation: "sum", range: "this_month", bars: "asset", min: 0, max: null, compare: "same_days_last_month" };
+    const calls = mockFetch({
+      "GET /api/billing/costs": { body: closedBody },
+      "GET /api/billing/months": { body: { first_month: "2026-09" } },
+      "POST /api/widget-data": { body: { type: "stat", mode: "values", source: "energy", metric: null, unit: "kWh", range: { preset: "this_month", start: "s", end: "e" }, tier: null, bucket: null, series: [], values: [], missing: [], no_metric: [] } },
+      [`POST /api/billing/months/2026-09/${action}`]: { status, body: reply },
+    });
+    const { result } = renderHook(() => ({ widget: useWidgetData("stat", stat, "this_month"), costs: useBillingCosts("2026-09"), write: hook() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.widget.data?.type).toBe("stat"));
+    const widgetReads = () => calls.filter((c) => c.method === "POST" && c.path === "/api/widget-data").length;
+    expect(widgetReads()).toBe(1);
+    let asked = 0;
+    const held = holdFetch((method, path) => method === "POST" && path === "/api/widget-data" && ++asked > 0);
+    await act(async () => { await result.current.write.mutateAsync({ month: "2026-09", note: "" }); });
+    await waitFor(() => expect(asked).toBe(1)); // the widget was asked for again ...
+    expect(result.current.widget.isFetching).toBe(true); // ... and is still waiting, yet the write has resolved
+    held.release();
+    await waitFor(() => expect(result.current.widget.isFetching).toBe(false));
+    expect(widgetReads()).toBe(2);
   });
 
   it("only the close and the reopen let go of the month check lazily: a tariff write still reads it again through the billing prefix", async () => {

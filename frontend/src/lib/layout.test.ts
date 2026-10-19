@@ -241,3 +241,35 @@ describe("compactVertical against react-grid-layout's verticalCompactor", () => 
     }
   });
 });
+
+describe("a stat that compares with last month (w24)", () => {
+  const compared: WidgetConfig = { ...config, range: "this_month", compare: "same_days_last_month" };
+
+  it("starts 3 wide and 3 high, and fits its own minimum", () => {
+    const size = defaultSize("stat", undefined, compared);
+    expect(size).toEqual({ w: 3, h: 3 });
+    const item = toGrid([draft("k", { config: compared, ...size })])[0];
+    expect(item).toMatchObject({ minW: 3, minH: 3 });
+    expect(size.h).toBeGreaterThanOrEqual(item.minH ?? 0);
+  });
+
+  it("changes nothing for another widget, or for a stat with compare off", () => {
+    expect(defaultSize("stat")).toEqual({ w: 3, h: 2 });
+    expect(defaultSize("stat", undefined, { ...compared, compare: "none" })).toEqual({ w: 3, h: 2 });
+    expect(defaultSize("stat", undefined, config)).toEqual({ w: 3, h: 2 });
+    expect(defaultSize("timeseries", undefined, compared)).toEqual({ w: 6, h: 5 });
+    expect(defaultSize("bar", undefined, { ...config, bars: "kind" })).toEqual({ w: 6, h: 5 });
+  });
+
+  it("may not shrink below 3 x 3, but a 3 x 2 saved before the rule keeps its size and its own minimum (the grid would record anything else as an edit)", () => {
+    expect(toGrid([draft("a", { config: compared, w: 4, h: 4 })])[0]).toMatchObject({ minW: 3, minH: 3 });
+    const old = draft("b", { config: compared, w: 3, h: 2 });
+    const grid = toGrid([old]);
+    expect(grid[0]).toMatchObject({ w: 3, h: 2, minW: 3, minH: 2 });
+    expect(applyGrid([old], grid)).toEqual([old]);
+  });
+
+  it("leaves the minimum of a plain stat alone", () => {
+    expect(toGrid([draft("c", { w: 4, h: 4 })])[0]).toMatchObject({ minW: 2, minH: 2 });
+  });
+});

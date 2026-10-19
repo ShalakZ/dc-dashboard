@@ -1,7 +1,9 @@
-import { seriesData, seriesPoint, valueRow, valuesData } from "../test/dashboardFixtures";
+import {
+  breakdownBlock, breakdownData, compareAsset, compareBlock, compareSeriesData, compareSide, compareStatData, seriesData, seriesPoint, valueRow, valuesData,
+} from "../test/dashboardFixtures";
 import {
   ageText, chartLabels, escapeHtml, figureOrNoData, figureText, flagsOf, formatValue, labelBucket, markerHint, noMetricText, removedText, shortLabel,
-  shortLabels, sinceText, uniqueLabels, unitSuffix,
+  shortLabels, sinceText, skeletonShape, uniqueLabels, unitSuffix,
 } from "./widgetFormat";
 
 const none = { estimated: false, partial: false };
@@ -200,5 +202,57 @@ describe("shortLabels", () => {
     expect(short.get(third)).toBe(shortLabel(third, 18));
     expect(Array.from(short.get(third)!)).toHaveLength(18);
     expect(short.get("Hall A")).toBe("Hall A");
+  });
+});
+
+describe("flagsOf, a comparison and a breakdown (w24)", () => {
+  const withSides = (source: "energy" | "cost", this_: Partial<ReturnType<typeof compareSide>>, last: Partial<ReturnType<typeof compareSide>>) =>
+    compareStatData({ source, compare: compareBlock({ assets: [compareAsset({ this: compareSide(this_), last: compareSide(last) })] }) });
+
+  it("has no marker for a plain comparison", () => {
+    expect(flagsOf(compareStatData())).toEqual({ estimated: false, partial: false, noRate: false });
+  });
+
+  it("finds an estimate on either side, so the footer explains the ~ the card draws", () => {
+    expect(flagsOf(withSides("energy", { estimated: true }, {})).estimated).toBe(true);
+    expect(flagsOf(withSides("energy", {}, { estimated: true })).estimated).toBe(true);
+  });
+
+  it("counts a partial side only on a cost widget (an energy card draws no star)", () => {
+    expect(flagsOf(withSides("cost", { partial: true }, {})).partial).toBe(true);
+    expect(flagsOf(withSides("energy", { partial: true }, { partial: true })).partial).toBe(false);
+  });
+
+  it("finds a missing rate on a cost side that had readings, not on one with none", () => {
+    expect(flagsOf(withSides("cost", { cost: null }, {})).noRate).toBe(true);
+    expect(flagsOf(withSides("cost", { cost: null, no_data_days: 17 }, {})).noRate).toBe(false);
+    expect(flagsOf(withSides("energy", { cost: null }, {})).noRate).toBe(false);
+  });
+
+  it("reads last month's daily points too", () => {
+    const data = compareSeriesData(2, 2);
+    data.compare!.assets[0].last_points[1] = seriesPoint({ ts: "2026-09-02T00:00:00+03:00", value: 5, estimated: true });
+    expect(flagsOf(data).estimated).toBe(true);
+    const cost = compareSeriesData(2, 2, { source: "cost" });
+    cost.compare!.assets[0].last_points[0] = seriesPoint({ ts: "2026-09-01T00:00:00+03:00", value: null });
+    expect(flagsOf(cost).noRate).toBe(true);
+  });
+
+  it("finds the marks of the bars a breakdown left out", () => {
+    expect(flagsOf(breakdownData())).toEqual({ estimated: false, partial: false, noRate: false });
+    const more = { count: 4, with_value: 4, value: 9, estimated: true, partial: true };
+    expect(flagsOf(breakdownData(3, { breakdown: breakdownBlock({ more }) }))).toEqual({ estimated: true, partial: true, noRate: false });
+  });
+});
+
+describe("skeletonShape", () => {
+  it("is a comparing stat, a comparing chart, or a breakdown by kind, and nothing for a plain widget", () => {
+    expect(skeletonShape("stat", { compare: "same_days_last_month", bars: "asset" })).toBe("compare-stat");
+    expect(skeletonShape("timeseries", { compare: "same_days_last_month", bars: "asset" })).toBe("compare-chart");
+    expect(skeletonShape("bar", { bars: "kind" })).toBe("kind-bars");
+    expect(skeletonShape("stat", { bars: "asset" })).toBeUndefined();
+    expect(skeletonShape("stat", { compare: "none", bars: "asset" })).toBeUndefined();
+    expect(skeletonShape("bar", { bars: "asset" })).toBeUndefined();
+    expect(skeletonShape("table", { compare: "same_days_last_month", bars: "asset" })).toBeUndefined();
   });
 });

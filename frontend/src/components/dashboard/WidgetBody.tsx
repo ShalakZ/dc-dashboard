@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import type { WidgetConfig, WidgetData, DataWidgetType } from "../../api/types";
+import { skeletonShape } from "../../lib/widgetFormat";
 import { WidgetSkeleton } from "../Skeleton";
 import { GaugeWidget } from "./widgets/GaugeWidget";
 import { StatWidget } from "./widgets/StatWidget";
@@ -9,17 +10,22 @@ import { TableWidget } from "./widgets/TableWidget";
 const TimeSeriesWidget = lazy(() => import("./widgets/TimeSeriesWidget").then((m) => ({ default: m.TimeSeriesWidget })));
 const BarWidget = lazy(() => import("./widgets/BarWidget").then((m) => ({ default: m.BarWidget })));
 
-interface Props { type: DataWidgetType; data: WidgetData; config: WidgetConfig; timezone: string; live: boolean }
+interface Props {
+  type: DataWidgetType; data: WidgetData; config: WidgetConfig; timezone: string; live: boolean;
+  /** A breakdown by kind: what the "Split by" select calls (a stable function), and whether it is shown but unusable (the editor's grid and preview). */
+  onKind?: (kind: string) => void;
+  splitDisabled?: boolean;
+}
 
-export function WidgetBody({ type, data, config, timezone, live }: Props) {
+export function WidgetBody({ type, data, config, timezone, live, onKind, splitDisabled }: Props) {
   if (type === "stat") return <StatWidget data={data} live={live} />;
   if (type === "table") return <TableWidget data={data} />;
   if (type === "gauge") return <GaugeWidget data={data} config={config} live={live} />;
   return (
     // The same shape the card showed while the data loaded, as a bare body: the chart chunk's wait is not a second status.
-    <Suspense fallback={<WidgetSkeleton type={type} />}>
+    <Suspense fallback={<WidgetSkeleton type={type} shape={skeletonShape(type, config)} />}>
       {type === "timeseries" && <TimeSeriesWidget data={data} timezone={timezone} />}
-      {type === "bar" && <BarWidget data={data} timezone={timezone} />}
+      {type === "bar" && <BarWidget data={data} timezone={timezone} kind={config.kind} onKind={onKind} splitDisabled={splitDisabled} />}
     </Suspense>
   );
 }

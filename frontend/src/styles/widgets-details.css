@@ -30,6 +30,7 @@
   .wd-table th { white-space: normal; vertical-align: bottom; }
   .wd-table tbody tr:last-child > td { border-bottom: 0; }
   .wd-table td:first-child { min-width: 11ch; overflow-wrap: anywhere; }
+  .wd-table caption { padding: 8px 8px 0; color: var(--text-2); font-size: var(--fs-xs); text-align: left; } /* the compared asset's name over the comparison table (w24) */
   .wd-fig { white-space: nowrap; }
   /* A second line under a name or a figure: the states in words, the bucket a figure belongs to. */
   .wd-sub { display: block; margin-top: 2px; color: var(--text-2); font-size: var(--fs-xs); font-weight: 400; white-space: normal; }

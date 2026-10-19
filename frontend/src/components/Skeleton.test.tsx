@@ -4,8 +4,10 @@ import { StrictMode, type ReactElement } from "react";
 import { CHART_HEIGHT } from "../lib/chartBox";
 import {
   ActionsSpace, AssetSkeleton, CanvasSkeleton, CTL_H, GraphBarSpace, ChartBlock, DashboardSkeleton, FleetSkeleton, FormSkeleton, PageCardSkeleton, PageHeaderSkeleton, PageSkeleton, ParagraphSkeleton,
-  resetSkeletonClock, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton, TreeSkeleton, TrendSkeleton,
+  resetSkeletonClock, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton, TreeSkeleton, TrendSkeleton, WidgetSkeleton,
 } from "./Skeleton";
+import { compareStatData } from "../test/dashboardFixtures";
+import { StatWidget } from "./dashboard/widgets/StatWidget";
 
 const FOCUSABLE = "button, a, input, select, textarea, [tabindex]";
 
@@ -813,5 +815,46 @@ describe("CTL_H", () => {
     expect((render(<ActionsSpace />).container.firstElementChild as HTMLElement).style.height).toBe(`${CTL_H}px`);
     const { container } = render(<PageHeaderSkeleton actions />);
     expect((container.querySelector(".actions .sk-block") as HTMLElement).style.height).toBe(`${CTL_H}px`);
+  });
+});
+
+// w24: a card that draws more rows than its type's plain shape has a skeleton with the same rows, so it does not move when the data lands.
+describe("WidgetSkeleton, the variants of a comparing stat and a breakdown by kind (w24)", () => {
+  const rowsOf = (el: Element) => [...el.children].filter((child) => !child.classList.contains("sr-only"));
+
+  it("draws seven rows for a comparing stat, as many as the loaded card has", () => {
+    const { container } = render(<WidgetSkeleton type="stat" shape="compare-stat" label="Loading Power" />);
+    const region = screen.getByRole("status");
+    expect(region).toHaveClass("widget-sk", "widget-sk-compare");
+    expect(region).toHaveAttribute("data-type", "stat");
+    expect(rowsOf(region)).toHaveLength(7);
+    const loaded = render(<StatWidget data={compareStatData()} live={false} />).container.querySelector(".stat")!;
+    expect(rowsOf(loaded)).toHaveLength(7);
+    expect(container.querySelectorAll(".sk-line")).toHaveLength(0); // blocks of a set height, so each row is the loaded row's height
+  });
+
+  it("draws the chart, the reserved line and the Split by row for a breakdown by kind", () => {
+    render(<WidgetSkeleton type="bar" shape="kind-bars" label="Loading Racks" />);
+    const region = screen.getByRole("status");
+    expect(region).toHaveClass("widget-sk", "widget-sk-kind");
+    const rows = rowsOf(region);
+    expect(rows).toHaveLength(3); // the loaded .widget-bars has the chart, .bars-note and .bars-split
+    expect(rows[2]).toHaveClass("sk-split");
+    expect(rows[2].children).toHaveLength(2);
+  });
+
+  it("is the plain chart box for a comparing chart, and the plain shapes for every other card", () => {
+    const { container, rerender } = render(<WidgetSkeleton type="timeseries" shape="compare-chart" />);
+    expect(rowsOf(container.firstElementChild!)).toHaveLength(1);
+    rerender(<WidgetSkeleton type="stat" />);
+    expect(rowsOf(container.firstElementChild!)).toHaveLength(2);
+    expect(container.firstElementChild).toHaveAttribute("class", "widget-sk");
+  });
+
+  it("is hidden when it has no label (the fallback of a lazy chart), whatever the variant", () => {
+    const { container } = render(<WidgetSkeleton type="bar" shape="kind-bars" />);
+    expect(container.firstElementChild).toHaveAttribute("aria-hidden", "true");
+    expect(container.firstElementChild).toHaveClass("widget-sk-kind");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });
