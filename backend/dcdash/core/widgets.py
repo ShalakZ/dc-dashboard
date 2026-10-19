@@ -23,6 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.settings import current_timezone
 from dcdash.core.asset_kinds import _BLANKS as KIND_BLANKS
+from dcdash.core.breakdown import Bar, candidates, common_spelling, kinds_present, top_and_more, trim_kind
+from dcdash.core.breakdown import order as order_bars
 from dcdash.core.compare import (
     Side, change, contributing_meters, rate_change, side_from_entries, snapshot_entries, snapshot_status, windows,
 )
@@ -30,7 +32,7 @@ from dcdash.core.cost import HourCost, cost_by_hour, load_tariffs, no_data, rate
 from dcdash.core.daycost import day_entries
 from dcdash.core.energy import HourEnergy, hourly_energy
 from dcdash.core.metrics import Metric, unit_for
-from dcdash.core.models import BillingClose
+from dcdash.core.models import Asset, BillingClose
 from dcdash.core.series import (
     DEFAULT_BUCKETS, combine_hours, first_mappings, last_rollup_value, latest_values, metric_aggregate, metric_hours,
     metric_series, series_tier,
@@ -365,6 +367,8 @@ class WidgetResult:
     compare: dict[str, Any] | None = None  # w24: the month-to-date comparison block (a compare widget only), else None
     breakdown: dict[str, Any] | None = None  # w24: the breakdown by kind block (a bar widget with bars "kind"), else None
     compare_rows: list[tuple[str, _Point]] = field(default_factory=list)  # (path, point): the last window's CSV rows
+    # w24: a breakdown by kind keeps every bar here, in order (`values` holds only the first `top`); the CSV lists all of them.
+    breakdown_values: list[_Value] | None = None
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -404,7 +408,8 @@ class WidgetResult:
                     "true" if estimated else "false", "true" if partial else "false", "true" if no_data else "false"]
 
         rows = [row(s.path, p.ts, p.value, p.estimated, p.partial, p.no_data) for s in self.series for p in s.points]
-        rows += [row(v.path, self.start, v.value, v.estimated, v.partial, v.no_data) for v in self.values]
+        listed = self.values if self.breakdown_values is None else self.breakdown_values
+        rows += [row(v.path, self.start, v.value, v.estimated, v.partial, v.no_data) for v in listed]
         rows += [row(path, p.ts, p.value, p.estimated, p.partial, p.no_data) for path, p in self.compare_rows]
         return rows
 
@@ -725,6 +730,42 @@ async def _fill_compare(
     finish(this, last, last_state, same_currency, rate_date, last_points)
 
 
+async def _fill_breakdown(
+    db: AsyncSession, result: WidgetResult, tree: AssetTree, config: WidgetConfig,
+    first: datetime, last: datetime, end: datetime, tz_name: str, zone: ZoneInfo,
+) -> None:
+    """One bar per asset of a kind (spec w24, core/breakdown.py).
+
+    The figures are `_fill_billing`'s own, asked for the outer candidates, so a bar is exactly what a plain bar widget on that
+    asset would draw. `result.values` keeps the first `top` in order and `result.breakdown_values` every bar (the CSV)."""
+    kind, root = config.kind or "", config.root
+    kinds = {  # only assets of the tree go on: an id the tree does not hold is not a candidate
+        asset_id: text for asset_id, text in (await db.execute(select(Asset.id, Asset.kind))).all() if asset_id in tree.nodes
+    }
+    gone = root is not None and root not in tree.nodes  # the asset to look under was deleted
+    outer, nested = ([], 0) if gone else candidates(tree, kinds, root, kind)
+    await _fill_billing(db, result, tree, config, outer, first, last, end, tz_name, zone)
+    by_id = {value.asset_id: value for value in result.values}
+    ordered = order_bars(
+        Bar(value.asset_id, value.path, value.value, value.no_data, value.estimated, value.partial)
+        for value in result.values
+    )
+    shown, more = top_and_more(ordered, config.top)
+    result.breakdown_values = [by_id[bar.asset_id] for bar in ordered]
+    result.values = [by_id[bar.asset_id] for bar in shown]
+    if gone:
+        result.missing = [root] if root is not None else []
+    result.breakdown = {
+        "kind": common_spelling(kinds[asset_id] for asset_id in outer) if outer else trim_kind(kind),
+        "root": None if root is None or gone else {"id": root, "name": tree.nodes[root].name},
+        "count": len(outer), "shown": len(shown), "more": asdict(more),
+        "no_data": sum(1 for value in result.breakdown_values if value.no_data), "inside_others": nested,
+        "kinds": [  # the whole tree's kinds when the root is gone, else the kinds under the root (before the nested rule)
+            {"kind": text, "count": count} for text, count in kinds_present(tree, kinds, None if gone else root, kind)
+        ],
+    }
+
+
 async def compute_widget(
     db: AsyncSession, widget_type: str, config: WidgetConfig, preset: str, now: datetime
 ) -> WidgetResult:
@@ -745,9 +786,9 @@ async def compute_widget(
         preset=preset, start=first.astimezone(zone), end=end.astimezone(zone),
         missing=[asset_id for asset_id in config.assets if asset_id not in tree.nodes],
     )
-    if config.bars == "kind":
-        raise NotImplementedError("the breakdown by kind")  # T3: replaced by the breakdown, the next commit
-    if config.compare != "none":  # a comparison replaces the plain billing figures (validate_data_config made it one asset)
+    if config.bars == "kind":  # validate_data_config made it a bar widget on energy or cost with no assets of its own
+        await _fill_breakdown(db, result, tree, config, first, last, end, tz_name, zone)
+    elif config.compare != "none":  # a comparison replaces the plain billing figures (validate_data_config made it one asset)
         await _fill_compare(db, result, tree, config, config.assets[0], now, tz_name, zone)
     elif billing:
         await _fill_billing(db, result, tree, config, asset_ids, first, last, end, tz_name, zone)
