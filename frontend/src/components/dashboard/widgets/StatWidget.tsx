@@ -1,5 +1,5 @@
 import type { WidgetData } from "../../../api/types";
-import { compareNotes, measureOf, measureUnit, NOTHING_YET, noteLine, sideFigure, windowLabel, changeLine } from "../../../lib/compare";
+import { changeLine, changeMarks, compareNotes, measureOf, measureUnit, NOTHING_YET, noteLine, sideFigure, windowLabel } from "../../../lib/compare";
 import { liveOrFetched } from "../../../lib/live";
 import { figureOrNoData, NO_DATA, unitSuffix } from "../../../lib/widgetFormat";
 import { Age } from "../Age";
@@ -15,12 +15,12 @@ function CompareRows({ data }: { data: WidgetData }) {
   const notes = compareNotes(compare, asset, measure);
   const last = sideFigure(asset.last, measure, compare.days, compare.currency);
   const lastWindow = compare.last_window ? windowLabel(compare.last_window) : "";
-  const change = changeLine(asset[measure], unit);
+  const change = changeLine(asset[measure], unit, changeMarks(asset, measure));
   return (
     <>
       {compare.this_window && <div className="stat-window" title={windowLabel(compare.this_window)}>{windowLabel(compare.this_window)}</div>}
       <div className="stat-last">
-        <span className="stat-last-label">Same days last month</span>
+        <span className="stat-last-label" title="Same days last month">Same days last month</span>
         <span className="stat-last-fig" title={last}>{last}</span>
       </div>
       <div className="stat-window" title={lastWindow}>{lastWindow}</div>

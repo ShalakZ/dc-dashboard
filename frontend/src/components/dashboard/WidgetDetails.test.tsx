@@ -520,7 +520,7 @@ describe("WidgetDetails: a comparison and a breakdown (w24)", () => {
     const rows = view.getAllByRole("row").map((row) => within(row).queryAllByRole("cell").map((c) => c.textContent));
     expect(rows).toContainEqual(["This month so far", "2026-10-01 to 2026-10-17", "~12.30", "~4.50*"]);
     expect(rows).toContainEqual(["Same days last month", "2026-09-01 to 2026-09-17", "1300.00", "260.00"]);
-    expect(rows).toContainEqual(["Change", "", "up 25.0 % (+2.50 kWh)", "up 1.00 QAR"]);
+    expect(rows).toContainEqual(["Change", "", "up ~25.0 % (~+2.50 kWh)", "up ~1.00* QAR"]); // the change carries the marks of its figures (the kWh column never a star)
     expect(view.getByRole("columnheader", { name: "Cost (QAR)" })).toBeInTheDocument();
     expect(view.getByText("Cost: No percentage: some of the cost has no rate.")).toBeInTheDocument();
     expect(view.getByText("31 October has no matching day in September.")).toBeInTheDocument();
@@ -538,6 +538,27 @@ describe("WidgetDetails: a comparison and a breakdown (w24)", () => {
     expect(rows).toContainEqual(["Same days last month", "2026-09-01 to 2026-09-17", "1500.00", "—"]);
     expect(view.getByText("* partial: some energy in the period had no rate, so the cost is incomplete")).toBeInTheDocument();
     expect(view.getByText("— no rate: no tariff applies to this figure")).toBeInTheDocument();
+  });
+
+  it("says nothing of a missing rate for a currency change after a close, in the markers and in the link to Tariffs (w24 review C-1)", () => {
+    held.ids = new Set(["assets.view", "tariffs.view"]);
+    const currency = compareAsset({ last: compareSide({ cost: null }), cost: compareChange({ why_none: "currency" }) });
+    const data = compareStatData({ source: "cost", unit: "QAR", compare: compareBlock({ last_month: { month: "2026-09", closed: true }, assets: [currency] }) });
+    const { dialog } = open("stat", data, config({ source: "cost", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" }));
+    const view = within(dialog());
+    const rows = view.getAllByRole("row").map((row) => within(row).queryAllByRole("cell").map((c) => c.textContent));
+    expect(rows).toContainEqual(["Same days last month", "2026-09-01 to 2026-09-17", "1500.00", "—"]);
+    expect(dialog().textContent).not.toMatch(/no rate/i);
+    expect(view.queryByRole("link", { name: "Set a rate in Tariffs" })).not.toBeInTheDocument();
+    expect(view.getByText("Cost: No cost comparison: the currency changed since last month closed.")).toBeInTheDocument();
+    held.ids = new Set(["assets.view"]);
+  });
+
+  it("still explains a dash that is a missing rate (the cost is null and the reason is no_cost), on a cost widget", () => {
+    const missing = compareAsset({ last: compareSide({ cost: null }), cost: compareChange({ why_none: "no_cost" }) });
+    const data = compareStatData({ source: "cost", unit: "QAR", compare: compareBlock({ assets: [missing] }) });
+    const { dialog } = open("stat", data, config({ source: "cost", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" }));
+    expect(within(dialog()).getByText("— no rate: no tariff applies to this figure")).toBeInTheDocument();
   });
 
   it("says nothing of a star or a missing rate when the cost column has neither", () => {

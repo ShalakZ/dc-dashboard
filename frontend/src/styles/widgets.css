@@ -77,12 +77,14 @@
   .stat-age small, .widget-table .cell-age small { font-size: inherit; }
 
   /* ===== A stat that compares with the same days of last month (w24): the window, last month's figure, the change and ONE reserved note line. Seven rows, each one line
-     with an ellipsis (the whole text is in its title and in Details), so the card fits 3 x 3 at every width and a note appearing moves nothing. ===== */
+     with an ellipsis (the whole text is in its title and in Details), so the card fits 3 x 3 at every width and a note appearing moves nothing. The one exception is
+     the "Same days last month" row: its label always reads in full, and when the figure does not fit beside it the figure wraps under it (one more line of the
+     room a 3 x 3 card has to spare). ===== */
   .stat-compare { gap: 2px; }
   .stat-window { overflow: hidden; color: var(--text-2); font-size: var(--fs-xs); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
-  .stat-last { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; margin-top: 4px; font-size: var(--fs-sm); line-height: 1.4; }
-  .stat-last-label { min-width: 0; overflow: hidden; color: var(--text-2); text-overflow: ellipsis; white-space: nowrap; }
-  .stat-last-fig { flex: none; max-width: 60%; overflow: hidden; color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .stat-last { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 8px; min-width: 0; margin-top: 4px; font-size: var(--fs-sm); line-height: 1.4; }
+  .stat-last-label { max-width: 100%; color: var(--text-2); white-space: nowrap; }
+  .stat-last-fig { max-width: 100%; overflow: hidden; color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
   .stat-change { overflow: hidden; color: var(--text); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
   .stat-note { min-height: 1lh; overflow: hidden; color: var(--text-2); font-size: var(--fs-xs); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
   .stat-nothing { margin: 0; color: var(--text-2); font-size: var(--fs-sm); }

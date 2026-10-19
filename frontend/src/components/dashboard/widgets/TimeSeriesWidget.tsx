@@ -5,7 +5,7 @@ import type { WidgetData } from "../../../api/types";
 import { compareChartDescription, compareLineNames, dayOfMonthLabel, measureOf, NOTHING_YET } from "../../../lib/compare";
 import { chartDescription } from "../../../lib/widgetDetails";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
-import { chartLabels, figureText, formatValue, labelBucket, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
+import { chartLabels, figureText, formatValue, labelBucket, lastCostGone, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
 import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, type ChartTheme } from "./chartTheme";
 import { useLegendSelection } from "./legendSelection";
 
@@ -80,6 +80,9 @@ function stateWords(data: WidgetData, point: Point): string {
   if (data.source === "cost" && point.value === null && !point.no_data) words.push("no rate");
   return words.join(", ");
 }
+
+/** What a day of last month says when its cost was taken away because the currency changed since the close: no figure, and why, not "no rate" (no tariff is missing). */
+const OTHER_CURRENCY = "other currency";
 
 /**
  * Axis tooltip: the time, then one row per asset (average with its min and max, the state in words), without the helper series
@@ -222,9 +225,11 @@ export function compareOption(data: WidgetData, timezone: string, theme: ChartTh
   const months = [compare.this_window?.from ?? "", compare.last_month.month];
   const labels = months.map((month) => Array.from({ length: days }, (_, i) => dayOfMonthLabel(month, i + 1)));
   const unit = unitSuffix(data.unit);
-  const cells = sides.map((points) => Array.from({ length: days }, (_, i) => {
+  const otherCurrency = measure === "cost" && asset !== undefined && lastCostGone(asset); // last month's days have no cost: they are in another currency
+  const cells = sides.map((points, side) => Array.from({ length: days }, (_, i) => {
     const point = points[i];
     if (!point || point.no_data) return null;
+    if (side === 1 && otherCurrency && point.value === null) return { text: "—", state: OTHER_CURRENCY };
     const figure = point.value === null ? "—" : `${figureText(point.value, point)}${unit}`;
     return { text: figure, state: stateWords(data, point) };
   }));

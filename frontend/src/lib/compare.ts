@@ -1,5 +1,6 @@
 import type { CompareAsset, CompareChange, CompareSide, CompareWhyNone, WidgetCompare, WidgetData } from "../api/types";
-import { figureText, unitSuffix } from "./widgetFormat";
+import type { Flags } from "./widgetFormat";
+import { figureText, lastCostGone, unitSuffix } from "./widgetFormat";
 
 /*
  * Everything a widget says about a month-to-date comparison (w24), as pure functions, so each phrase is tested once and the stat, the daily chart and the
@@ -87,18 +88,30 @@ export function sideFigure(side: CompareSide | null | undefined, measure: Measur
 const round2 = (value: number): number => Math.round(value * 100) / 100;
 
 /**
+ * The marks a change carries, the ones of the figures it is made from: `~` when either side is estimated, and `*` when either side is a partial COST (a kWh
+ * change never has one, whatever the sides say: the star belongs to cost, as in `sideText`).
+ */
+export function changeMarks(asset: Pick<CompareAsset, "this" | "last">, measure: Measure): Flags {
+  const sides = [asset.this, asset.last];
+  return { estimated: sides.some((side) => side?.estimated === true), partial: measure === "cost" && sides.some((side) => side?.partial === true) };
+}
+
+/**
  * The change line: "up 12.4 % (+340.00 kWh)", "down 3.1 % (-120.00 kWh)", "no change", or just "up 340.00 kWh" when the server gave no percentage (the reason
  * is a note). The direction is read from the amount as it is shown (two decimals, like every figure of the stat), so -0.004 is "no change" and never
  * "down (-0.00 kWh)". The words and the sign carry the direction; colour never does. A change without an amount is a dash.
+ * The marks of its figures travel with it (`changeMarks`): `~` in front of the percentage and of the amount ("down ~0.2 % (~-294.32 kWh)"), `*` behind the
+ * amount ("up 18.60* QAR", also when the percentage is withheld because the cost is partial). "no change" and a dash show no figure, so they carry none.
  */
-export function changeLine(change: CompareChange, unit: string | null): string {
+export function changeLine(change: CompareChange, unit: string | null, marks: Flags = { estimated: false, partial: false }): string {
   if (change.abs === null) return DASH;
   const shown = round2(change.abs);
   if (shown === 0) return "no change";
   const direction = shown > 0 ? "up" : "down";
-  const amount = `${Math.abs(shown).toFixed(2)}${unitSuffix(unit)}`;
-  if (change.percent === null) return `${direction} ${amount}`;
-  return `${direction} ${Math.abs(change.percent).toFixed(1)} % (${shown > 0 ? "+" : "-"}${amount})`;
+  const tilde = marks.estimated ? "~" : "";
+  const amount = `${Math.abs(shown).toFixed(2)}${marks.partial ? "*" : ""}${unitSuffix(unit)}`;
+  if (change.percent === null) return `${direction} ${tilde}${amount}`;
+  return `${direction} ${tilde}${Math.abs(change.percent).toFixed(1)} % (${tilde}${shown > 0 ? "+" : "-"}${amount})`;
 }
 
 interface NoteContext { days: number; thisSide: CompareSide | null; lastSide: CompareSide | null }
@@ -119,7 +132,7 @@ export function whyNoneText(why: CompareWhyNone, measure: Measure, ctx: NoteCont
     case "missing_days": return `No percentage: ${missingDaysClause(ctx)}.`;
     case "partial": return "No percentage: some of the cost has no rate.";
     case "previous_zero": return measure === "kwh" ? "No percentage: last month used nothing." : "No percentage: last month's cost was zero.";
-    case "no_previous": return "No readings last month.";
+    case "no_previous": return ctx.days > 0 && (ctx.thisSide === null || ctx.thisSide.no_data_days >= ctx.days) ? "No readings this month or last month." : "No readings last month.";
     case "no_current": return "No readings this month.";
     case "currency": return "No cost comparison: the currency changed since last month closed.";
     case "no_cost": return "No cost comparison: no rate applies to these days.";
@@ -205,7 +218,8 @@ export function withoutEnergyStars(data: WidgetData): WidgetData {
 export function costMarkMeanings(data: Pick<WidgetData, "source" | "compare">): string[] {
   const compare = data.compare;
   if (!compare || data.source === "cost") return [];
-  const sides = compare.assets.flatMap((a) => [a.this, a.last].filter((side): side is CompareSide => side !== null));
+  // an asset whose currency changed after the close has a dash for last month's cost because of the currency, which is not a missing rate
+  const sides = compare.assets.flatMap((a) => [a.this, lastCostGone(a) ? null : a.last].filter((side): side is CompareSide => side !== null));
   const out: string[] = [];
   if (sides.some((side) => sideText(side, "cost", compare.days).endsWith("*"))) out.push("* partial: some energy in the period had no rate, so the cost is incomplete");
   if (sides.some((side) => side.cost === null && side.no_data_days < compare.days)) out.push("— no rate: no tariff applies to this figure");
@@ -223,7 +237,8 @@ export function compareLineNames(compare: WidgetCompare, asset: CompareAsset | u
   const marks = (side: CompareSide | null | undefined): string => `${side?.estimated ? " ~" : ""}${measure === "cost" && side?.partial ? " *" : ""}`;
   const now = monthName(compare.this_window?.from ?? "") || "This month";
   const before = monthName(compare.last_month.month) || "Last month";
-  return [`${now}${marks(asset?.this)}`, `${before}${marks(asset?.last)}`];
+  const noLastCost = measure === "cost" && asset !== undefined && lastCostGone(asset); // another currency: a line with no figure carries no marks
+  return [`${now}${marks(asset?.this)}`, `${before}${noLastCost ? "" : marks(asset?.last)}`];
 }
 
 /** The accessible name of the daily comparison chart (the canvas is a picture). */

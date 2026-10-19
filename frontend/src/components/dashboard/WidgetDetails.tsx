@@ -7,7 +7,7 @@ import { useAuth } from "../../auth/AuthProvider";
 import { meets } from "../../auth/need";
 import { useNow } from "../../hooks/useNow";
 import { insideOthersText, kindNoun, moreFigure } from "../../lib/breakdown";
-import { changeLine, costMarkMeanings, detailNotes, measureUnit, NOTHING_YET, sideText, windowDates } from "../../lib/compare";
+import { changeLine, changeMarks, costMarkMeanings, detailNotes, measureUnit, NOTHING_YET, sideText, windowDates } from "../../lib/compare";
 import { TYPE_LABELS } from "../../lib/dashboardEdit";
 import { liveOrFetched } from "../../lib/live";
 import {
@@ -98,8 +98,8 @@ function ComparisonSection({ data }: { data: WidgetData }) {
                   <tr>
                     <td>Change</td>
                     <td />
-                    <td className="num">{changeLine(asset.kwh, "kWh")}</td>
-                    <td className="num">{changeLine(asset.cost, costUnit)}</td>
+                    <td className="num">{changeLine(asset.kwh, "kWh", changeMarks(asset, "kwh"))}</td>
+                    <td className="num">{changeLine(asset.cost, costUnit, changeMarks(asset, "cost"))}</td>
                   </tr>
                 </tbody>
               </table>

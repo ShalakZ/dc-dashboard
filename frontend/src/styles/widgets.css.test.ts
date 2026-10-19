@@ -563,8 +563,21 @@ describe("styles/widgets.css, the comparison and the breakdown (w24)", () => {
       expect(prop(bodyOf(selector), "white-space"), selector).toBe("nowrap");
       expect(prop(bodyOf(selector), "text-overflow"), selector).toBe("ellipsis");
     }
-    expect(prop(bodyOf(".stat-last-label"), "white-space")).toBe("nowrap");
     expect(prop(bodyOf(".stat-last-fig"), "white-space")).toBe("nowrap");
+  });
+
+  it("lets the figure of 'Same days last month' wrap under its label instead of cutting the label (w24 review m1: at 1440 a 3 wide card read 'Same days last m...')", () => {
+    const row = bodyOf(".stat-last");
+    expect(prop(row, "display")).toBe("flex");
+    expect(prop(row, "flex-wrap")).toBe("wrap");
+    expect(prop(row, "gap"), "no row gap: an unwrapped row stays as tall as the skeleton's").toBe("0 8px");
+    const label = bodyOf(".stat-last-label");
+    expect(prop(label, "white-space")).toBe("nowrap"); // one word group, never split inside
+    expect(prop(label, "overflow"), "the label is never clipped").toBeUndefined();
+    expect(prop(label, "text-overflow"), "the label never ends in an ellipsis").toBeUndefined();
+    const fig = bodyOf(".stat-last-fig");
+    expect(prop(fig, "max-width"), "alone on its line the figure may take the whole row").toBe("100%");
+    expect(prop(fig, "flex"), "the figure is not pinned to its size beside the label").toBeUndefined();
   });
 
   it("makes the Split by select a 28px control at the small size, in a row of its own, with its label not the app's bold grid", () => {

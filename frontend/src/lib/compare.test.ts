@@ -1,6 +1,6 @@
 import { compareAsset, compareBlock, compareChange, compareSeriesData, compareSide, compareStatData, valueRow } from "../test/dashboardFixtures";
 import {
-  changeLine, CLOSED_NOTE, compareChartDescription, costMarkMeanings, compareLineNames, compareNotes, dayLabel, dayOfMonthLabel, detailNotes, lastStateText, leftOutText,
+  changeLine, changeMarks, CLOSED_NOTE, compareChartDescription, costMarkMeanings, compareLineNames, compareNotes, dayLabel, dayOfMonthLabel, detailNotes, lastStateText, leftOutText,
   measureOf, measureUnit, monthName, noteLine, rateNoteText, sideFigure, sideText, whyNoneText, windowDates, windowLabel, withoutEnergyStars,
 } from "./compare";
 
@@ -105,6 +105,61 @@ describe("the change line", () => {
   it("works without a unit (a site with no currency)", () => {
     expect(changeLine(compareChange({ abs: 5, percent: 1 }), null)).toBe("up 1.0 % (+5.00)");
   });
+
+  describe("carries the marks of its figures (w24 review I-2)", () => {
+    const EST = { estimated: true, partial: false };
+    const PART = { estimated: false, partial: true };
+    const BOTH = { estimated: true, partial: true };
+
+    it("puts ~ in front of the percentage and of the amount when a side is estimated", () => {
+      expect(changeLine(compareChange({ abs: -294.32, percent: -0.2 }), "kWh", EST)).toBe("down ~0.2 % (~-294.32 kWh)");
+      expect(changeLine(compareChange({ abs: 340, percent: 12.4 }), "kWh", EST)).toBe("up ~12.4 % (~+340.00 kWh)");
+      expect(changeLine(compareChange({ abs: 340, why_none: "missing_days" }), "kWh", EST)).toBe("up ~340.00 kWh");
+    });
+
+    it("puts * behind a cost amount when a side is partial, also when the percentage is withheld for that reason", () => {
+      expect(changeLine(compareChange({ abs: 18.6, why_none: "partial" }), "QAR", PART)).toBe("up 18.60* QAR");
+      expect(changeLine(compareChange({ abs: -2, why_none: "partial" }), "QAR", PART)).toBe("down 2.00* QAR");
+      expect(changeLine(compareChange({ abs: 18.6, percent: 12.4 }), "QAR", PART)).toBe("up 12.4 % (+18.60* QAR)"); // the star is the amount's, never the percentage's
+      expect(changeLine(compareChange({ abs: 5, percent: 1 }), null, PART)).toBe("up 1.0 % (+5.00*)");
+    });
+
+    it("carries both marks together", () => {
+      expect(changeLine(compareChange({ abs: 18.6, why_none: "partial" }), "QAR", BOTH)).toBe("up ~18.60* QAR");
+      expect(changeLine(compareChange({ abs: -18.6, percent: -9 }), "QAR", BOTH)).toBe("down ~9.0 % (~-18.60* QAR)");
+    });
+
+    it("draws no mark on a line that shows no figure: no change, and a dash", () => {
+      expect(changeLine(compareChange({ abs: 0, percent: 0 }), "kWh", BOTH)).toBe("no change");
+      expect(changeLine(compareChange({ abs: -0.004, percent: -0.01 }), "kWh", EST)).toBe("no change");
+      expect(changeLine(compareChange({ why_none: "no_previous" }), "kWh", BOTH)).toBe("—");
+    });
+
+    it("has no marks unless they are given", () => {
+      expect(changeLine(compareChange({ abs: 340, percent: 12.4 }), "kWh", { estimated: false, partial: false })).toBe("up 12.4 % (+340.00 kWh)");
+    });
+  });
+});
+
+describe("the marks of a change", () => {
+  const asset = (over: Parameters<typeof compareAsset>[0]) => compareAsset(over);
+
+  it("is estimated when either side is, for either measure", () => {
+    expect(changeMarks(asset({ this: compareSide({ estimated: true }) }), "kwh")).toEqual({ estimated: true, partial: false });
+    expect(changeMarks(asset({ last: compareSide({ estimated: true }) }), "cost")).toEqual({ estimated: true, partial: false });
+    expect(changeMarks(asset({}), "kwh")).toEqual({ estimated: false, partial: false });
+  });
+
+  it("is partial only on a cost, when either side is partial: an energy comparison never shows a star", () => {
+    expect(changeMarks(asset({ this: compareSide({ partial: true }) }), "cost").partial).toBe(true);
+    expect(changeMarks(asset({ last: compareSide({ partial: true }) }), "cost").partial).toBe(true);
+    expect(changeMarks(asset({ this: compareSide({ partial: true }), last: compareSide({ partial: true }) }), "kwh").partial).toBe(false);
+  });
+
+  it("copes with a side that is missing", () => {
+    expect(changeMarks(asset({ last: null, this: compareSide({ estimated: true }) }), "kwh")).toEqual({ estimated: true, partial: false });
+    expect(changeMarks(asset({ last: null, this: null }), "cost")).toEqual({ estimated: false, partial: false });
+  });
 });
 
 describe("the reasons a percentage is withheld", () => {
@@ -124,6 +179,20 @@ describe("the reasons a percentage is withheld", () => {
     expect(whyNoneText("no_current", "kwh", ctx())).toBe("No readings this month.");
     expect(whyNoneText("currency", "cost", ctx())).toBe("No cost comparison: the currency changed since last month closed.");
     expect(whyNoneText("no_cost", "cost", ctx())).toBe("No cost comparison: no rate applies to these days.");
+  });
+
+  it("says both months when neither has readings (w24 review m7): the server only names the last month, the first reason that holds", () => {
+    const none = compareSide({ kwh: 0, no_data_days: 17 });
+    expect(whyNoneText("no_previous", "kwh", ctx({ thisSide: none, lastSide: none }))).toBe("No readings this month or last month.");
+    expect(whyNoneText("no_previous", "cost", ctx({ thisSide: none, lastSide: null }))).toBe("No readings this month or last month.");
+    expect(whyNoneText("no_previous", "kwh", ctx({ thisSide: null, lastSide: null }))).toBe("No readings this month or last month.");
+    expect(whyNoneText("no_previous", "kwh", ctx({ thisSide: compareSide({ no_data_days: 16 }), lastSide: none }))).toBe("No readings last month.");
+  });
+
+  it("says both months in the notes of an asset with no readings on either side", () => {
+    const none = compareSide({ kwh: 0, no_data_days: 17 });
+    const asset = compareAsset({ this: none, last: none, last_state: "no_readings", kwh: compareChange({ why_none: "no_previous" }) });
+    expect(compareNotes(compareBlock(), asset, "kwh")).toEqual(["No readings this month or last month."]);
   });
 
   it("has a sentence for the last states that cannot be compared, and none for the others", () => {
@@ -195,6 +264,12 @@ describe("the chart's names", () => {
     expect(compareLineNames(compareBlock(), asset, "cost")).toEqual(["October ~", "September *"]);
   });
 
+  it("draws no mark on the last month's line of a cost whose currency changed: it has no figure to mark", () => {
+    const gone = compareAsset({ this: compareSide({ estimated: true }), last: compareSide({ estimated: true, partial: true, cost: null }), cost: compareChange({ why_none: "currency" }) });
+    expect(compareLineNames(compareBlock(), gone, "cost")).toEqual(["October ~", "September"]);
+    expect(compareLineNames(compareBlock(), gone, "kwh")).toEqual(["October ~", "September ~"]); // its kWh are real
+  });
+
   it("falls back to this month and last month when the windows are missing", () => {
     expect(compareLineNames(compareBlock({ this_window: null, last_month: { month: "", closed: false } }), undefined, "kwh")).toEqual(["This month", "Last month"]);
   });
@@ -244,6 +319,16 @@ describe("the cost marks of Details' table on an energy widget", () => {
     expect(costMarkMeanings(sides({ partial: true }))).toEqual(["* partial: some energy in the period had no rate, so the cost is incomplete"]);
     expect(costMarkMeanings(sides({ cost: null }))).toEqual(["— no rate: no tariff applies to this figure"]);
     expect(costMarkMeanings(sides({ partial: true, cost: 3 })).length).toBe(1);
+  });
+
+  it("does not call a currency change a missing rate: last month's cost is a dash because the currency changed, and a rate that really is missing still is (w24 review C-1)", () => {
+    const currency = compareAsset({ last: compareSide({ cost: null }), cost: compareChange({ why_none: "currency" }) });
+    expect(costMarkMeanings(compareStatData({ compare: compareBlock({ assets: [currency] }) }))).toEqual([]);
+    const missing = compareAsset({ last: compareSide({ cost: null }), cost: compareChange({ why_none: "no_cost" }) });
+    expect(costMarkMeanings(compareStatData({ compare: compareBlock({ assets: [missing] }) }))).toEqual(["— no rate: no tariff applies to this figure"]);
+    // both together: this month's own cost lacks a rate while last month's is in another currency
+    const both = compareAsset({ this: compareSide({ cost: null }), last: compareSide({ cost: null }), cost: compareChange({ why_none: "currency" }) });
+    expect(costMarkMeanings(compareStatData({ compare: compareBlock({ assets: [both] }) }))).toEqual(["— no rate: no tariff applies to this figure"]);
   });
 
   it("says nothing when the table draws neither mark, for a side with no readings (a dash that is not a missing rate), for a cost widget and without a comparison", () => {

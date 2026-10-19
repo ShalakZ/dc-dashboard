@@ -260,6 +260,7 @@ describe("stat, compared with the same days of last month (w24)", () => {
     const windows = [...container.querySelectorAll(".stat-window")].map((el) => el.textContent);
     expect(windows).toEqual(["1 to 17 Oct", "1 to 17 Sep"]);
     expect(text(container, ".stat-last-label")).toBe("Same days last month");
+    expect(container.querySelector(".stat-last-label")).toHaveAttribute("title", "Same days last month"); // the label can never be cut without its full text on hand
     expect(text(container, ".stat-last-fig")).toBe("1300.00 kWh");
     expect(text(container, ".stat-change")).toBe("up 15.4 % (+200.00 kWh)");
     const note = container.querySelector(".stat-note");
@@ -281,8 +282,39 @@ describe("stat, compared with the same days of last month (w24)", () => {
     const { container } = show(data);
     expect(container.querySelector(".big")).toHaveTextContent("~4.50* QAR");
     expect(text(container, ".stat-last-fig")).toBe("3.00* QAR");
-    expect(text(container, ".stat-change")).toBe("up 1.50 QAR");
+    expect(text(container, ".stat-change")).toBe("up ~1.50* QAR"); // the change carries the marks of the figures it is made from
     expect(text(container, ".stat-note")).toBe("No percentage: some of the cost has no rate.");
+  });
+
+  it("carries ~ on the change when a side is estimated, on the percentage and on the amount, and never a star on kWh", () => {
+    const energy = withAsset({ this: compareSide({ kwh: 1500, estimated: true, partial: true }), kwh: compareChange({ abs: -294.32, percent: -0.2 }) });
+    expect(text(show(energy).container, ".stat-change")).toBe("down ~0.2 % (~-294.32 kWh)");
+  });
+
+  it("carries * on a partial cost's change even when the percentage is withheld, and ~ and * together", () => {
+    const partial = withAsset(
+      { this: compareSide({ cost: 4.5, partial: true }), cost: compareChange({ abs: 1.5, why_none: "partial" }) },
+      {}, { source: "cost", unit: "QAR", values: [valueRow({ value: 4.5, partial: true, point_id: null })] },
+    );
+    expect(text(show(partial).container, ".stat-change")).toBe("up 1.50* QAR");
+  });
+
+  it("says nothing of a missing rate for a currency change: the last month's figure is a dash and the note tells the truth", () => {
+    const data = withAsset(
+      { last: compareSide({ cost: null }), cost: compareChange({ why_none: "currency" }) },
+      { last_month: { month: "2026-09", closed: true } }, { source: "cost", unit: "QAR" },
+    );
+    const { container } = show(data);
+    expect(text(container, ".stat-last-fig")).toBe("—");
+    expect(text(container, ".stat-change")).toBe("—");
+    expect(text(container, ".stat-note")).toContain("No cost comparison: the currency changed since last month closed.");
+    expect(container.textContent).not.toContain("no rate");
+  });
+
+  it("says both months when neither has readings", () => {
+    const none = compareSide({ kwh: 0, no_data_days: 17 });
+    const { container } = show(withAsset({ this: none, last: none, last_state: "no_readings", kwh: compareChange({ why_none: "no_previous" }) }));
+    expect(text(container, ".stat-note")).toBe("No readings this month or last month.");
   });
 
   it("marks an estimated kWh side with ~ and never with a star, even when its cost is partial", () => {

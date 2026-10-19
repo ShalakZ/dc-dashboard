@@ -1,5 +1,5 @@
 import {
-  breakdownBlock, breakdownData, compareAsset, compareBlock, compareSeriesData, compareSide, compareStatData, seriesData, seriesPoint, valueRow, valuesData,
+  breakdownBlock, breakdownData, compareAsset, compareBlock, compareChange, compareSeriesData, compareSide, compareStatData, seriesData, seriesPoint, valueRow, valuesData,
 } from "../test/dashboardFixtures";
 import {
   ageText, chartLabels, escapeHtml, figureOrNoData, figureText, flagsOf, formatValue, labelBucket, markerHint, noMetricText, removedText, shortLabel,
@@ -227,6 +227,56 @@ describe("flagsOf, a comparison and a breakdown (w24)", () => {
     expect(flagsOf(withSides("cost", { cost: null }, {})).noRate).toBe(true);
     expect(flagsOf(withSides("cost", { cost: null, no_data_days: 17 }, {})).noRate).toBe(false);
     expect(flagsOf(withSides("energy", { cost: null }, {})).noRate).toBe(false);
+  });
+
+  describe("a currency change after a close is not a missing rate (w24 review C-1)", () => {
+    const currency = { cost: compareChange({ why_none: "currency" }) };
+    const withAsset = (source: "energy" | "cost", over: Parameters<typeof compareAsset>[0]) =>
+      compareStatData({ source, compare: compareBlock({ assets: [compareAsset(over)] }) });
+    const gone = { last: compareSide({ cost: null }), ...currency };
+
+    it("raises no noRate flag for last month's side that was taken away, and the footer and the markers say nothing of a rate", () => {
+      const data = withAsset("cost", gone);
+      expect(flagsOf(data)).toEqual({ estimated: false, partial: false, noRate: false });
+      expect(markerHint(flagsOf(data))).toBe("");
+    });
+
+    it("raises none for last month's daily points that were taken away either (value null, not no_data)", () => {
+      const data = compareSeriesData(2, 2, { source: "cost" });
+      data.compare!.assets[0] = { ...data.compare!.assets[0], ...gone, last_points: data.compare!.assets[0].last_points.map((p) => ({ ...p, value: null, no_data: false })) };
+      expect(flagsOf(data).noRate).toBe(false);
+      expect(markerHint(flagsOf(data))).not.toContain("no rate");
+    });
+
+    it("leaves the marks of the removed side out too: a dash carries none, and the footer's partial words speak of a rate", () => {
+      const data = withAsset("cost", { last: compareSide({ cost: null, estimated: true, partial: true }), ...currency });
+      expect(flagsOf(data)).toEqual({ estimated: false, partial: false, noRate: false });
+    });
+
+    it("keeps the kWh marks of last month on an energy widget (its kWh are real)", () => {
+      expect(flagsOf(withAsset("energy", { last: compareSide({ estimated: true }), ...currency })).estimated).toBe(true);
+    });
+
+    it("still raises noRate for a side whose cost lacks a rate (why_none no_cost)", () => {
+      const data = withAsset("cost", { last: compareSide({ cost: null }), cost: compareChange({ why_none: "no_cost" }) });
+      expect(flagsOf(data).noRate).toBe(true);
+      expect(markerHint(flagsOf(data))).toBe("— no rate");
+    });
+
+    it("still raises it for last month's points of a cost with no rate (no_cost), and for this month's side or points when the currency changed too", () => {
+      const series = compareSeriesData(2, 2, { source: "cost" });
+      series.compare!.assets[0] = { ...series.compare!.assets[0], cost: compareChange({ why_none: "no_cost" }) };
+      series.compare!.assets[0].last_points[0] = seriesPoint({ ts: "2026-09-01T00:00:00+03:00", value: null });
+      expect(flagsOf(series).noRate).toBe(true);
+
+      const both = withAsset("cost", { this: compareSide({ cost: null }), ...gone });
+      expect(flagsOf(both).noRate).toBe(true); // this month has readings but no cost: that rate really is missing
+      const bothSeries = compareSeriesData(2, 2, { source: "cost" });
+      bothSeries.compare!.assets[0] = { ...bothSeries.compare!.assets[0], ...gone, last_points: bothSeries.compare!.assets[0].last_points.map((p) => ({ ...p, value: null, no_data: false })) };
+      expect(flagsOf(bothSeries).noRate).toBe(false);
+      bothSeries.series[0].points[1] = seriesPoint({ ts: "2026-10-02T00:00:00+03:00", value: null });
+      expect(flagsOf(bothSeries).noRate).toBe(true);
+    });
   });
 
   it("reads last month's daily points too", () => {
