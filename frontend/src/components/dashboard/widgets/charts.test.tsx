@@ -1064,10 +1064,10 @@ describe("the breakdown by kind (w24)", () => {
     expect(select()).toBeEnabled();
   });
 
-  it("says there are none of the kind, naming the root", () => {
+  it("says there are none of the kind, naming the root, and where to choose another kind (w25)", () => {
     const data = breakdownData(0, { breakdown: breakdownBlock({ kind: "Panel", root: { id: 2, name: "Hall 1" }, count: 0, more: none, kinds: [{ kind: "Rack", count: 117 }] }) });
     show(data, { kind: "Panel" });
-    expect(screen.getByText("No Panels under Hall 1.")).toHaveClass("widget-empty");
+    expect(screen.getByText("No Panels under Hall 1. Choose another kind in Split by.")).toHaveClass("widget-empty");
     expect(select()).toBeEnabled();
   });
 

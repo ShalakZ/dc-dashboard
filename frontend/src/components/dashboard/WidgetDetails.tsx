@@ -1,12 +1,12 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Fragment } from "react";
+import { Fragment, useMemo } from "react";
 import { Link } from "react-router";
-import { keys } from "../../api/queries";
+import { keys, useAssets } from "../../api/queries";
 import type { Asset, WidgetConfig, WidgetData, DataWidgetType } from "../../api/types";
 import { useAuth } from "../../auth/AuthProvider";
 import { meets } from "../../auth/need";
 import { useNow } from "../../hooks/useNow";
-import { insideOthersText, kindNoun, moreFigure } from "../../lib/breakdown";
+import { insideOthersText, kindNoun, moreFigure, narrowLabel, parentIds } from "../../lib/breakdown";
 import { changeLine, changeMarks, costMarkMeanings, detailNotes, measureUnit, NOTHING_YET, sideText, windowDates } from "../../lib/compare";
 import { TYPE_LABELS } from "../../lib/dashboardEdit";
 import { liveOrFetched } from "../../lib/live";
@@ -18,6 +18,7 @@ import { figureOrNoData, figureText, flagsOf, noMetricText, removedText, unitSuf
 import { Drawer } from "../Drawer";
 import { Icon } from "../Icon";
 import { PAGE_NEED } from "../navItems";
+import { useFocus } from "./FocusContext";
 import { useLiveValue } from "./LiveValuesContext";
 import { useCsvExport, type CsvSource } from "./WidgetFrame";
 
@@ -180,6 +181,11 @@ export function WidgetDetails({ title, type, data, config, timezone, following, 
   const queryClient = useQueryClient();
   const csvExport = useCsvExport(csv);
   const linked = can(PAGE_NEED.assets);
+  // w25 (R10): the keyboard way to the drill-through of the chart. A bar whose asset has children gets a button that narrows the dashboard to it. The list is the
+  // one the chart already loaded (same query); it is asked for here only by a breakdown, and only for a role that may open assets (the panel is the viewer's).
+  const { allowed, setFocus } = useFocus();
+  const assetList = useAssets(allowed && data.breakdown != null).data;
+  const parents = useMemo(() => (assetList ? parentIds(assetList) : null), [assetList]);
 
   const latest = isLatestReading(data, config);
   // A reading time only means something for the latest reading of a metric (the backend's `ts` of a stat, gauge or table row)
@@ -201,6 +207,7 @@ export function WidgetDetails({ title, type, data, config, timezone, following, 
   const removed = removedCount(data);
 
   const perValue = type === "bar" && data.mode === "values";
+  const narrowable = allowed && perValue && data.breakdown != null && parents !== null;
   const showTable = rows.length > 0 && (summary !== null || perValue || rows.some((r) => r.states.length > 0));
   const totalsHidden = summary !== null && data.source !== "metric" && summary.rows.some((r) => r.total === null);
 
@@ -304,6 +311,7 @@ export function WidgetDetails({ title, type, data, config, timezone, following, 
                     <th>Asset</th>
                     {perValue && <th className="num">{data.unit ? `Value (${data.unit})` : "Value"}</th>}
                     {summary?.columns.map((column) => <th key={column.key} className="num">{column.heading}</th>)}
+                    {narrowable && <th><span className="sr-only">Actions</span></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -317,6 +325,14 @@ export function WidgetDetails({ title, type, data, config, timezone, following, 
                       {summary?.columns.map((column) => (
                         <td key={column.key} className="num"><SummaryCell column={column.key} row={summary.rows[i]} states={row.states} data={data} timezone={timezone} /></td>
                       ))}
+                      {narrowable && (
+                        <td className="drill-cell">
+                          {parents.has(row.assetId) && (
+                            // Closing the drawer gives focus back to the card's Details button (Drawer's returnFocus); the dashboard behind it follows the new focus.
+                            <button type="button" className="quiet" aria-label={narrowLabel(row.name)} onClick={() => { setFocus(row.assetId); onClose(); }}>Narrow</button>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
