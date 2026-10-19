@@ -325,6 +325,31 @@ describe("AssetPicker chips", () => {
     expect(remove("Asset #99")).toBeInTheDocument();
   });
 
+  it("draws the name and the end of a long path in the chip, and keeps the whole label in its title and in the remove button's name", () => {
+    const E = String.fromCharCode(0x2026);
+    const deep = [
+      node(1, null, "Seeded pilot hall", "site"), node(2, 1, "Hall 1", "hall"), node(3, 2, "Pod A", "pod"), node(4, 3, "Row 1", "row"),
+      node(5, 4, "Rack 05", "rack"), node(6, 4, "Rack 06", "rack"), node(7, 5, "Feed A", "feed"), node(8, 6, "Feed A", "feed"),
+    ];
+    const whole = "Feed A (Seeded pilot hall / Hall 1 / Pod A / Row 1 / Rack 05)";
+    render(<Harness assets={deep.filter((a) => a.kind === "feed")} tree={deep} initial={[7]} notes={new Map([[7, "no voltage_v"]])} />);
+    expect(chipTexts()).toEqual([`Feed A (${E} / Row 1 / Rack 05) (no voltage_v)`]);
+    expect(remove(whole).closest("li")).toHaveAttribute("title", `${whole} (no voltage_v)`);
+  });
+
+  it("names a chip by the button label, which tells an asset apart from a context row of the same name elsewhere", () => {
+    // Only Panel (id 5) and Meter 1 are offered; the other Panel (id 3) is a context row, so the checkbox reads "Panel" but the chip must not.
+    const clash = [
+      node(1, null, "Site", "site"), node(2, 1, "Room A", "room"), node(3, 2, "Panel", "panel"), node(4, 1, "Room B", "room"),
+      node(5, 4, "Panel", "panel"), node(6, 3, "Meter 1", "meter"),
+    ];
+    render(<Harness assets={clash.filter((a) => a.id === 5 || a.id === 6)} tree={clash} initial={[5]} />);
+    expect(screen.getByRole("checkbox", { name: "Panel" })).toBeChecked();
+    expect(chipTexts()).toEqual(["Panel (Site / Room B)"]);
+    expect(remove("Panel (Site / Room B)")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove Panel" })).not.toBeInTheDocument();
+  });
+
   it("in single mode has one chip and no remove button, and a new pick replaces it", async () => {
     render(<Harness assets={tree} single initial={[6]} />);
     expect(chipTexts()).toEqual(["Main"]);
@@ -622,6 +647,45 @@ describe("AssetPicker focus", () => {
     expect(box).toHaveFocus();
     rerender(<Harness assets={tree.filter((a) => a.id !== 6)} initial={[6]} notes={noted} />);
     expect(box).not.toBeInTheDocument();
+    expect(searchBox()).toHaveFocus();
+  });
+
+  /** A site, a hall, `n` racks each with a Feed A and a Feed B. A search for "feed a" shows 2 + 2n rows, and the site, the hall and every rack are locked branches. */
+  function feedHall(n: number): Asset[] {
+    const out = [node(1, null, "Site", "site"), node(2, 1, "Hall", "hall")];
+    for (let k = 1; k <= n; k++) out.push(node(3 * k, 2, `Rack ${k}`, "rack"), node(3 * k + 1, 3 * k, "Feed A", "feed"), node(3 * k + 2, 3 * k, "Feed B", "feed"));
+    return out;
+  }
+
+  it("keeps the focus in the picker after Show more when the first new row is a locked branch, also when the button goes away", async () => {
+    render(<Harness assets={feedHall(250)} />);
+    await userEvent.type(searchBox(), "feed a");
+    expect(screen.getByText("Showing 200 of 502")).toBeInTheDocument();
+    const picker = screen.getByRole("group", { name: "Assets" });
+    expect(screen.getByRole("button", { name: "Children of Rack 99" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Show 200 more" }));
+    expect(screen.getByText("Showing 400 of 502")).toBeInTheDocument();
+    expect(picker).toContainElement(document.activeElement as HTMLElement);
+    expect(screen.getByRole("checkbox", { name: "Rack 100" })).toHaveFocus(); // the first new row: its fold button is disabled, its checkbox is not
+    await userEvent.click(screen.getByRole("button", { name: "Show 102 more" })); // the last chunk: the button unmounts
+    expect(screen.queryByText(/^Showing/)).not.toBeInTheDocument();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(screen.getByRole("checkbox", { name: "Rack 200" })).toHaveFocus();
+  });
+
+  it("puts the focus on a button of the first new row when that row has no enabled input (a context row with a locked fold)", async () => {
+    const hall = feedHall(250);
+    render(<Harness assets={hall.filter((a) => a.kind === "feed")} tree={hall} />);
+    await userEvent.type(searchBox(), "feed a");
+    await userEvent.click(screen.getByRole("button", { name: "Show 200 more" }));
+    expect(screen.getByRole("button", { name: "Children of Rack 100" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Pick all under Rack 100" })).toHaveFocus();
+  });
+
+  it("puts the focus on the search box when no new row has an enabled control", async () => {
+    render(<Harness assets={many(250)} initial={[1]} max={1} />);
+    await userEvent.click(screen.getByRole("button", { name: "Show 50 more" }));
+    expect(screen.queryByText(/^Showing/)).not.toBeInTheDocument();
     expect(searchBox()).toHaveFocus();
   });
 });

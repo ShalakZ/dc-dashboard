@@ -17,7 +17,7 @@
 
   /* The picks. The box has a fixed height (two rows of chips and the gap between them) and scrolls beyond that, so picking more never pushes
      the list down; a chip is one rectangular line that cuts a long label with an ellipsis (the full label is its title). */
-  .asset-picker .picker-chip-box { height: 60px; min-width: 0; overflow-y: auto; }
+  .asset-picker .picker-chip-box { height: 60px; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; }
   .asset-picker .picker-chips { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px; margin: 0; padding: 0; list-style: none; }
   .asset-picker .picker-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; min-width: 0; height: var(--ctl-h-xs); padding: 0 2px 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--fs-sm); }
   .asset-picker .picker-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -35,14 +35,17 @@
   .asset-picker .picker-all, .asset-picker .picker-all-sp { width: 24px; height: 24px; }
   .asset-picker .picker-fold-sp, .asset-picker .picker-all-sp { flex: none; display: block; }
 
-  /* The list. A fixed height, so nothing below it moves while the search narrows it; it scrolls inside. */
-  .asset-picker .picker-list { height: clamp(160px, 30vh, 240px); margin: 0; padding: 4px; overflow: auto; list-style: none; border: 1px solid var(--border); border-radius: var(--radius); }
+  /* The list. A fixed height (120px at the smallest window, 240px at the tallest), so nothing below it moves while the search narrows it; it
+     scrolls inside. The scrollbar's gutter is always reserved, so with classic scrollbars the rows do not shift sideways while typing. */
+  .asset-picker .picker-list { height: clamp(120px, 24vh, 240px); margin: 0; padding: 4px; overflow: auto; scrollbar-gutter: stable; list-style: none; border: 1px solid var(--border); border-radius: var(--radius); }
 
   /* A line: the fold button (or an empty spacer of the same size), the label, the pick-all button (or its spacer). --depth indents a child. */
   .asset-picker .picker-line { display: flex; align-items: center; gap: 4px; min-height: var(--ctl-h-xs); padding-left: calc(var(--depth, 0) * 16px); }
   .asset-picker .picker-fold svg { transition: transform var(--motion); }
   .asset-picker .picker-fold[aria-expanded="false"] svg { transform: rotate(-90deg); }
-  .asset-picker .picker-fold:disabled { opacity: 1; cursor: default; }
+  /* A locked fold (a branch on the way to a match while filtering) keeps full opacity, since it is the way to the match, but its caret takes the
+     disabled colour so it does not look like a working one. */
+  .asset-picker .picker-fold:disabled { opacity: 1; cursor: default; color: var(--text-disabled); }
   .asset-picker .picker-row { display: flex; gap: 6px; align-items: center; flex: 1 1 auto; min-width: 0; font-weight: 400; overflow-wrap: anywhere; }
   .asset-picker .picker-row > input { flex: none; }
   .asset-picker .picker-context { flex: 1 1 auto; min-width: 0; color: var(--text-2); overflow-wrap: anywhere; }

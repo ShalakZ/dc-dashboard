@@ -1,7 +1,7 @@
 import type { Asset } from "../api/types";
 import { FOLD_ROW_LIMIT } from "./foldLevels";
 import {
-  ancestorsOf, buildPickerModel, countsBelow, filterPicker, isFolded, pickAllUnder, sameAssets, visibleRows,
+  ancestorsOf, buildPickerModel, chipText, countsBelow, filterPicker, isFolded, pickAllUnder, sameAssets, visibleRows,
   type FoldState, type PickerModel,
 } from "./pickerModel";
 import { pickerRows } from "./pickerRows";
@@ -514,6 +514,37 @@ describe("sameAssets", () => {
 
   it("ignores the icon fields", () => {
     expect(sameAssets(a, [a[0], { ...a[1], icon: "x", kind_icon: "y" }])).toBe(true);
+  });
+});
+
+describe("chipText", () => {
+  const E = String.fromCharCode(0x2026);
+
+  it("keeps the name and the last two segments of a path of three or more, with an ellipsis for the rest", () => {
+    expect(chipText("Feed A (Hall 1 / Row 1 / Rack 05)", "Feed A")).toBe(`Feed A (${E} / Row 1 / Rack 05)`);
+    expect(chipText("Feed A (Seeded pilot hall / Hall 1 / Pod A / Row 1 / Rack 05)", "Feed A")).toBe(`Feed A (${E} / Row 1 / Rack 05)`);
+  });
+
+  it("leaves a path of two segments or fewer as it is", () => {
+    expect(chipText("Panel (Site / Room A)", "Panel")).toBe("Panel (Site / Room A)");
+    expect(chipText("Meter (Rack) #7", "Meter")).toBe("Meter (Rack) #7");
+    expect(chipText("Meter (top level)", "Meter")).toBe("Meter (top level)");
+  });
+
+  it("leaves a label without a path alone", () => {
+    expect(chipText("Main", "Main")).toBe("Main");
+    expect(chipText("Asset #99", "Asset #99")).toBe("Asset #99");
+  });
+
+  it("keeps a trailing #id after the path", () => {
+    expect(chipText("Meter (Site / Hall / Rack 3) #12", "Meter")).toBe(`Meter (${E} / Hall / Rack 3) #12`);
+    expect(chipText("Meter (Rack 3 / Row 2) #12", "Meter")).toBe("Meter (Rack 3 / Row 2) #12");
+  });
+
+  it("leaves a label that does not start with the name, or does not end in a path, alone", () => {
+    expect(chipText("Feed A (Hall 1 / Row 1 / Rack 05)", "Feed B")).toBe("Feed A (Hall 1 / Row 1 / Rack 05)");
+    expect(chipText("Feed A (Hall 1 / Row 1 / Rack 05) extra", "Feed A")).toBe("Feed A (Hall 1 / Row 1 / Rack 05) extra");
+    expect(chipText("Feed A - Hall 1 / Row 1 / Rack 05", "Feed A")).toBe("Feed A - Hall 1 / Row 1 / Rack 05");
   });
 });
 

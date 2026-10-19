@@ -284,6 +284,22 @@ export function pickAllUnder(model: PickerModel, view: PickerView, id: number, s
   return ids.length <= room ? { kind: "add", ids } : { kind: "refuse", count: ids.length, room };
 }
 
+const ELLIPSIS = String.fromCharCode(0x2026);
+
+/**
+ * The text a chip draws for a label of the form "Name (A / B / C / D) #id": the name and the LAST TWO segments of the path (the end is what
+ * tells same-named assets apart), the ellipsis standing for the segments left out, and the " #id" kept. A label with two segments or fewer, or
+ * not of that form, comes back unchanged. The chip's title and remove button keep the whole label.
+ */
+export function chipText(label: string, name: string): string {
+  if (!label.startsWith(name)) return label;
+  const match = /^ \((.*)\)( #\d+)?$/.exec(label.slice(name.length));
+  if (!match) return label;
+  const segments = match[1].split(" / ");
+  if (segments.length <= 2) return label;
+  return `${name} (${ELLIPSIS} / ${segments.slice(-2).join(" / ")})${match[2] ?? ""}`;
+}
+
 /** Whether two lists of assets are the same for the picker: the same length and, item by item, the same object or the same (id, parent_id, name, kind, sort_order). */
 export function sameAssets(a: readonly Asset[], b: readonly Asset[]): boolean {
   if (a === b) return true;

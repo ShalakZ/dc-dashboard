@@ -1,7 +1,7 @@
 import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { Asset } from "../../api/types";
 import {
-  ancestorsOf, buildPickerModel, countsBelow, filterPicker, isFolded, pickAllUnder, sameAssets, visibleRows,
+  ancestorsOf, buildPickerModel, chipText, countsBelow, filterPicker, isFolded, pickAllUnder, sameAssets, visibleRows,
   type PickerNode,
 } from "../../lib/pickerModel";
 import { Icon } from "../Icon";
@@ -93,7 +93,7 @@ const Row = memo(function Row({ node, single, group, checked, disabled, note, fo
       {canPickAll ? (
         <button
           type="button" className="picker-all" aria-label={`Pick all under ${node.buttonLabel}`}
-          aria-disabled={allPicked ? true : undefined} title={allPicked ? "Everything under it is picked" : undefined}
+          aria-disabled={allPicked ? true : undefined} title={allPicked ? "Everything under it is picked" : `Pick all under ${node.buttonLabel}`}
           onClick={() => kit.pickAll(node.id)}
         >
           <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M4 12h6M4 17h9" /><path d="m14 14 2.5 2.5L21 11" /></svg>
@@ -206,8 +206,10 @@ export function AssetPicker({ assets, selected, onChange, single, max, tree, not
     setLimit((l) => l + ROW_STEP);
   };
 
-  // After every render: the focus a chip removal or "Show more" asked for; else, when the row that had the focus is gone (an unpicked row that is
-  // no longer offered) and the focus fell to the page, the search box.
+  // After every render: the focus a chip removal or "Show more" asked for. "Show more" puts it on the first enabled control of the rows it just
+  // drew (a checkbox or radio first, else a button; a locked fold button is disabled and cannot take it), else on the search box. Then, after
+  // any of that, when the row that had the focus is gone (an unpicked row that is no longer offered, or the "Show more" button on the last chunk)
+  // and the focus fell to the page, the search box.
   useLayoutEffect(() => {
     const target = focusAfter.current;
     const first = moreAt.current;
@@ -216,8 +218,15 @@ export function AssetPicker({ assets, selected, onChange, single, max, tree, not
     if (target !== null) {
       (target === "search" ? search.current : chipButtons.current.get(target) ?? search.current)?.focus();
     } else if (first !== null) {
-      list.current?.children[first]?.querySelector<HTMLElement>("input, button")?.focus();
-    } else if (lastFocus.current && !lastFocus.current.isConnected && document.activeElement === document.body) {
+      const lines = list.current?.children;
+      let found: HTMLElement | null = null;
+      for (let i = first; lines && i < rows.length && i < lines.length && !found; i++) {
+        found = lines[i].querySelector<HTMLElement>("input:not(:disabled)") ?? lines[i].querySelector<HTMLElement>("button:not(:disabled)");
+      }
+      (found ?? search.current)?.focus();
+    }
+    if (document.activeElement === document.body && lastFocus.current && !lastFocus.current.isConnected) {
+      lastFocus.current = null;
       search.current?.focus();
     }
   });
@@ -261,14 +270,17 @@ export function AssetPicker({ assets, selected, onChange, single, max, tree, not
             ) : (
               <ul className="picker-chips" aria-label="Picked assets">
                 {selected.map((id) => {
-                  const labelOnly = model.byId.get(id)?.label ?? `Asset #${id}`;
-                  const text = labelOnly + (notes?.has(id) ? ` (${notes.get(id)})` : "");
+                  // The button label tells apart an asset that shares its name with a context row elsewhere; the chip draws the name and the end
+                  // of its path, and the title and the remove button carry the whole label.
+                  const chipNode = model.byId.get(id);
+                  const whole = chipNode?.buttonLabel ?? `Asset #${id}`;
+                  const note = notes?.has(id) ? ` (${notes.get(id)})` : "";
                   return (
-                    <li key={id} className="picker-chip" title={text}>
-                      <span className="picker-chip-text">{text}</span>
+                    <li key={id} className="picker-chip" title={whole + note}>
+                      <span className="picker-chip-text">{(chipNode ? chipText(whole, chipNode.name) : whole) + note}</span>
                       {removable && (
                         <button
-                          type="button" className="picker-chip-x" aria-label={`Remove ${labelOnly}`} onClick={() => remove(id)}
+                          type="button" className="picker-chip-x" aria-label={`Remove ${whole}`} onClick={() => remove(id)}
                           ref={(el) => { if (el) chipButtons.current.set(id, el); else chipButtons.current.delete(id); }}
                         >
                           <Icon name="close" />
