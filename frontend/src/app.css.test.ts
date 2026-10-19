@@ -980,11 +980,11 @@ describe("the row menu, the trash button and the info tip (W7b)", () => {
     expect(only(".editor-cols .compare-field").body).toMatch(/width:\s*fit-content/); // the compare box's tip follows its words
   });
 
-  it("a waiting quiet button in the widget editor (Whole site, when the whole site is chosen) looks disabled and takes the hover wash back, and is never a native :disabled", () => {
-    const look = only('.editor-cols .quiet[aria-disabled="true"]').body;
+  it("Whole site in the widget editor, when the whole site is chosen, looks disabled (its own class: the picker's Clear all keeps its own look) and takes the hover wash back, and is never a native :disabled", () => {
+    const look = only('.editor-cols .whole-site[aria-disabled="true"]').body;
     expect(look).toMatch(/opacity:\s*0\.55/);
     expect(look).toMatch(/cursor:\s*not-allowed/);
-    expect(only('.editor-cols .quiet[aria-disabled="true"]:hover').body).toMatch(/background:\s*none/);
+    expect(only('.editor-cols .whole-site[aria-disabled="true"]:hover').body).toMatch(/background:\s*none/);
   });
 
   it("the tip and menu buttons keep a hit area of 24px or more", () => {

@@ -985,6 +985,7 @@ describe("one bar per asset of a kind", () => {
     const whole = screen.getByRole("button", { name: "Whole site" });
     expect(whole).toHaveAttribute("aria-disabled", "true");
     expect(whole).toBeEnabled();
+    expect(whole).toHaveClass("quiet", "whole-site"); // the disabled look is the editor's own class: the picker's Clear all is a quiet aria-disabled button too, with its own look
     await userEvent.click(within(lookUnder()).getByRole("radio", { name: "MV2" }));
     expect(whole).not.toHaveAttribute("aria-disabled");
     await userEvent.click(whole);

@@ -953,11 +953,12 @@ describe("the breakdown by kind (w24)", () => {
     expect(note).toBeEmptyDOMElement();
   });
 
-  it("draws a bar with no figure as no bar (energy: the tooltip says no data) or a dash mark (cost: no rate), and never as a zero", () => {
+  it("draws a bar with no figure as the dash mark and no bar (energy: the tooltip says no data; cost: no rate), and never as a zero", () => {
     const energy = breakdownData(3, { values: [valueRow({ asset_id: 10, name: "Rack 1", value: 5, point_id: null }), valueRow({ asset_id: 11, name: "Rack 2", value: null, no_data: true, point_id: null })] });
     show(energy);
     const drawn = JSON.parse(screen.getByTestId("chart").textContent!) as { series: { data: (number | null)[] }[] };
     expect(drawn.series[0].data).toEqual([5, null]);
+    expect((barOption(energy, TZ) as unknown as { series: { markPoint: { data: { coord: number[] }[] } }[] }).series[0].markPoint.data).toEqual([{ coord: [1, 0] }]);
     const tipOf = (data: typeof energy) => (barOption(data, TZ) as unknown as { tooltip: { formatter: (p: unknown) => string } }).tooltip.formatter([{ dataIndex: 1, seriesIndex: 0 }]);
     expect(tipOf(energy)).toContain("no data");
     const cost = breakdownData(3, { source: "cost", unit: "QAR", values: [valueRow({ asset_id: 10, name: "Rack 1", value: 5, point_id: null }), valueRow({ asset_id: 11, name: "Rack 2", value: null, point_id: null })] });

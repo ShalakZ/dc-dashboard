@@ -678,8 +678,8 @@
   .editor-cols > div { display: grid; gap: 8px; align-content: start; }
   .editor-cols h3 { margin: 0; font-size: 14px; }
   .editor-cols .compare-field { width: fit-content; max-width: 100%; } /* the box, its words and its ? tip travel together: the tip sits right after the words, not at the column's edge */
-  .editor-cols .quiet[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; } /* Whole site while the whole site is chosen: aria-disabled, never disabled (it may hold the focus the click gave it) */
-  .editor-cols .quiet[aria-disabled="true"]:hover { background: none; }
+  .editor-cols .whole-site[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; } /* Whole site while the whole site is chosen: aria-disabled, never disabled (it may hold the focus the click gave it). Its own class: the picker's quiet buttons have their own looks (asset-picker.css) */
+  .editor-cols .whole-site[aria-disabled="true"]:hover { background: none; }
   .issues { margin: 0; padding-left: 18px; }
   @media (max-width: 700px) {
     .editor-cols { grid-template-columns: minmax(0, 1fr); }

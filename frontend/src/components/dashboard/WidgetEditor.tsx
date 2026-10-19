@@ -76,7 +76,7 @@ function KindBars({ assets, root, kind, top, rootGone, patch, ids }: KindBarsPro
       {/* The button is never disabled: a disabled button that has the focus drops it to the page. It does nothing while the whole site is already chosen. */}
       <div className="row">
         <p className="spacer" aria-live="polite">{`Under: ${root === null ? "Whole site" : labels.get(root) ?? `Asset #${root}`}`}</p>
-        <button type="button" className="quiet" aria-disabled={root === null ? true : undefined} onClick={() => { if (root !== null) patch({ root: null }); }}>
+        <button type="button" className="quiet whole-site" aria-disabled={root === null ? true : undefined} onClick={() => { if (root !== null) patch({ root: null }); }}>
           Whole site
         </button>
       </div>

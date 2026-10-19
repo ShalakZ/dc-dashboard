@@ -1003,7 +1003,7 @@ async function pickAsset(dialog: Locator, group: string, name: string): Promise<
  * sit at the column's edge). The text is measured with a Range over the label's own text node.
  */
 async function expectBoxBesideWords(dialog: Locator, where: string): Promise<void> {
-  const label = dialog.locator("label.inline");
+  const label = dialog.locator(".compare-field > label.inline");
   await expect(label, `${where}: the comparison box's label`).toHaveCount(1);
   const m = await label.evaluate((el) => {
     const box = el.querySelector('input[type="checkbox"]')!.getBoundingClientRect();
