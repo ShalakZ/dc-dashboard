@@ -102,7 +102,7 @@ front end pack 1 (reserved counter line), 6 (CSS: new names `widget-text*` only;
 - [x] **T3b Front end, components and CSS** (needs T3a). `TextWidgetView`, the `WidgetView` dispatcher, `DashboardEditor`/`DashboardViewer` call sites, `WidgetEditor` (D8), `widgets.css` (D6), component tests (`<b>x</b>` stays literal text, line breaks kept, no `/api/widget-data` request, no Details/CSV buttons, no live registration, a divider is a separator, a heading is an `h2`, edit mode keeps Edit/Delete, the editor fields, the counter, title prefill and numbering, the immediate preview, switching types back and forth).
 - [x] **T4 End-to-end spec** `frontend/e2e/w22.spec.ts` (needs T2 and T3b): add a heading, a paragraph and a divider through the dialog, save, reload, light and dark; move and resize one in edit mode; no `/api/widget-data` request for them; the keyboard through the dialog; an emoji counted once. The controller runs it (implementers never run Playwright).
 - [x] **T5 Docs and close-out** (after the gates): `docs/dashboards-and-billing.md` (six types; the rules and limits in Dashboards and Limits; the downgrade note), `docs/screens.md` (one clause), `docs/upgrading.md` (`0013` is the head, a table row), `CHANGELOG.md` (the `## w22` section and the `### Upgrading to w22 (migration 0013)` note EACH under about 900 bytes; header count 19), the backlog's next free letter, the roadmap row, the plan's log. Run the doc tests right after.
-- [ ] **Gates** (controller, once): full backend suite (a migration), full vitest, typecheck, build, e2e type check, `vis-rebuild.sh` (the whole Playwright suite), gallery (1440 light and dark; 1024 for the editor; keyboard), whole-wave Opus review, one fix wave, the scoped re-review (mandatory in tier L), the merge order of RESUME.md.
+- [x] **Gates** (controller, once): full backend suite (a migration), full vitest, typecheck, build, e2e type check, `vis-rebuild.sh` (the whole Playwright suite), gallery (1440 light and dark; 1024 for the editor; keyboard), whole-wave Opus review, one fix wave, the scoped re-review (mandatory in tier L), the merge order of RESUME.md.
 
 ## Review focus
 1. A text widget can never reach the data path (no request, no live registration, no CSV, no Details; the API refuses it on both routes).
@@ -112,7 +112,18 @@ front end pack 1 (reserved counter line), 6 (CSS: new names `widget-text*` only;
 5. Light, dark, the four theme colours; 1920, 1440, 1024; keyboard only; a 1-row card does not clip.
 
 ## Execution log
-(kept in the ledger `.waves/w22/progress.md`; the close-out copies the summary here)
+Summary of the run (the full ledger is `.waves/w22/progress.md`, git-ignored). 2026-10-19, tier L, one controller session that was cut off by a WSL shutdown
+and resumed (nothing lost: the unfinished migration fix had been saved as a stash and was applied as it was).
+- T0 baseline, T1 migration 0013 (`415b063`, review fix `8cf4756`), T2 backend (`fe1b905`), T3a libs (`19b02f3`), T3b components and CSS (`29805c9`),
+  T5 docs (`600d057`), T4 end-to-end spec (`fde10aa`), whole-wave review fix wave T6a (`8d0dc8e`) and T6b (`27dace7`), the spec's request count (`8da5112`).
+- Reviews: plan (Opus) 0 Critical / 6 Important / 7 Minor, all folded in (F1-F13 above); migration review (Opus, per task) 0 / 1 / 6 (R1 fixed, R3 R4 R6a R7 R2
+  folded in, R5 skipped); whole-wave (Opus, real browser at 1920, 1440, 1024) 0 / 1 / 4 (W1 a tab in a text made an automatic title the server refused; W2-W5
+  fixed or recorded); scoped re-review of the fix wave (Opus, medium) 0 / 0 / 1 (parked, backlog BF).
+- Rehearsal of the migration on a restored copy of the dev database, twice (before and after the review fix): the upgrade changed no widgets row and no other
+  table, the downgrade refused with a text widget and was lossless without one, a second upgrade was identical.
+- Gates: backend 5,522 passed, 1 skipped (46 min, at the last backend commit); vitest 255 files, 9,135 tests; typecheck, build and the e2e type check clean;
+  isolated Playwright 496 passed, 1 flaky (`w7f.spec.ts:470`, the known timing flake, passed on retry), 0 failed (the first run had one failure in the new spec:
+  it counted exactly one stat request, and the count depends on timing; the assertion now allows one or two). Doc tests 69 passed.
 
 ## Folded from the Opus plan review (`.waves/w22/plan-review.md`: 0 Critical, 6 Important, 7 Minor; all accepted; this section overrides the text above where they differ)
 - **F1 (P1) Dispatcher.** `WidgetView` stays the DATA view (`type: DataWidgetType`, `config: WidgetConfig`, otherwise unchanged). NEW `components/dashboard/WidgetCard.tsx` takes ONE prop `widget: Pick<DraftWidget, "type" | "title" | "config">` plus `widgetKey, dashboardRange, timezone, csv?, live?, details?, actions?, dragHandle?`; it narrows on `widget.type === "text"` and renders `TextWidgetView`, else `WidgetView`; it calls no hook. The three call sites (`DashboardViewer`, `DashboardEditor.renderWidget`, the `WidgetEditor` preview) use `WidgetCard`. No `as` cast on a `config` anywhere. `toDrafts`, `toWidgetBody`, the fixture `widget()` and `{...d, ...fields}` use spreads; `formToFields` and `EditorFields` are the union; `WidgetData.type` becomes `DataWidgetType`. T3a lists these as compile-only changes.
