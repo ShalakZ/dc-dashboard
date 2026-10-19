@@ -642,7 +642,7 @@ const VARIANTS: Variant[] = [
   {
     name: "a partial cost (*) withholds the percentage and says why",
     make: (c) => { c.assets[0].this = side(1124, 168.6, { partial: true }); c.assets[0].cost = change(18.6, null, "partial"); },
-    head: `168.60* ${CURRENCY}`, last: `150.00 ${CURRENCY}`, change: `up 18.60 ${CURRENCY}`, note: "No percentage: some of the cost has no rate.", energyNote: "",
+    head: `168.60* ${CURRENCY}`, last: `150.00 ${CURRENCY}`, change: `up 18.60* ${CURRENCY}`, note: "No percentage: some of the cost has no rate.", energyNote: "",
   },
   {
     name: "a rate that changed inside the windows is said on the cost card only",
@@ -663,7 +663,7 @@ const VARIANTS: Variant[] = [
       c.assets[0].cost = change(18.6, null, "partial");
       c.assets[0].rate_change = { date: "2026-03-05" };
     },
-    head: `168.60* ${CURRENCY}`, last: `150.00 ${CURRENCY}`, change: `up 18.60 ${CURRENCY}`,
+    head: `168.60* ${CURRENCY}`, last: `150.00 ${CURRENCY}`, change: `up 18.60* ${CURRENCY}`,
     note: "No percentage: some of the cost has no rate. (+3 more in Details)",
     title: `No percentage: some of the cost has no rate. A rate changed on 5 Mar, so the cost change is not only usage. 29 and 30 March have no matching day in February. ${CLOSED_NOTE}`,
     energyNote: `29 and 30 March have no matching day in February. (+1 more in Details)`,

@@ -79,7 +79,7 @@ Dashboards are shared by everyone.
     shows both; two stats side by side give both on the dashboard.
   - **Marks.** `~` (estimated), `*` (a cost with an hour that has no rate; a kWh figure never carries it) and the dash (no readings, or no
     rate; never a zero) travel with the figure to the card, the chart's line names and tooltip, Details and the CSV.
-  - **The change** is said in words and sign, never by colour alone: "up 12.4 % (+340.00 kWh)", "down 3.1 % (-120.00 kWh)", "no change".
+  - **The change** is said in words and sign, never by colour alone: "up 12.4 % (+340.00 kWh)", "down 3.1 % (-120.00 kWh)", "no change". It carries the marks of the figures it is made from: `~` when a side is estimated ("down ~0.2 % (~-294.32 kWh)") and, for a cost, `*` when a side has an hour with no rate ("up 18.60* USD").
     The card shows no percentage, and says why on its note line, when last month used nothing ("No percentage: last month used
     nothing."; for cost "... last month's cost was zero."), when a day has no readings on either side ("No percentage: last month has no
     readings on 3 of the 17 days."), or, for a cost, when some of it has no rate ("No percentage: some of the cost has no rate."). It shows
