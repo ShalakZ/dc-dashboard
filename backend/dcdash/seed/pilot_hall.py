@@ -2,6 +2,7 @@
 
     python -m dcdash.seed.history --layout pilot-hall                       # prints the plan, writes nothing
     DCDASH_ALLOW_SEED_HISTORY=1 python -m dcdash.seed.history --layout pilot-hall --yes
+    DCDASH_ALLOW_SEED_HISTORY=1 python -m dcdash.seed.history --layout pilot-hall --metering panels [--panel-unit kw] --yes
 
 The first part is the LAYOUT: what the tree looks like, which racks are busy, idle, single-fed or empty, and which meter sits on
 which asset. Everything here is synthetic and generic ("Hall 1", "Pod A", "Row 1", "Rack 01", "Feed A", "Panel 1A"); no name comes
@@ -16,8 +17,8 @@ The tree, with its keys (a key is a unique label in this module, not a path):
     hall (`h1/row1`; Rows 1 and 2 belong to Pod A, Rows 3 and 4 to Pod B) > racks (`h1/r01`; numbered across the hall, Hall 1 has
     Rack 01 to 59 and Hall 2 Rack 01 to 58, 117 in all) > Feed A and Feed B (`h1/r01/a`, `h1/r01/b`);
   - beside the halls, "Electrical" (`elec`, listed after them) > Panel 1A to Panel 4B (`elec/p1a`; the number is the pod across the
-    site, the letter the feed). A panel is mapped only to voltage and current, never to energy, so the Site does not count the same
-    kWh twice (the energy of a pod is the energy of its racks).
+    site, the letter the feed). By default (`--metering feeds`) a panel is mapped only to voltage and current, never to energy, so
+    the Site does not count the same kWh twice (the energy of a pod is the energy of its racks).
 Variety, with the counts fixed and the choice of racks moved by the seed: 6 free racks (Feed A and Feed B exist, nothing is metered),
 6 idle racks (a fraction of a kW), 5 single-feed racks (only Feed A, carrying everything) and the rest live (2 to 11 kW). A live
 rack shares its load about half and half between the feeds. Eight of the Hall 2 B feeds report power instead of an energy counter
@@ -29,6 +30,14 @@ its own, and a gap applies to both of them. The engine takes the energy counter 
 energy figure changes and the 8 power-only feeds are still the only estimated ones; what the twins give is a live power that adds
 up at every level (rack, row, pod, hall, Site) and a kW trend on every feed. That makes 442 points: 209 counters, their 209 twins,
 8 power-only feeds and 16 panel meters.
+
+`--metering panels` is the "just the panels for now" case: the same tree and the same load, but ONE measured level. Each of the 8
+panels gets an energy meter that carries the energy of the feeds it already carries a current for (`--panel-unit kwh`, the default:
+an `energy_kwh` counter; `--panel-unit kw`: an `active_power_kw` point only, so the engine estimates the energy and flags it `~`),
+and the feeds and racks get no meter at all (feeds and panels both metered would put the same energy in the Site total twice, since
+the panels sit beside the halls). That makes 24 points: 8 panel energy meters, 8 voltages and 8 currents. The feeds' power is still
+drawn inside the generator, with the same random stream as the default mode (the "hidden" meters of the layout, which are never
+written), so the panels carry exactly the sum of what their feeds would have shown; a panel has no gap and no reset.
 
 The load of every feed also moves with the local day (`day_factor`, 0.95 to 1.05), so a month of Billing does not read as one day
 repeated.
@@ -63,6 +72,8 @@ SOURCE_NAME = "seeded-pilot-hall"
 ELECTRICAL_NAME = "Electrical"
 UNDO = 'delete the "Seeded pilot hall" asset and the source "seeded-pilot-hall" with the normal deletes (Assets Tree and Sources)'
 INTERVAL_CHOICES = history.INTERVAL_CHOICES
+METERING_CHOICES = history.METERING_CHOICES  # "feeds" (default) | "panels"
+PANEL_UNIT_CHOICES = history.PANEL_UNIT_CHOICES  # "kwh" (default) | "kw"; only with metering "panels"
 DEFAULT_INTERVAL_MINUTES = 30  # measured on the scratch stack (w16 task 5): 442 points, so about 1,000,000 readings over a full month at 30 minutes and twice that at 15
 
 RACKS_PER_ROW = ((15, 15, 14, 15), (15, 15, 13, 15))  # Hall 1, Hall 2: the racks of Row 1 to Row 4, 117 in all
@@ -95,11 +106,14 @@ class Rack:
 class Meter:
     node: str
     metric: Metric
-    kind: str  # "counter" | "power" | "voltage" | "current"; a "power" meter is a power-only feed OR the kW twin of a counter
+    # "counter" | "power" | "voltage" | "current" | "panel_counter" | "panel_power"; a "power" meter is a power-only feed OR the kW
+    # twin of a counter; the two "panel_" kinds exist only with `--metering panels`: the energy counter (kWh) or the power-only point
+    # (kW) of a panel, carrying the feeds in `feeds`
+    kind: str
     counter_base: float | None = None  # where an energy counter starts (never set on a twin)
     resets: bool = False  # the counter drops back to near zero once (never set on a twin)
     gap: bool = False  # the counter has a hole in its samples; its kW twin has the same flag, so the hole is in both
-    feeds: tuple[str, ...] = ()  # for a current meter: the feed nodes whose power it carries
+    feeds: tuple[str, ...] = ()  # for a current or a panel energy meter: the feed nodes whose power it carries
 
     @property
     def id(self) -> str:
@@ -111,12 +125,22 @@ class Layout:
     seed: int
     nodes: tuple[Node, ...]  # parents before children, depth first
     racks: tuple[Rack, ...]  # in tree order
-    # the feeds' meters in tree order (a counter is followed at once by its kW twin on the same node; a power-only feed has one
-    # meter), 426 of them, then the panels' (voltage, current), 16: 442 in all
+    # the meters that are written. With the default `--metering feeds`: the feeds' meters in tree order (a counter is followed at
+    # once by its kW twin on the same node; a power-only feed has one meter), 426 of them, then the panels' (voltage, current), 16:
+    # 442 in all. With `--metering panels`: for each panel its voltage, its current and its energy meter, 24 in all.
     meters: tuple[Meter, ...]
+    metering: str = "feeds"  # "feeds" | "panels"
+    panel_unit: str = "kwh"  # "kwh" | "kw"; only meaningful with metering "panels"
+    # the feeds' meters of the default layout when they are NOT written (metering "panels"), else empty: `samples` still runs
+    # them, in front of `meters`, so the feeds' power (and the random stream) is exactly the default mode's, but emits nothing for them
+    hidden: tuple[Meter, ...] = ()
 
 
-def build_layout(seed: int = history.DEFAULT_SEED) -> Layout:
+def build_layout(seed: int = history.DEFAULT_SEED, metering: str = "feeds", panel_unit: str = "kwh") -> Layout:
+    if metering not in METERING_CHOICES or panel_unit not in PANEL_UNIT_CHOICES:
+        raise ValueError(f"metering must be one of {METERING_CHOICES} and panel_unit one of {PANEL_UNIT_CHOICES}")
+    if panel_unit == "kw" and metering == "feeds":
+        raise ValueError("panel_unit kw needs metering panels (with metering feeds the panels carry no energy)")
     rng = random.Random(seed)
     slots = _slots()
     total = len(slots)
@@ -172,7 +196,8 @@ def build_layout(seed: int = history.DEFAULT_SEED) -> Layout:
                 meters.append(Meter(feed, Metric.ENERGY_KWH, "counter", base, resets=is_a and index == reset_at, gap=has_gap))
                 meters.append(Meter(feed, Metric.ACTIVE_POWER_KW, "power", gap=has_gap))  # its kW twin: draws no random number
 
-    metered = {meter.node for meter in meters}
+    metered = {meter.node for meter in meters}  # the feeds of the DEFAULT layout that are metered, whatever the metering mode
+    panel_meters: list[Meter] = []
     for hall in (1, 2):
         for pod in ("a", "b"):
             number = (hall - 1) * 2 + (1 if pod == "a" else 2)
@@ -185,10 +210,17 @@ def build_layout(seed: int = history.DEFAULT_SEED) -> Layout:
                     for feed in rack.feeds
                     if feed.endswith("/" + letter) and feed in metered
                 )
-                meters.append(Meter(panel, Metric.VOLTAGE_V, "voltage"))
-                meters.append(Meter(panel, Metric.CURRENT_A, "current", feeds=carried))
+                panel_meters.append(Meter(panel, Metric.VOLTAGE_V, "voltage"))
+                panel_meters.append(Meter(panel, Metric.CURRENT_A, "current", feeds=carried))
+                if metering == "panels" and panel_unit == "kwh":  # the base is drawn after every other layout draw
+                    base = round(rng.uniform(2000, 90000), 3)
+                    panel_meters.append(Meter(panel, Metric.ENERGY_KWH, "panel_counter", base, feeds=carried))
+                elif metering == "panels":
+                    panel_meters.append(Meter(panel, Metric.ACTIVE_POWER_KW, "panel_power", feeds=carried))
 
-    return Layout(seed, tuple(nodes), tuple(racks), tuple(meters))
+    if metering == "feeds":
+        return Layout(seed, tuple(nodes), tuple(racks), tuple(meters + panel_meters))
+    return Layout(seed, tuple(nodes), tuple(racks), tuple(panel_meters), metering, panel_unit, hidden=tuple(meters))
 
 
 def _slots() -> list[tuple[int, int, int]]:
@@ -280,12 +312,19 @@ def samples(plan: history.Plan, layout: Layout) -> Iterator[tuple[datetime, dict
     never ticks down by chance; the one reset drops it to near zero once, and the gap meter keeps counting through its hole without
     emitting. The power of a feed is its rack's load x its share x the daily curve x the factor of the local day x the jitter.
     The random draws are the same with or without a gap: one per feed (a counter or a power-only meter) per instant, then one per
-    panel voltage. A kW twin draws nothing: it reads the power its counter has just integrated (and has the counter's hole)."""
+    panel voltage. A kW twin draws nothing: it reads the power its counter has just integrated (and has the counter's hole).
+
+    With `--metering panels` the feeds' meters are the layout's `hidden` ones: they run first, exactly as in the default mode (the
+    same draws in the same order, the reset's included), so every number is the default mode's, but they emit nothing. A panel's
+    energy meter reads the sum of the true power of the feeds it carries: its counter integrates it, its kW point is it; it draws
+    nothing."""
     rng = random.Random(plan.seed)
     zone = ZoneInfo(plan.tz)
     step_hours = plan.step_seconds / 3600
     feed_of = {feed: (rack, feed[-1]) for rack in layout.racks for feed in rack.feeds}  # feed key -> (its rack, "a" or "b")
-    counters = {meter.id: meter.counter_base for meter in layout.meters if meter.kind == "counter"}
+    running = (*layout.hidden, *layout.meters)  # the hidden feeds first: they are before the panels in the default layout too
+    hidden_ids = [meter.id for meter in layout.hidden]
+    counters = {meter.id: meter.counter_base for meter in running if meter.kind in ("counter", "panel_counter")}
     day_factors: dict[date, float] = {}
     for index, ts in enumerate(plan.times()):
         factor = curve(history.base_kw(ts, zone))
@@ -296,7 +335,7 @@ def samples(plan: history.Plan, layout: Layout) -> Iterator[tuple[datetime, dict
         values: dict[str, float] = {}
         power_of: dict[str, float] = {}  # the true power of each feed now, also of the one that is not sampled
         volts_of: dict[str, float] = {}  # the voltage sample of each panel now, for its current
-        for meter in layout.meters:
+        for meter in running:
             if meter.kind in ("counter", "power"):
                 if meter.kind == "power" and meter.node in power_of:  # a kW twin: the power its counter integrates, no new draw
                     power = power_of[meter.node]
@@ -317,9 +356,18 @@ def samples(plan: history.Plan, layout: Layout) -> Iterator[tuple[datetime, dict
             elif meter.kind == "voltage":
                 volts_of[meter.node] = round(NOMINAL_VOLTS * (1 + rng.uniform(-VOLTAGE_JITTER, VOLTAGE_JITTER)), 1)
                 values[meter.id] = volts_of[meter.node]
-            else:  # "current": the panel's voltage meter comes right before it in the layout
+            elif meter.kind == "current":  # the panel's voltage meter comes right before it in the layout
                 carried = sum(power_of[feed] for feed in meter.feeds)
                 values[meter.id] = round(carried * 1000 / (math.sqrt(3) * volts_of[meter.node] * POWER_FACTOR), 2)
+            else:  # "panel_counter" | "panel_power": the energy of the feeds the panel carries (its current is right before it)
+                carried = sum(power_of[feed] for feed in meter.feeds)
+                if meter.kind == "panel_power":
+                    values[meter.id] = round(carried, 3)
+                else:
+                    values[meter.id] = round(counters[meter.id], 3)
+                    counters[meter.id] += carried * step_hours
+        for meter_id in hidden_ids:  # run for their power and their draws, never written
+            values.pop(meter_id, None)
         yield ts, values
 
 
@@ -511,6 +559,21 @@ def _layout_lines(layout: Layout, kinds: dict[str, KindChoice], known: bool, ste
         elif choice.name != choice.preferred:
             line += f' (preferred "{choice.preferred}")'
         lines.append(line)
+    if layout.metering == "panels":
+        lines.append(
+            f"racks    {len(layout.racks)} ({by_status['live']} live, {by_status['idle']} idle, {by_status['single']} single-feed "
+            f"with Feed A only, {by_status['free']} free); the feeds and racks carry no meter in this mode"
+        )
+        lines.append(f"metering {_metering_text(layout)}")
+        energy = (
+            f"{by_kind['panel_counter']} panel energy counters (kWh)" if layout.panel_unit == "kwh"
+            else f"{by_kind['panel_power']} panel power points (kW)"
+        )
+        lines.append(
+            f"points   {len(layout.meters)}, each mapped with an interval of {step_seconds} seconds: {energy}, "
+            f"{by_kind['voltage']} panel voltages (V) and {by_kind['current']} panel currents (A)"
+        )
+        return lines
     lines.append(
         f"racks    {len(layout.racks)} ({by_status['live']} live, {by_status['idle']} idle, {by_status['single']} single-feed "
         f"with Feed A only, {by_status['free']} free with no readings)"
@@ -521,6 +584,19 @@ def _layout_lines(layout: Layout, kinds: dict[str, KindChoice], known: bool, ste
         f"panel voltages (V) and {by_kind['current']} panel currents (A)"
     )
     return lines
+
+
+def _metering_text(layout: Layout) -> str:
+    """What the dry run and the report say of `--metering panels` (the default mode says nothing of its own)."""
+    if layout.panel_unit == "kwh":
+        what = "an energy counter (kWh) that carries the energy of the feeds it has a current for"
+    else:
+        what = "a power point (kW) only, so its energy is estimated and shown with ~"
+    panels = sum(1 for meter in layout.meters if meter.kind == "voltage")
+    return (
+        f"panels (--panel-unit {layout.panel_unit}): each of the {panels} panels has {what}; no feed has "
+        "an energy or power point, so there is one measured level, a breakdown by Panel shows figures and one by Rack shows no data"
+    )
 
 
 def _plan_lines(layout: Layout, plan: history.Plan) -> list[str]:
@@ -543,6 +619,11 @@ def _plan_lines(layout: Layout, plan: history.Plan) -> list[str]:
         + (f", minus {gap_missing} in the gap)" if gap_missing else ")")
     )
     power_only = _power_only(layout)
+    if layout.metering == "panels" and layout.panel_unit == "kw":
+        lines.append(
+            f"power    {sum(1 for meter in layout.meters if meter.kind == 'panel_power')} panels report kW instead of a kWh counter, "
+            "so their energy is estimated and Electrical, the Site and the totals above them show ~"
+        )
     if power_only:
         hall_of = {feed: rack.hall for rack in layout.racks for feed in rack.feeds}
         halls = ", ".join(f"Hall {hall}" for hall in sorted({hall_of[meter.node] for meter in power_only}))
@@ -552,12 +633,17 @@ def _plan_lines(layout: Layout, plan: history.Plan) -> list[str]:
         )
     if plan.gap is None:
         lines.append("gap      none (the range holds no complete day)")
+    elif layout.metering == "panels":
+        lines.append("gap      none (a panel meter has no gap in this mode)")
     else:
         gap_meter = next(meter for meter in layout.meters if meter.gap)
         lines.append(
             f"gap      {path(layout, gap_meter.node)} has no samples from {history._local(plan.gap[0], tz)} "
             f"to {history._local(plan.gap[1], tz)}"
         )
+    if layout.metering == "panels":
+        lines.append("reset    none (a panel meter never resets in this mode)")
+        return lines
     reset_meter = next(meter for meter in layout.meters if meter.resets)
     lines.append(
         f"reset    the counter of {path(layout, reset_meter.node)} drops back to near zero at {history._local(plan.reset_at, tz)}"
@@ -565,11 +651,16 @@ def _plan_lines(layout: Layout, plan: history.Plan) -> list[str]:
     return lines
 
 
+def _layout_of(args: argparse.Namespace) -> Layout:
+    """The layout the command line asks for (the parser has already refused `--panel-unit kw` without `--metering panels`)."""
+    return build_layout(args.seed, getattr(args, "metering", None) or "feeds", getattr(args, "panel_unit", None) or "kwh")
+
+
 async def dry_run(args: argparse.Namespace) -> int:
     """Print what a real run would make and whether it would be refused. Writes nothing and exits 0 whatever it finds."""
     tz, retention = history._default_timezone(), history.FACTORY_STORAGE_SETTINGS.raw_retention_days
     step_seconds = (args.interval_minutes or DEFAULT_INTERVAL_MINUTES) * 60
-    layout = build_layout(args.seed)
+    layout = _layout_of(args)
     registered: set[str] | None = None
     refusal = exc_name = None
     pool = None
@@ -634,7 +725,7 @@ async def seed(args: argparse.Namespace) -> int:
             problem = await history.pending_drop(pool, plan)
             if problem is not None:
                 raise history.Refused(problem)
-            layout = build_layout(args.seed)
+            layout = _layout_of(args)
             kinds = choose_kinds(await registered_kinds(pool))
             created = await create_rows(pool, layout, kinds, step_seconds)
         except history.Refused as refused:
@@ -658,6 +749,8 @@ async def seed(args: argparse.Namespace) -> int:
         print(f'  root      "{ROOT_NAME}" id {created.root_id}')
         print(f"  assets    {len(layout.nodes)} ({_by_role(layout)})")
         print(f"  points    {len(layout.meters)}")
+        if layout.metering == "panels":
+            print(f"  metering  {_metering_text(layout)}")
         print(f"  kinds     {_kinds_summary(kinds)}")
         print(
             f"  range     {history._local(plan.start, tz)} to {history._local(plan.end, tz)} in {tz}"

@@ -90,7 +90,8 @@ docker compose exec -T -e DCDASH_ALLOW_SEED_HISTORY=1 api python -m dcdash.seed.
 Run them in the folder that holds `compose.yaml`. The same two lines work on Linux, macOS and WSL and in Windows PowerShell 5.1: on the
 work laptop run `scripts\update.ps1` first so the code is current, then type them in the install folder (PowerShell passes
 `-e DCDASH_ALLOW_SEED_HISTORY=1`, `--layout pilot-hall` and `--yes` to docker unchanged). Options: `--interval-minutes 5|10|15|30|60`
-(default 30, the spacing of the samples), `--days N` (the last N days instead of the previous month) and `--seed N`.
+(default 30, the spacing of the samples), `--days N` (the last N days instead of the previous month), `--seed N`, and the two options
+of the panels-only case below: `--metering feeds|panels` (default `feeds`) and `--panel-unit kwh|kw` (default `kwh`).
 
 - **What it makes.** The Site **Seeded pilot hall** with **Hall 1** and **Hall 2**, two pods each (**Pod A**, **Pod B**), two rows per
   pod, 117 racks (Rack 01 to 59 in Hall 1, 01 to 58 in Hall 2), each with **Feed A** and **Feed B**; beside the halls an **Electrical**
@@ -129,16 +130,37 @@ work laptop run `scripts\update.ps1` first so the code is current, then type the
   the day, and each rack a few kW. Between one hour and an hour and a half after the run (three sample spacings counted from the last
   sample, which is up to half an hour old) the feeds count as not reporting and a parent says so; Billing and the 7d and month views
   are not affected.
-- **Why the panels carry no kWh.** A parent without a meter adds up every child. A kWh meter on a panel beside the halls would count
-  the same energy twice at the Site and in the total of Billing, so the panels carry voltage and current only (the current follows the
-  feeds of their pod). Energy per panel needs a "fed by" relation between assets, which does not exist yet.
+- **Why the panels carry no kWh (by default, `--metering feeds`).** A parent without a meter adds up every child. A kWh meter on a
+  panel beside the halls would count the same energy twice at the Site and in the total of Billing, so the panels carry voltage and
+  current only (the current follows the feeds of their pod). Energy per panel needs a "fed by" relation between assets, which does not
+  exist yet. The next bullet is the one case where the panels do carry energy, and then the feeds do not.
+- **Just the panels (`--metering panels`).** The owner's likely real case is "just the panels for now": only the eight panels are
+  metered, the feeds and racks are not. The tree and the load are the same, but each panel gets an energy meter that carries the energy
+  of the feeds it already carries a current for, and the feeds get no energy and no power point (one measured level: a feed and its panel
+  both metered would put the same energy in the Site total twice). It makes 24 points (8 voltages, 8 currents, 8 energy meters) and
+  about a twentieth of the readings of the default, so the run is quick. A panel has no gap and no reset in this mode, and the
+  numbers are the sums of the default mode's (same seed, same feeds' power underneath). What it shows: a **breakdown by Panel** shows
+  figures, a **breakdown by Rack** (or by Row, Pod or Hall) shows "no data" because those assets have nothing to add up, and the Site
+  total is the Electrical total. `--panel-unit kwh` (the default) gives each panel an `energy_kwh` counter, so the figures are exact;
+  `--panel-unit kw` gives it an `active_power_kw` point only, so the engine estimates the energy and the panels, Electrical, the Site
+  and the totals show `~`. `--panel-unit kw` without `--metering panels` is refused. The dry run names the mode and the point count.
+  Like every seed it goes on a scratch stack only; the first run only prints the plan:
+
+  ```bash
+  DCDASH_ALLOW_SEED_HISTORY=1 python -m dcdash.seed.history --layout pilot-hall --metering panels --yes
+  DCDASH_ALLOW_SEED_HISTORY=1 python -m dcdash.seed.history --layout pilot-hall --metering panels --panel-unit kw --yes
+  ```
+
+  (inside the `api` container, as the commands above: `docker compose exec -T -e DCDASH_ALLOW_SEED_HISTORY=1 api python -m
+  dcdash.seed.history --layout pilot-hall --metering panels --yes`). Remove it exactly as the default, below; a second pilot-hall run
+  of either mode is refused while the first exists.
 - **Refusals and "half-way".** Nothing is written without `--yes` and `DCDASH_ALLOW_SEED_HISTORY=1`. A second run is refused while the
   source `seeded-pilot-hall`, or a top-level asset **Seeded pilot hall**, exists; the old layout (Seeded demo) can exist beside it. On
   a stack whose rollups outlive their raw data it refuses and says so. A run that fails or is stopped removes what it made (source,
   assets, points, mappings and readings) and says so. If the process was killed, the next run is refused and you remove the seed by
   hand, as below. Ctrl+C on `docker compose exec` stops your terminal, not the command inside the container: wait for it to finish
   before you start another.
-- **Remove it.** In the Assets Tree pick **Seeded pilot hall** and Delete (the dialog says 370 assets and 442 mappings), then in
+- **Remove it.** In the Assets Tree pick **Seeded pilot hall** and Delete (the dialog says 370 assets and 442 mappings, or 24 mappings after `--metering panels`), then in
   Sources delete `seeded-pilot-hall`. It takes under a second. As with the old layout, the readings and rollup rows of the removed
   points stay behind as orphans: the raw readings until the raw retention drops them, the rollups much later.
 
