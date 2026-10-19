@@ -24,7 +24,8 @@ class TariffRow:
     effective_from: date
 
 
-@dataclass(frozen=True)
+# Slots and not frozen, as `HourEnergy` (core/energy.py): one per priced asset-hour, built far more often than read twice.
+@dataclass(slots=True)
 class HourCost:
     kwh: float
     cost: float | None  # None when no rate applied in that hour
