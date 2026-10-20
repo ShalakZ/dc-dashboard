@@ -27,6 +27,7 @@ vi.mock("../pages/UsersPage", () => ({ UsersPage: () => <h1>the users page</h1> 
 vi.mock("../pages/SettingsPage", () => ({ SettingsPage: () => <h1>the settings page</h1> }));
 vi.mock("../pages/TariffsPage", () => ({ TariffsPage: () => <h1>the tariffs page</h1> }));
 vi.mock("../pages/StoragePage", () => ({ StoragePage: () => <h1>the storage page</h1> }));
+vi.mock("../pages/DisplaysPage", () => ({ DisplaysPage: () => <h1>the displays page</h1> }));
 vi.mock("../pages/AuditPage", () => ({ AuditPage: () => <h1>the audit page</h1> }));
 vi.mock("../pages/DiagnosticsPage", () => ({ DiagnosticsPage: () => <h1>the diagnostics page</h1> }));
 vi.mock("../pages/PasswordPage", () => ({ PasswordPage: () => <h1>the password page</h1> }));
@@ -73,6 +74,7 @@ const PAGE: Record<string, string> = {
   "/settings": "the settings page",
   "/tariffs": "the tariffs page",
   "/storage": "the storage page",
+  "/displays": "the displays page",
   "/audit": "the audit page",
   "/audit/7": "the audit page", // the same page, with the entry open in the drawer
   "/diagnostics": "the diagnostics page",
@@ -103,11 +105,18 @@ const CHANGED_IN_W9B: Partial<Record<BuiltinRole, { sidebar: [string, string[][]
  */
 const RENAMED_IN_W9B: Record<string, string> = { Users: "Users & Roles" };
 const shown = (label: string) => RENAMED_IN_W9B[label] ?? label;
+/**
+ * What w28 added, kept apart from the literal tables like the W9b change above: the Displays page, for the Admin alone (it needs displays.manage, which only
+ * Admin holds, and dashboards.view). Its link sits in the Administer group between Storage and Audit, its address is /displays, and the quick find offers it.
+ */
+const ADDED_IN_W28 = { role: "admin" as BuiltinRole, after: "Storage", link: ["Displays", "/displays"], page: "/displays", quickFind: "Displays" };
+const withW28 = (role: BuiltinRole, links: string[][]) =>
+  role === ADDED_IN_W28.role ? links.flatMap((link) => (link[0] === ADDED_IN_W28.after ? [link, ADDED_IN_W28.link] : [link])) : links;
 const sidebarOf = (role: BuiltinRole) =>
-  [...SIDEBAR[role], ...(CHANGED_IN_W9B[role]?.sidebar ?? [])].map(([heading, links]) => [heading, links.map(([label, to]) => [shown(label), to])]);
-const mayOpen = (role: BuiltinRole) => [...MAY_OPEN[role], ...(CHANGED_IN_W9B[role]?.pages ?? [])];
+  [...SIDEBAR[role], ...(CHANGED_IN_W9B[role]?.sidebar ?? [])].map(([heading, links]) => [heading, (heading === "Administer" ? withW28(role, links) : links).map(([label, to]) => [shown(label), to])]);
+const mayOpen = (role: BuiltinRole) => [...MAY_OPEN[role], ...(CHANGED_IN_W9B[role]?.pages ?? []), ...(role === ADDED_IN_W28.role ? [ADDED_IN_W28.page] : [])];
 const quickFindOffers = (role: BuiltinRole) => [
-  ...SIDEBAR[role].flatMap(([, links]) => links.map(([label]) => label)), ...(CHANGED_IN_W9B[role]?.quickFind ?? []),
+  ...SIDEBAR[role].flatMap(([, links]) => links.map(([label]) => label)), ...(CHANGED_IN_W9B[role]?.quickFind ?? []), ...(role === ADDED_IN_W28.role ? [ADDED_IN_W28.quickFind] : []),
 ];
 
 /** Opens `route` as `role` and returns the first level-1 heading that appears: the page's own, or the notice that keeps the person out. */
@@ -129,6 +138,16 @@ describe("what W9b changed for the built-in roles", () => {
     expect(Object.keys(CHANGED_IN_W9B)).toEqual(["operator"]);
     expect(CHANGED_IN_W9B.operator).toEqual({ sidebar: [["Administer", [["Tariffs", "/tariffs"]]]], pages: ["/tariffs"], quickFind: ["Tariffs"] });
     for (const role of ROLES) for (const link of CHANGED_IN_W9B[role]?.sidebar.flatMap(([, links]) => links) ?? []) expect(link).toEqual(["Tariffs", "/tariffs"]);
+  });
+});
+
+describe("what w28 added for the built-in roles", () => {
+  it("is one page, for the Admin alone: Displays, between Storage and Audit", () => {
+    expect(ADDED_IN_W28).toEqual({ role: "admin", after: "Storage", link: ["Displays", "/displays"], page: "/displays", quickFind: "Displays" });
+    expect((sidebarOf("admin").find(([heading]) => heading === "Administer")![1] as string[][]).map(([label]) => label)).toEqual(
+      ["Users & Roles", "Settings", "Tariffs", "Storage", "Displays", "Audit", "Diagnostics"],
+    );
+    for (const role of ROLES.filter((each) => each !== "admin")) expect(JSON.stringify(sidebarOf(role))).not.toContain("Displays");
   });
 });
 
@@ -179,7 +198,7 @@ describe("where each built-in role lands", () => {
 });
 
 describe("the quick find of each built-in role lists the pages it may open", () => {
-  const LABELS = [...MONITOR, ...OPERATE, ...ADMINISTER].map(([label]) => label);
+  const LABELS = [...MONITOR, ...OPERATE, ...ADMINISTER, ADDED_IN_W28.link].map(([label]) => label);
   it.each(ROLES)("%s", async (role) => {
     mockFetch(routes(role));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });

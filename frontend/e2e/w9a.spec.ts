@@ -47,11 +47,11 @@ const STAFF_USER: Account = { username: "w9a-staffer", password: "w9a-staffer-pa
 // The sidebar in the order it is drawn (components/navItems.ts): three groups.
 const MONITOR = ["Assets Tree", "Dashboards", "Billing"];
 const OPERATE = ["Sources", "Scans", "Discovery"];
-const ADMINISTER = ["Users & Roles", "Settings", "Tariffs", "Storage", "Audit", "Diagnostics"];
+const ADMINISTER = ["Users & Roles", "Settings", "Tariffs", "Storage", "Displays", "Audit", "Diagnostics"];
 const EVERY_LINK = [...MONITOR, ...OPERATE, ...ADMINISTER];
 const PAGE_OF: Record<string, string> = {
   Sources: "/sources", Scans: "/scans", Discovery: "/discovery",
-  "Users & Roles": "/users", Settings: "/settings", Tariffs: "/tariffs", Storage: "/storage", Audit: "/audit", Diagnostics: "/diagnostics",
+  "Users & Roles": "/users", Settings: "/settings", Tariffs: "/tariffs", Storage: "/storage", Displays: "/displays", Audit: "/audit", Diagnostics: "/diagnostics",
 };
 // The one Administer page the built-in Operator opens since W9b (tariffs.view): read-only.
 const OPERATOR_ADMINISTER = ["Tariffs"];
