@@ -60,13 +60,17 @@ def test_the_api_command_hands_pid_1_to_uvicorn_with_a_graceful_timeout():
 def test_the_grace_periods_cover_the_shutdown_budgets():
     from dcdash.api.main import LIFESPAN_SHUTDOWN_SECONDS
     from dcdash.collector.main import SHUTDOWN_SECONDS
-    from dcdash.figures.worker import WORKER_SHUTDOWN_SECONDS
+    from dcdash.figures.worker import WORKER_SHUTDOWN_SECONDS, WORST_STOP_SECONDS
 
     services = compose_config()["services"]
     graceful = float(re.search(r"--timeout-graceful-shutdown (\d+)", _api_command()).group(1))
     assert seconds(services["api"]["stop_grace_period"]) >= graceful + LIFESPAN_SHUTDOWN_SECONDS + 3
     assert seconds(services["collector"]["stop_grace_period"]) >= SHUTDOWN_SECONDS + 5
-    assert seconds(services["figures"]["stop_grace_period"]) >= WORKER_SHUTDOWN_SECONDS + 5
+    # The worker's stop is held to ONE deadline (WORKER_SHUTDOWN_SECONDS, from the signal); the real worst case is that deadline plus
+    # the closing's minimum, the abandon wait and the final join of the compute thread (WORST_STOP_SECONDS), and the interpreter's
+    # own tear-down comes after it: the grace period must cover all of it, not only the deadline.
+    assert WORST_STOP_SECONDS >= WORKER_SHUTDOWN_SECONDS
+    assert seconds(services["figures"]["stop_grace_period"]) >= WORST_STOP_SECONDS + 5
 
 
 def test_the_api_healthcheck_survives_a_slow_migration_and_fails_inside_its_timeout():

@@ -19,9 +19,12 @@ import inspect
 import logging
 import os
 import signal
+import threading
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
+import asyncpg
 import pytest
 from sqlalchemy import text
 
@@ -112,8 +115,8 @@ async def cycle(state: worker.WorkerState, *, now: datetime = NOW, months: int =
     return await worker.run_once(get_sessionmaker(), now, tz, months, state)
 
 
-def plan_of(months: int = MONTHS, tz: str = TZ) -> list[worker.Target]:
-    return worker.targets(NOW, tz, months)
+def plan_of(months: int = MONTHS, tz: str = TZ, now: datetime = NOW) -> list[worker.Target]:
+    return worker.targets(now, tz, months)
 
 
 def same(a, b) -> bool:
@@ -240,6 +243,7 @@ def fast_loop(monkeypatch):
     monkeypatch.setattr(worker, "interval_seconds", lambda: 0.1)
     monkeypatch.setattr(worker, "BACKOFF_FIRST", 0.1)
     monkeypatch.setattr(worker, "BACKOFF_MAX", 0.3)
+    monkeypatch.setattr(worker, "RETRY_UNIT", 0.02)  # a target that fails twice in a row rests 0.08 s, 0.16 s ... instead of minutes
     monkeypatch.setenv("DCDASH_FIGURES_MONTHS", "2")
 
 
@@ -702,7 +706,7 @@ async def test_an_error_in_one_target_does_not_stop_the_others_and_is_retried_ne
     assert len(await rows(db)) == 7
 
 
-async def test_a_value_the_codec_refuses_is_counted_and_named_once_and_never_stored(db, monkeypatch, caplog):
+async def test_a_value_the_codec_refuses_is_counted_and_named_once_never_stored_and_rests_ten_minutes(db, clock, monkeypatch, caplog, engine_calls):
     await build(db)
     caplog.set_level(logging.WARNING, logger=worker.log.name)
 
@@ -713,7 +717,17 @@ async def test_a_value_the_codec_refuses_is_counted_and_named_once_and_never_sto
     state = make_state()
     report = await cycle(state)
     assert counts(report) == (7, 0, 0, 0, 0, 0, 0, 7) and await rows(db) == []
-    await cycle(state)
+    assert len(engine_calls) == 7
+    # M9: a key the codec refused is not built again at every cycle (open or not): it would be refused again, and the build is
+    # the worker's whole cost; the refusal counter is the cycle's, so the second cycle has nothing to count
+    engine_calls.clear()
+    second = await cycle(state)
+    assert counts(second) == (7, 0, 0, 0, 0, 0, 7, 0) and engine_calls == []
+    clock.now += worker.SETTLED_EVERY - 1
+    assert counts(await cycle(state)) == (7, 0, 0, 0, 0, 0, 7, 0)
+    clock.now += 2  # ten minutes after the refusal: tried again
+    fourth = await cycle(state)
+    assert counts(fourth) == (7, 0, 0, 0, 0, 0, 0, 7) and len(engine_calls) == 7
     lines = [r.getMessage() for r in caplog.records if "was not stored" in r.getMessage()]
     assert len(lines) == 2 and sum("month-days" in line for line in lines) == 1 and sum("window-values" in line for line in lines) == 1
 
@@ -788,11 +802,9 @@ async def test_a_stop_ends_the_loop_within_a_second_or_two_and_the_heartbeat_mov
     started = time.monotonic()
     async with running() as (state, task):
         await wait_until(lambda: rows_exist(db))
-        beats = set()
-        for _ in range(4):
-            beats.add(heartbeat_mtime())
-            await asyncio.sleep(0.25)
-        assert len(beats) >= 3  # it moved on (nearly) every look
+        first_beat = heartbeat_mtime()
+        await asyncio.sleep(1.0)  # (ten intervals: not a count of beats, which a loaded host can lose)
+        assert heartbeat_mtime() > first_beat  # the first and the last mtime differ: it kept beating
         stopping = time.monotonic()
         state.stop.set()
         await asyncio.wait_for(task, 5)
@@ -864,11 +876,21 @@ async def test_the_switch_ledger_off_makes_the_loop_write_nothing(db, fast_loop,
 # ---- 14: the targets are the keys the consumers ask for ------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("zone", ["UTC", "Europe/Berlin"])
-async def test_the_targets_contain_every_key_a_widget_a_comparison_and_billing_ask_the_cache_for(db, monkeypatch, zone):
+MID_HOUR = NOW + timedelta(minutes=37, seconds=12)  # a request in the middle of an hour: `this_month`'s window ends at the NEXT whole hour
+SPRING_FORWARD_MONTH = datetime(2026, 3, 29, 12, 20, tzinfo=UTC)  # the day Europe/London changed to summer time (01:00 UTC): a 23-hour day
+
+
+@pytest.mark.parametrize(
+    "zone, now",
+    [
+        ("UTC", NOW), ("Europe/Berlin", NOW), ("UTC", MID_HOUR), ("Europe/Berlin", MID_HOUR),
+        ("Europe/London", SPRING_FORWARD_MONTH),
+    ],
+)
+async def test_the_targets_contain_every_key_a_widget_a_comparison_and_billing_ask_the_cache_for(db, monkeypatch, zone, now):
     ids = await build(db)
     await set_zone(db, zone)
-    monkeypatch.setattr("dcdash.api.billing._now", lambda: NOW)
+    monkeypatch.setattr("dcdash.api.billing._now", lambda: now)
     asked: list[tuple] = []
     real = figure_cache.get_or_compute
 
@@ -877,26 +899,568 @@ async def test_the_targets_contain_every_key_a_widget_a_comparison_and_billing_a
         return await real(db_, kind, start, end, params, compute_fn, **kwargs)
 
     monkeypatch.setattr(figure_cache, "get_or_compute", recorder)
+    local = now.astimezone(ZoneInfo(zone))
+    this_label = f"{local.year:04d}-{local.month:02d}"
+    previous_label = f"{local.year - (local.month == 1):04d}-{(local.month - 2) % 12 + 1:02d}"
     async with get_sessionmaker()() as session:
         for source in ("energy", "cost"):
             for preset in ("this_month", "last_month"):
                 config = validate_config("stat", {"assets": [ids["Hall A"]], "source": source, "aggregation": "sum", "range": preset})
-                await widget_data(session, "stat", config, preset, NOW)  # a plain value widget
-            await widget_data(session, "stat", compare_config(ids["Hall A"], source), "this_month", NOW)  # the comparison
-        await billing.month_costs(session, "2026-03")  # Billing
-        await billing.month_costs(session, "2026-04")
-    keys = {t.key for t in plan_of(MONTHS, zone)}
+                await widget_data(session, "stat", config, preset, now)  # a plain value widget
+            await widget_data(session, "stat", compare_config(ids["Hall A"], source), "this_month", now)  # the comparison
+        await billing.month_costs(session, previous_label)  # Billing
+        await billing.month_costs(session, this_label)
+    plan = plan_of(MONTHS, zone, now)
+    keys = {t.key for t in plan}
     assert asked and set(asked) <= keys, sorted(set(asked) - keys)
-    assert {t.key for t in plan_of(MONTHS, zone) if t.kind == "window-values"} <= set(asked)  # this_month and last_month, energy and cost
-    assert {k for k in asked if k[0] == "month-days"} == {t.key for t in plan_of(2, zone) if t.kind == "month-days"}  # April and March
+    assert {t.key for t in plan if t.kind == "window-values"} <= set(asked)  # this_month and last_month, energy and cost
+    assert {k for k in asked if k[0] == "month-days"} == {t.key for t in plan_of(2, zone, now) if t.kind == "month-days"}  # this month and the one before
     # and what the worker stores for them is what those consumers get: one cycle, then a request served from the rows
-    report = await cycle(make_state(), tz=zone)
+    report = await cycle(make_state(), tz=zone, now=now)
     assert report.written == 7 and report.errors == 0 and report.refused == 0
     await figure_cache.aclear()  # (the requests above filled the in-memory cache: the next one must go to the ledger)
     asked.clear()
     ledger.reset_stats()
     async with get_sessionmaker()() as session:
-        await figures.month_days(session, zone, *month_bounds("2026-03", zone))
+        await figures.month_days(session, zone, *month_bounds(previous_label, zone))
     assert ledger.stats()["hits_exact"] == 1 and asked == [
-        ("month-days", *[m.astimezone(UTC) for m in month_bounds("2026-03", zone)], f'["{zone}"]')
+        ("month-days", *[m.astimezone(UTC) for m in month_bounds(previous_label, zone)], f'["{zone}"]')
     ]
+
+
+# ---- the fixes after the Opus review of Task 4 (I1, I2, M1 to M9, M12) -----------------------------------------------------------
+
+
+def test_the_sleep_after_a_cycle_keeps_a_fixed_rate_and_never_runs_cycles_back_to_back():
+    assert worker.next_delay(30.0, 0.0) == 30.0
+    assert worker.next_delay(30.0, 1.0) == 29.0
+    assert worker.next_delay(30.0, 25.0) == 10.0  # a third of the interval at least
+    assert worker.next_delay(30.0, 100.0) == 10.0
+
+
+async def test_the_loop_sleeps_by_the_time_the_cycle_took(db, fast_loop, monkeypatch):
+    await build(db)
+    seen: list[tuple[float, float]] = []
+    real = worker.next_delay
+
+    def spy(interval, elapsed):
+        seen.append((interval, elapsed))
+        return real(interval, elapsed)
+
+    monkeypatch.setattr(worker, "next_delay", spy)
+    async with running() as (state, task):
+        await wait_until(lambda: len(seen) >= 3)
+    assert {interval for interval, _ in seen} == {0.1}
+    assert seen[0][1] > seen[-1][1]  # the first cycle builds six figures, the last only touches the open rows
+
+
+async def test_a_failing_target_is_retried_at_once_then_rests_longer_each_time_and_a_success_forgets_it(db, clock, monkeypatch):
+    await build(db)
+    real = figures.compute_window_values
+    attempts: list[bool] = []
+    broken = {"on": True}
+
+    async def sometimes(session, first, last, last_day, tz_name, cost):
+        if cost:
+            attempts.append(True)
+            if broken["on"]:
+                raise RuntimeError("boom")
+        return await real(session, first, last, last_day, tz_name, cost)
+
+    monkeypatch.setattr(figures, "compute_window_values", sometimes)
+    state = make_state()
+    cost_key = plan_of(1)[2].key
+    assert cost_key[0] == "window-values" and cost_key[3].endswith("true]")
+    first = await cycle(state, months=1)
+    assert (first.errors, len(attempts)) == (1, 1) and state.failures == {cost_key: 1}
+    second = await cycle(state, months=1)  # the same instant: one prompt retry
+    assert (second.errors, len(attempts)) == (1, 2) and state.failures == {cost_key: 2}
+    assert state.not_before[cost_key] == clock.now + min(worker.RETRY_UNIT * 4, worker.SETTLED_EVERY)  # 240 s
+    clock.now += 100
+    third = await cycle(state, months=1)  # resting: not looked at, not an error
+    assert (third.errors, third.skipped, len(attempts)) == (0, 1, 2)
+    clock.now += 141  # 241 s after the second failure
+    fourth = await cycle(state, months=1)
+    assert (fourth.errors, len(attempts)) == (1, 3) and state.failures == {cost_key: 3}
+    assert state.not_before[cost_key] == clock.now + min(worker.RETRY_UNIT * 8, worker.SETTLED_EVERY)  # 480 s
+    clock.now += 470
+    assert (await cycle(state, months=1)).skipped == 1 and len(attempts) == 3
+    broken["on"] = False
+    clock.now += 11
+    healed = await cycle(state, months=1)
+    assert (healed.errors, len(attempts)) == (0, 4)
+    assert state.failures == {} and state.not_before == {}  # a success forgets it all
+    again = await cycle(state, months=1)  # and the open targets are looked at every cycle again (the rows are current: touched)
+    assert (again.errors, again.touched, again.skipped) == (0, 3, 0) and len(attempts) == 4
+
+
+async def test_after_a_failing_cycle_the_loop_waits_at_least_an_interval_and_failed_targets_do_not_rebuild_every_cycle(
+    db, monkeypatch, engine_calls
+):
+    await build(db)
+    monkeypatch.setattr(worker, "interval_seconds", lambda: 0.4)
+    monkeypatch.setattr(worker, "BACKOFF_FIRST", 0.05)  # (below the interval: the wait starts at the interval)
+    monkeypatch.setattr(worker, "BACKOFF_MAX", 0.3)
+    monkeypatch.setattr(worker, "RETRY_UNIT", 5.0)
+    monkeypatch.setenv("DCDASH_FIGURES_MONTHS", "2")
+    stamps: list[tuple[float, float]] = []
+    real_run_once = worker.run_once
+
+    async def spy(*args, **kwargs):
+        began = time.monotonic()
+        try:
+            return await real_run_once(*args, **kwargs)
+        finally:
+            stamps.append((began, time.monotonic()))
+
+    async def broken_write(*args, **kwargs):
+        raise RuntimeError("the disk is full")  # AFTER the build: every target fails once its figure has been computed
+
+    monkeypatch.setattr(worker, "run_once", spy)
+    monkeypatch.setattr(ledger, "write", broken_write)
+    async with running() as (state, task):
+        await wait_until(lambda: len(stamps) >= 4, timeout=30)
+    gaps = [stamps[i + 1][0] - stamps[i][1] for i in range(2)]  # after the two cycles in which every target failed
+    assert all(gap >= 0.38 for gap in gaps), gaps  # a failing cycle does not retry sooner than an interval (the old 0.05, 0.1 s ... did)
+    assert len(engine_calls) == 12  # six targets, built twice: the first try and the one prompt retry; then they rest (not 24)
+    assert state.failures and set(state.failures.values()) == {2}
+
+
+async def test_a_worker_that_loses_the_lock_in_the_middle_of_a_cycle_stops_writing_and_a_standby_takes_over(db, fast_loop, monkeypatch, caplog):
+    await build(db)
+    caplog.set_level(logging.WARNING, logger=worker.log.name)
+    looks: list[tuple] = []
+    real_look = worker._look
+    standby = worker.AdvisoryLock(get_settings().database_url)
+    cut = {"done": False}
+
+    async def spy(session_factory, target, report, guard=None):
+        result = await real_look(session_factory, target, report, guard)
+        looks.append(target.key)
+        if not cut["done"]:
+            cut["done"] = True  # after the first target: the lock connection is cut, and another worker takes the lock
+            await db.fetchval(
+                "SELECT count(pg_terminate_backend(pid)) FROM pg_locks WHERE locktype = 'advisory' AND classid::bigint = $1 AND granted",
+                worker.LOCK_SPACE,
+            )
+            await wait_until(standby.ensure, timeout=10)
+        return result
+
+    monkeypatch.setattr(worker, "_look", spy)
+    try:
+        async with running() as (state, task):
+            await wait_until(lambda: cut["done"])
+            await asyncio.sleep(1.0)  # about ten intervals, with the standby holding the lock
+            assert len(looks) == 1 and await db.fetchval("SELECT count(*) FROM figure_ledger") == 1  # no further target, no further write
+            assert not task.done()
+            assert any("advisory lock was lost" in r.getMessage() for r in caplog.records)
+            await standby.close()  # the standby goes away: the worker takes the lock again and finishes the job
+            await wait_until(lambda: row_count_is(db, 6))
+    finally:
+        await standby.close()
+
+
+async def test_the_cycle_ends_without_a_clean_up_when_the_lock_is_gone_before_it(db):
+    await build(db)
+    stale = ("month-days", datetime(2020, 1, 1, tzinfo=UTC), datetime(2020, 2, 1, tzinfo=UTC), '["UTC"]')
+    await plant(stale, shift=timedelta(minutes=-5))
+
+    class Gone:
+        async def held_now(self) -> bool:
+            return False
+
+    report = await worker.run_once(get_sessionmaker(), NOW, TZ, 1, make_state(), lock=Gone())
+    assert report.lost_lock and counts(report)[1:3] == (0, 0) and report.deleted == 0
+    assert set(await by_key(db)) == {stale}  # nothing written, the row that is no target was not deleted either
+
+
+async def test_the_lock_probe_says_no_for_a_closed_or_a_silent_connection_and_forgets_the_lock(db, monkeypatch):
+    url = get_settings().database_url
+    lock = worker.AdvisoryLock(url)
+    try:
+        assert await lock.held_now() is False  # never connected
+        assert await lock.ensure() is True and await lock.held_now() is True
+        lock.conn.terminate()
+        assert await lock.held_now() is False and lock.conn is None and lock.held is False
+        await wait_until(lock.ensure, timeout=10)  # connects again and takes the lock again (the old session may need a moment to go)
+        assert lock.held
+        terminated = []
+
+        class Silent:
+            def is_closed(self) -> bool:
+                return False
+
+            async def fetchval(self, *args):
+                await asyncio.sleep(100)
+
+            def terminate(self) -> None:
+                terminated.append(True)
+
+        real = lock.conn
+        monkeypatch.setattr(worker, "LOCK_PROBE_SECONDS", 0.05)
+        lock.conn = Silent()
+        assert await lock.held_now() is False and terminated == [True] and lock.conn is None
+        real.terminate()
+    finally:
+        await lock.close()
+
+
+async def test_the_engine_and_the_lock_connection_have_timeouts_keepalives_and_a_pool_of_one(db, fast_loop, monkeypatch):
+    await build(db)
+    engine_kwargs: dict = {}
+    real_engine = worker.create_async_engine
+
+    def engine_spy(url, **kwargs):
+        engine_kwargs.update(kwargs)
+        return real_engine(url, **kwargs)
+
+    monkeypatch.setattr(worker, "create_async_engine", engine_spy)
+    async with running() as (state, task):
+        await wait_until(lambda: rows_exist(db))
+    assert engine_kwargs["pool_size"] == 1 and engine_kwargs["max_overflow"] == 0
+    connect_args = engine_kwargs["connect_args"]
+    assert connect_args["timeout"] == worker.CONNECT_TIMEOUT and connect_args["command_timeout"] == worker.COMMAND_TIMEOUT
+    assert connect_args["server_settings"] == {"statement_timeout": "120s", "lock_timeout": "5s", "idle_in_transaction_session_timeout": "300s"}
+    assert all(isinstance(value, str) for value in connect_args["server_settings"].values())
+    # the lock connection: the same command timeout and the keepalives, and the server accepts all of them
+    seen: dict = {}
+
+    async def connect_spy(dsn, **kwargs):
+        seen.update(kwargs)
+        return await asyncpg.connect(dsn, **kwargs)
+
+    lock = worker.AdvisoryLock(get_settings().database_url, connect=connect_spy)
+    try:
+        assert await lock.ensure() is True
+        assert seen["command_timeout"] == worker.COMMAND_TIMEOUT and seen["timeout"] == worker.CONNECT_TIMEOUT
+        assert seen["server_settings"] == {"tcp_keepalives_idle": "30", "tcp_keepalives_interval": "10", "tcp_keepalives_count": "3"}
+        assert await lock.conn.fetchval("SHOW tcp_keepalives_idle") == "30"
+        worker_session = await asyncpg.connect(get_settings().database_url, server_settings=connect_args["server_settings"])
+        try:
+            assert await worker_session.fetchval("SHOW statement_timeout") == "2min"
+            assert await worker_session.fetchval("SHOW lock_timeout") == "5s"
+        finally:
+            await worker_session.close()
+    finally:
+        await lock.close()
+
+
+def test_a_routine_cycle_is_a_debug_line_one_summary_comes_every_ten_minutes_and_a_failing_cycle_says_so_at_once(clock, caplog):
+    caplog.set_level(logging.DEBUG, logger=worker.log.name)
+    state = worker.WorkerState()
+
+    def mine() -> list[logging.LogRecord]:
+        return [r for r in caplog.records if r.name == worker.log.name]
+
+    worker._log_report(worker.Report(targets=7, written=3, skipped=4, duration=1.5, oldest_open_age=12.0), state)
+    assert [r.levelno for r in mine()] == [logging.DEBUG]
+    assert "in 1.5 s" in mine()[0].getMessage() and "oldest open row 12 s" in mine()[0].getMessage()
+    clock.now += 300
+    worker._log_report(worker.Report(targets=7, touched=3, skipped=4, duration=0.2, oldest_open_age=31.0), state)
+    assert [r.levelno for r in mine()] == [logging.DEBUG, logging.DEBUG]  # nothing at INFO for routine cycles
+    clock.now += 301
+    worker._log_report(worker.Report(targets=7, written=1, touched=2, skipped=4, duration=4.0, oldest_open_age=5.0), state)
+    infos = [r.getMessage() for r in mine() if r.levelno == logging.INFO]
+    assert len(infos) == 1
+    assert "3 cycles" in infos[0] and "4 written" in infos[0] and "5 touched" in infos[0] and "longest cycle 4.0 s" in infos[0]
+    assert "oldest open row 31 s old" in infos[0]
+    worker._log_report(worker.Report(targets=7, touched=3, skipped=4), state)  # the next summary starts afresh
+    assert len([r for r in mine() if r.levelno == logging.INFO]) == 1 and state.summary.cycles == 1
+    # a cycle with errors, or with refused values, is a warning at once; one line per kind per minute
+    worker._log_report(worker.Report(targets=7, errors=2, written=1), state)
+    worker._log_report(worker.Report(targets=7, errors=2, written=1), state)
+    worker._log_report(worker.Report(targets=7, refused=7), state)
+    warnings = [r.getMessage() for r in mine() if r.levelno == logging.WARNING]
+    assert len(warnings) == 2 and "2 of 7 targets failed" in warnings[0] and "7 values were not stored" in warnings[1]
+    clock.now += 61
+    worker._log_report(worker.Report(targets=7, errors=1), state)
+    assert len([r for r in mine() if r.levelno == logging.WARNING]) == 3
+
+
+async def test_a_running_loop_logs_its_start_and_stop_at_info_and_nothing_routine(db, fast_loop, caplog):
+    await build(db)
+    caplog.set_level(logging.INFO, logger=worker.log.name)
+    async with running() as (state, task):
+        await wait_until(lambda: rows_exist(db))
+        await asyncio.sleep(0.6)  # about six cycles after the first one wrote its rows
+    messages = [r.getMessage() for r in caplog.records if r.name == worker.log.name and r.levelno == logging.INFO]
+    assert messages == ["figures worker started", "figures worker stopped"]
+
+
+async def test_the_report_carries_the_cycles_duration_and_the_age_of_the_oldest_open_row_it_refreshed(db, clock):
+    await build(db)
+    state = make_state()
+    first = await cycle(state)
+    assert first.oldest_open_age is None and first.duration == 0.0  # (no row existed yet; the manual clock does not move)
+    second = await cycle(state)
+    assert second.touched == 3 and second.oldest_open_age is not None and 0.0 <= second.oldest_open_age < 60.0
+    await db.execute("UPDATE figure_ledger SET snapshot_at = snapshot_at - interval '100 seconds', checked_at = checked_at - interval '100 seconds'")
+    third = await cycle(state)
+    assert 100.0 <= third.oldest_open_age < 160.0  # the OPEN rows (the settled ones are not counted) were 100 s old when refreshed
+
+
+async def test_in_a_long_cycle_the_open_targets_are_looked_at_again_between_the_settled_ones(db, clock, monkeypatch):
+    await build(db)
+    monkeypatch.setattr(worker, "interval_seconds", lambda: 5.0)
+    state = make_state()
+    await cycle(state)
+    clock.now += 1
+    await db.execute("UPDATE tariffs SET rate_per_kwh = rate_per_kwh + 0.01")  # a configuration change: every target is due
+    order: list[tuple] = []
+    real_look = worker._look
+    real_month = figures.compute_month_days
+    march = month_bounds("2026-03", TZ)[0]
+
+    async def spy(session_factory, target, report, guard=None):
+        order.append(target.key)
+        return await real_look(session_factory, target, report, guard)
+
+    async def slow(session, tz_name, start, end):
+        if start == march:
+            clock.now += 10  # the March build "takes" ten seconds
+        return await real_month(session, tz_name, start, end)
+
+    monkeypatch.setattr(worker, "_look", spy)
+    monkeypatch.setattr(figures, "compute_month_days", slow)
+    report = await cycle(state)
+    keys = [t.key for t in plan_of()]  # April, this_month x2 (open), March, last_month x2, February (settled)
+    assert order == keys[0:4] + keys[0:3] + keys[4:7]  # the three open ones again after March: their rows were ten seconds old
+    assert report.errors == 0 and report.written >= 7
+
+
+async def test_a_configuration_that_moved_and_came_back_during_a_cycle_leaves_everything_due_for_the_next_one(db, clock, monkeypatch):
+    await build(db)
+    real_month, real_window = figures.compute_month_days, figures.compute_window_values
+    flips: list[str] = []
+
+    async def rename_away(session, tz_name, start, end):
+        if not flips:
+            flips.append("away")  # after this target read its snapshot: the configuration moves
+            await db.execute("UPDATE assets SET name = 'Annexx' WHERE name = 'Annex'")
+        return await real_month(session, tz_name, start, end)
+
+    async def rename_back(session, first, last, last_day, tz_name, cost):
+        if flips == ["away"]:
+            flips.append("back")  # and after the next target read ITS snapshot (labelled with the other one): it comes back
+            await db.execute("UPDATE assets SET name = 'Annex' WHERE name = 'Annexx'")
+        return await real_window(session, first, last, last_day, tz_name, cost)
+
+    monkeypatch.setattr(figures, "compute_month_days", rename_away)
+    monkeypatch.setattr(figures, "compute_window_values", rename_back)
+    state = make_state()
+    start_config = await config_fp()
+    first = await cycle(state)
+    assert flips == ["away", "back"] and first.written == 7 and await config_fp() == start_config
+    assert len({row["config_fp"] for row in await rows(db)}) == 2  # the targets in between were labelled with the other one
+    assert state.config_fp_seen is None  # so the cycle remembers NO configuration
+    second = await cycle(state)
+    assert second.skipped == 0  # every target, settled ones too, is looked at again
+    assert {row["config_fp"] for row in await rows(db)} == {start_config}
+    assert state.config_fp_seen == start_config
+    assert (await cycle(state)).skipped == 4  # and now the settled ones rest again
+
+
+async def test_a_relabel_is_tried_only_for_a_row_of_the_same_configuration_and_compares_by_digest(db, clock, monkeypatch):
+    await build(db)
+    calls: list[tuple] = []
+    real = worker._relabel
+
+    async def spy(session, target, payload, **kwargs):
+        calls.append(target.key)
+        return await real(session, target, payload, **kwargs)
+
+    monkeypatch.setattr(worker, "_relabel", spy)
+    state = make_state()
+    await cycle(state)
+    assert calls == []  # no row yet: the write goes straight
+    await db.execute("UPDATE tariffs SET rate_per_kwh = rate_per_kwh + 0.01")  # another configuration: no row can be the same bytes
+    report = await cycle(state)
+    assert calls == [] and report.written == 7
+    monkeypatch.setattr(ledger, "engine_id", lambda: "another-build")
+    clock.now += worker.SETTLED_EVERY + 1
+    report = await cycle(state)
+    assert len(calls) == 7 and report.unchanged == 7  # the same configuration, new engine: relabelled by digest
+    sql = worker._RELABEL.text
+    assert ":payload" not in sql and "size_bytes = :size AND sha256(payload) = :digest" in sql  # no payload travels to be compared
+
+
+# ---- the next hour's keys (M6) -------------------------------------------------------------------------------------------------
+
+
+def test_the_next_hours_keys_are_added_only_in_the_last_minute_and_a_half_before_a_boundary():
+    def extra(now: datetime) -> list[worker.Target]:
+        return worker.upcoming_targets(now, TZ, MONTHS, worker.targets(now, TZ, MONTHS), 30.0)
+
+    before = NOW - timedelta(seconds=20)  # 09:59:40
+    more = extra(before)
+    assert [(t.kind, t.start, t.end) for t in more] == [("window-values", datetime(2026, 4, 1, tzinfo=UTC), NOW + HOUR)] * 2
+    this_month = [t for t in worker.targets(before, TZ, MONTHS) if t.kind == "window-values"][:2]
+    assert {t.end for t in this_month} == {NOW}  # the plan's own keys end at the boundary; the extras one hour later
+    assert [t.spec.params for t in more] == ['["2026-04-08","UTC",false]', '["2026-04-08","UTC",true]']
+    assert extra(NOW) == []  # exactly on a boundary nothing is coming
+    assert extra(NOW - timedelta(seconds=90)) == [] and len(extra(NOW - timedelta(seconds=89))) == 2  # 2 * 30 s + 30 s
+    assert extra(NOW - timedelta(minutes=10)) == [] and extra(NOW - timedelta(minutes=30)) == []
+    last_hour = datetime(2026, 4, 30, 23, 59, 30, tzinfo=UTC)  # the last hour of April: the new month's keys come too
+    new_month = datetime(2026, 5, 1, 0, 0, 5, tzinfo=UTC)
+    assert {t.key for t in extra(last_hour)} == {t.key for t in worker.targets(new_month, TZ, MONTHS)} - {
+        t.key for t in worker.targets(last_hour, TZ, MONTHS)
+    }
+    assert {t.kind for t in extra(last_hour)} == {"month-days", "window-values"}
+
+
+async def test_the_first_request_of_a_new_hour_is_served_from_a_row_built_before_the_boundary_and_the_extras_become_the_plan(db):
+    ids = await build(db)
+    state = make_state()
+    before = NOW - timedelta(seconds=20)
+    first = await cycle(state, now=before)
+    assert (first.targets, first.written, first.errors) == (7, 9, 0)  # the plan's seven and the two keys of the next hour
+    plan_before = plan_of(now=before)
+    extras = worker.upcoming_targets(before, TZ, MONTHS, plan_before, worker.interval_seconds())
+    assert {key_of(r) for r in await rows(db)} == {t.key for t in plan_before} | {t.key for t in extras}  # none is cleaned up
+    await figure_cache.aclear()
+    ledger.reset_stats()
+    after = NOW + timedelta(seconds=5)  # a kiosk's first refresh of the new hour
+    async with get_sessionmaker()() as session:
+        for source in ("energy", "cost"):
+            config = validate_config("stat", {"assets": [ids["Hall A"]], "source": source, "aggregation": "sum", "range": "this_month"})
+            await widget_data(session, "stat", config, "this_month", after)
+    assert ledger.stats()["hits_exact"] == 2 and ledger.stats()["misses"] == 0  # a hit, not a miss
+    assert figure_cache.stats()["computes"] == 0
+    # the cycle after the boundary: the extras are the plan now, only touched; the old keys are gone
+    plan_after = plan_of(now=after)
+    second = await cycle(state, now=after)
+    assert (second.written, second.errors, second.deleted) == (0, 0, 2)
+    assert {key_of(r) for r in await rows(db)} == {t.key for t in plan_after}
+
+
+# ---- stopping: one deadline (M2) ------------------------------------------------------------------------------------------------
+
+
+async def test_a_stop_is_seen_by_a_wait_for_the_lock_that_never_ends(db, fast_loop, monkeypatch):
+    async def never(self):
+        await asyncio.sleep(1000)
+
+    monkeypatch.setattr(worker.AdvisoryLock, "ensure", never)
+    started = time.monotonic()
+    async with running() as (state, task):
+        await asyncio.sleep(0.3)
+        state.stop.set()
+        await asyncio.wait_for(task, 5)
+    assert time.monotonic() - started < 4 and task.exception() is None
+
+
+async def test_a_stop_is_seen_by_a_wait_for_the_site_zone_that_never_ends(db, fast_loop, monkeypatch):
+    async def never(sessions):
+        await asyncio.sleep(1000)
+
+    monkeypatch.setattr(worker, "_site_zone", never)
+    started = time.monotonic()
+    async with running() as (state, task):
+        await asyncio.sleep(0.3)
+        state.stop.set()
+        await asyncio.wait_for(task, 5)
+    assert time.monotonic() - started < 4 and task.exception() is None
+
+
+async def test_the_wait_for_a_target_and_the_closing_share_one_deadline_counted_from_the_signal(db, fast_loop, monkeypatch, caplog):
+    await build(db)
+    caplog.set_level(logging.WARNING, logger=worker.log.name)
+    monkeypatch.setattr(worker, "WORKER_SHUTDOWN_SECONDS", 3.0)
+    monkeypatch.setattr(worker, "CLOSE_RESERVE_SECONDS", 1.0)
+    entered = asyncio.Event()
+
+    async def hangs(session, tz_name, start, end):
+        entered.set()
+        await asyncio.sleep(1000)
+
+    monkeypatch.setattr(figures, "compute_month_days", hangs)
+    async with running() as (state, task):
+        await asyncio.wait_for(entered.wait(), 20)
+        stopping = time.monotonic()
+        state.request_stop()
+        await asyncio.wait_for(task, 10)
+        took = time.monotonic() - stopping
+    # the target got until deadline - reserve (2 s), was cancelled, and the closing followed: well inside the 3 s deadline plus
+    # the closing's own minimum
+    assert 1.0 <= took < worker.WORKER_SHUTDOWN_SECONDS + worker.CLOSE_MIN_SECONDS + worker.ABANDON_SECONDS + 1
+    assert any("did not finish in time" in r.getMessage() for r in caplog.records)
+
+
+def test_the_deadline_starts_when_the_stop_is_first_seen_whoever_sets_the_flag():
+    state = worker.WorkerState()
+    state.request_stop()
+    first = state.deadline()
+    assert first == state.stop_at + worker.WORKER_SHUTDOWN_SECONDS and state.deadline() == first
+    other = worker.WorkerState()
+    other.stop.set()  # a test (or any code) that sets the flag directly: the first look at the deadline starts it
+    assert other.stop_at is None
+    assert abs(other.deadline() - time.monotonic() - worker.WORKER_SHUTDOWN_SECONDS) < 1.0 and other.stop_at is not None
+
+
+async def _run_main(monkeypatch, *, nice=None):
+    """`worker.main()` with a stand-in for the loop, in its own thread (`asyncio.run` needs a thread without a running loop)."""
+    nices: list[int] = []
+    exits: list[int] = []
+
+    def fake_nice(increment):
+        nices.append(increment)
+        if nice is not None:
+            raise nice
+        return increment
+
+    async def fake_amain(state):
+        compute.shutdown()  # (what the real loop does last: an idle compute thread of an earlier test must not look busy)
+        state.stop.set()
+
+    monkeypatch.setattr(os, "nice", fake_nice)
+    monkeypatch.setattr(worker, "configure_logging", lambda: None)
+    monkeypatch.setattr(worker, "amain", fake_amain)
+    monkeypatch.setattr(worker, "_hard_exit", exits.append)
+    await asyncio.to_thread(worker.main)
+    return nices, exits
+
+
+async def test_main_lowers_the_priority_and_leaves_quietly_when_no_computation_is_running(monkeypatch):
+    nices, exits = await _run_main(monkeypatch)
+    assert nices == [10] and exits == []
+
+
+@pytest.mark.parametrize("failure", [OSError("not permitted"), AttributeError("no os.nice here")])
+async def test_main_goes_on_when_the_priority_cannot_be_lowered(monkeypatch, failure):
+    nices, exits = await _run_main(monkeypatch, nice=failure)
+    assert nices == [10] and exits == []
+
+
+async def test_main_ends_the_process_when_a_compute_thread_is_still_busy_at_the_deadline(monkeypatch):
+    monkeypatch.setattr(worker, "WORKER_SHUTDOWN_SECONDS", 0.3)
+    monkeypatch.setattr(worker, "EXIT_JOIN_SECONDS", 0.1)
+    release = threading.Event()
+    busy = threading.Thread(target=release.wait, name="dcdash-compute_7", daemon=True)
+    busy.start()
+    try:
+        nices, exits = await _run_main(monkeypatch)
+    finally:
+        release.set()
+        busy.join(5)
+    assert exits == [0]
+
+
+async def test_main_does_not_end_the_process_for_a_compute_thread_that_finishes_inside_the_deadline(monkeypatch):
+    monkeypatch.setattr(worker, "WORKER_SHUTDOWN_SECONDS", 3.0)
+    release = threading.Event()
+    busy = threading.Thread(target=release.wait, name="dcdash-compute_8", daemon=True)
+    busy.start()
+    threading.Timer(0.2, release.set).start()
+    try:
+        nices, exits = await _run_main(monkeypatch)
+    finally:
+        release.set()
+        busy.join(5)
+    assert exits == []
+
+
+def test_the_worst_case_of_a_stop_is_the_sum_of_its_named_parts():
+    assert worker.WORST_STOP_SECONDS == (
+        worker.WORKER_SHUTDOWN_SECONDS + worker.CLOSE_MIN_SECONDS + worker.ABANDON_SECONDS + worker.EXIT_JOIN_SECONDS
+    )
+    assert worker.CLOSE_RESERVE_SECONDS < worker.WORKER_SHUTDOWN_SECONDS
