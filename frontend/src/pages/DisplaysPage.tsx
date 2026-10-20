@@ -41,8 +41,8 @@ const NEEDS_PLAYLIST = "Make a playlist first";
  * Playlists), a "Screens" card and a "Playlists" card, the whole width of the page. "New display" waits for a first playlist (aria-disabled with its reason as a
  * tip, never natively disabled). Revoke, Delete and the playlist delete go through `ConfirmDeleteDialog` with the request inside it, so a refusal stays in the
  * dialog, starting with a capital. The playlist delete keeps its refusal (a screen still shows it: 409 with at most three names) in a slot of its own between
- * the message and the buttons, which is there, empty, before the answer comes (for a playlist a screen shows) and scrolls past six lines, so Cancel and Delete
- * do not jump. After a delete took the focused trash button away, the focus goes to the heading.
+ * the message and the buttons, which for a playlist a screen shows is a fixed five lines high (empty before the answer comes, scrolling when the text is longer),
+ * so Cancel and Delete never jump. After a delete took the focused trash button away, the focus goes to the heading.
  */
 export function DisplaysPage() {
   const list = useDisplays();

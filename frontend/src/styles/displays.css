@@ -28,11 +28,12 @@
   /* The small dialogs and the two steps of New display. The message slot keeps its height with no text, so a refusal landing does not move the buttons. */
   .displays-dialog { width: min(560px, 100%); }
   .displays-error { min-height: 2lh; }
-  /* The refusal of a playlist delete (the screens that still show it), in its own slot of the confirmation: three lines are kept free before it lands for a
-     playlist a screen shows, so Cancel and Delete stay put; a longer text grows up to six lines and then scrolls inside the slot, never taller. With no
-     screen showing the playlist and no text, the slot is not drawn at all (an empty grid row would still add a gap). */
+  /* The refusal of a playlist delete (the screens that still show it), in its own slot of the confirmation. For a playlist a screen shows (the refusal is
+     expected) the slot is a fixed five lines high before and after the answer, so Cancel and Delete never move, and a longer text scrolls inside it (the
+     server names at most three screens, about four lines for ordinary names). With no screen showing the playlist and no text, the slot is not drawn at all
+     (an empty grid row would still add a gap); a text that arrives there anyway (a stale list) grows the slot up to six lines, then scrolls. */
   .displays-refusal { max-height: 6lh; overflow-y: auto; overflow-wrap: anywhere; }
-  .displays-refusal-reserved { min-height: 3lh; }
+  .displays-refusal-reserved { height: 5lh; max-height: none; }
   .displays-refusal:empty:not(.displays-refusal-reserved) { display: none; }
   .displays-link { font-family: var(--font-mono); font-size: var(--fs-sm); word-break: break-all; }
   .displays-copy-row { display: flex; align-items: center; gap: 12px; }

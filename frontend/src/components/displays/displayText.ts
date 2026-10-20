@@ -16,11 +16,13 @@ export function focusRefusal(error: unknown, applies: boolean): unknown {
 }
 
 const IN_USE_ADVICE = "Change their playlist or delete them first.";
+/** The server's own advice, for one screen ("Change its playlist or delete it first.") or several ("Change their playlist or delete them first."). */
+const ADVICE_GIVEN = /change (its|their) playlist or delete (it|them) first/i;
 
-/** What a refused playlist delete says: the server's sentence with a capital and a full stop, and, for the 409 (a screen still shows it), what to do about it. */
+/** What a refused playlist delete says: the server's sentence with a capital and a full stop, and, for the 409 (a screen still shows it), what to do about it unless the server already said. */
 export function playlistDeleteRefusal(error: unknown): string {
   const text = sentence(error instanceof Error ? error.message : String(error));
-  return error instanceof ApiError && error.status === 409 && !text.includes(IN_USE_ADVICE) ? `${text} ${IN_USE_ADVICE}` : text;
+  return error instanceof ApiError && error.status === 409 && !ADVICE_GIVEN.test(text) ? `${text} ${IN_USE_ADVICE}` : text;
 }
 
 /** What the answer says in place of a name the caller may not read (the server sends null for it); only for a thing that exists. */

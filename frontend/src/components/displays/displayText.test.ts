@@ -119,6 +119,13 @@ describe("playlistDeleteRefusal: the sentence a refused playlist delete shows", 
     expect(playlistDeleteRefusal(new ApiError(409, text))).toBe("This playlist is shown by 10 screens: A, B, C and 7 more. Change their playlist or delete them first.");
   });
 
+  it("does not say it twice for one screen either (the server's singular advice), nor for a screen it does not name", () => {
+    expect(playlistDeleteRefusal(new ApiError(409, "this playlist is shown by 1 screen: Hall TV. Change its playlist or delete it first.")))
+      .toBe("This playlist is shown by 1 screen: Hall TV. Change its playlist or delete it first.");
+    expect(playlistDeleteRefusal(new ApiError(409, "this playlist is shown by a screen. Change its playlist or delete it first.")))
+      .toBe("This playlist is shown by a screen. Change its playlist or delete it first.");
+  });
+
   it("adds no advice to another refusal, only the capital and the full stop", () => {
     expect(playlistDeleteRefusal(new ApiError(404, "playlist not found"))).toBe("Playlist not found.");
     expect(playlistDeleteRefusal(new ApiError(403, "insufficient permission"))).toBe("Your role does not allow this.");
