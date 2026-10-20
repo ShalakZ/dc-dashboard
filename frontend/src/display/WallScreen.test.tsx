@@ -1,7 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import type { WidgetData } from "../api/types";
 import { markerHint } from "../lib/widgetFormat";
 import { compareSeriesData, compareStatData, config, dataFor, seriesData, valueRow, valuesData } from "../test/dashboardFixtures";
+import { parseRules, stripComments } from "../test/cssTools";
 import { manualTimers } from "../test/manualTimers";
 import type { DisplayItem, DisplayWidget } from "./displayApi";
 import { fitWall, naturalHeight } from "./fit";
@@ -126,17 +128,24 @@ describe("the legend", () => {
     expect(legend(view.container)).toBeNull();
   });
 
-  it("uses the app's own words for the marks the cards carry, with the full text as its title", () => {
+  it("writes its own short words for the marks the cards carry (two spaces apart, no commas), with the app's full text as its title", () => {
     const estimated = answered(valuesData({ values: [valueRow({ estimated: true })] }));
     const fake = show({ cards: { ...POWER_CARDS, 1: estimated } });
-    const text = markerHint({ estimated: true, partial: false });
-    expect(legend(fake.view.container)).toHaveTextContent(text);
-    expect(legend(fake.view.container)).toHaveAttribute("title", text);
+    expect(legend(fake.view.container)?.textContent).toBe("~ estimated");
+    expect(legend(fake.view.container)).toHaveAttribute("title", markerHint({ estimated: true, partial: false }));
     fake.set({ cards: { ...POWER_CARDS, 1: estimated, 2: answered(valuesData({ type: "table", values: [valueRow({ partial: true })] })) } });
-    const both = markerHint({ estimated: true, partial: true });
-    expect(both).toContain("~ estimated");
-    expect(both).toContain("* partial");
-    expect(legend(fake.view.container)).toHaveTextContent(both);
+    expect(legend(fake.view.container)?.textContent).toBe("~ estimated  * partial");
+    expect(legend(fake.view.container)).toHaveAttribute("title", markerHint({ estimated: true, partial: true }));
+  });
+
+  it("shows all three marks, the dash included, in under 40 characters, and never a title shorter than the text it shows", () => {
+    const noRate = answered(valuesData({ source: "cost", values: [valueRow({ value: null, estimated: true, partial: true })] }));
+    const { view } = show({ cards: { ...POWER_CARDS, 1: noRate } });
+    const shown = legend(view.container);
+    expect(shown?.textContent).toBe("~ estimated  * partial  \u2014 no rate");
+    expect(shown!.textContent!.length).toBeLessThan(40);
+    expect(shown).toHaveAttribute("title", markerHint({ estimated: true, partial: true, noRate: true }));
+    expect(shown!.getAttribute("title")!.length).toBeGreaterThanOrEqual(shown!.textContent!.length);
   });
 
   it("clears when the card that carried the mark no longer does", () => {
@@ -381,6 +390,7 @@ describe("the cards of one dashboard", () => {
     expect(screen.getByText(/This card could not be loaded\./)).toBeInTheDocument();
     expect(screen.getByText("Not updated since 14:02")).toBeInTheDocument();
     expect(view.container.querySelectorAll(".wall-card-stale")).toHaveLength(1);
+    expect(view.container.textContent).not.toMatch(/tries again|could not be refreshed/); // the stale card says it by its dim and its tag alone
   });
 
   it("passes the item's focus to the cards that follow it", () => {
@@ -390,5 +400,35 @@ describe("the cards of one dashboard", () => {
       cards: { 1: answered(dataFor("stat")), 2: answered(dataFor("stat")) },
     });
     expect(screen.getAllByText("Its own assets, not Hall 1")).toHaveLength(1); // the card with its own assets; the one that follows the focus has none to say
+  });
+});
+
+describe("the header and the type floors in the stylesheet (the browser measures them; these pin what the rules say)", () => {
+  const rules = parseRules(stripComments(readFileSync("src/styles/display-wall.css", "utf8"))); // vitest runs from the frontend directory
+  const body = (selector: string, at: (a: string[]) => boolean = (a) => a.length === 1) => rules.find((r) => r.selector === selector && at(r.at))?.body ?? "";
+
+  it("gives the right part of the header the wider column, and lets the legend keep its two spaces", () => {
+    expect(body(".wall-head")).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1\.6fr\)/);
+    expect(body(".wall-legend")).toMatch(/white-space:\s*pre\b/);
+    expect(body(".wall-legend")).toMatch(/min-width:\s*0/);
+    expect(body(".wall-meta")).toMatch(/min-width:\s*0/);
+  });
+
+  it("drops 'Updated' and then the place in a narrow strip, by the strip's own width (never over a neighbour)", () => {
+    expect(body(".wall-head")).toMatch(/container-type:\s*inline-size/);
+    expect(rules.find((r) => r.selector === ".wall-updated" && r.at.some((a) => a.startsWith("@container")))?.body).toMatch(/display:\s*none/);
+    expect(rules.find((r) => r.selector === ".wall-position" && r.at.some((a) => a.startsWith("@container")))?.body).toMatch(/display:\s*none/);
+    for (const part of [".wall-title", ".wall-position", ".wall-meta"]) expect(body(part), part).toMatch(/grid-column:\s*[123]/);
+  });
+
+  it("aims a table's figures and a stat's comparison figure at 32px per 1080 rows, held at 24 logical px", () => {
+    const figures = body('.wall-canvas td.num, .wall-canvas [class~="stat-last-fig"]');
+    expect(figures).toMatch(/font-size:\s*clamp\(var\(--fs-base\),\s*calc\(32px \* var\(--wall-unit\) \/ var\(--wall-s\)\),\s*24px\)/);
+  });
+
+  it("gives the three note lines a line that follows their raised text, so a descender is not cut", () => {
+    const notes = body('.wall-canvas [class~="stat-window"], .wall-canvas [class~="stat-note"], .wall-canvas [class~="bars-note"]');
+    expect(notes).toMatch(/line-height:\s*1\.25/);
+    expect(notes).toMatch(/overflow:\s*visible/); // a clipping box could still shave a descender (Segoe UI has little room below the baseline at 1.25)
   });
 });

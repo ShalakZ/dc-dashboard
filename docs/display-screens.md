@@ -140,7 +140,7 @@ bars. The mouse pointer hides after 3 seconds without a move.
 - The cards are the ones on the dashboard, in the same places and with the same figures. They have no download button, no details and no
   "Split by" choice. The marks of the app stay on the figures: `~` for an estimate, `*` for a partial figure.
 - A few seconds before a dashboard's turn the screen fetches its figures, and shows it when they have arrived (after 5 seconds at most),
-  so cards do not appear empty.
+  so cards do not appear empty. A card that keeps failing never stops the other cards from loading.
 
 ### The header
 
@@ -148,8 +148,10 @@ A thin strip along the top, never more than 4.5 percent of the screen's height:
 
 - On the left, the dashboard's name. If the playlist item has a focus asset, its name follows after a comma: "Power, Hall 1".
 - In the middle, "2 of 3": the place among the dashboards that are shown (a skipped one is not counted).
-- On the right, a short key to the marks, such as "~ estimated" and "* partial", only while a figure on screen carries one; then
-  "Updated 14:02" and the clock.
+- On the right, a short key to the marks that the figures on screen carry, written in short words, two spaces apart: "~ estimated",
+  "* partial" and "— no rate" (a dash where a cost has no rate). Only the marks that appear on screen are in it, and the whole key is
+  missing when no figure carries one. Then "Updated 14:02" and the clock. In a narrow window or one turned upright, "Updated" goes first
+  and then the place ("2 of 3"), so nothing is ever drawn over something else.
 
 "Updated" is the time of the OLDEST figure on screen, not the newest, so one old card cannot hide behind fresh ones. Times are in the
 site's time zone and come from the server's clock, not the screen's: a PC with a dead clock battery still shows the right time.
@@ -181,6 +183,8 @@ dashboard. Only one shows at a time, and it goes away by itself on the first ans
   server that lasts a few seconds, or one failed request, never shows it. The screen keeps trying and shows its last figures dimmed.
 
 A single card whose own figures could not be refreshed for two minutes is dimmed and says "Not updated since 14:02" at the top of the card.
+The dimming and that one line are the whole message: the figures stay and no sentence is added under them. A card that has never had its
+figures and fails says "This card could not be loaded." and the screen keeps asking for them.
 A card the server refuses to give figures for, or one that fails to draw, says "This card cannot be shown."; the other cards go on.
 Once a dashboard has been drawn, a lost connection or a restarting server never replaces the whole screen with a sentence (a revoked
 link still does).
@@ -196,28 +200,39 @@ The text is sized for someone about 3 metres away. A 55-inch TV is about 685 mm 
 0.63 mm. The screen makes every text at least **24 pixels for each 1,080 rows of the window**: capital letters about 11 mm tall on a
 55-inch TV (13 mm on a 65-inch), enough to glance at a label from 3 metres. The header, the notices and the figures get at least
 **32 pixels** for each 1,080 rows, capitals about 14 mm, which is the size usual guidance gives for text that must be read at that
-distance. A 4K window is twice as many pixels tall, so the same limits are twice as many pixels, and the picture looks the same.
+distance. That holds for the header, the notices and the big figure of a stat. The values of a table and the
+comparison figure of a stat aim at 32 as well, but a table row has room for 24 pixels of the dashboard's own size at most, so they
+reach the full 32 only when the dashboard is scaled up by a third or more, and measure between 24 and 32 when it is shown at its own
+size or larger. A 4K window is twice as many pixels tall, so the same limits are twice as many pixels, and the picture looks the same.
 A TV at 3840 x 2160 with Windows scaling at 200 percent counts as 1920 x 1080 to the page and looks the same too.
 
-The one exception is the small numbers and dates around a chart (the axis labels). They only follow the scaling, so on the Power
-template at 1,080 rows they are about 17 pixels tall, below the 24, and smaller still on a chart with many bars or points, or on a taller dashboard such as Cost. Read the
-figures, not the axes, from across a room.
+There are two exceptions to the limits above:
+
+- The small numbers and dates around a chart (the axis labels). They only follow the scaling, so on the Power template at 1,080 rows
+  they are about 17 pixels tall, below the 24, and smaller still on a chart with many bars or points.
+- A dashboard taller than about nine rows. It is shown smaller than its own size to fit, so all its text is smaller too: on the Cost
+  template (12 rows) the text measures about 18 pixels for each 1,080 rows instead of 24, and its figures can be well under 32.
+
+Read the figures, not the axes, from across a room, and keep a wall dashboard to nine rows or fewer.
 
 ### Updates, sleep and wake
 
-- After you update the server, the screen sees the new version on its next read (within a minute) and reloads itself at the next change
-  of dashboard (with one dashboard, when its time is up). It reloads at most once every 10 seconds, and not at all when the browser
-  blocks site storage; then press F5 or restart the browser.
+- After you update the server, the screen sees the new version on its next read (within a minute). It then waits a random 10 to 30
+  seconds, so that ten screens do not reload together, and reloads itself at the next change of dashboard (with one dashboard, when its
+  time is up). It reloads at most once every 10 seconds, and not at all when the browser blocks site storage; then press F5 or restart
+  the browser.
 - After the PC wakes from sleep, or the network comes back after a cut, the screen reads at once instead of waiting for its next turn.
 - When the server restarts, or the network is cut, the screen keeps its last figures on screen and asks again.
 
 ### What a screen costs the server
 
-Measured on a test site with a playlist of four dashboards of four figure cards, 20 seconds each. One screen makes about one playlist
-read and about 8 figure requests a minute. A typical answer takes the server about 10 milliseconds. The processor use of the `api`
-service (one worker is 100 percent) was 1.9 percent on average with no screen and 1.9 percent with one screen: a screen adds nothing
-you can measure. With ten screens at once (together about 10 playlist reads and 80 figure requests a minute) it was 4.9 percent on
-average over 5 minutes, with one short peak of 36.8 percent while the ten screens were connecting. The server never answered "busy" to
+Measured on a test site with a playlist of three dashboards of about four figure cards each, 20 seconds each. One real screen, watched
+for an hour, made about one playlist read and about 11 figure requests a minute. A typical answer takes the server about 10
+milliseconds. The processor use of the `api` service (one worker is 100 percent) was 1.9 percent on average with no screen and 1.9
+percent with one screen: a screen adds nothing you can measure. With ten screens at once it was 4.9 percent on average over 5
+minutes, with one short peak of 36.8 percent while the ten screens were connecting. That test used simulated screens that asked for
+about 8 figures a minute each (together about 10 playlist reads and 80 figure requests a minute); ten real screens would ask for about a
+third more, about 110 a minute. The server never answered "busy" to
 a playlist read or a figure request. A screen asks for at most 2 figures at a time, and when the server does say "busy" it waits the
 time the server names plus a little random delay, so screens do not all come back at the same moment after a restart.
 

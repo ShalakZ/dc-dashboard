@@ -8,7 +8,7 @@ import { childrenNote, chooseText, isFollowing, leafText, NO_ASSETS_TEXT, ownAss
 import { skeletonShape } from "../lib/widgetFormat";
 import type { DisplayWidget } from "./displayApi";
 import type { CardState } from "./wallTypes";
-import { formatClock, isDataWidget, wallRefetchMs } from "./wallRules";
+import { formatClock, isDataWidget } from "./wallRules";
 
 // One card of the wall. The wall has no provider of the app (no router, no query client, no sign-in), so a card is drawn from what the controller kept:
 // WidgetFrame and WidgetBody draw the figures exactly as the app's card does, and nothing here asks the server for anything.
@@ -97,9 +97,10 @@ function DataCard({ widget, card, timezone, focus }: DataProps) {
     );
   }
   const view = wallFocusView({ config }, data, focus);
-  // A failure with an answer kept shows nothing (the figures stay, R8); a card that never answered says so; a card whose failures are 120 s old is dimmed and tagged.
+  // A failure with an answer kept shows nothing (the figures stay, R8); a card whose failures are 120 s old is dimmed and tagged, and that is the whole message (no
+  // sentence under the head: it would push the figures out of the card). Only a card with nothing to draw says so, and it names no wait: the wall's retries are its own.
   const stale = card !== undefined && card.notUpdated && data !== null;
-  const failed = card !== undefined && (card.status === "error" || stale);
+  const nothingToDraw = card?.status === "error" && data === null;
   const since = stale && card.answeredAt !== null ? formatClock(card.answeredAt, timezone) : null;
   const head = view.note !== "" || stale ? (
     <>
@@ -114,9 +115,7 @@ function DataCard({ widget, card, timezone, focus }: DataProps) {
         type={type}
         shape={skeletonShape(type, config)}
         loading={card === undefined || card.status === "loading"}
-        error={failed ? new Error("") : null}
-        retryMs={wallRefetchMs(config)}
-        drawn={data !== null}
+        error={nothingToDraw ? new Error("") : null}
         missing={view.gone ? 0 : (data?.missing.length ?? 0)}
         noMetric={data?.no_metric.length ?? 0}
         actions={head}

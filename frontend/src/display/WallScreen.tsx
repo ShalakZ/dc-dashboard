@@ -64,10 +64,24 @@ function useIdleCursor(timers: Timers): { idle: boolean; onMove: () => void } {
 }
 
 /**
- * The marks the cards on screen carry, in the app's own words (`markerHint` of the union of their flags): empty when none does. A comparison of energy shows no `*`
+ * The wall's own short words for the marks in `flags` (the app's marks, `markerHint`'s order), two spaces apart: "~ estimated  * partial  — no rate". The app's words are a
+ * sentence per mark (the partial one alone is 34 characters) and do not fit the header's right column; the full text stays as the legend's title.
+ */
+export function wallMarks(flags: HintFlags): string {
+  const words: string[] = [];
+  if (flags.estimated) words.push("~ estimated");
+  if (flags.partial) words.push("* partial");
+  if (flags.noRate) words.push("— no rate");
+  return words.join("  ");
+}
+
+interface Legend { /** What the header shows. */ marks: string; /** The app's own text (`markerHint`), the legend's title. */ hint: string }
+
+/**
+ * The marks the cards on screen carry (`marks` in the wall's short words, `hint` in the app's own): both empty when none does. A comparison of energy shows no `*`
  * and a card that shows a sentence instead of figures marks nothing, as in the app. A card whose answer cannot be read is left out here (its own boundary says so).
  */
-function legendOf(widgets: readonly DisplayWidget[], cards: Readonly<Record<number, CardState>>, focus: WallFocus | null): string {
+function legendOf(widgets: readonly DisplayWidget[], cards: Readonly<Record<number, CardState>>, focus: WallFocus | null): Legend {
   const union: HintFlags = { estimated: false, partial: false, noRate: false };
   for (const widget of widgets) {
     const data = cards[widget.id]?.data ?? null;
@@ -84,7 +98,7 @@ function legendOf(widgets: readonly DisplayWidget[], cards: Readonly<Record<numb
       // a malformed answer: that card is skipped here and draws its own sentence
     }
   }
-  return markerHint(union);
+  return { marks: wallMarks(union), hint: markerHint(union) };
 }
 
 /** The dashboard's own grid: the same placement as the app's read-only grid (`StaticGrid`), under the wall's own class names so no rule of the app's grid reaches it. */
@@ -135,7 +149,7 @@ function WallView({ snap, dashboard, focus, timers, viewport }: ViewProps) {
         <h1 className="wall-title">{focus ? `${dashboard.name}, ${focus.name}` : dashboard.name}</h1>
         <p className="wall-position">{position ? `${position.index} of ${position.of}` : ""}</p>
         <div className="wall-meta">
-          {legend !== "" && <p className="wall-legend" title={legend}>{legend}</p>}
+          {legend.marks !== "" && <p className="wall-legend" title={legend.hint}>{legend.marks}</p>}
           {updated !== null && <p className="wall-updated">{`Updated ${updated}`}</p>}
           {clock !== null && <p className="wall-clock">{clock}</p>}
         </div>

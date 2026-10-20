@@ -80,8 +80,23 @@ describe("a data card with no provider", () => {
 
   it("says it could not be loaded when it failed and keeps nothing", () => {
     card(dw(7, "stat"), { status: "error", data: null, answeredAt: null, failingSince: AT, notUpdated: false });
-    expect(screen.getByText(/This card could not be loaded\./)).toBeInTheDocument();
+    expect(screen.getByText("This card could not be loaded.")).toBeInTheDocument();
     expect(screen.queryByText(/Not updated/)).not.toBeInTheDocument();
+  });
+
+  it("never prints a promise of when it tries again (the wall retries on its own schedule, 5 to 20 seconds, and says nothing of it)", () => {
+    const states: [string, CardState | undefined][] = [
+      ["loading", undefined],
+      ["failed with nothing kept", { status: "error", data: null, answeredAt: null, failingSince: AT, notUpdated: false }],
+      ["failed with an answer kept", kept(dataFor("stat"), { status: "error", failingSince: AT + 30_000 })],
+      ["not updated for 120 s", kept(dataFor("stat"), { failingSince: AT + 1_000, notUpdated: true })],
+      ["refused by the server", { status: "unavailable", data: null, answeredAt: null, failingSince: null, notUpdated: false }],
+    ];
+    for (const [name, state] of states) {
+      const { container, unmount } = card(dw(7, "stat"), state);
+      expect(container.textContent, name).not.toMatch(/tries again|second|minute/i);
+      unmount();
+    }
   });
 
   it("says nothing when a request failed but an answer is kept: the figures stay, no error text, no tag, not dimmed (R8)", () => {
@@ -98,7 +113,16 @@ describe("a data card with no provider", () => {
     expect(screen.getByText("Not updated since 14:02")).toHaveClass("wall-card-tag");
     expect(container.querySelector(".wall-card-stale")).not.toBeNull();
     expect(container.querySelector(".wall-card-stale .stat-num")).toHaveTextContent("10.5");
-    expect(screen.getByText(/This card could not be refreshed\./)).toBeInTheDocument();
+    // the dim and the tag are the whole message: no sentence under the head (it would push the figures out of the card)
+    expect(screen.queryByText(/could not be/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps the figures and says nothing else when a failure comes with an answer kept, even if the card says error", () => {
+    const { container } = card(dw(9, "stat"), kept(dataFor("stat"), { status: "error", failingSince: AT + 1_000 }));
+    expect(container.querySelector(".stat-num")).toHaveTextContent("10.5");
+    expect(screen.queryByText(/could not be/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("draws 'This card cannot be shown.' for a widget the server refuses, with no tag", () => {
