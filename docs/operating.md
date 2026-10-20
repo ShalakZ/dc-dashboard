@@ -56,6 +56,31 @@ Every hour the collector deletes expired sessions, finished jobs older than 7 da
 14 days or beyond the newest 20 000 (`backend/dcdash/collector/housekeeping.py`). The collector runs at most 4 jobs (connection
 tests, browses, checks) at once, so "Test all" tests at most 4 sources at a time and queues the rest.
 
+## The figures service
+
+`figures` is a small background service beside `api` and `collector`. It keeps the figures of the current and the recent months ready in
+the database table `figure_ledger`, so that Billing and the dashboards do not have to compute them again after an api restart
+([The figure ledger](dashboards-and-billing.md#the-figure-ledger)). It writes that table and nothing else: never a reading, a tariff or
+a setting.
+
+- **What it does.** Every 30 seconds it looks at the current month (and the previous one during its first week), recomputes what changed
+  and stores it. Older months it looks at every 10 minutes, or at once after a configuration change, and it deletes what is no longer
+  needed. At 03:00 site time it checks every stored figure against a fresh calculation; a figure that differs is deleted and written to
+  the diagnostic journal as `figures.mismatch`.
+- **Stopping it is safe.** `docker compose stop figures` makes pages slower after an api restart, never wrong: the api uses a stored
+  figure only when it has proof that it is current. `docker compose start figures` brings it back and it refills the table within a minute.
+- **Settings.** Put them in `.env` (Compose passes them to the api and the service; run `docker compose up -d` after a change).
+  `DCDASH_FIGURE_LEDGER`: `0` switches the ledger off for the api and the service. `DCDASH_FIGURES_INTERVAL`: seconds between two
+  rounds, default 30, never below 5. `DCDASH_FIGURES_MONTHS`: how many months it keeps ready, 1 to 24, default 6.
+- **Where to look.** `docker compose ps` shows `figures` as `healthy`: it touches a heartbeat file after every figure and every round and
+  is called unhealthy when that file is older than 3 minutes. `docker compose logs --tail 80 figures` shows what it did; a quiet log is
+  normal, and a problem is named in a warning.
+- **The table is derived.** `docker compose exec db psql -U dcdash -d dcdash -c "TRUNCATE figure_ledger"` is always safe; the service
+  refills the table within a minute and the pages are only slower until then.
+- **Memory and CPU.** Measured in the wave report (w26b).
+
+The check you can run yourself, and what to paste back to Claude, is in [Field debugging](field-debugging.md#the-figures-check).
+
 ## If you are blocked from signing in
 
 After too many wrong passwords for one account from one computer, that account is blocked from that computer and the sign-in page

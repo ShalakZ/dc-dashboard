@@ -662,6 +662,22 @@ and works in whole hours; a day or a month is the sum of its hours in the site t
   `DCDASH_FIGURE_CACHE_TTL` sets the seconds. The maths runs on one worker thread and the rows are read in chunks, so a slow dashboard
   does not make the other pages wait.
 
+### The figure ledger
+
+A background service, `figures`, keeps each month's figures ready in the database table `figure_ledger`. It makes them with the very
+code a live request runs, and after an api restart the api reads them instead of computing them again. A stored figure is used only
+when it is provably current:
+
+- The configuration (tree, meters, tariffs, zone) and the code must be the same as when it was made.
+- For a month that ended more than a week ago the readings must be exactly the same too.
+- For the current month and the first week of the next, a figure may be up to 60 seconds behind the readings (on top of the cache's
+  30 seconds).
+
+Closing a month and Check month always check on the spot: a close never takes a figure that is merely recent, and Check month uses its
+stored report only when the readings and the configuration it reads are exactly the same as now. If anything is in doubt the page
+computes the figure as before, only slower. The service is described in [Operating the stack](operating.md#the-figures-service);
+`DCDASH_FIGURE_LEDGER=0` switches the ledger off.
+
 ## How history is calculated
 
 Dashboards, and Billing for every month that is not closed, follow the current configuration: past months are recomputed from today's
@@ -695,6 +711,9 @@ Billing.
 - A figure on a dashboard or in Billing can be up to 30 seconds behind the newest readings (a configuration change shows at once). The
   first load after an api restart, or of a window nobody asked for lately, computes it once, which takes seconds on a big site;
   `python -m dcdash.diagnostics.speed` shows how long.
+- Right after an api restart a figure may step back by up to 60 seconds: it comes from the ledger, which can be that far behind the
+  readings. The ledger keeps the 6 newest months (`DCDASH_FIGURES_MONTHS`); an older month is computed live. Rolling windows (1 hour
+  to 30 days), time-series charts and the asset and fleet summary do not use it.
 - One counter reset per hour is recovered exactly; a second one inside the same hour may understate that hour.
 - Energy estimated from power is an estimate, not a measurement.
 - The currency is one per site, there are no time-of-use tariffs, and custom metrics cannot be used in widgets.

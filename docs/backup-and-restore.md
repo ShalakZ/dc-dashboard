@@ -6,7 +6,7 @@ not hold, and how to practise a restore before you need one. Running backups on 
 Both scripts talk to the `db` container of the running stack (`.ps1` twins exist for Windows).
 
     scripts/backup.sh [out_dir] [--keep N] [--copy-to DIR]   # ./backups/dcdash-YYYYmmdd-HHMMSS.dump + .dump.version (Alembic revision)
-    scripts/restore.sh <dump> [--force] [--apply-retention]  # reads the dump, stops api+collector, recreates the database, restores, restarts
+    scripts/restore.sh <dump> [--force] [--apply-retention]  # reads the dump, stops api+collector+figures, recreates the database, restores, restarts
 
 A self-test that runs both in a throwaway Compose project of its own, never in your stack, is
 `OPS_COMPOSE_PROJECT=dcdash_e2e_drill scripts/backup_smoke.sh` (see [Practise a restore](#practise-a-restore)).
@@ -71,6 +71,12 @@ The **closed billing months** ([Closing a month](dashboards-and-billing.md#closi
 as the dump had them. That makes a restore of an older backup bring back the older set: a month closed since that backup is open
 again (and its billed figures are recalculated from the restored tree and rates), and a month reopened since is closed again. The
 audit log goes back in step with them. Take the CSV of a month before you restore if you need the figures as they were closed.
+
+The **figure ledger** (`figure_ledger`, [the figure ledger](dashboards-and-billing.md#the-figure-ledger)) is in the dump like any table. It
+is derived data: nothing in it is needed to get the figures back. A restored ledger is safe, because every row carries the fingerprints
+of the configuration and of the readings it was made from, and the api rejects a row when they differ from what the restored database
+holds. The restore scripts stop `figures` together with `api` and `collector`, so that it does not compute from a half-restored
+database, and start it again at the end (on an install that has no `figures` container yet, they start `api` and `collector` alone).
 
 **Retention and a restore.** The dump contains the retention policies, and a restored policy runs the moment the database starts its
 background jobs again, so restoring an old dump used to delete everything older than its retention limits within seconds. Raising the

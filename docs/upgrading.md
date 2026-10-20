@@ -146,7 +146,7 @@ message appeared as described), and lost what came after the dump.
 
 ## Migrations in order
 
-The files are in `backend/migrations/versions/`; each revises the one before it, and `0013` is the head. The release-note entry of a
+The files are in `backend/migrations/versions/`; each revises the one before it, and `0014` is the head. The release-note entry of a
 migration says how to apply it, how to verify it and the commit to go back to.
 
 | Revision | What it does | Downgrade | Release note |
@@ -164,8 +164,17 @@ migration says how to apply it, how to verify it and the commit to go back to.
 | `0011` | data only: the permission Manage asset kinds (`assets.kinds`) for the custom roles that could change kinds | lossless for the data; only which permissions a custom role lists changes | [W7o](../CHANGELOG.md#upgrading-to-w7o-migration-0011) |
 | `0012` | close month: the `billing_closes` table (a closed billing month's stored figures) | lossless for everything that existed before; a downgrade drops the closed months (and a restore of an older dump brings back the older set) | [W11](../CHANGELOG.md#upgrading-to-w11-migration-0012) |
 | `0013` | text widget: the widget type CHECK allows `text` | lossless while no text widget exists; refuses while one does: remove them first | [w22](../CHANGELOG.md#upgrading-to-w22-migration-0013) |
+| `0014` | the figure ledger: the table `figure_ledger` (derived data: computed figures kept between requests) | lossless except the stored figures, which are recomputed (the downgrade drops the table) | the w26b entry in the [CHANGELOG](../CHANGELOG.md) |
 
 Waves without a migration also have entries in the CHANGELOG (for example W7p, no migration): read them too, they can name checks.
+
+**`0014` and the `figures` service (w26b).** The migration only adds the table `figure_ledger`, empty at first (nothing else changes); the
+`figures` service fills it. The service is new in `compose.yaml` and starts with the ordinary `docker compose up -d`.
+`scripts\update.ps1` starts it the same way but does not list it in its health checks, so after an update look at `docker compose ps`:
+`figures` should be `healthy` within a few minutes. If it is not running the pages are only slower, never wrong. An older image left
+running beside the new table is harmless: it does not know the table. Going back to code from before w26b: stop `figures` first
+(`docker compose stop figures`) and remove its container with the others (option b: add `figures` to the `docker compose rm` line; option a:
+add `--remove-orphans` to the final `up -d --build`), because the old `compose.yaml` does not know the service (not rehearsed).
 
 ## Upgrading images
 
