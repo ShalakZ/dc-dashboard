@@ -196,7 +196,8 @@ def stats() -> dict[str, int]:
 
 @contextmanager
 def require_fresh():
-    """Inside this block a stored value is used only after its data fingerprint was re-checked on the spot."""
+    """Inside this block a stored value is used only after its data fingerprint was re-checked on the spot, and never when it was
+    made from a ledger row (that is computed again by the engine); the ledger itself is not consulted either."""
     token = _fresh.set(True)
     try:
         yield
