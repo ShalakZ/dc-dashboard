@@ -124,7 +124,7 @@ or only text cards) has neither.
 
 - **Updated** is the time, in the site's time zone, at which this browser received the oldest figure now on the page. The oldest one
   decides, because that is the figure furthest behind. It is a time to the minute: the server may serve a figure up to 30 seconds old,
-  60 for the current month ([Limits](dashboards-and-billing.md#limits)). A card asks again by itself every 30 seconds, and a card that compares with last month
+  60 for the current month and the first week of the next ([Limits](dashboards-and-billing.md#limits)). A card asks again by itself every 30 seconds, and a card that compares with last month
   every 5 minutes, so on a dashboard with a comparison the time can be up to 5 minutes behind. Nothing shows before the first figure
   arrives, and while a new range or focus loads the old time stays, dimmed. If a card cannot be refreshed, the time stays at its last
   good figure. A screen reader is not told about each change of the time.
