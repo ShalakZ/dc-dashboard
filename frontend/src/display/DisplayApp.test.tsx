@@ -507,8 +507,14 @@ describe("polling", () => {
     await settle();
     expect(count(PLAYLIST)).toBe(0);
     await advance(c, 1);
+    // The claim of this document was refused, so the wall is not drawn in it (its navigation entry still holds the link): the page loads clean first
+    // (mocked here), and the poll that follows connects (security review M1).
+    await settle();
+    expect(vi.mocked(reloadClean)).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("heading", { level: 1, name: "Ops" })).toBeNull();
+    await advance(c, 60_000);
     await onWall(3);
-    expect(c.delays).toEqual([FIVE_MINUTES, 60_000]);
+    expect(c.delays).toEqual([FIVE_MINUTES, 60_000, 60_000]);
     expect(count(CLAIM)).toBe(1);
   });
 

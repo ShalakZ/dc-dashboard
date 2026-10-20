@@ -147,6 +147,7 @@ export function startDisplay(link: SecretHandle | null, onState: (state: Display
   let wasConnected = false;
   // The revoked answers since the last 200: 5, 15 and 60 minutes to the next read, then none.
   let revokedAnswers = 0;
+  let claimRefused = false; // this document's claim was refused: a later 200 loads the page clean instead of drawing the wall here
   // What refresh() checks: the last state emitted is "connected" (a failed read after that emits nothing, so a retrying wall still counts), no read
   // is on the wire, and no `Retry-After` wait is running (`waitUntil`, local ms).
   let onWall = false;
@@ -193,6 +194,14 @@ export function startDisplay(link: SecretHandle | null, onState: (state: Display
     reading = false; // everything below is synchronous: no other read can start in between
     waitUntil = 0;
     if (stopped) return;
+    if (reply.status === 200 && reply.playlist && claimRefused) {
+      // The claim of THIS document was refused, yet an older cookie (or a restored backup) now says 200. This document's navigation entry still holds the
+      // link, so it must not become the wall: load the page clean (the new document has the cookie and no link) and keep polling in case the navigation fails.
+      claimRefused = false;
+      reloadClean();
+      later(POLL_MS, checkPlaylist);
+      return;
+    }
     if (reply.status === 200 && reply.playlist) {
       backoff = BACKOFF_START_MS;
       revokedAnswers = 0; // only a 200 starts the revoked schedule over
@@ -229,6 +238,7 @@ export function startDisplay(link: SecretHandle | null, onState: (state: Display
       await checkPlaylist();
     } else if (outcome === "refused") {
       backoff = BACKOFF_START_MS;
+      claimRefused = true;
       revoked(checkPlaylist); // an older cookie may still be good, or a restored backup may have brought the link back
     } else if (outcome !== "unreachable" && outcome.kind === "busy") {
       // Busy, not blocked: the page keeps what it shows ("Connecting..." before the first answer) and the link stays in memory.

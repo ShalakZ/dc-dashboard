@@ -1,5 +1,6 @@
 import { manualTimers } from "../test/manualTimers";
 import { claimMemoSnapshot, resetClaimMemo, startDisplay, type DisplayDeps, type DisplayState, type Timers } from "./displayLoop";
+import { reloadClean } from "./reloadClean";
 import { holdSecret, type SecretHandle } from "./secretHandle";
 import { jittered } from "./wallRules";
 
@@ -234,6 +235,21 @@ describe("the revoked schedule", () => {
     expect(r.delays).toEqual([120_000, 120_000]);
     await r.advance(120_000);
     expect(r.kinds()).toEqual(["blocked", "blocked", "connected"]);
+  });
+});
+
+describe("a claim that was refused", () => {
+  it("never lets this document become the wall: a later 200 loads the page clean first, and the next 200 connects (security review M1)", async () => {
+    stubFetch({ [CLAIM]: [401], [PLAYLIST]: [good()] });
+    const handle = holdSecret(SECRET)!;
+    const r = await rig(handle);
+    expect(r.kinds()).toEqual(["revoked"]);
+    await r.advance(5 * MINUTE); // an older cookie now answers 200
+    expect(r.kinds(), "the 200 is not drawn in this document").toEqual(["revoked"]);
+    expect(vi.mocked(reloadClean)).toHaveBeenCalledTimes(1);
+    await r.advance(MINUTE); // the navigation did not happen: the poll goes on and connects
+    expect(r.kinds()).toEqual(["revoked", "connected"]);
+    expect(vi.mocked(reloadClean)).toHaveBeenCalledTimes(1);
   });
 });
 

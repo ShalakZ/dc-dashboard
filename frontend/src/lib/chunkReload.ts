@@ -12,7 +12,8 @@ function tabStorage(): Store | null {
 }
 
 // A stale chunk is a 404 from a live server, so any status says "the server is there"; a refused or timed-out connection is the other case.
-const serverAnswers: Probe = () => fetch("/", { method: "HEAD", cache: "no-store" });
+// The probe has a 5 s limit: a server that accepts connections but never answers must not leave requests hanging for the life of the page.
+const serverAnswers: Probe = () => fetch("/", { method: "HEAD", cache: "no-store", signal: typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(5_000) : undefined });
 
 /**
  * Reloads the page once, if the web server answers: the one reload path of a page that may be stale (a lazy chunk the new build no longer has, or the

@@ -94,6 +94,7 @@ export function createWall(deps: WallDeps): Wall {
   const unavailableUntil = new Map<string, number>(); // keys the server refused: not asked again before this server time
   let forceDue = false; // a wake: every pinned card is due at the next tick
   let lastRereadAt: number | null = null; // server ms of the last refreshPlaylist() this controller asked for
+  let lastWakeAt: number | null = null; // server ms of the last wake that was acted on (a burst of events is one wake)
 
   // The honesty bands.
   let lastFeedAt: number | null = null; // server ms of the last playlist read
@@ -462,6 +463,7 @@ export function createWall(deps: WallDeps): Wall {
     if (buildSeenAt !== null && buildSeenAt > t) buildSeenAt = t;
     if (lastReloadAt !== null && lastReloadAt > t) lastReloadAt = t;
     if (lastRereadAt !== null && lastRereadAt > t) lastRereadAt = t;
+    if (lastWakeAt !== null && lastWakeAt > t) lastWakeAt = t;
     if (collectorRunStart !== null && collectorRunStart > t) collectorRunStart = t;
     if (target !== null && target.chosenAt > t) target = { ...target, chosenAt: t };
     if (wakeHoldUntil > t + WAKE_HOLD_MS) wakeHoldUntil = t + WAKE_HOLD_MS;
@@ -569,6 +571,10 @@ export function createWall(deps: WallDeps): Wall {
     wake() {
       if (!running || isHidden()) return;
       const t = serverNow();
+      // A burst of wake events (a flaky link firing `online`, a driver toggling visibility) is ONE wake: it must not skip the 10 s limit on playlist reads,
+      // refetch every card again and again, or keep restarting the item's timer (security review I1).
+      if (lastWakeAt !== null && t >= lastWakeAt && t - lastWakeAt < REREAD_MIN_MS) return;
+      lastWakeAt = t;
       wakeHoldUntil = t + WAKE_HOLD_MS;
       pinnedAt = t;
       forceDue = true;

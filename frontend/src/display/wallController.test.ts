@@ -728,6 +728,23 @@ describe("wake, hidden, reduced motion, start and stop", () => {
     expect(t.snap().phase).toBe("out");
   });
 
+  it("a burst of wake events is ONE wake: one playlist read, one refetch, the item's timer restarted once (security review I1)", async () => {
+    const t = setup();
+    t.feed(list([item(1), item(2)]));
+    await t.run(10_000);
+    t.wall.wake();
+    const asked = t.asks(1).length;
+    for (let i = 0; i < 6; i += 1) {
+      await t.run(1_000);
+      t.wall.wake(); // `online` and `visibilitychange` firing again and again within 10 s
+    }
+    expect(t.refreshes).toEqual([T0 + 10_000]);
+    expect(t.asks(1).length).toBe(asked + 2); // the cards were refetched once, 1 s after the first wake
+    await t.run(4_000); // 15 s after the first wake: a later wake is a new one
+    t.wall.wake();
+    expect(t.refreshes).toHaveLength(2);
+  });
+
   it("while hidden asks for nothing and does not turn; wake() does nothing; unhiding and waking resumes", async () => {
     const t = setup();
     t.feed(list([item(1), item(2)]));
