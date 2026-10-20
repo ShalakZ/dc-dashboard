@@ -70,7 +70,9 @@ whole site."), and the server refuses a `POST /api/widget-data` or `/api/widget-
 (the widget form picks assets), so a role with both sees the Focus button when it views a dashboard; starting a
 dashboard from a template (Power, Cost, Energy by area, Last 24 hours: `POST /api/dashboards` with a `recipe`) needs only `dashboards.edit`,
 and so does the list that fills the template gallery (`GET /api/dashboard-templates`: each template, the widgets it creates and whether it
-suits this site); a role with only `dashboards.view` gets a 403 there and sees no gallery. There is no per-asset visibility, so See the Assets Tree opens the whole tree and a
+suits this site); a role with only `dashboards.view` gets a 403 there and sees no gallery. Making a copy of a dashboard
+(`POST /api/dashboards/{id}/copy`: the same range and widgets under the name "<name> (copy)", counted up if that is taken) needs only
+`dashboards.edit` as well, counts toward the 50 dashboards and never becomes the default. There is no per-asset visibility, so See the Assets Tree opens the whole tree and a
 focus can name any asset in it.
 
 `assets.edit` also lets a person move assets in the Assets Tree ([Moving assets](assets-and-kinds.md#moving-assets)); deleting the picked

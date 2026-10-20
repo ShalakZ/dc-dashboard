@@ -3,12 +3,14 @@
 A dashboard is saved as a whole: PUT replaces the name, the range and every widget in one transaction.
 Two editors are told apart by `updated_at`: the row is locked, the request's stamp must equal the stored
 one, and a later save sees the newer stamp and gets 409. A create takes an advisory lock before it counts, so
-the 50-dashboard cap holds when creates race. Dashboard changes never notify the collector.
+the 50-dashboard cap holds when creates race; a copy takes the same lock, then the source row. Dashboard changes never notify the
+collector.
 """
 import hashlib
 import json
 import math
 from collections.abc import Sequence
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
@@ -37,6 +39,7 @@ router = APIRouter(prefix="/api", tags=["dashboards"])
 
 MAX_WIDGETS = 24
 MAX_DASHBOARDS = 50
+MAX_NAME = 100  # characters in a dashboard's name
 DASHBOARD_CAP_LOCK = 7_306_001  # advisory-lock key serializing "count the dashboards" with "insert one"
 DEFAULT_LOCK = 7_310_001  # advisory-lock key: one change to the default dashboard at a time
 MAX_ID = 2_147_483_647  # dashboards.id is a 4-byte SERIAL; the driver raises on a bigger one
@@ -53,7 +56,7 @@ def _preset(value: str) -> str:
     return value
 
 
-Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_NAME)]
 Preset = Annotated[str, AfterValidator(_preset)]
 
 
@@ -298,6 +301,63 @@ async def create_dashboard(
         await audit(db, user.id, "dashboard.created", detail)
         await db.commit()
     except IntegrityError:  # two creates with the same name raced; the UNIQUE constraint decided
+        await db.rollback()
+        raise HTTPException(409, NAME_TAKEN) from None
+    return dashboard_out(dashboard, widgets)
+
+
+async def _free_copy_name(db: AsyncSession, name: str) -> str:
+    """"<name> (copy)", else "<name> (copy 2)", "(copy 3)"...: the first one nobody has. The base is cut so the result is at
+    most 100 characters (the limit of a name), and trimmed after the cut so a cut after a space leaves no double space. At most
+    50 dashboards exist, so a free number is found by the 51st."""
+    number = 1
+    while True:
+        suffix = " (copy)" if number == 1 else f" (copy {number})"
+        candidate = name[: MAX_NAME - len(suffix)].strip() + suffix
+        if not await name_taken(db, candidate):
+            return candidate
+        number += 1
+
+
+@router.post(
+    "/dashboards/{dashboard_id}/copy", response_model=DashboardOut, status_code=201,
+    dependencies=[Depends(require_permission("dashboards.edit"))],
+)
+async def copy_dashboard(
+    dashboard_id: int, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
+) -> DashboardOut:
+    """A new dashboard with the source's range and widgets (their stored configs, as they are); the default is not touched.
+
+    Locks are taken in one order, the cap lock and then the source row, which no other path reverses: create takes the cap lock
+    only, save and delete the row only, and the default takes its own lock and then the row."""
+    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": DASHBOARD_CAP_LOCK})
+    # Read under the row lock: a save in progress finishes first, so the copy has the widgets that save stored.
+    source = await load_dashboard(db, dashboard_id, lock=True)
+    if (await db.scalar(select(func.count()).select_from(Dashboard)) or 0) >= MAX_DASHBOARDS:
+        raise HTTPException(422, f"at most {MAX_DASHBOARDS} dashboards")
+    stored = (await db.scalars(select(Widget).where(Widget.dashboard_id == source.id))).all()
+    originals = sorted(stored, key=lambda w: (w.y, w.x, w.id))
+    now = datetime.now(UTC)
+    dashboard = Dashboard(
+        name=await _free_copy_name(db, source.name), range=source.range, created_by=user.id, created_at=now, updated_at=now
+    )
+    try:
+        db.add(dashboard)
+        await db.flush()
+        widgets = [
+            Widget(
+                dashboard_id=dashboard.id, type=w.type, title=w.title, config=deepcopy(w.config), x=w.x, y=w.y, w=w.w, h=w.h
+            )
+            for w in originals
+        ]
+        db.add_all(widgets)
+        await db.flush()
+        await audit(
+            db, user.id, "dashboard.created",
+            {"dashboard_id": dashboard.id, "name": dashboard.name, "widgets": len(widgets), "copied_from": source.id},
+        )
+        await db.commit()
+    except IntegrityError:  # another request took the name between the check and the insert; the UNIQUE constraint decided
         await db.rollback()
         raise HTTPException(409, NAME_TAKEN) from None
     return dashboard_out(dashboard, widgets)
