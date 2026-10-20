@@ -82,12 +82,12 @@
   .wall .wall-canvas .widget-title { font-size: clamp(13px, calc(32px * var(--wall-unit) / var(--wall-s)), 26px); }
   /* The figures of a table and the comparison figure of a stat aim at 32px per 1080 rows too, held at 24 logical px so a table row (32px) still holds them; the line is
      1.2 so the figure's line is never taller than its neighbour's (the name beside it), and the row does not grow. */
-  /* The stat's classes below are written as [class~="..."]: widgets.css owns them as bare classes, and app.css.test.ts lets no page file name another's bare class. The wall
-     restyles them on purpose, and only inside .wall-canvas, which exists on the wall alone (an attribute selector weighs the same as a class). */
-  .wall-canvas td.num, .wall-canvas [class~="stat-last-fig"] { font-size: clamp(var(--fs-base), calc(32px * var(--wall-unit) / var(--wall-s)), 24px); line-height: 1.2; }
+  /* The stat's classes below are widgets.css's bare classes: the wall restyles them on purpose, and only inside .wall-canvas, which exists on the wall alone
+     (app.css.test.ts sanctions each of the four by name). */
+  .wall-canvas td.num, .wall-canvas .stat-last-fig { font-size: clamp(var(--fs-base), calc(32px * var(--wall-unit) / var(--wall-s)), 24px); line-height: 1.2; }
   /* The three note lines of a card keep a 16px line in the app. Raised to the wall's size they would cut a descender (the g of "No readings last month."): their line follows the
      text, and the box no longer clips (Segoe UI, the first font of the stack, has so little room below the baseline at 1.25 that a clipping box could still shave a g). */
-  .wall-canvas [class~="stat-window"], .wall-canvas [class~="stat-note"], .wall-canvas [class~="bars-note"] { overflow: visible; line-height: 1.25; }
+  .wall-canvas .stat-window, .wall-canvas .stat-note, .wall-canvas .bars-note { overflow: visible; line-height: 1.25; }
   /* The breakdown's "Split by" row (a label and a select that does nothing here) has no place on a wall; it is the only box in a card with a select as its child. */
   .wall-canvas :has(> select) { display: none; }
   /* No scroll bars anywhere: a card whose content is longer than the card is cut, never scrolled. */

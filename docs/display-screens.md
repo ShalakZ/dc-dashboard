@@ -179,7 +179,8 @@ dashboard. Only one shows at a time, and it goes away by itself on the first ans
   notice has no time. It says "The data collector stopped." instead only when the collector has said so on two reads a minute apart (a
   collector restarts during an update; one read could catch it). One meter that stops alone does not bring this notice: its own card
   shows its stale mark. When nothing has ever been read, there is no notice.
-- **"This screen has not been updated since 14:02. Trying again..."** No figure has reached the screen for two minutes. A restart of the
+- **"This screen has not been updated since 14:02. Trying again..."** No figure has reached the screen for two minutes, or the
+  playlist itself has not been read for five minutes (the playlist carries the data status for the first notice). A restart of the
   server that lasts a few seconds, or one failed request, never shows it. The screen keeps trying and shows its last figures dimmed.
 
 A single card whose own figures could not be refreshed for two minutes is dimmed and says "Not updated since 14:02" at the top of the card.

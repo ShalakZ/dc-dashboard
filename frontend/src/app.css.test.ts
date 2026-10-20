@@ -804,7 +804,15 @@ describe("the page style files (src/styles/*.css)", () => {
     expect(parsed.length).toBeGreaterThanOrEqual(5);
     // The one deliberate cross-file rule (W7l, review C2): while a drawer is open, drawer.css lifts the toast stack above the drawer's footer
     // (`body:has(.drawer) .toast-stack`). The stack is feedback-toasts.css's; the lift can only be written where the drawer's footer height is.
-    const SANCTIONED = new Set([".toast-stack: bare in feedback-toasts.css, named in drawer.css"]);
+    // And w29 (display wall): display-wall.css raises the type of four card lines (the stat's comparison figure and its note lines) to what reads from across a room, only inside
+    // `.wall-canvas`, which exists on the wall alone. They are widgets.css's bare classes; the wall page cannot be styled anywhere else.
+    const SANCTIONED = new Set([
+      ".toast-stack: bare in feedback-toasts.css, named in drawer.css",
+      ".stat-last-fig: bare in widgets.css, named in display-wall.css",
+      ".stat-window: bare in widgets.css, named in display-wall.css",
+      ".stat-note: bare in widgets.css, named in display-wall.css",
+      ".bars-note: bare in widgets.css, named in display-wall.css",
+    ]);
     const clashes: string[] = [];
     for (const a of parsed) {
       for (const cls of bareClasses(a.rules)) {

@@ -422,12 +422,12 @@ describe("the header and the type floors in the stylesheet (the browser measures
   });
 
   it("aims a table's figures and a stat's comparison figure at 32px per 1080 rows, held at 24 logical px", () => {
-    const figures = body('.wall-canvas td.num, .wall-canvas [class~="stat-last-fig"]');
+    const figures = body('.wall-canvas td.num, .wall-canvas .stat-last-fig');
     expect(figures).toMatch(/font-size:\s*clamp\(var\(--fs-base\),\s*calc\(32px \* var\(--wall-unit\) \/ var\(--wall-s\)\),\s*24px\)/);
   });
 
   it("gives the three note lines a line that follows their raised text, so a descender is not cut", () => {
-    const notes = body('.wall-canvas [class~="stat-window"], .wall-canvas [class~="stat-note"], .wall-canvas [class~="bars-note"]');
+    const notes = body('.wall-canvas .stat-window, .wall-canvas .stat-note, .wall-canvas .bars-note');
     expect(notes).toMatch(/line-height:\s*1\.25/);
     expect(notes).toMatch(/overflow:\s*visible/); // a clipping box could still shave a descender (Segoe UI has little room below the baseline at 1.25)
   });
