@@ -5,11 +5,12 @@ draw figures, `validate_text_config` for the Text widget, which holds no data). 
 field ("assets: at most 20 assets per widget (got 21)") so the editor can show them.
 `compute_widget` answers POST /api/widget-data and its CSV export for a validated data config.
 """
+import asyncio
 import bisect
 import logging
 import math
 import re
-from collections.abc import Iterable
+from collections.abc import Awaitable, Iterable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal, Self
@@ -30,6 +31,7 @@ from dcdash.core.compare import (
     Side, change, contributing_meters, rate_change, side_from_entries, snapshot_entries, snapshot_status, windows,
 )
 from dcdash.core.cost import HourCost, cost_by_hour, load_tariffs, summarize
+from dcdash.core.db import get_sessionmaker
 from dcdash.core.energy import HourEnergy, hourly_energy
 from dcdash.core.figures import entries_at, month_days, window_values
 from dcdash.core.metrics import Metric, unit_for
@@ -620,6 +622,19 @@ def _window_json(first: date | None, last: date | None) -> dict[str, str] | None
     return None if first is None or last is None else {"from": first.isoformat(), "to": last.isoformat()}
 
 
+async def _together[A, B](first: Awaitable[A], second: Awaitable[B]) -> tuple[A, B]:
+    """Await two coroutines side by side. If one fails (or the caller is cancelled) the other is cancelled and awaited first, so
+    nothing keeps using a session the caller is about to close, and the original error goes on unchanged."""
+    tasks = (asyncio.ensure_future(first), asyncio.ensure_future(second))
+    try:
+        return await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
 async def _fill_compare(
     db: AsyncSession, result: WidgetResult, tree: AssetTree, config: WidgetConfig, asset_id: int, now: datetime,
     tz_name: str, zone: ZoneInfo,
@@ -678,16 +693,22 @@ async def _fill_compare(
     # request's, so a configuration edit that lands between the request's load and the values' snapshot cannot mix two
     # configurations. The two values must agree on the configuration; if an edit landed between them, ask again (a few times,
     # then go on, and say so once in the log: the card then prices last month with its tariffs and takes the rest from this month).
-    for _ in range(3):
-        md_last = await month_days(db, tz_name, *month_bounds(win.last_month, tz_name))
-        md_this = await month_days(db, tz_name, *month_bounds(win.this_month, tz_name))
-        if md_last.config_fp == md_this.config_fp:
-            break
-    else:
-        log.warning(
-            "the comparison went on with two configurations: last month %s, this month %s (three tries)",
-            md_last.config_fp[:8], md_this.config_fp[:8],
-        )
+    # The two months are asked for side by side: on a cold cache the cache runs both computations at once (their reads overlap,
+    # their pure parts take turns on the one compute thread), where one after the other took the sum. An AsyncSession serves one
+    # task at a time, so the second month asks through a session of its own.
+    async with get_sessionmaker()() as other:
+        for _ in range(3):
+            md_last, md_this = await _together(
+                month_days(db, tz_name, *month_bounds(win.last_month, tz_name)),
+                month_days(other, tz_name, *month_bounds(win.this_month, tz_name)),
+            )
+            if md_last.config_fp == md_this.config_fp:
+                break
+        else:
+            log.warning(
+                "the comparison went on with two configurations: last month %s, this month %s (three tries)",
+                md_last.config_fp[:8], md_this.config_fp[:8],
+            )
 
     # The windows' days are prefixes of the months' local days (core/compare.py `windows`): same entries, by position.
     this_entries = entries_at(md_this, asset_id, now)[: len(win.this_days)]

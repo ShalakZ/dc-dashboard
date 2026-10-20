@@ -6,6 +6,7 @@ tuples, compared with `==` and with `repr` (so `-0.0` counts). The second half u
 card against the cache off, a request whose tree differs from the value's, a close that must not use an entry inside its TTL,
 and the compute thread.
 """
+import asyncio
 import copy
 import dataclasses
 import json
@@ -693,3 +694,32 @@ async def test_no_reader_changes_a_shared_value(client, db, session):
     renamed = copy.deepcopy(md)
     renamed.tree.nodes[asset] = dataclasses.replace(renamed.tree.nodes[asset], name="scribble")
     assert not same_snapshot(month_snapshot(renamed), month_snapshot(md))
+
+
+# ---- the two months of a cold comparison are computed side by side --------------------------------------------------------------
+
+
+async def test_a_cold_comparison_starts_both_months_before_either_has_finished_and_answers_as_before(db, session, monkeypatch):
+    ids = await build(db)
+    expected = await compare_card(session, ids["Pump"], "cost")
+    await figure_cache.aclear()  # cold again
+    assert figure_cache.stats()["computes"] == 0
+    real, spans = figures.read_energy_rows, []
+    loop = asyncio.get_running_loop()
+
+    async def slow(*args, **kwargs):
+        began = loop.time()
+        await asyncio.sleep(0.25)  # long enough that one after the other cannot overlap
+        try:
+            return await real(*args, **kwargs)
+        finally:
+            spans.append((began, loop.time()))
+
+    monkeypatch.setattr(figures, "read_energy_rows", slow)
+    card = await compare_card(session, ids["Pump"], "cost")
+
+    assert card == expected and repr(card) == repr(expected)
+    assert figure_cache.stats()["computes"] == 2 and len(spans) == 2
+    (first_began, first_ended), (second_began, _) = sorted(spans)
+    assert second_began < first_ended, "the second month was not started until the first had finished"
+    assert second_began - first_began < 0.2
