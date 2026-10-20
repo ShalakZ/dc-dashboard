@@ -1,8 +1,9 @@
 /** What an audit entry did, for its icon and colour: one of seven, a pure function of the action string. The sentence is always there too; the kind is decoration. */
 export type AuditKind = "signin" | "problem" | "create" | "change" | "delete" | "settings" | "other";
 
-const PROBLEMS = new Set(["login.failed", "login.locked", "password.change_failed"]);
-const SIGN_INS = new Set(["login.succeeded", "setup.completed"]);
+// A blocked display claim is an address guessing links; a display that connected is the screen's own sign-in.
+const PROBLEMS = new Set(["login.failed", "login.locked", "password.change_failed", "display.claim_blocked"]);
+const SIGN_INS = new Set(["login.succeeded", "setup.completed", "display.connected"]);
 const SETTINGS_PREFIXES = ["settings.", "storage.", "billing."];
 // Actions that add things without ending in ".created": the data-centre starter pack registers kinds.
 const CREATE_ACTIONS = new Set(["kind.starter_pack_added"]);
@@ -17,7 +18,8 @@ export function auditKind(action: string): AuditKind {
   if (PROBLEMS.has(action)) return "problem";
   if (SIGN_INS.has(action)) return "signin";
   if (SETTINGS_PREFIXES.some((prefix) => action.startsWith(prefix))) return "settings";
-  if (action.endsWith(".deleted")) return "delete";
+  // A revoked display link ends for good, like a removal (no other action ends in ".revoked").
+  if (action.endsWith(".deleted") || action.endsWith(".revoked")) return "delete";
   if (action.endsWith(".created") || CREATE_ACTIONS.has(action)) return "create";
   if (CHANGE_SUFFIXES.some((suffix) => action.endsWith(suffix))) return "change";
   return "other";

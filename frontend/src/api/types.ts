@@ -267,7 +267,7 @@ export type AcceptIn = { source_id: number; points: AcceptPointIn[] } & (
 );
 export interface AcceptResult { asset_id: number; mapping_ids: number[] }
 /** The kinds of record an audit entry's details can point at; the server looks their names up (GET /api/audit `refs`). */
-export type RefKind = "asset" | "user" | "source" | "dashboard" | "point";
+export type RefKind = "asset" | "user" | "source" | "dashboard" | "point" | "display" | "playlist";
 /** Kind -> id (as a string key) -> the name it has now. A kind or an id that is missing is a target that no longer exists. */
 export type AuditRefs = Partial<Record<RefKind, Record<string, string>>>;
 export interface AuditEntry {

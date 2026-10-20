@@ -35,7 +35,7 @@ const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 // A friendly sentence never shows a database id (the Scan numbers excepted): a name comes from the stored detail or from
 // the server's `refs` lookup, a target the lookup could not find reads "a deleted asset", and with no lookup at all
 // (`refs` undefined: a test fixture or a future caller) it reads "an asset".
-const REF_KINDS: readonly RefKind[] = ["asset", "user", "source", "dashboard", "point"];
+const REF_KINDS: readonly RefKind[] = ["asset", "user", "source", "dashboard", "point", "display", "playlist"];
 const kindOf = (noun: string): RefKind | undefined => REF_KINDS.find((kind) => kind === noun);
 const article = (noun: string) => `${/^[aeiou]/.test(noun) ? "an" : "a"} ${noun}`;
 
@@ -105,6 +105,8 @@ const ID_FIELDS: Record<string, { kind: RefKind; label: string }> = {
   source_id: { kind: "source", label: "Source" },
   dashboard_id: { kind: "dashboard", label: "Dashboard" },
   point_id: { kind: "point", label: "Point" },
+  display_id: { kind: "display", label: "Display" },
+  playlist_id: { kind: "playlist", label: "Playlist" },
 };
 
 /**
@@ -136,6 +138,8 @@ function diff(sides: Sides, refs: AuditRefs | undefined): { changes: AuditChange
   let unchanged = 0;
   // dashboard.default_changed keeps the dashboard's name beside its id; the name row says it, so the id row would say it twice.
   const namedDashboard = has(sides.before, "dashboard") || has(sides.after, "dashboard");
+  // display.updated may keep the playlist's name beside its id in the same way.
+  const namedPlaylist = has(sides.before, "playlist") || has(sides.after, "playlist");
   for (const key of new Set([...Object.keys(sides.before), ...Object.keys(sides.after)])) {
     // The name stored beside parent_id is only that row's fallback (asset.moved): a row of its own would say the parent twice, and maybe by an old name.
     if (key === "parent_name") continue;
@@ -143,7 +147,7 @@ function diff(sides: Sides, refs: AuditRefs | undefined): { changes: AuditChange
     const after = get(sides.after, key);
     if (stable(before) === stable(after)) {
       if (has(sides.before, key) && has(sides.after, key)) unchanged += 1;
-    } else if (!(key === "dashboard_id" && namedDashboard)) {
+    } else if (!(key === "dashboard_id" && namedDashboard) && !(key === "playlist_id" && namedPlaylist)) {
       changes.push(describeChange(refs, key, before, after, sides));
     }
   }
@@ -407,6 +411,7 @@ const rolesPage = page("/users/roles", "Open Roles");
 const tariffsPage = page("/tariffs", "Open Tariffs");
 const billingPage = page("/billing", "Open Billing"); // the page has no month in its address, so the link cannot point at one
 const storagePage = page("/storage", "Open Storage");
+const displaysPage = page("/displays", "Open Displays");
 
 /** "QAR", or "not set" when the side is missing or empty. */
 function settingSide(side: Detail | undefined, key: string): string {
@@ -472,6 +477,57 @@ function defaultSide(c: Context, side: Detail | undefined): { bare: string; full
   return { bare: named.replace(/^dashboard /, ""), full: named };
 }
 
+/** "playlist Wall A" or "display Hall TV" (the name cut); the lookup's name, "a deleted playlist" or the bare noun when the entry kept none. */
+const displayThing = (c: Context) => thing(c, "display", "display_id", "display", shortName);
+const playlistThing = (c: Context) => thing(c, "playlist", "playlist_id", "playlist", shortName);
+
+/** "display Hall TV", else "a display" (the bare noun reads badly mid-sentence), else "a deleted display". */
+function aDisplay(c: Context): string {
+  const what = displayThing(c);
+  return what === "display" ? "a display" : what;
+}
+
+/** " (3 dashboards)" from the number of items a playlist holds; "" when the entry has no count. */
+function dashboardCount(value: unknown): string {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return "";
+  return ` (${value === 0 ? "no dashboards" : count(value, "dashboard")})`;
+}
+
+/** " (playlist Wall A)": the name the entry kept, else the lookup's ("a deleted playlist"); "" when the entry names no playlist at all. */
+function playlistOfDisplay(c: Context): string {
+  const stored = text(c.d.playlist);
+  if (stored) return ` (playlist ${shortName(stored)})`;
+  const named = target(c.refs, "playlist", c.d.playlist_id);
+  return named !== null ? ` (${named})` : "";
+}
+
+/** The playlist a display was moved to, from the `after` side: its stored name, else the lookup's, else "a deleted playlist" / "a playlist"; null when the side holds no playlist. */
+function movedToPlaylist(c: Context): string | null {
+  const stored = text(sideValue(c, "after", "playlist"));
+  if (stored) return shortName(stored);
+  const id = idOf(sideValue(c, "after", "playlist_id"));
+  if (id === null) return null;
+  const found = ref(c.refs, "playlist", id);
+  return found.is === "name" ? found.name : nameless(found, "playlist");
+}
+
+/** What a display.updated entry did, as one sentence: a rename, a new playlist or both; null when the sides show neither (a plain "Changed display ..." then). */
+function displayUpdate(c: Context): string | null {
+  const { sides } = c;
+  if (!sides) return null;
+  const changedKey = (key: string) => has(sides.after, key) && stable(get(sides.before, key)) !== stable(get(sides.after, key));
+  const parts: string[] = [];
+  const to = changedKey("name") ? text(get(sides.after, "name")) : null;
+  const from = to !== null ? text(get(sides.before, "name")) : null;
+  if (to !== null) parts.push(`Renamed ${from ? `display ${shortName(from)}` : "a display"} to ${shortName(to)}`);
+  const playlist = changedKey("playlist") || changedKey("playlist_id") ? movedToPlaylist(c) : null;
+  if (playlist !== null) {
+    // After a rename the sentence already named the display: "its playlist".
+    parts.push(to !== null ? `changed its playlist to ${playlist}` : `Changed the playlist of ${aDisplay(c)} to ${playlist}`);
+  }
+  return parts.length > 0 ? parts.join("; ") : null;
+}
+
 // One entry per action the backend writes. backend/tests/test_audit_describers.py fails when an action is missing.
 const RULES: Record<string, Rule> = {
   "asset.created": made("asset", "asset_id", ownAsset),
@@ -528,6 +584,28 @@ const RULES: Record<string, Rule> = {
     },
     link: assetOfDetail,
   },
+
+  // A display has no user behind it when it connects or when a claim is blocked (the actor is empty): those sentences stand alone.
+  // The detail never holds the link, its secret or its hash; only the id, the name, the playlist and the client address are read.
+  "display.claim_blocked": {
+    summary: ({ d }) => {
+      const client = text(d.client);
+      return `Too many wrong display links${client ? ` from ${client}` : ""}: the address is blocked for 15 minutes`;
+    },
+    link: displaysPage,
+  },
+  "display.connected": {
+    summary: (c) => {
+      const client = text(c.d.client);
+      const who = aDisplay(c);
+      return `${who.charAt(0).toUpperCase()}${who.slice(1)} connected${client ? ` from ${client}` : ""}`;
+    },
+    link: displaysPage,
+  },
+  "display.created": { summary: (c) => `Created ${displayThing(c)}${playlistOfDisplay(c)}`, link: displaysPage },
+  "display.deleted": { summary: (c) => `Deleted ${thing(c, "display", "display_id", undefined, shortName)}`, link: displaysPage },
+  "display.revoked": { summary: (c) => `Revoked ${displayThing(c)}: its link no longer works`, link: displaysPage },
+  "display.updated": { summary: (c) => displayUpdate(c) ?? withFields(`Changed ${displayThing(c)}`, c.fields), link: displaysPage },
 
   // The detail keeps the kind's name (kind_id is only there for the raw Details JSON): a rename stores it in before/after.
   "kind.created": { summary: (c) => `Created ${kindThing(c.d.name)}`, link: kindsPage },
@@ -590,6 +668,10 @@ const RULES: Record<string, Rule> = {
 
   "password.change_failed": { summary: () => "Failed password change (wrong current password)" },
   "password.changed": { summary: () => "Changed own password" },
+
+  "playlist.created": { summary: (c) => `Created ${playlistThing(c)}${dashboardCount(c.d.items)}`, link: displaysPage },
+  "playlist.deleted": { summary: (c) => `Deleted ${thing(c, "playlist", "playlist_id", undefined, shortName)}`, link: displaysPage },
+  "playlist.updated": { summary: (c) => withFields(`Changed ${playlistThing(c)}`, c.fields), link: displaysPage },
 
   "role.created": {
     summary: (c) => {

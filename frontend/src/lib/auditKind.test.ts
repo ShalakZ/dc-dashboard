@@ -21,14 +21,17 @@ const EXPECTED: Record<string, AuditKind> = {
   "storage.changed": "settings", "storage.default_set": "settings",
   "tariff.created": "create", "tariff.updated": "change", "tariff.deleted": "delete",
   "user.created": "create", "user.deleted": "delete", "user.updated": "change",
+  "playlist.created": "create", "playlist.updated": "change", "playlist.deleted": "delete",
+  "display.created": "create", "display.updated": "change", "display.revoked": "delete", "display.deleted": "delete",
+  "display.connected": "signin", "display.claim_blocked": "problem",
 };
 
 describe("auditKind", () => {
-  it("names the kind of every one of the 53 actions in the audit text table", () => {
+  it("names the kind of every one of the 62 actions in the audit text table", () => {
     const source = readFileSync("src/lib/auditText.ts", "utf8"); // vitest runs from the frontend directory
     const table = source.slice(source.indexOf("const RULES"), source.indexOf("function build("));
     const actions = [...table.matchAll(/^ {2}"([a-z_.]+)":/gm)].map((m) => m[1]);
-    expect(actions).toHaveLength(53);
+    expect(actions).toHaveLength(62);
     expect([...actions].sort()).toEqual(Object.keys(EXPECTED).sort());
     for (const action of actions) expect(auditKind(action), action).toBe(EXPECTED[action]);
   });
@@ -54,6 +57,14 @@ describe("auditKind", () => {
     expect(auditKind("kind.renamed")).toBe("change"); // a rename is a change, not "other"
     expect(auditKind("kind.starter_pack_added")).toBe("create"); // the pack registers kinds: a creation, by name, not by a broad "_added" suffix
     expect(auditKind("tariff.rate_added")).toBe("other");
+  });
+
+  it("reads a revoked display link as a delete, a display that connected as a sign-in and a blocked claim as a problem", () => {
+    expect(auditKind("display.revoked")).toBe("delete"); // the link is ended for good, like a removal
+    expect(auditKind("display.connected")).toBe("signin");
+    expect(auditKind("display.claim_blocked")).toBe("problem");
+    expect(auditKind("playlist.deleted")).toBe("delete");
+    expect(auditKind("x.revoked.more")).toBe("other"); // the end of the string, not a word inside it
   });
 
   it("matches the whole string at its start or end, not a word inside it", () => {
