@@ -3,6 +3,7 @@ closed. It only reads. The maths is core/month_check.py (pure); this module reso
 of every metered point with ONE statement, and hands both over. It changes no figure and writes nothing (no audit row)."""
 from collections import defaultdict
 from datetime import datetime, timezone
+from functools import partial
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -14,8 +15,9 @@ from dcdash.api import billing
 from dcdash.api.billing import MONTH_PATTERN
 from dcdash.api.deps import current_user, get_db, require_permission
 from dcdash.api.settings import current_timezone
+from dcdash.core import compute
 from dcdash.core.cost import TariffRow, load_tariffs, rate_at
-from dcdash.core.energy import HourRow, Meter, load_meters
+from dcdash.core.energy import PART_ROWS, HourRow, Meter, load_meters
 from dcdash.core.models import BillingClose, Point, Source, User
 from dcdash.core.month_check import LIMITS, MeterInput, build_report
 from dcdash.core.timeutil import month_bounds, validate_whole_hour_zone
@@ -71,17 +73,23 @@ async def _read_inputs(
     before: dict[int, HourRow] = {}
     first: dict[int, datetime] = {}
     ids = sorted({meter.point_id for meter in meters.values()})
-    for row in await db.execute(_ROWS, {"ids": ids, "start": start, "end": stop}):
-        # sum(n) in the rollup is numeric, which asyncpg returns as Decimal.
-        hour = HourRow(
-            row.bucket, row.min_value, row.max_value, row.sum_value, int(row.n), row.last_value, int(row.minutes)
-        )
-        if row.kind == "before":
-            before[row.point_id] = hour
-        elif row.kind == "first":
-            first[row.point_id] = row.bucket
-        else:
-            rows[row.point_id].append(hour)
+    # Streamed in parts, as the engine's read is, so the event loop is free between parts of a big month (still ONE statement).
+    result = await db.stream(_ROWS, {"ids": ids, "start": start, "end": stop})
+    try:
+        async for part in result.partitions(PART_ROWS):
+            for row in part:
+                # sum(n) in the rollup is numeric, which asyncpg returns as Decimal.
+                hour = HourRow(
+                    row.bucket, row.min_value, row.max_value, row.sum_value, int(row.n), row.last_value, int(row.minutes)
+                )
+                if row.kind == "before":
+                    before[row.point_id] = hour
+                elif row.kind == "first":
+                    first[row.point_id] = row.bucket
+                else:
+                    rows[row.point_id].append(hour)
+    finally:
+        await result.close()
     return [
         MeterInput(asset_id, meter, rows.get(meter.point_id, []), before.get(meter.point_id), first.get(meter.point_id))
         for asset_id, meter in meters.items()
@@ -147,11 +155,13 @@ async def month_check(
             if user.can("sources.view"):
                 names = await _names(db, meters)
             tariffs = await load_tariffs(db)
-    report = build_report(
+    # The report is pure (the tree, the rows and the tariffs are only read): on the compute thread, the loop stays free.
+    report = await compute.run(partial(
+        build_report,
         tree, inputs, start=start, stop=stop,
         rate_for=lambda asset_id, day: rate_at(tariffs, tree, asset_id, day),
         zone=zone, names=names,
-    )
+    ))
     return {
         "month": month,
         "timezone": tz_name,

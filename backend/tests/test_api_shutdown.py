@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 import dcdash.api.main as api_main
 
 
@@ -98,3 +100,51 @@ async def test_the_lifespan_publishes_its_pool_for_the_error_recorder_and_cancel
         assert journal.record_soon(Frozen(), "api", journal.HTTP_5XX, "x")
         await asyncio.sleep(0)
     assert pool.pending_at_close == 0
+
+
+async def test_the_lifespan_closes_the_figure_caches_engine_and_the_compute_thread_and_both_start_again_when_needed(app, monkeypatch):
+    import threading
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import text
+
+    from dcdash.core import compute, figure_cache
+    from dcdash.core.db import get_sessionmaker
+
+    class Pool(_HangingPool):
+        async def close(self):
+            pass
+
+    async def fake_create_pool(*args, **kwargs):
+        return Pool()
+
+    async def one(session):
+        await session.execute(text("SELECT 1"))  # a statement on the cache's own session: its engine opens a connection
+        return "ok"
+
+    def thread_name() -> str:
+        return threading.current_thread().name
+
+    async def ask() -> str:
+        start = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        async with get_sessionmaker()() as session:
+            return await figure_cache.get_or_compute(session, "shutdown-test", start, start + timedelta(hours=1), (), one)
+
+    monkeypatch.setattr(api_main, "create_pool", fake_create_pool)
+    assert await ask() == "ok"
+    assert (await compute.run(thread_name)).startswith("dcdash-compute")
+    engine, executor = figure_cache._engine, compute._executor
+    assert engine is not None and engine.pool.checkedin() == 1  # a connection is parked in the cache's pool
+    assert executor is not None
+
+    async with api_main.lifespan(app):
+        pass
+
+    assert figure_cache._engine is None and engine.pool.checkedin() == 0  # the engine was disposed: its connection is closed
+    assert compute._executor is None
+    with pytest.raises(RuntimeError):  # the thread was shut down: it takes no more work
+        executor.submit(thread_name)
+    # and both come back by themselves on the next use (a test client runs no lifespan; a restarted worker in the same process)
+    assert (await compute.run(thread_name)).startswith("dcdash-compute")
+    assert await ask() == "ok"
+    assert figure_cache._engine is not None and figure_cache._engine is not engine

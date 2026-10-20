@@ -308,12 +308,16 @@ _STATS_SQL = text(
            (SELECT min(ts) FROM readings) AS oldest
     """
 )
+# One pass over the hourly rollup, filtered once to the whole range (UTC midnight of `first` up to UTC midnight after
+# `last`) and grouped by the UTC day of the bucket; a join per generated day over the real-time view took seconds for a
+# long range. The days without rows are not in the result: rows_per_day fills them with 0.
 _ROWS_SQL = text(
     """
-    SELECT d::date AS day, coalesce(sum(r.n), 0)::bigint AS rows
-    FROM generate_series(CAST(:first AS date), CAST(:last AS date), INTERVAL '1 day') AS d
-    LEFT JOIN readings_1h r ON r.bucket >= d AND r.bucket < d + INTERVAL '1 day'
-    GROUP BY d ORDER BY d
+    SELECT (bucket AT TIME ZONE 'UTC')::date AS day, coalesce(sum(n), 0)::bigint AS rows
+    FROM readings_1h
+    WHERE bucket >= CAST(:first AS date)::timestamp AT TIME ZONE 'UTC'
+      AND bucket < (CAST(:last AS date) + 1)::timestamp AT TIME ZONE 'UTC'
+    GROUP BY 1 ORDER BY 1
     """
 )
 _FIRST_DAY_SQL = text("SELECT (min(bucket) AT TIME ZONE 'UTC')::date FROM readings_1h")
@@ -327,8 +331,9 @@ class RangeError(ValueError):
 
 async def rows_per_day(db: AsyncSession, first: date, last: date) -> list[DayRows]:
     """Rows of the hourly rollup per UTC day, first..last inclusive, a day without rows counted as 0."""
-    rows = (await db.execute(_ROWS_SQL, {"first": first, "last": last})).mappings().all()
-    return [DayRows(day=r["day"], rows=r["rows"]) for r in rows]
+    counted = {r["day"]: r["rows"] for r in (await db.execute(_ROWS_SQL, {"first": first, "last": last})).mappings()}
+    days = (first + timedelta(days=back) for back in range((last - first).days + 1))
+    return [DayRows(day=day, rows=counted.get(day, 0)) for day in days]
 
 
 async def rows_per_day_range(db: AsyncSession, start: date, end: date) -> RowsPerDay:

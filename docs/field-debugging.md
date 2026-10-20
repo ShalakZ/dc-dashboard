@@ -51,6 +51,13 @@ On Diagnostics (and as **Check connection** on a row of the Sources page, for op
 
 The check only reads (DNS, TCP, endpoint discovery, session, Read); it opens one session, never writes to the SCADA, and refuses to start twice at once or within five seconds of the last one.
 
+## The speed check
+When a page is slow on an installation, run this in the project folder and paste the whole output back:
+
+    docker compose exec -T api python -m dcdash.diagnostics.speed
+
+About 25 plain lines: how many assets, points, meters and hourly rows there are, and how many seconds one month of energy, Billing, Check month and the Storage page's queries take (each run twice, so a cache shows as a drop; the check switches the figure cache off for its run, so a drop between the two runs is the database's own cache). It only reads, in a read-only transaction (Billing's month is computed on the figure cache's own small connection pool, with read-only statements, outside that transaction and without the statement timeout, so a stalled database can hang that one stage), and prints counts and seconds, never a name, an address or a password. A large database can take a few minutes.
+
 ## Reading a report (what Claude looks at)
 1. The **header**: build id and time, to know which code produced it.
 2. The **LATEST CHECK** line right after it: the failing step and the OPC UA status, or "all steps OK", or "no connection check has been run".

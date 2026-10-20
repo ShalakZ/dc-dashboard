@@ -1,17 +1,21 @@
 """The energy engine: hourly kWh per asset from the hourly rollup, rolled up the asset tree.
 
 Every energy figure (asset page, billing, dashboards) comes from here. The maths is pure Python on
-`readings_1h` rows so it can be tested without a database; `hourly_energy` is the only function that
-touches one, and it reads the rollup with a single batched query.
+`readings_1h` rows so it can be tested without a database; `load_meters` and `read_energy_rows` are the only
+functions that touch one (`read_energy_rows` reads the rollup with a single batched query), `assemble` never does,
+and `hourly_energy` is the two of them and `assemble` in a row, with `assemble` on the compute thread
+(core/compute.py) so the event loop stays free.
 """
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dcdash.core import compute
 from dcdash.core.metrics import Metric
 from dcdash.core.models import Mapping
 from dcdash.core.tree import AssetTree
@@ -23,10 +27,10 @@ class Energy:
     estimated: bool
 
 
-@dataclass(frozen=True)
-class HourRow:
+class HourRow(NamedTuple):
     """One `readings_1h` row: the good samples of one point in one UTC hour. `minutes` is how many of the hour's
-    1-minute rollup buckets hold at least one good sample (0 to 60)."""
+    1-minute rollup buckets hold at least one good sample (0 to 60). A tuple, not a dataclass: a month holds about
+    150,000 of them and building one is the cost of reading it."""
 
     bucket: datetime
     min_value: float
@@ -37,7 +41,10 @@ class HourRow:
     minutes: int
 
 
-@dataclass(frozen=True)
+# Slots and not frozen: a quarter of a million of these are built per month and a frozen dataclass sets every field through
+# `object.__setattr__` (assemble 0.196 s to 0.107 s on 217 meters x 31 days). Nothing changes an hour after building it (the
+# engine makes a new one for every sum), and nothing uses one as a dict key or set member (unhashable now).
+@dataclass(slots=True)
 class HourEnergy:
     kwh: float
     estimated: bool
@@ -223,14 +230,20 @@ def total(hours: dict[datetime, HourEnergy] | None) -> Energy | None:
 # One statement for every metered point, three kinds of row: the rows of [start, end); the last bucket before
 # `start` of each counter point (its baseline); and the very first bucket the point ever had, whenever that was
 # (to know from when an own meter counts). Bad-quality readings are already excluded by the rollup views, which are
-# real-time, so the hours not yet materialized are included.
+# real-time, so the hours not yet materialized are included. `sum(n)` in the rollup is numeric, which asyncpg returns as
+# Decimal: `n` and `minutes` are cast to integers here, in every branch (a UNION takes the widest type of its branches),
+# so the rows arrive as Python ints. The column order is the order `_collect` unpacks them in. `CAST(n AS bigint)` rounds where the
+# old `int(Decimal)` truncated: the two agree only because `n` is a sum of whole counts, so a rollup that ever averages `n`
+# would change digits here. `billing_check._ROWS` (a test pins that its values equal these) still returns `Decimal` for `n`.
 _ROWS = text(
     """
-    SELECT point_id, bucket, min_value, max_value, sum_value, n, last_value, minutes, 'row' AS kind
+    SELECT point_id, bucket, min_value, max_value, sum_value, CAST(n AS bigint) AS n, last_value,
+           CAST(minutes AS integer) AS minutes, 'row' AS kind
     FROM readings_1h
     WHERE point_id = ANY(:ids) AND bucket >= :start AND bucket < :end
     UNION ALL
-    SELECT b.point_id, b.bucket, b.min_value, b.max_value, b.sum_value, b.n, b.last_value, b.minutes, 'baseline'
+    SELECT b.point_id, b.bucket, b.min_value, b.max_value, b.sum_value, CAST(b.n AS bigint), b.last_value,
+           CAST(b.minutes AS integer), 'baseline'
     FROM unnest(CAST(:counter_ids AS integer[])) AS c(point_id)
     CROSS JOIN LATERAL (
         SELECT point_id, bucket, min_value, max_value, sum_value, n, last_value, minutes
@@ -240,7 +253,8 @@ _ROWS = text(
         LIMIT 1
     ) b
     UNION ALL
-    SELECT f.point_id, f.bucket, f.min_value, f.max_value, f.sum_value, f.n, f.last_value, f.minutes, 'first'
+    SELECT f.point_id, f.bucket, f.min_value, f.max_value, f.sum_value, CAST(f.n AS bigint), f.last_value,
+           CAST(f.minutes AS integer), 'first'
     FROM unnest(CAST(:ids AS integer[])) AS p(point_id)
     CROSS JOIN LATERAL (
         SELECT point_id, bucket, min_value, max_value, sum_value, n, last_value, minutes
@@ -271,6 +285,75 @@ async def load_meters(db: AsyncSession, tree: AssetTree) -> dict[int, Meter]:
     return meters
 
 
+class EnergyRows(NamedTuple):
+    """What the rollup read gives `assemble`: the hours of [start, end) per point (ascending), each counter point's
+    baseline (the last value before `start`) and every point's first bucket ever."""
+
+    rows: dict[int, list[HourRow]]
+    baselines: dict[int, float]
+    first_buckets: dict[int, datetime]
+
+
+def _add_part(
+    part: Iterable,
+    rows: dict[int, list[HourRow]],
+    baselines: dict[int, float],
+    first_buckets: dict[int, datetime],
+) -> None:
+    """Add one chunk of a `_ROWS` result (rows unpacked in `_ROWS` order) to the three dicts. The result is ordered by point and
+    bucket, so appending chunk after chunk keeps every point's rows ascending."""
+    for point_id, bucket, min_value, max_value, sum_value, n, last_value, minutes, kind in part:
+        if kind == "baseline":
+            baselines[point_id] = last_value
+        elif kind == "first":
+            first_buckets[point_id] = bucket
+        else:
+            rows[point_id].append(HourRow(bucket, min_value, max_value, sum_value, n, last_value, minutes))
+
+
+def _collect(result: Iterable) -> EnergyRows:
+    """The rows of a whole `_ROWS` result (or of one chunk of it) as `EnergyRows`."""
+    rows: dict[int, list[HourRow]] = defaultdict(list)
+    baselines: dict[int, float] = {}
+    first_buckets: dict[int, datetime] = {}
+    _add_part(result, rows, baselines, first_buckets)
+    return EnergyRows(dict(rows), baselines, first_buckets)
+
+
+# Rows fetched, decoded and filed per turn of the event loop. A request that arrives during a month read waits for one part
+# (tens of milliseconds: over 172,800 rows the longest gap was 45 to 48 ms with 5000 rows a part and about 40 ms with 2000, on
+# a busy machine; the first cold dashboard measured `GET /api/me` waiting up to 130 ms), not for the whole month. Fewer rows a
+# part means a shorter turn; more parts cost a few more trips to the loop.
+PART_ROWS = 2000
+
+
+async def read_energy_rows(db: AsyncSession, meters: dict[int, Meter], start: datetime, end: datetime) -> EnergyRows:
+    """The rollup rows for the points of `meters`: ONE statement on `readings_1h` (none when there is no meter), streamed in
+    parts of `PART_ROWS` rows so the loop is free between parts. `start` and `end` must be timezone-aware (a `ValueError`
+    otherwise, with or without meters; `hourly_energy` asks first, before it reads the meters). The only thing here that needs
+    a session: `assemble` does not."""
+    if start.tzinfo is None or end.tzinfo is None:
+        raise ValueError("start and end must include a timezone offset")
+    if not meters:
+        return EnergyRows({}, {}, {})
+    params = {
+        "ids": sorted({m.point_id for m in meters.values()}),
+        "counter_ids": sorted({m.point_id for m in meters.values() if m.counter}),
+        "start": start,
+        "end": end,
+    }
+    rows: dict[int, list[HourRow]] = defaultdict(list)
+    baselines: dict[int, float] = {}
+    first_buckets: dict[int, datetime] = {}
+    result = await db.stream(_ROWS, params)
+    try:
+        async for part in result.partitions(PART_ROWS):
+            _add_part(part, rows, baselines, first_buckets)
+    finally:
+        await result.close()
+    return EnergyRows(dict(rows), baselines, first_buckets)
+
+
 async def hourly_energy(db: AsyncSession, tree: AssetTree, start: datetime, end: datetime) -> EnergyResult:
     """Hourly energy for every asset in `tree`, for the UTC hours that begin in [start, end).
 
@@ -281,27 +364,5 @@ async def hourly_energy(db: AsyncSession, tree: AssetTree, start: datetime, end:
     if start.tzinfo is None or end.tzinfo is None:
         raise ValueError("start and end must include a timezone offset")
     meters = await load_meters(db, tree)
-    rows: dict[int, list[HourRow]] = defaultdict(list)
-    baselines: dict[int, float] = {}
-    first_buckets: dict[int, datetime] = {}
-    if meters:
-        params = {
-            "ids": sorted({m.point_id for m in meters.values()}),
-            "counter_ids": sorted({m.point_id for m in meters.values() if m.counter}),
-            "start": start,
-            "end": end,
-        }
-        for row in await db.execute(_ROWS, params):
-            if row.kind == "baseline":
-                baselines[row.point_id] = row.last_value
-            elif row.kind == "first":
-                first_buckets[row.point_id] = row.bucket
-            else:
-                # sum(n) in the rollup is numeric, which asyncpg returns as Decimal.
-                rows[row.point_id].append(
-                    HourRow(
-                        row.bucket, row.min_value, row.max_value, row.sum_value, int(row.n), row.last_value,
-                        int(row.minutes),
-                    )
-                )
-    return assemble(tree, meters, rows, baselines, start, end, first_buckets)
+    read = await read_energy_rows(db, meters, start, end)
+    return await compute.run(assemble, tree, meters, read.rows, read.baselines, start, end, read.first_buckets)

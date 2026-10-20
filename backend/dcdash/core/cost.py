@@ -24,7 +24,8 @@ class TariffRow:
     effective_from: date
 
 
-@dataclass(frozen=True)
+# Slots and not frozen, as `HourEnergy` (core/energy.py): one per priced asset-hour, built far more often than read twice.
+@dataclass(slots=True)
 class HourCost:
     kwh: float
     cost: float | None  # None when no rate applied in that hour
@@ -101,10 +102,14 @@ def cost_by_hour(
     is). None wherever the engine has no figure."""
     zone = ZoneInfo(tz_name)
     rates: dict[tuple[int, date], float | None] = {}
+    local_dates: dict[datetime, date] = {}  # bucket -> its local date, worked out once per bucket, not once per asset-hour
     done: dict[int, dict[datetime, HourCost] | None] = {}
 
     def rate(asset_id: int, bucket: datetime) -> float | None:
-        key = (asset_id, bucket.astimezone(zone).date())
+        day = local_dates.get(bucket)
+        if day is None:
+            day = local_dates[bucket] = bucket.astimezone(zone).date()
+        key = (asset_id, day)
         if key not in rates:
             rates[key] = rate_at(tariffs, tree, asset_id, key[1])
         return rates[key]

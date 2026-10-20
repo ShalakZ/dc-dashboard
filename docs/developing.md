@@ -16,6 +16,13 @@ The tests start their own TimescaleDB container (testcontainers, image `timescal
 `backend/tests/conftest.py`), so Docker must be running. `uv run pytest tests/<file>.py` runs one file; the doc-reading tests
 (`tests/test_readme_ops.py`, `tests/test_field_debugging_doc.py`, `tests/test_docs_links.py`) need no Docker.
 
+`docker compose exec -T api python -m dcdash.diagnostics.speed` prints where the time goes (counts and seconds, read-only): [the speed check](field-debugging.md#the-speed-check).
+
+`backend/tests/reference_engine.py` is the energy engine of w25 copied unchanged (never edit it): `tests/test_engine_oracle.py` compares
+the live engine with it, bit for bit, on random worlds. The figure cache (`core/figure_cache.py`) is emptied before every test and its
+time to live is 0 in tests, so every request checks the rollup rows again; `DCDASH_FIGURE_CACHE=0` turns it off and
+`DCDASH_FIGURE_CACHE_TTL=<seconds>` (default 30) sets it.
+
 ## Frontend
 
 The dev server needs the stack running for the API:

@@ -691,7 +691,7 @@ const withoutKind = (config: WidgetConfig): string => hashKey([{ ...config, kind
 
 /** How often a widget's figures are read again: every 30 s. */
 const WIDGET_REFETCH_MS = 30_000;
-/** A comparison's figures change only when a day completes or a month is closed (a close or a reopen already invalidates `keys.widgetData`), and each answer costs two whole-month reads: every five minutes. */
+/** A comparison's figures change only when a day completes or a month is closed (a close or a reopen already invalidates `keys.widgetData`): every five minutes. (The server reads the two months once and keeps them for 30 s, w26, so a refetch is cheap; the interval is pinned by queries.test.tsx.) */
 const COMPARE_REFETCH_MS = 5 * 60_000;
 
 /** The re-read interval of a widget's data: five minutes for a widget that compares with last month's same days, 30 s for every other. */

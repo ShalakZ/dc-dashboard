@@ -18,15 +18,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import account_vanished_is_401, current_user, get_db, require_permission
 from dcdash.api.settings import current_timezone
+from dcdash.core import figure_cache
 from dcdash.core.audit import audit
 from dcdash.core.billing_close import csv_rows, has_data, is_complete, live_delta, root_totals
-from dcdash.core.cost import cost_by_hour, load_tariffs, rate_at
+from dcdash.core.cost import rate_at
 from dcdash.core.csvout import write_csv
-from dcdash.core.daycost import day_entries, month_total
-from dcdash.core.energy import hourly_energy, load_meters
+from dcdash.core.daycost import month_total
+from dcdash.core.energy import load_meters
+from dcdash.core.figures import entries_at, month_days
 from dcdash.core.models import BillingClose, User
 from dcdash.core.settings_store import get_currency
-from dcdash.core.timeutil import local_days, month_bounds, validate_whole_hour_zone
+from dcdash.core.timeutil import month_bounds, validate_whole_hour_zone
 from dcdash.core.tree import AssetTree
 
 router = APIRouter(prefix="/api", tags=["billing"])
@@ -63,23 +65,19 @@ async def month_costs(db: AsyncSession, month: str | None) -> dict[str, Any]:
     except (ValueError, OverflowError):
         raise HTTPException(422, "month must look like 2026-10") from None
 
-    tree = await AssetTree.load(db)
-    energy = await hourly_energy(db, tree, start.astimezone(timezone.utc), end.astimezone(timezone.utc))
-    tariffs = await load_tariffs(db)
-    priced = cost_by_hour(energy, tariffs, tree, tz_name)
-
-    days = local_days(start, end, tz_name)
+    # The day entries come from the shared month value (core/figures.py), made from today's engine in one snapshot; the tree,
+    # the names and the rates below are that value's own, so every figure of the answer belongs to one configuration.
+    md = await month_days(db, tz_name, start, end)
+    tree, tariffs, days = md.tree, md.tariffs, md.days
     today = now.astimezone(zone).date()
     first_day, last_day = days[0][0], days[-1][0]
     rate_day = today if first_day <= today <= last_day else last_day
 
     assets = []
     for asset_id in tree.preorder():
-        # A day with no energy hours used nothing: it costs 0 where a rate is in effect that day.
-        entries = day_entries(
-            priced.get(asset_id), days, now=now,
-            rate_on=lambda day, a=asset_id: rate_at(tariffs, tree, a, day) is not None,
-        )
+        # A day with no energy hours used nothing: it costs 0 where a rate is in effect that day. The entries of the value are
+        # shared with every other reader, so each day is copied: this answer is the caller's to change (a close stores it).
+        entries = [None if entry is None else dict(entry) for entry in entries_at(md, asset_id, now)]
         assets.append({
             "asset_id": asset_id,
             "parent_id": tree.nodes[asset_id].parent_id,
@@ -250,7 +248,8 @@ async def close_month(
         raise HTTPException(422, "month must look like 2026-10") from None
     if not complete:
         raise HTTPException(409, "that month is not over yet")
-    figures = await month_costs(db, month)
+    with figure_cache.require_fresh():  # a close never freezes a figure that was computed before rows landed a moment ago
+        figures = await month_costs(db, month)
     if not has_data(figures):
         raise HTTPException(409, "no energy data was recorded for that month")
     try:
