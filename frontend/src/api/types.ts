@@ -565,3 +565,27 @@ export interface RemoveSourcesResult {
   removed: { id: number; name: string }[];
   skipped: { id: number; name: string | null; reason: "mapped" | "manual" | "gone" }[];
 }
+
+/** w28 display screens. GET /api/displays (needs displays.manage): the screens, the playlists and the limits. Never carries a link secret or its hash. */
+export type DisplayStatus = "active" | "revoked";
+/** Why a playlist item is skipped by a screen: its dashboard was deleted, its focus asset is gone, or its dashboard has no widgets. */
+export type PlaylistSkip = "dashboard_deleted" | "focus_gone" | "no_widgets";
+export interface DisplayRow {
+  id: number; name: string; playlist_id: number; playlist_name: string; status: DisplayStatus;
+  created_at: string; last_seen_at: string | null; last_client: string | null; revoked_at: string | null;
+}
+/** `dashboard_name` and `focus_name` are the live name, or the stored one when the thing is gone; null when the caller lacks the permission to read it (dashboards.view, assets.view). */
+export interface PlaylistItemRow {
+  id: number; position: number; seconds: number;
+  dashboard_id: number | null; dashboard_name: string | null; focus_asset_id: number | null; focus_name: string | null; skipped: PlaylistSkip | null;
+}
+export interface PlaylistRow { id: number; name: string; item_count: number; skipped_count: number; display_count: number; items: PlaylistItemRow[] }
+export interface DisplayLimits { displays: number; playlists: number; items: number; min_seconds: number; max_seconds: number }
+export interface DisplaysList { displays: DisplayRow[]; playlists: PlaylistRow[]; limits: DisplayLimits }
+/** An item sent back with its own `id` and the stored `dashboard_id` / `focus_asset_id` is kept as stored (a null dashboard included); an item without `id` is new. */
+export interface PlaylistItemIn { id?: number; dashboard_id: number | null; focus_asset_id?: number | null; seconds: number }
+export interface PlaylistIn { name: string; items: PlaylistItemIn[] }
+export interface DisplayIn { name: string; playlist_id: number }
+export interface DisplayPatch { name?: string; playlist_id?: number }
+/** The answer to creating a display: `link_secret` is in this one answer and nowhere else. Keep it out of every cache. */
+export interface DisplayCreated { display: DisplayRow; link_secret: string }

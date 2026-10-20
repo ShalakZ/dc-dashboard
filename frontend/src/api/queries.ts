@@ -8,6 +8,7 @@ import type {
   FleetSummary, GeneralSettings, GraphModel, Metric, MoveBody, MovePreview, MoveResult, PermissionRow, PointRow, RangePreset, RemoveSourcesResult, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, SourceImpact, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, DataWidgetType, DashboardTemplates, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
+  DisplayCreated, DisplayIn, DisplayPatch, DisplayRow, DisplaysList, PlaylistIn, PlaylistRow,
 } from "./types";
 
 export const keys = {
@@ -60,6 +61,8 @@ export const keys = {
   secretKey: ["secret-key"] as const,
   tlsStatus: ["tls-status"] as const,
   version: ["version"] as const,
+  /** w28: the screens, the playlists and the limits, one answer (`GET /api/displays`); every write to either refreshes it. */
+  displays: ["displays"] as const,
 };
 
 /** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today), `fleet` the Assets Tree landing page's figures. */
@@ -771,3 +774,30 @@ export function useBuildReport() {
     onSuccess: () => invalidate(keys.auditAll), // the build is audited ("diagnostics.report")
   });
 }
+
+/** Needs displays.manage. The screens, the playlists and the limits, in one answer; it never carries a link secret. */
+export const useDisplays = () => useQuery({ queryKey: keys.displays, queryFn: () => api.get<DisplaysList>("/api/displays") });
+
+/**
+ * What a write to a playlist or a screen moves: the displays answer (both lists, and the counts each shows of the other) and the audit log. `onSettled`,
+ * not `onSuccess`: a refused write (a taken name, a playlist still in use, a screen another administrator already deleted) means the page is out of date.
+ */
+function useDisplayMutation<Variables, Result>(mutationFn: (variables: Variables) => Promise<Result>, options: { gcTime?: number } = {}) {
+  const invalidate = useInvalidate();
+  return useMutation({ mutationFn, ...options, onSettled: () => invalidate(keys.displays, keys.auditAll) });
+}
+
+export const useCreatePlaylist = () => useDisplayMutation((body: PlaylistIn) => api.post<PlaylistRow>("/api/playlists", body));
+export const useUpdatePlaylist = () => useDisplayMutation(({ id, body }: { id: number; body: PlaylistIn }) => api.put<PlaylistRow>(`/api/playlists/${id}`, body));
+/** A playlist that a screen shows answers 409 with the screens' names (the dialog shows that sentence). */
+export const useDeletePlaylist = () => useDisplayMutation((id: number) => api.del(`/api/playlists/${id}`));
+
+/**
+ * The answer carries the link secret, shown once. `gcTime: 0`: once nothing observes this mutation any more (the dialog is gone, or it called `reset()`),
+ * the cache drops it at once instead of holding the secret for the default five minutes. Nothing else may keep the answer: never `setQueryData` with it.
+ */
+export const useCreateDisplay = () => useDisplayMutation((body: DisplayIn) => api.post<DisplayCreated>("/api/displays", body), { gcTime: 0 });
+export const useUpdateDisplay = () => useDisplayMutation(({ id, body }: { id: number; body: DisplayPatch }) => api.put<DisplayRow>(`/api/displays/${id}`, body));
+/** The screen goes blank within a minute (its next poll is refused). Answers the screen; revoking twice is not an error. */
+export const useRevokeDisplay = () => useDisplayMutation((id: number) => api.post<DisplayRow>(`/api/displays/${id}/revoke`));
+export const useDeleteDisplay = () => useDisplayMutation((id: number) => api.del(`/api/displays/${id}`));

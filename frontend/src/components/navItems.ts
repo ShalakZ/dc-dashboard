@@ -61,6 +61,7 @@ export const GROUPS: NavGroup[] = [
       { to: "/settings", label: "Settings", icon: "settings", need: PAGE_NEED.settings },
       { to: "/tariffs", label: "Tariffs", icon: "tariffs", need: PAGE_NEED.tariffs },
       { to: "/storage", label: "Storage", icon: "storage", need: PAGE_NEED.storage },
+      { to: "/displays", label: "Displays", icon: "screen", need: PAGE_NEED.displays },
       { to: "/audit", label: "Audit", icon: "audit", need: PAGE_NEED.audit },
       { to: "/diagnostics", label: "Diagnostics", icon: "diagnostics", need: PAGE_NEED.diagnostics },
     ],
