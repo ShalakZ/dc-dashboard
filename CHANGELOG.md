@@ -16,7 +16,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w26b (2026-10-20, @@MERGE@@)
+## w26b (2026-10-20, 7fbaf5b)
 
 Dashboard speed, part 2: the figure ledger. Migration `0014`, no new permission or route, no changed figure (byte for byte w26's answers on four frozen test sites, cold, warm and with the ledger off). A new service, `figures`, keeps each month's figures ready in the database (table `figure_ledger`), made by the same code a request would run, and checks them against a fresh calculation every night. A page uses a stored figure only when it is provably current (same configuration, code and readings; the current month at most about a minute behind); closing a month never uses one, Check month checks the readings on the spot, and in any doubt the page computes as before. First request after an api restart on the pilot hall (217 meters): Billing for a month 1.2 s to 0.28 s, Check month 1.2 s to 0.22 s, the Power dashboard in the browser 3.0 s to 1.0 s. `docker compose exec -T figures python -m dcdash.figures.rebuild --check` proves the stored figures; `DCDASH_FIGURE_LEDGER=0` turns the ledger off. Rules: [Dashboards and billing](docs/dashboards-and-billing.md); the service: [Operating](docs/operating.md).
 
