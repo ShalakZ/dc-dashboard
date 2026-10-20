@@ -3,7 +3,8 @@
 import { chartLabels, shortLabels } from "../../../lib/widgetFormat";
 import { valueRow } from "../../../test/dashboardFixtures";
 import {
-  AXIS_CHARS, barAxisLayout, DEFAULT_CHART_WIDTH, GRID_SIDES_PX, LABEL_LINE_PX, LABEL_LINES, MIN_SLOT_PX, SLOT_GAP_PX, steppedWidth, textPx, wrapLabel,
+  AXIS_CHARS, barAxisLayout, DEFAULT_CHART_HEIGHT, DEFAULT_CHART_WIDTH, GRID_SIDES_PX, LABEL_LINE_PX, LABEL_LINES, MIN_SLOT_PX, MIN_TURNED_CHARS, nameGapFor, PLOT_MIN_PX, PLOT_SHARE,
+  SLOT_GAP_PX, steppedHeight, steppedWidth, textPx, TOP_PX, wrapLabel,
 } from "./barAxis";
 
 // The names of the w13 showcase (e2e/w13Showcase.ts SIX), as chartLabels builds them: the second is estimated.
@@ -251,14 +252,22 @@ describe("barAxisLayout", () => {
     expect(lines(ta).length).toBeLessThanOrEqual(LABEL_LINES + 1);
   });
 
-  it("goes to rotate mode when even the full texts (4 lines) are equal", () => {
-    // Two names equal at the start and at the end: only the middle differs, and it does not fit even in four lines.
-    const long = (digit: string) => `${"Q".repeat(10)}-${"a".repeat(100)}${digit}${"a".repeat(100)}-${"R".repeat(10)}`;
+  it("goes to rotate mode when even the full texts (4 lines) are equal, and then keeps the whole text of two names that differ only in the middle", () => {
+    // Two names equal at the start and at the end: only the middle differs, and it does not fit even in four lines (a slot of 50 px: a chart of 180 px for two).
+    const long = (digit: string) => `${"Q".repeat(5)}-aaaaaaaaa${digit}aaaaaaaaa-${"R".repeat(5)}`; // 31 characters, about 190 px
     const labels = [long("1"), long("2")];
-    const layout = barAxisLayout(labels, DEFAULT_CHART_WIDTH);
+    const layout = barAxisLayout(labels, GRID_SIDES_PX + 100, 600);
     expect(layout.mode).toBe("rotate");
     expect(layout.labels).toEqual(shortLabels(labels, AXIS_CHARS));
     expect(layout.labels.get(labels[0])).not.toBe(layout.labels.get(labels[1]));
+  });
+
+  it("draws no names rather than two equal ones when the whole texts do not fit the height under the plot", () => {
+    const long = (digit: string) => `${"Q".repeat(10)}-${"a".repeat(100)}${digit}${"a".repeat(100)}-${"R".repeat(10)}`;
+    const labels = [long("1"), long("2")];
+    const layout = barAxisLayout(labels, DEFAULT_CHART_WIDTH);
+    expect(layout.mode).toBe("none"); // the cuts are equal and the whole names are far taller than what is left under the plot
+    expect(layout.labels.size).toBe(0);
   });
 
   it("one asset: the slot is the whole plot and the label is one line", () => {
@@ -337,6 +346,121 @@ describe("barAxisLayout", () => {
   it("an empty list and a width of 0 do not crash", () => {
     expect(barAxisLayout([], DEFAULT_CHART_WIDTH).labels.size).toBe(0);
     expect(barAxisLayout(["A"], 0).mode).toBe("rotate");
+  });
+});
+
+// w27 P1: the plot keeps its share of the chart's height, and the names are cut to what is left.
+describe("barAxisLayout and the height of the chart", () => {
+  const RACKS = [
+    "Rack 35 / Feed A", "Rack 14 / Feed A", "Rack 19 / Feed A", "Rack 04 / Feed B (#16)", "Rack 03 / Feed B", "Rack 22 / Feed A", "Rack 12 / Feed B",
+    "Rack 38 / Feed A", "Rack 04 / Feed B (#198)", "Rack 24 / Feed A",
+  ];
+  const TWENTY = Array.from({ length: 20 }, (_, i) => `Distribution panel number ${i + 1}`);
+  const plotMin = (height: number) => Math.max(PLOT_MIN_PX, Math.ceil(height * PLOT_SHARE));
+  /** The plot's height by the layout's own estimates: wrapped, what `bottom` leaves; turned, what is left after the margin, the tick, the gap and the widest turned name. */
+  function plotOf(layout: ReturnType<typeof barAxisLayout>, height: number): number {
+    if (layout.mode === "wrap") return height - layout.top - layout.bottom;
+    if (layout.mode === "none") return height - layout.top - layout.bottom;
+    const widest = Math.max(...[...layout.labels.values()].map(textPx));
+    const turned = widest * Math.sin((40 * Math.PI) / 180) + LABEL_LINE_PX * Math.cos((40 * Math.PI) / 180);
+    return height - layout.top - layout.bottom - 13 - turned;
+  }
+
+  it("lays out for the unmeasured height as it did before the height was passed: the same layout, the roomy top", () => {
+    for (const names of [SIX, RACKS, TWENTY]) {
+      const same = barAxisLayout(names, DEFAULT_CHART_WIDTH);
+      expect(barAxisLayout(names, DEFAULT_CHART_WIDTH, DEFAULT_CHART_HEIGHT)).toEqual(same);
+      expect(same.top).toBe(TOP_PX);
+    }
+    expect(barAxisLayout(SIX, DEFAULT_CHART_WIDTH).mode).toBe("wrap");
+    expect(barAxisLayout(TWENTY, DEFAULT_CHART_WIDTH).mode).toBe("rotate");
+  });
+
+  it("keeps the plot's share at every height from the minimum card up, for wrapped, turned and unlabelled axes alike", () => {
+    const modes = new Set<string>();
+    for (const height of [120, 124, 140, 160, 180, 214, 260, 304, 360, 480]) {
+      for (const width of [330, 427, 543, 783, 880]) {
+        for (const names of [SIX, RACKS, TWENTY]) {
+          const layout = barAxisLayout(names, width, height);
+          modes.add(layout.mode);
+          expect(plotOf(layout, height), `${layout.mode} ${names.length} names in ${width} x ${height}`).toBeGreaterThanOrEqual(plotMin(height) - 1);
+          expect(layout.top).toBeGreaterThanOrEqual(24);
+          if (layout.mode === "rotate") for (const [label, text] of layout.labels) expect(text === label || Array.from(text).length >= MIN_TURNED_CHARS).toBe(true);
+        }
+      }
+    }
+    expect([...modes].sort()).toEqual(["none", "rotate", "wrap"]); // the sweep really meets all three
+  });
+
+  it("at the minimum card (a 124 px chart) wrapped names get one line and are cut in the middle, with the plot at 60 px or more", () => {
+    const layout = barAxisLayout(SIX, 880, 124);
+    expect(layout.mode).toBe("wrap");
+    expect(layout.lines).toBe(1);
+    expect(layout.top).toBe(24); // the unit's name stands in 24 px (nameGapFor)
+    expect(124 - layout.top - layout.bottom).toBeGreaterThanOrEqual(60);
+    const cut = layout.labels.get(SIX[4])!; // "Chiller plant 2 condenser loop" does not fit one line of its slot
+    expect(cut).toContain("…");
+    expect(cut).not.toContain("\n");
+    expect(textPx(cut)).toBeLessThanOrEqual(slotOf(SIX.length, 880) - SLOT_GAP_PX);
+  });
+
+  it("at the minimum card ten long names in a narrow chart are not drawn at all: eight characters do not fit under a plot of 60 px", () => {
+    for (const width of [427, 543]) {
+      const layout = barAxisLayout(RACKS, width, 124);
+      expect(layout.mode).toBe("none");
+      expect(layout.bottom).toBe(8); // only the margin: the plot takes the rest
+      expect(layout.left).toBe(12);
+    }
+  });
+
+  it("does not wrap names into one line where that cuts a name to '…' or 'Ro…' beside its suffix: the axis turns instead (and, in a short box, is left off)", () => {
+    const layout = barAxisLayout(RACKS, 783, 124); // slots of 70 px: one line of 62 px, and "Rack 04 / Feed B (#198)" keeps nothing of itself beside "(#198)"
+    expect(layout.mode).toBe("none");
+    const roomy = barAxisLayout(RACKS, 783, 214); // three lines: every name keeps its words
+    expect(roomy.mode).toBe("wrap");
+    for (const text of roomy.labels.values()) expect(text).not.toMatch(/^…|^Ro…/);
+  });
+
+  it("with more height the same names are turned and cut to what is left, never below eight characters, and the cut is the one shortLabels makes", () => {
+    const small = barAxisLayout(RACKS, 427, 200);
+    const medium = barAxisLayout(RACKS, 427, 240);
+    const large = barAxisLayout(RACKS, 427, 304);
+    for (const layout of [small, medium, large]) expect(layout.mode).toBe("rotate");
+    const shown = (layout: typeof small) => Math.max(...[...layout.labels.values()].map((text) => Array.from(text).length));
+    expect(shown(small)).toBeLessThan(shown(medium));
+    expect(shown(medium)).toBeLessThan(shown(large));
+    expect(shown(large)).toBeLessThanOrEqual(AXIS_CHARS);
+    for (const layout of [small, medium]) {
+      for (const label of RACKS) {
+        const text = layout.labels.get(label)!;
+        expect(text === label || text.includes("…")).toBe(true); // whole or cut in the middle with the ellipsis
+        expect(Array.from(text).length).toBeLessThanOrEqual(Array.from(label).length);
+      }
+    }
+  });
+
+  it("the unit's name never needs more than the top: 30 px in a roomy chart, 24 px (with a smaller gap) in a short one, 12 px with no name", () => {
+    expect(barAxisLayout(RACKS, 427, 304).top).toBe(30);
+    expect(barAxisLayout(RACKS, 427, 124).top).toBe(24);
+    expect(barAxisLayout(RACKS, 427, 124, false).top).toBe(12);
+    expect(nameGapFor(24)).toBe(6);
+    expect(nameGapFor(24) + 14).toBeLessThanOrEqual(24); // the text (about 14 px) fits between the picture's top and the plot
+    expect(nameGapFor(0)).toBeGreaterThan(0);
+  });
+});
+
+describe("steppedHeight", () => {
+  it("rounds a measured height down to a step of 4 px", () => {
+    expect(steppedHeight(124)).toBe(124);
+    expect(steppedHeight(126.9)).toBe(124);
+    expect(steppedHeight(214)).toBe(212);
+  });
+
+  it("ignores a height that is no real chart (not laid out: 0, NaN): the default stays", () => {
+    expect(steppedHeight(0)).toBe(DEFAULT_CHART_HEIGHT);
+    expect(steppedHeight(PLOT_MIN_PX)).toBe(DEFAULT_CHART_HEIGHT);
+    expect(steppedHeight(Number.NaN)).toBe(DEFAULT_CHART_HEIGHT);
+    expect(steppedHeight(PLOT_MIN_PX + 4)).toBe(PLOT_MIN_PX + 4);
   });
 });
 

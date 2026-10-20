@@ -1,7 +1,10 @@
 // P1 (w14): the category axis of a bar chart of one value per asset. Six assets on a 480 px card leave an 80 px slot for each name, and a name
 // cut to 18 characters is about 105 px wide, so neighbours collided and `hideOverlap` dropped one of them. The names now WRAP inside their slot
 // (up to three lines) and only a crowded axis turns them by 40 degrees. This file is pure (no canvas, no DOM): it decides the text of each label
-// and the room under the plot; BarWidget measures the chart's width and barOption puts the result into the axis.
+// and the room under the plot; BarWidget measures the chart's width and height and barOption puts the result into the axis.
+// w27 P1: the plot comes first. A card at its minimum height is 124 px of chart, and names that are turned or wrapped took all of it (the plot was a
+// 3 px sliver). The plot now keeps PLOT_SHARE of the box (at least PLOT_MIN_PX) and the names are CUT to the height that is left, or left off when
+// not even a few characters fit (the full name is in the tooltip and in the chart's text alternative).
 import { shortLabels } from "../../../lib/widgetFormat";
 
 /** Characters a rotated label shows (the full name is in the tooltip and in the Details panel). */
@@ -15,6 +18,27 @@ export const MIN_SLOT_PX = 56;
 export const GRID_SIDES_PX = 80;
 /** The chart's width when it has not been measured (a server render, jsdom): a 480 px card. */
 export const DEFAULT_CHART_WIDTH = 480;
+/** The chart's height when it has not been measured: a card of the default 6 x 5 size (a 3 row card is 124 px). */
+export const DEFAULT_CHART_HEIGHT = 280;
+/** What the plot keeps of the chart box's height at least: this share of it, and never less than PLOT_MIN_PX (w27 P1). */
+export const PLOT_SHARE = 0.45;
+export const PLOT_MIN_PX = 60;
+/** `grid.top` of a roomy chart: the unit's name stands in it, above the plot. */
+export const TOP_PX = 30;
+/** `grid.top` of a chart without room to spare: just the unit's name (12 px text, 15 px from the axis end by default), or nothing without a name. */
+const TOP_NAMED_TIGHT_PX = 24;
+const TOP_BARE_TIGHT_PX = 12;
+/** A box with less than this under its plot (once the plot has its share) takes the tight top: names then get a little more room. */
+const COMFORT_PX = 48;
+/** The tick and the gap before a label (ECharts' 5 and 8). */
+const TICK_AND_GAP_PX = 13;
+/** Fewest characters (the ellipsis counts) a turned name may be cut to: below that the names are left off, "Rac…A" says nothing the tooltip does not say better. */
+export const MIN_TURNED_CHARS = 8;
+/**
+ * `nameGap` of the value axis's unit name when `top` is the tight one: ECharts' default 15 px between the name and the axis end would cut the name off at the
+ * top of a 24 px margin (its text is about 14 px tall), so the gap is what is left of `top` under the name, which keeps 4 px above it.
+ */
+export const nameGapFor = (top: number): number => Math.max(2, top - 18);
 /** Room kept between a line of text and the edge of its slot: 4 px each side. */
 export const SLOT_GAP_PX = 8;
 /**
@@ -77,6 +101,11 @@ function splitSuffix(label: string): { body: string; suffix: string } {
   const found = SUFFIX.exec(label);
   return found ? { body: label.slice(0, found.index), suffix: found[0].trim() } : { body: label, suffix: "" };
 }
+
+/** The characters of a label's name that are drawn: what is before the identifying suffix, without the ellipsis and the spaces. */
+const nameChars = (label: string): number => Array.from(splitSuffix(label).body).filter((char) => char !== "…" && char !== " ").length;
+/** A wrapped name that is cut keeps at least this many characters of itself ("Rack…", not "Ro…"). */
+const MIN_CUT_NAME_CHARS = 4;
 
 /** A row of the greedy wrap and the offset in the body where it ends (what is left over is `body.slice(end)`). */
 interface Row { text: string; end: number }
@@ -189,7 +218,8 @@ function widestPiece(label: string): number {
 }
 
 export interface AxisLayout {
-  mode: "wrap" | "rotate";
+  /** `none`: the box has no room for even a short name under its plot, so the axis draws no names (the tooltip and the text alternative have them). */
+  mode: "wrap" | "rotate" | "none";
   /** Width of one category's slot, in px. */
   slot: number;
   /** Lines of the longest label (1 when rotated). */
@@ -198,6 +228,8 @@ export interface AxisLayout {
   labels: Map<string, string>;
   /** `grid.bottom`: the room under the plot for the labels (wrapped), or the margin under the turned names (rotated, which uses containLabel). */
   bottom: number;
+  /** `grid.top`: TOP_PX, or less when the box is short (the plot's share comes first). */
+  top: number;
   /** `grid.left`: WRAPPED_LEFT_PX, or `rotatedLeft(...)` when rotated: at least ROTATED_LEFT_PX, up to 0.4 of the chart width for a long first name (containLabel counts the y axis's numbers and the turned names' height, not their width). */
   left: number;
 }
@@ -220,29 +252,62 @@ function rotatedLeft(first: string, slot: number, chartWidth: number): number {
 }
 
 /**
- * How the category labels of a chart `chartWidth` px wide are drawn. `wrap`: each name in lines of its slot's width. Two names that wrap to the
- * same text keep their whole text, over up to LABEL_LINES + 1 lines; if they are still equal, or the slot is narrower than MIN_SLOT_PX, or a word of
- * a name is wider than the line (it would be cut inside the word), the axis is `rotate`d, with `shortLabels` (which never makes two names equal).
+ * What a chart `height` px tall leaves for the names: `top` (grid.top) and `room`, the height under the plot for the tick, the gap and the names, once
+ * the plot has its share. `named` is whether the value axis has a unit name (it stands above the plot, in `top`).
  */
-export function barAxisLayout(labels: readonly string[], chartWidth: number): AxisLayout {
+function verticalBudget(height: number, named: boolean): { top: number; room: number } {
+  const plot = Math.max(PLOT_MIN_PX, Math.ceil(height * PLOT_SHARE));
+  const top = height - TOP_PX - plot < COMFORT_PX ? (named ? TOP_NAMED_TIGHT_PX : TOP_BARE_TIGHT_PX) : TOP_PX;
+  return { top, room: Math.max(0, height - top - plot) };
+}
+
+/**
+ * How the category labels of a chart `chartWidth` x `chartHeight` px are drawn. `wrap`: each name in lines of its slot's width, as many lines as the
+ * height under the plot holds (at most LABEL_LINES; a name that does not fit them is cut in the middle). Two names that wrap to the same text keep their
+ * whole text, over up to LABEL_LINES + 1 lines where the height allows; if they are still equal, or the slot is narrower than MIN_SLOT_PX, or a word of
+ * a name is wider than the line (it would be cut inside the word), the axis is `rotate`d, with `shortLabels` (which never makes two names equal) cut to
+ * what the height under the plot holds; if that is under MIN_TURNED_CHARS characters the axis draws no names at all (`none`).
+ * `named`: the value axis has a unit name above its plot.
+ */
+export function barAxisLayout(
+  labels: readonly string[], chartWidth: number, chartHeight: number = DEFAULT_CHART_HEIGHT, named = true,
+): AxisLayout {
   const slot = (chartWidth - GRID_SIDES_PX) / Math.max(labels.length, 1);
+  const { top, room } = verticalBudget(chartHeight, named);
   const rotated = (): AxisLayout => {
-    const short = shortLabels(labels, AXIS_CHARS);
-    return { mode: "rotate", slot, lines: 1, labels: short, bottom: ROTATED_BOTTOM_PX, left: rotatedLeft(short.get(labels[0] ?? "") ?? "", slot, chartWidth) };
+    // The widest text a turned name may have so that the names' height fits under the plot (the margin below the grid and the tick are theirs too).
+    const maxText = (room - ROTATED_BOTTOM_PX - TICK_AND_GAP_PX - LABEL_LINE_PX * COS_TURN) / SIN_TURN;
+    const widest = (texts: Iterable<string>) => Math.max(0, ...Array.from(texts, textPx));
+    let short = shortLabels(labels, AXIS_CHARS);
+    let kept = AXIS_CHARS;
+    // Cut until it fits. `shortLabels` restores the full text of names whose cuts are equal (two bars never carry the same name), and that stays while it
+    // fits; when it cannot (names that differ only in the middle, and a short box) the axis draws no names rather than two equal ones.
+    while (widest(short.values()) > maxText && kept > MIN_TURNED_CHARS) {
+      kept--;
+      short = shortLabels(labels, kept);
+    }
+    if (widest(short.values()) > maxText) {
+      return { mode: "none", slot, lines: 1, labels: new Map(), top, bottom: ROTATED_BOTTOM_PX, left: ROTATED_LEFT_PX };
+    }
+    return { mode: "rotate", slot, lines: 1, labels: short, top, bottom: ROTATED_BOTTOM_PX, left: rotatedLeft(short.get(labels[0] ?? "") ?? "", slot, chartWidth) };
   };
   if (!(slot >= MIN_SLOT_PX)) return rotated();
   const linePx = slot - SLOT_GAP_PX;
   const names = [...new Set(labels)];
   if (names.some((name) => widestPiece(name) > linePx)) return rotated(); // a word wider than its slot would be cut in two ("Electrica" over "l"): the axis turns instead (w27 R5)
-  const wrapped = new Map(names.map((name) => [name, wrapLabel(name, linePx, LABEL_LINES)] as const));
+  const fits = Math.floor((room - BOTTOM_BASE_PX) / LABEL_LINE_PX); // the lines the height under the plot holds
+  const most = Math.max(1, Math.min(LABEL_LINES, fits));
+  const wrapped = new Map(names.map((name) => [name, wrapLabel(name, linePx, most)] as const));
   const owners = new Map<string, number>();
   for (const lines of wrapped.values()) owners.set(lines.join("\n"), (owners.get(lines.join("\n")) ?? 0) + 1);
-  for (const name of names) if ((owners.get(wrapped.get(name)!.join("\n")) ?? 0) > 1) wrapped.set(name, wrapLabel(name, linePx, LABEL_LINES + 1));
+  for (const name of names) if ((owners.get(wrapped.get(name)!.join("\n")) ?? 0) > 1) wrapped.set(name, wrapLabel(name, linePx, Math.max(1, Math.min(LABEL_LINES + 1, fits))));
   const texts = [...wrapped.values()].map((lines) => lines.join("\n"));
   if (new Set(texts).size < texts.length) return rotated();
+  // A name cut to "…" or "Ro…" (one short line, a long identifying suffix) says nothing: such an axis turns, and the height may then leave the names off.
+  if (texts.some((text) => text.includes("…") && nameChars(text.replace(/\n/g, " ")) < MIN_CUT_NAME_CHARS)) return rotated();
   const lines = Math.max(1, ...[...wrapped.values()].map((rows) => rows.length));
   return {
-    mode: "wrap", slot, lines, bottom: BOTTOM_BASE_PX + lines * LABEL_LINE_PX, left: WRAPPED_LEFT_PX,
+    mode: "wrap", slot, lines, top, bottom: BOTTOM_BASE_PX + lines * LABEL_LINE_PX, left: WRAPPED_LEFT_PX,
     labels: new Map([...wrapped].map(([name, rows]) => [name, rows.join("\n")] as const)),
   };
 }
@@ -254,4 +319,12 @@ export function barAxisLayout(labels: readonly string[], chartWidth: number): Ax
  */
 export function steppedWidth(measured: number): number {
   return measured > GRID_SIDES_PX + MIN_SLOT_PX ? Math.floor(measured / STEP_PX) * STEP_PX : DEFAULT_CHART_WIDTH;
+}
+
+/**
+ * The chart height to lay the axis out for, from a measured box: rounded DOWN to a step of 4 px. A box that has not been laid out (0 in jsdom, NaN) or
+ * is shorter than a plot's minimum keeps the default.
+ */
+export function steppedHeight(measured: number): number {
+  return measured > PLOT_MIN_PX ? Math.floor(measured / 4) * 4 : DEFAULT_CHART_HEIGHT;
 }

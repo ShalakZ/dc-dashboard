@@ -40,7 +40,7 @@ const SIX = ["Rack A01", "Rack A02", "UPS-1 output", "CRAH-3 supply fan", "Chill
 interface LegendOpt { show: boolean; type: string; formatter: (name: string) => string; tooltip: { show: boolean } }
 const legendOf = (option: unknown) => (option as { legend: LegendOpt }).legend;
 interface AxisLabelOpt { interval: number; hideOverlap?: boolean; rotate?: number; width?: number; overflow?: string; ellipsis?: string; lineHeight?: number; formatter: (value: string) => string }
-interface AxisOpt { xAxis: { axisLabel: AxisLabelOpt }; grid: { left: number; bottom: number; containLabel?: boolean } }
+interface AxisOpt { xAxis: { axisLabel: AxisLabelOpt }; grid: { left: number; top: number; bottom: number; containLabel?: boolean } }
 const axisLabelOf = (option: unknown) => (option as AxisOpt).xAxis.axisLabel;
 /** A tooltip as the viewer reads it: the tags taken away, the name, the value and the state of each row one after the other. */
 const tipText = (html: string) => html.replace(/<\/(span|div)>/g, " ").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
@@ -508,6 +508,32 @@ describe("bar", () => {
     expect(wide.xAxis.axisLabel.rotate).toBeUndefined();
     expect(narrow.xAxis.axisLabel.rotate).toBe(40);
     expect(wide.grid.bottom).toBeLessThanOrEqual(barAxisLayout(SIX, 480).bottom);
+  });
+
+  it("lays the axis out for the chart height too (w27 P1): a minimum-height card keeps its plot, the names are cut or left off, the unit's name keeps its room", () => {
+    const names = ["Rack 35 / Feed A", "Rack 14 / Feed A", "Rack 19 / Feed A", "Rack 04 / Feed B (#16)", "Rack 03 / Feed B", "Rack 22 / Feed A", "Rack 12 / Feed B", "Rack 38 / Feed A"];
+    const racks = byAsset(names.map((name, i) => valueRow({ asset_id: 40 + i, name, value: 1_000 + i * 500 })));
+    type Opt = AxisOpt & { yAxis: { name?: string; nameGap?: number } };
+    const roomy = barOption(racks, TZ, LIGHT_CHART, 427) as unknown as Opt;
+    const short = barOption(racks, TZ, LIGHT_CHART, 427, undefined, undefined, 124) as unknown as Opt;
+    const medium = barOption(racks, TZ, LIGHT_CHART, 427, undefined, undefined, 240) as unknown as Opt;
+    expect(roomy.grid.top).toBe(30);
+    expect(roomy.yAxis.nameGap).toBeUndefined(); // the library's own gap
+    expect(roomy.xAxis.axisLabel.rotate).toBe(40);
+    // A 124 px chart cannot hold eight characters of a turned name under a plot of 60 px: no names, the plot takes the room, the y numbers keep theirs (containLabel).
+    expect(short.grid.top).toBe(24);
+    expect(short.yAxis.nameGap).toBe(6); // the unit's name is not cut at the picture's top
+    expect(short.yAxis.name).toBe("kWh");
+    expect(short.xAxis.axisLabel).toMatchObject({ show: false });
+    expect(short.grid.containLabel).toBe(true);
+    expect(short.grid.bottom).toBe(8);
+    // Cut names are the same cuts the width-only layout makes, only shorter: the full names stay in the category data (tooltip, clicks, text alternative).
+    expect(medium.xAxis.axisLabel.rotate).toBe(40);
+    const shownMedium = Array.from(medium.xAxis.axisLabel.formatter(names[3])).length;
+    expect(shownMedium).toBeLessThan(Array.from(roomy.xAxis.axisLabel.formatter(names[3])).length + 1);
+    expect(asBar(short).xAxis.data).toEqual(names);
+    expect(asBar(medium).xAxis.data).toEqual(names);
+    expect(asBar(short).tooltip.formatter([{ name: names[3], dataIndex: 3, seriesIndex: 0, marker: "" }])).toContain(escapeHtml(names[3]));
   });
 
   it("leaves the time-bucket mode alone: its axis shows times, with no wrapping, and its grid is not the label grid", () => {

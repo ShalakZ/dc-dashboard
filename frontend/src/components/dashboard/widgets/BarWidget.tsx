@@ -13,7 +13,7 @@ import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
 import { chartLabels, escapeHtml, figureText, hasNoReading, labelBucket, NO_DATA, shortLabel, shortLabels, uniqueLabels, unitSuffix, type ParentNames } from "../../../lib/widgetFormat";
 import { InfoTip } from "../../InfoTip";
 import { useFocus } from "../FocusContext";
-import { AXIS_CHARS, barAxisLayout, DEFAULT_CHART_WIDTH, LABEL_LINE_PX, steppedWidth } from "./barAxis";
+import { AXIS_CHARS, barAxisLayout, DEFAULT_CHART_HEIGHT, DEFAULT_CHART_WIDTH, LABEL_LINE_PX, nameGapFor, steppedHeight, steppedWidth, TOP_PX } from "./barAxis";
 import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, valueAxisParts, type ChartTheme } from "./chartTheme";
 import { useLegendSelection } from "./legendSelection";
 
@@ -90,16 +90,20 @@ function tooltipFor(
  * `drill` (w25) is what a click on each bar of a breakdown by kind does, in the bars' order: it adds the last line of the tooltip, makes the axis names emit
  * events and gives the bars the pointer. With none, a breakdown's bars say with their cursor that a click does nothing.
  * `parents` (w27 R6) is the asset list's parent names: a name several bars share is drawn "Hall 2 / Rack 04" (see `uniqueLabels`); without it the label is "Rack 04 (#12)".
+ * `chartHeight` (w27 P1) is the height of the chart's box: the plot keeps its share of it and the names are cut to what is left (barAxis.ts).
  */
 export function barOption(
   data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART, chartWidth: number = DEFAULT_CHART_WIDTH, drill?: readonly DrillAction[], parents?: ParentNames,
+  chartHeight: number = DEFAULT_CHART_HEIGHT,
 ): EChartsOption {
   const unit = unitSuffix(data.unit);
   const base = chartBase(theme);
   const axis = axisParts(theme);
   if (data.mode === "values") {
     const labels = chartLabels(data.values, parents);
-    const layout = barAxisLayout(labels, chartWidth);
+    // One scale for the value axis, from the tallest bar (D3); the bars keep their base-unit values and the tooltip its exact figure.
+    const valueAxis = valueAxisFor(data, data.values.map((v) => v.value));
+    const layout = barAxisLayout(labels, chartWidth, chartHeight, valueAxis.name !== undefined);
     // A metric that recorded nothing is "no data", with no dash mark: the dash means a missing rate and nothing else. A cost
     // without a rate keeps its dash whether or not anything was recorded, like the stat, the table and Billing.
     // A breakdown by kind (w24) is the exception: there a bar that recorded nothing (no figure, or the zero of a meter silent for the whole range,
@@ -120,18 +124,18 @@ export function barOption(
       // truncation only catch a line that is wider than the estimate. Rotated (a crowded axis): hideOverlap may still drop some names (the
       // tooltip and the Details panel have every one), and containLabel keeps the first rotated name from being cut at the left edge. With
       // containLabel the names and the y numbers sit INSIDE the rectangle that left and bottom describe, so those two are plain margins there.
-      grid: { left: layout.left, right: 20, top: 30, bottom: layout.bottom, ...(layout.mode === "rotate" ? { containLabel: true } : {}) },
+      // `containLabel` is also kept where the names are left off (a box too short for them), so the y axis's numbers keep their room at the left.
+      grid: { left: layout.left, right: 20, top: layout.top, bottom: layout.bottom, ...(layout.mode !== "wrap" ? { containLabel: true } : {}) },
       xAxis: {
         type: "category", data: labels, ...axis, ...(notes ? { triggerEvent: true } : {}),
         axisLabel: {
           ...axis.axisLabel, interval: 0, formatter: (v: string) => layout.labels.get(String(v)) ?? shortLabel(String(v), AXIS_CHARS),
           ...(layout.mode === "wrap"
             ? { width: layout.slot - 4, overflow: "truncate", ellipsis: "…", lineHeight: LABEL_LINE_PX }
-            : { rotate: 40, hideOverlap: true }),
+            : layout.mode === "none" ? { show: false } : { rotate: 40, hideOverlap: true }),
         },
       },
-      // One scale for the value axis, from the tallest bar (D3); the bars keep their base-unit values and the tooltip its exact figure.
-      yAxis: valueAxisParts(theme, valueAxisFor(data, data.values.map((v) => v.value))),
+      yAxis: valueAxisParts(theme, valueAxis, layout.top < TOP_PX ? { nameGap: nameGapFor(layout.top) } : {}),
       series: [{
         type: "bar", color: theme.accent, data: data.values.map((v) => (silent(v) ? null : v.value)),
         // A bar shows the pointer (zrender's default for every shape) only when a click on it does something.
@@ -202,7 +206,7 @@ function SplitBy({ data, current, onKind, disabled }: { data: WidgetData; curren
   );
 }
 
-interface BarsProps { data: WidgetData; timezone: string; theme: ChartTheme; chartWidth: number; parents?: ParentNames }
+interface BarsProps { data: WidgetData; timezone: string; theme: ChartTheme; chartWidth: number; chartHeight: number; parents?: ParentNames }
 const BREAKDOWN_CHART_STYLE = { height: "100%", width: "100%", minHeight: 120 };
 
 /**
@@ -210,8 +214,8 @@ const BREAKDOWN_CHART_STYLE = { height: "100%", width: "100%", minHeight: 120 };
  * Memoised on its own because BreakdownBars, its parent, re-renders whenever the dashboard's focus changes (it reads the focus context), and a fresh option
  * would make echarts-for-react set it again (see TimeSeriesWidget).
  */
-const PlainBars = memo(function PlainBars({ data, timezone, theme, chartWidth, parents }: BarsProps) {
-  return <ReactECharts option={barOption(data, timezone, theme, chartWidth, undefined, parents)} style={BREAKDOWN_CHART_STYLE} notMerge />;
+const PlainBars = memo(function PlainBars({ data, timezone, theme, chartWidth, chartHeight, parents }: BarsProps) {
+  return <ReactECharts option={barOption(data, timezone, theme, chartWidth, undefined, parents, chartHeight)} style={BREAKDOWN_CHART_STYLE} notMerge />;
 });
 
 /** What ECharts hands a click handler: the part that was clicked and, for a bar, its index, for an axis name, the category as it was given (not as it is drawn). */
@@ -233,7 +237,7 @@ export function clickedBar(params: ClickParams, labels: readonly string[]): numb
  * It waits for the asset list (children are read from it), and until then behaves like PlainBars. Only this component asks for the list and for the router, so a
  * card that cannot drill needs neither.
  */
-const DrillBars = memo(function DrillBars({ data, timezone, theme, chartWidth, parents }: BarsProps) {
+const DrillBars = memo(function DrillBars({ data, timezone, theme, chartWidth, chartHeight, parents }: BarsProps) {
   const assets = useAssets().data;
   const { setFocus, anyFollowing } = useFocus();
   const navigate = useNavigate();
@@ -242,7 +246,7 @@ const DrillBars = memo(function DrillBars({ data, timezone, theme, chartWidth, p
     const parents = parentIds(assets);
     return data.values.map((bar) => drillAction(bar.asset_id, parents, anyFollowing));
   }, [assets, data.values, anyFollowing]);
-  const option = useMemo(() => barOption(data, timezone, theme, chartWidth, actions, parents), [data, timezone, theme, chartWidth, actions, parents]);
+  const option = useMemo(() => barOption(data, timezone, theme, chartWidth, actions, parents, chartHeight), [data, timezone, theme, chartWidth, chartHeight, actions, parents]);
   // The handler ECharts holds never changes (a new one would be bound again on every refetch); it calls whatever the latest render decided.
   const click = useRef<(params: ClickParams) => void>(() => {});
   click.current = (params) => {
@@ -278,13 +282,18 @@ interface BarWidgetProps {
 export const BarWidget = memo(function BarWidget({ data, timezone, kind, onKind, splitDisabled = false, parents }: BarWidgetProps) {
   const legend = useLegendSelection();
   const theme = useChartTheme();
-  // The width of the chart's box, in steps of 8 px, for the axis layout. The box is held in state (a callback ref) so that the observer follows it
-  // when the data arrives after an empty first render. A box with no width (jsdom, a server render) or no ResizeObserver leaves the default 480 px.
+  // The width of the chart's box, in steps of 8 px, and its height, in steps of 4 px, for the axis layout. The box is held in state (a callback ref) so that
+  // the observer follows it when the data arrives after an empty first render. A box with no size (jsdom, a server render) or no ResizeObserver leaves the
+  // defaults (480 x 280 px).
   const [box, setBox] = useState<HTMLDivElement | null>(null);
   const [chartWidth, setChartWidth] = useState(DEFAULT_CHART_WIDTH);
+  const [chartHeight, setChartHeight] = useState(DEFAULT_CHART_HEIGHT);
   useLayoutEffect(() => {
     if (!box || typeof ResizeObserver !== "function") return undefined;
-    const measure = () => setChartWidth(steppedWidth(box.clientWidth));
+    const measure = () => {
+      setChartWidth(steppedWidth(box.clientWidth));
+      setChartHeight(steppedHeight(box.clientHeight));
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(box);
@@ -304,7 +313,7 @@ export const BarWidget = memo(function BarWidget({ data, timezone, kind, onKind,
           <p className="widget-empty">{sentence}</p>
         ) : (
           <div ref={setBox} className="widget-chart" role="img" aria-label={breakdownDescription(data, breakdown)}>
-            <BreakdownBars data={data} timezone={timezone} theme={theme} chartWidth={chartWidth} parents={parents} splitDisabled={splitDisabled} />
+            <BreakdownBars data={data} timezone={timezone} theme={theme} chartWidth={chartWidth} chartHeight={chartHeight} parents={parents} splitDisabled={splitDisabled} />
           </div>
         )}
         <p className="bars-note" title={exact}>{line}</p>
@@ -321,7 +330,7 @@ export const BarWidget = memo(function BarWidget({ data, timezone, kind, onKind,
   return (
     <div ref={setBox} className="widget-chart" role="img" aria-label={chartDescription("bar", data, parents)}>
       <ReactECharts
-        option={legend.apply(barOption(data, timezone, theme, chartWidth, undefined, parents), data.mode === "series" ? data.series.map((s) => s.asset_id) : [])} onEvents={legend.onEvents}
+        option={legend.apply(barOption(data, timezone, theme, chartWidth, undefined, parents, chartHeight), data.mode === "series" ? data.series.map((s) => s.asset_id) : [])} onEvents={legend.onEvents}
         style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge
       />
     </div>

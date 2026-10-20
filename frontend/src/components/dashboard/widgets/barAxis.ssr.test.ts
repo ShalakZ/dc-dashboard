@@ -81,10 +81,10 @@ function draw(names: readonly string[], width: number, flags: { estimated?: numb
   const data = valuesData({ type: "bar", source: "metric", metric: "active_power_kw", unit: "kWh", values: rows });
   const labels = chartLabels(rows);
   const chart = echarts.init(null, undefined, { renderer: "svg", ssr: true, width, height });
-  chart.setOption(barOption(data, "Asia/Qatar", undefined, width));
+  chart.setOption(barOption(data, "Asia/Qatar", undefined, width, undefined, undefined, height));
   const svg = chart.renderToSVGString();
   chart.dispose();
-  return { labels, drawn: labelsOf(svg), layout: barAxisLayout(labels, width), plot: plotOf(svg) };
+  return { labels, drawn: labelsOf(svg), layout: barAxisLayout(labels, width, height), plot: plotOf(svg), svg };
 }
 
 // The names of the w13 showcase: one has no data, one carries the "~" suffix. And the shouting kind, which is the widest text there is.
@@ -165,6 +165,45 @@ describe("the plot of a bar chart with a turned axis (the normal mode of a narro
     const { drawn, layout } = draw(WIDEST, width, {}, height);
     expect(layout.mode).toBe("rotate");
     expectInside(drawn, width, height);
+  });
+});
+
+// w27 P1: the breakdown card of the Power dashboard at its minimum height holds a chart 124 px tall. Rotated names (up to 80 px of height) took all of it, the
+// plot was a 3 px sliver and the unit's name sat on the first name. The plot keeps its share and the names are cut to what is left, or left off.
+describe("the plot of a short chart (a breakdown card at its minimum height)", () => {
+  const RACKS = [
+    "Rack 35 / Feed A", "Rack 14 / Feed A", "Rack 19 / Feed A", "Rack 04 / Feed B (#16)", "Rack 03 / Feed B", "Rack 22 / Feed A", "Rack 12 / Feed B",
+    "Rack 38 / Feed A", "Rack 04 / Feed B (#198)", "Rack 24 / Feed A",
+  ];
+  /** Where the unit's title ("kWh") is drawn: the top and the bottom of its text, in the picture's pixels. */
+  const unitBox = (svg: string) => {
+    const unit = pieces(svg).find((p) => p.text === "kWh");
+    return unit ? { top: unit.matrix[5] + unit.dy - 7, bottom: unit.matrix[5] + unit.dy + 7 } : null; // the text is centred on its y
+  };
+  const CASES: [number, number][] = [[427, 124], [543, 124], [783, 124], [427, 160], [543, 214], [783, 214], [427, 304], [783, 304]];
+
+  it.each(CASES)("a chart of %i x %i px keeps 45 percent of its height (and 60 px) for the plot, with the unit's name above it, inside the picture", (width, height) => {
+    const { drawn, plot, svg } = draw(RACKS, width, {}, height);
+    expect(plot.bars, "every bar is drawn").toBe(RACKS.length);
+    expect(plot.baseline - plot.top).toBeGreaterThanOrEqual(Math.max(60, Math.floor(height * 0.45)));
+    const unit = unitBox(svg)!;
+    expect(unit.top, "the unit's name is not cut at the top").toBeGreaterThanOrEqual(0);
+    expect(unit.bottom, "the unit's name stands above the plot").toBeLessThanOrEqual(plot.top);
+    for (const label of drawn) for (const corner of label.boxes.flat()) {
+      expect(corner[0]).toBeGreaterThanOrEqual(0);
+      expect(corner[0]).toBeLessThanOrEqual(width);
+      expect(corner[1], `${label.lines.join(" ")} is under the plot`).toBeGreaterThanOrEqual(plot.baseline);
+      expect(corner[1]).toBeLessThanOrEqual(height);
+    }
+  });
+
+  it("draws no names where not even eight characters fit under the plot, and the names it does draw are cut, whole in the tooltip", () => {
+    expect(draw(RACKS, 427, {}, 124).layout.mode).toBe("none");
+    expect(draw(RACKS, 427, {}, 124).drawn).toHaveLength(0);
+    const taller = draw(RACKS, 427, {}, 214);
+    expect(taller.layout.mode).toBe("rotate");
+    expect(taller.drawn).toHaveLength(RACKS.length);
+    expect(taller.drawn.some((label) => label.lines.join("").includes("…"))).toBe(true);
   });
 });
 
