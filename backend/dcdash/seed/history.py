@@ -416,6 +416,23 @@ async def refresh_rollups(pool: asyncpg.Pool, plan: Plan) -> None:
     lo = hour_floor(plan.start)
     await _refresh(pool, "readings_1m", lo, plan.now)
     await _refresh(pool, "readings_1h", lo, plan.now)
+    await forget_figures(pool)
+
+
+async def forget_figures(pool: asyncpg.Pool) -> None:
+    """Clear the stored figures (table `figure_ledger`, derived data that the `figures` service rebuilds within a minute).
+
+    A seed or its undo has just changed hours the stored figures were made from, and a figure of an OPEN month is trusted for up
+    to a minute without a data check, so a page opened right after the seed would show the figures of before it. The table holds
+    nothing that cannot be recomputed, so clearing it is always safe; an older schema has no such table and is left alone. One
+    narrow window remains: a `figures` cycle whose snapshot began before the seed committed can still write its row afterwards,
+    and that row is served for at most a minute."""
+    try:
+        await pool.execute("DELETE FROM figure_ledger")
+    except asyncpg.UndefinedTableError:
+        pass
+    except Exception as exc:  # never fails a seed that has already written its data
+        print(f"could not clear the stored figures ({type(exc).__name__}); the figures service rewrites them within a minute", file=sys.stderr)
 
 
 async def _undo(pool: asyncpg.Pool, plan: Plan, created: Created, undo: str = UNDO) -> None:

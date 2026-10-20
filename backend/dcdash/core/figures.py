@@ -16,17 +16,24 @@ A value is made inside ONE database snapshot and carries its own tree and tariff
 figure is never priced with one configuration and walked with another; an asset id that the value's tree does not hold reads
 as "no figure". A value is READ-ONLY by contract: it is handed to every reader as it is. `entries_at` returns a new list, but
 the entry DICTS inside are shared: copy one before changing it.
+
+The ledger (w26b). The two computations that make a value are module-level coroutines, `compute_month_days` and
+`compute_window_values`: the cache path (`month_days`, `window_values`) and the figures worker call the very same code, so a
+row the worker stored is the value the live path computes. `month_days_spec` and `window_values_spec` describe the same values
+to the ledger (`core/ledger.py`): the key text of their parameters, where the window ends, and how to decode a stored row.
 """
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.core import compute, figure_cache
+from dcdash.core import compute, figure_cache, ledger_codec
 from dcdash.core.cost import TariffRow, cost_by_hour, load_tariffs, no_data, rate_at, summarize
 from dcdash.core.daycost import day_entries
 from dcdash.core.energy import EnergyRows, Meter, assemble, load_meters, read_energy_rows
+from dcdash.core.ledger import LedgerSpec
 from dcdash.core.timeutil import local_days
 from dcdash.core.tree import AssetTree
 
@@ -118,6 +125,25 @@ def _build_window_values(
 # ---- the cached entry points ---------------------------------------------------------------------------------------------------
 
 
+async def compute_month_days(session: AsyncSession, tz_name: str, start: datetime, end: datetime) -> MonthDays:
+    """The `MonthDays` of the local month [`start`, `end`) as `session` sees it: the configuration fingerprint, the tree, the
+    tariffs, the meters and the rows of the window are all read from `session` (the caller makes it ONE repeatable-read
+    snapshot), and the pure part runs on the compute thread. The cache calls it through `month_days`, the figures worker directly."""
+    start_utc, end_utc = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+    fingerprint = await figure_cache.config_fingerprint(session)
+    tree = await AssetTree.load(session)
+    tariffs = await load_tariffs(session)
+    meters = await load_meters(session, tree)
+    read = await read_energy_rows(session, meters, start_utc, end_utc)
+    return await compute.run(_build_month_days, fingerprint, tz_name, start, end, tree, tariffs, meters, read)
+
+
+def month_days_spec(tz_name: str, end_utc: datetime) -> LedgerSpec:
+    """The ledger's view of a `month_days` value: its key text is the JSON of the cache key's `params`, the window ends at
+    `end_utc` (that decides open or settled)."""
+    return LedgerSpec("month-days", json.dumps([tz_name], separators=(",", ":")), end_utc, ledger_codec.decode_month_days)
+
+
 async def month_days(db: AsyncSession | None, tz_name: str, start: datetime, end: datetime) -> MonthDays:
     """The day entries of the local month [`start`, `end`) (`timeutil.month_bounds`, aware), from the figure cache. `db` is the
     request's session for the cache's fingerprint statements, or None to have them read on the cache's own engine (see
@@ -125,14 +151,11 @@ async def month_days(db: AsyncSession | None, tz_name: str, start: datetime, end
     start_utc, end_utc = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
 
     async def make(session: AsyncSession) -> MonthDays:
-        fingerprint = await figure_cache.config_fingerprint(session)
-        tree = await AssetTree.load(session)
-        tariffs = await load_tariffs(session)
-        meters = await load_meters(session, tree)
-        read = await read_energy_rows(session, meters, start_utc, end_utc)
-        return await compute.run(_build_month_days, fingerprint, tz_name, start, end, tree, tariffs, meters, read)
+        return await compute_month_days(session, tz_name, start, end)
 
-    return await figure_cache.get_or_compute(db, "month-days", start_utc, end_utc, (tz_name,), make)
+    return await figure_cache.get_or_compute(
+        db, "month-days", start_utc, end_utc, (tz_name,), make, ledger=month_days_spec(tz_name, end_utc)
+    )
 
 
 def entries_at(md: MonthDays, asset_id: int, now: datetime) -> list[dict | None]:
@@ -145,22 +168,45 @@ def entries_at(md: MonthDays, asset_id: int, now: datetime) -> list[dict | None]
     return [None if day[1] > now else entry for day, entry in zip(md.days, entries)]
 
 
+async def compute_window_values(
+    session: AsyncSession, first: datetime, last: datetime, last_day: date, tz_name: str, cost: bool
+) -> WindowValues:
+    """The `WindowValues` of the whole UTC hours [`first`, `last`) as `session` sees it (see `compute_month_days`); `last_day` is
+    the local day the period ends on."""
+    fingerprint = await figure_cache.config_fingerprint(session)
+    tree = await AssetTree.load(session)
+    tariffs = await load_tariffs(session) if cost else []
+    meters = await load_meters(session, tree)
+    read = await read_energy_rows(session, meters, first, last)
+    return await compute.run(
+        _build_window_values, fingerprint, tz_name, first, last, last_day, cost, tree, tariffs, meters, read
+    )
+
+
+def window_values_spec(last_day: date, tz_name: str, cost: bool, last: datetime) -> LedgerSpec:
+    """The ledger's view of a `window_values` value (see `month_days_spec`); the window ends at `last`."""
+    params = json.dumps([last_day.isoformat(), tz_name, cost], separators=(",", ":"))
+    return LedgerSpec("window-values", params, last, ledger_codec.decode_window_values)
+
+
+def last_day_of(end: datetime, tz_name: str) -> date:
+    """The local day a period that ends at `end` (exclusive) falls on: the one thing of `end` a `WindowValues` depends on. A
+    function of its own so that the figures worker derives the very same key as `window_values`."""
+    return (end - timedelta(microseconds=1)).astimezone(ZoneInfo(tz_name)).date()
+
+
 async def window_values(
     db: AsyncSession | None, first: datetime, last: datetime, end: datetime, tz_name: str, cost: bool
 ) -> WindowValues:
     """The value of every asset for the whole UTC hours [`first`, `last`) (`widgets._hour_window`), as `_fill_billing`'s plain
     value mode computes it. `end` is where the period ends: the figures depend on it only through the local day it falls on, so
     that day (not the instant, which a rolling preset moves with every request) is what the cache keys on."""
-    last_day = (end - timedelta(microseconds=1)).astimezone(ZoneInfo(tz_name)).date()  # the local day the period ends on
+    last_day = last_day_of(end, tz_name)  # the local day the period ends on
 
     async def make(session: AsyncSession) -> WindowValues:
-        fingerprint = await figure_cache.config_fingerprint(session)
-        tree = await AssetTree.load(session)
-        tariffs = await load_tariffs(session) if cost else []
-        meters = await load_meters(session, tree)
-        read = await read_energy_rows(session, meters, first, last)
-        return await compute.run(
-            _build_window_values, fingerprint, tz_name, first, last, last_day, cost, tree, tariffs, meters, read
-        )
+        return await compute_window_values(session, first, last, last_day, tz_name, cost)
 
-    return await figure_cache.get_or_compute(db, "window-values", first, last, (last_day, tz_name, cost), make)
+    return await figure_cache.get_or_compute(
+        db, "window-values", first, last, (last_day, tz_name, cost), make,
+        ledger=window_values_spec(last_day, tz_name, cost, last),
+    )

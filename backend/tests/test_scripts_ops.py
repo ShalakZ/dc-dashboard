@@ -342,7 +342,8 @@ def test_backup_smoke_runs_the_real_scripts_only_against_the_scratch_project(tmp
     assert result.returncode == 0, result.stdout + result.stderr
     assert "backup smoke OK (3 assets)" in result.stdout and "restore failure-path OK" in result.stdout
     nested = [c for c in compose_calls(calls) if c.project is None]  # backup.sh and restore.sh: a plain `docker compose`
-    kinds = {(c.sub, c.args[-2:] == ["api", "collector"]) for c in nested}
+    # w26b: the restore scripts stop and start `figures` together with the api and the collector
+    kinds = {(c.sub, {"api", "collector", "figures"} <= set(c.args)) for c in nested}
     assert ("stop", True) in kinds and ("start", True) in kinds and ("exec", False) in kinds
     assert any(c.has("pg_dump") for c in nested) and any(c.has("pg_restore") and c.has("-d") for c in nested)
     # one `ps --format {{.Name}}` per nested script: 1 backup.sh + 3 restore.sh (version mismatch, good restore, refused corrupt

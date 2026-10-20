@@ -946,6 +946,19 @@ async def test_a_journal_row_written_by_the_writer_shows_up_in_a_report(db, sess
     assert "warning collector source.offline code=unreachable: link lost" in line and '{"failures":3}' in line
 
 
+async def test_a_figures_mismatch_event_of_the_figures_worker_shows_up_in_a_report(db, session):
+    """The report lists every event of the journal (no allow-list of components or kinds): the figures worker's nightly self-check
+    writes `figures` / `figures.mismatch` and a field report must show it."""
+    message = "a stored figure differed from the live one and was deleted: month-days 2026-04: asset 12, day 2026-04-04"
+    assert await journal.record(
+        db, "figures", journal.FIGURES_MISMATCH, message, level="warning", code="month-days",
+        detail={"kind": "month-days", "window": "2026-04"},
+    )
+    data = await gather(session, detail="summary")
+    line = lines_of(render(data, "summary", ident), "JOURNAL")[0]
+    assert f"warning figures figures.mismatch code=month-days: {message}" in line and '"window":"2026-04"' in line
+
+
 @pytest.mark.parametrize("stamp, shown", [
     ("2026-10-11T20:00:00+03:00", "2026-10-11T17:00:00Z"),
     ("2026-10-11T17:00:00Z", "2026-10-11T17:00:00Z"),

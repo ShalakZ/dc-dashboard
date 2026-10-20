@@ -58,6 +58,36 @@ When a page is slow on an installation, run this in the project folder and paste
 
 About 25 plain lines: how many assets, points, meters and hourly rows there are, and how many seconds one month of energy, Billing, Check month and the Storage page's queries take (each run twice, so a cache shows as a drop; the check switches the figure cache off for its run, so a drop between the two runs is the database's own cache). It only reads, in a read-only transaction (Billing's month is computed on the figure cache's own small connection pool, with read-only statements, outside that transaction and without the statement timeout, so a stalled database can hang that one stage), and prints counts and seconds, never a name, an address or a password. A large database can take a few minutes.
 
+## The figures check
+When a figure looks wrong (Billing and a dashboard disagree, or a number seems stale), these two commands say whether the stored figures
+([the figure ledger](dashboards-and-billing.md#the-figure-ledger)) are involved. Run them in the project folder and paste both outputs back:
+
+    docker compose exec -T figures python -m dcdash.figures.rebuild --check
+    docker compose logs --tail 80 figures
+
+The first compares every stored figure with a fresh calculation, each in a snapshot of its own, and writes nothing. It prints one line
+per figure and then a summary with five counts. `equal` is as it should be. `moved on` means readings arrived since the figure was
+stored: normal for the current month (the rows of the open month are usually `moved on`; the summary says how many), not a difference.
+`stale` means it was made under another configuration or another build: the api never uses it and the service replaces it.
+`DIFFERENT` is a fault: the command exits with code 1 and names the first asset and day that differ. `error` means a row could not be
+judged; the command then exits with code 3, as it does when the database did not answer. On exit code 1 or 3 paste the whole output at
+once. (The rebuild modes of the same command, `--all` and `--month YYYY-MM`, exit differently: a rebuild exits 1 if a figure failed and
+2 if it is refused (ledger off, or a month the worker does not keep).) The second shows
+the service's own log. A quiet log is normal; a warning names what failed (a figure that could not be made or stored, a database that did
+not answer). If `docker compose exec` says the service is not running, or `docker compose ps` does not show `figures` as `healthy`, the pages
+are only slower: start it with `docker compose up -d figures`. `scripts\update.ps1` does not check this service.
+
+To see the same page without the ledger, run it once with the ledger off and once with it back on (the first form is for bash, the second
+for PowerShell on the workstation):
+
+    DCDASH_FIGURE_LEDGER=0 docker compose up -d api figures
+    docker compose up -d api figures
+
+    $env:DCDASH_FIGURE_LEDGER = "0"; docker compose up -d api figures
+    Remove-Item Env:DCDASH_FIGURE_LEDGER; docker compose up -d api figures
+
+If the figure differs between the two, that is the finding: paste both numbers and the output of the first command.
+
 ## Reading a report (what Claude looks at)
 1. The **header**: build id and time, to know which code produced it.
 2. The **LATEST CHECK** line right after it: the failing step and the OPC UA status, or "all steps OK", or "no connection check has been run".

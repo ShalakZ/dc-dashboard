@@ -35,6 +35,10 @@ JOB_FINISHED = "job.finished"
 CHECK_FINISHED = "check.finished"
 CLOCK_SKEW = "clock.skew"
 HTTP_5XX = "http.5xx"
+# figures.mismatch: the figures worker's nightly self-check found a stored figure (a row of the figure ledger) that differs from
+# what the live code computes from the same data. The row is deleted (readers compute it live; the worker stores it again). The
+# message names the kind, the window and the first differing asset id and day or item, never a value or a name.
+FIGURES_MISMATCH = "figures.mismatch"
 
 WRITE_TIMEOUT_SECONDS = 3.0
 MAX_MESSAGE_CHARS = 500

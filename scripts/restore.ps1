@@ -44,21 +44,21 @@ if ($Current -ne $Wanted -and $Force -ne "--force") {
 # Binary through cmd, never text-decoded, like the real restore below. exit 1, not throw: no PowerShell error block on top of the message.
 cmd /c "docker compose exec -T db pg_restore -f /dev/null < `"$Dump`""
 if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("refusing: cannot read the dump '$Dump' (missing, cut off or damaged); nothing was changed"); exit 1 }
-# From the stop until the dump is loaded, a failed call must not leave api and collector stopped. Windows PowerShell 5.1 does not throw
+# From the stop until the dump is loaded, a failed call must not leave api, collector and figures stopped. Windows PowerShell 5.1 does not throw
 # when a native command fails, so the exit code of each call is checked. exit 1, not throw: no PowerShell error block on top of the
 # message, and never psql's own code (2 means usage). The database may be missing or empty after a failed DROP/CREATE.
 function Exit-BeforeLoad([int]$Code) {
-  docker compose start api collector | Out-Null
-  [Console]::Error.WriteLine("restore failed (exit $Code) before the dump was loaded: api and collector were started again; the database may be missing or empty. Run the restore again with the same dump.")
+  docker compose start api collector figures | Out-Null; if ($LASTEXITCODE -ne 0) { docker compose start api collector | Out-Null }
+  [Console]::Error.WriteLine("restore failed (exit $Code) before the dump was loaded: api and collector were started again (figures with them); the database may be missing or empty. Run the restore again with the same dump.")
   exit 1
 }
-docker compose stop api collector
+docker compose stop api collector figures
 if ($LASTEXITCODE -ne 0) { Exit-BeforeLoad $LASTEXITCODE }
 docker compose exec -T db psql -U dcdash -d postgres -c "DROP DATABASE IF EXISTS dcdash WITH (FORCE)" -c "CREATE DATABASE dcdash OWNER dcdash"
 if ($LASTEXITCODE -ne 0) { Exit-BeforeLoad $LASTEXITCODE }
 docker compose exec -T db psql -U dcdash -d dcdash -c "CREATE EXTENSION IF NOT EXISTS timescaledb" -c "SELECT timescaledb_pre_restore()"
 if ($LASTEXITCODE -ne 0) { Exit-BeforeLoad $LASTEXITCODE }
-# Whatever happens from here on, run timescaledb_post_restore() and start api/collector again
+# Whatever happens from here on, run timescaledb_post_restore() and start api/collector/figures again
 # so a failed restore never leaves the database stranded.
 $Log = Join-Path ([IO.Path]::GetTempPath()) ("dcdash-restore-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
 $Failed = $true
@@ -92,8 +92,8 @@ try {
     }
   }
   docker compose exec -T db psql -U dcdash -d dcdash -c "SELECT timescaledb_post_restore()" | Out-Null
-  docker compose start api collector | Out-Null   # api runs `alembic upgrade head`, a no-op unless --force restored an older schema
-  if ($Failed) { Write-Host "restore failed: ran timescaledb_post_restore() and started api/collector; log: $Log" }
+  docker compose start api collector figures | Out-Null; if ($LASTEXITCODE -ne 0) { docker compose start api collector | Out-Null }   # api runs `alembic upgrade head`, a no-op unless --force restored an older schema
+  if ($Failed) { Write-Host "restore failed: ran timescaledb_post_restore() and started api/collector/figures; log: $Log" }
 }
 Write-Host "restored $Dump"
 if ($RetentionFailed) { exit 4 }

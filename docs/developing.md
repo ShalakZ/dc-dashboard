@@ -23,6 +23,41 @@ the live engine with it, bit for bit, on random worlds. The figure cache (`core/
 time to live is 0 in tests, so every request checks the rollup rows again; `DCDASH_FIGURE_CACHE=0` turns it off and
 `DCDASH_FIGURE_CACHE_TTL=<seconds>` (default 30) sets it.
 
+### The figure ledger
+
+The ledger (w26b, [what it is for](dashboards-and-billing.md#the-figure-ledger), [the service](operating.md#the-figures-service)) keeps
+the cache's values in the table `figure_ledger`. Its parts:
+
+- `core/ledger_codec.py`, the codec: a value to lossless bytes (canonical JSON, then zlib; no `pickle`). `canonical(value)` is what
+  "equal" means for a stored row and a live value.
+- `core/ledger.py`, the store: `engine_id()`, `decide` (the rules for when a row may be used), `consult`, and the writer's `write`,
+  `touch` and `delete`. The hook is in `core/figure_cache.py` and the two builders it and the worker share are in `core/figures.py`.
+- `figures/worker.py`, the service; `figures/rebuild.py`, the check and rebuild command.
+
+The one rule: a row is read only inside `figure_cache._run`, in the same snapshot that takes the configuration fingerprint, and used
+only when `ledger.decide` says so. (Check month is the one other reader, `billing_check._from_ledger`: it needs the configuration and
+the readings it reads to equal the row's exactly.) Anything else is a miss and the live engine runs.
+
+    docker compose exec -T figures python -m dcdash.figures.rebuild --check
+
+judges every stored row, each in a snapshot of its own, and prints one line per row and a summary of five counts: `equal` (the same bytes
+as a fresh calculation), `moved on` (readings arrived since the row was made: not a difference, and normal for the current month),
+`stale` (made by another build or another configuration: never used), `DIFFERENT` (a fault: the first differing asset and day are
+named) and `error` (the row could not be judged). It proves only rows that are unchanged and settled: the rows of the open month are
+normally `moved on` (the summary says how many). Exit code 0: every row is fine; 1: at least one row is `DIFFERENT`; 3: the proof could
+not be completed (an `error` line, or a database that did not answer). On 1 or 3 paste the whole output. The check writes nothing.
+`--all` and `--month YYYY-MM` rebuild instead of checking: a rebuild exits 1 if a figure failed and 2 if it is refused (ledger off, or a
+month the worker does not keep); like the worker they run niced.
+
+What this wave found about tests:
+
+- Every "the ledger equals live" test must also prove that a hit happened (`ledger.stats()`, or a spy). A row the codec refused is
+  only a miss, and a miss gives the live answer, so such a test passes without ever reading a row.
+- An older schema test that compares every table at head with a lower revision must skip a new derived table such as `figure_ledger`.
+- `engine_id()` hashes every `.py` file under `dcdash/core` and `dcdash/figures` (and `api/billing_check.py`, and the Python version), so
+  ANY change there makes every stored row stale until the worker writes it again. That is expected: after a deploy, wait a minute
+  before you measure.
+
 ## Frontend
 
 The dev server needs the stack running for the API:
@@ -196,13 +231,13 @@ of the panels-only case below: `--metering feeds|panels` (default `feeds`) and `
 
 | Path | What it holds |
 |---|---|
-| `backend/` | the Python package `dcdash` (`api`, `collector`, `connectors`, `core`, `diagnostics`, `profiles`, `seed`, `simulator`), the Alembic migrations and the tests |
+| `backend/` | the Python package `dcdash` (`api`, `collector`, `connectors`, `core`, `diagnostics`, `figures`, `profiles`, `seed`, `simulator`), the Alembic migrations and the tests |
 | `frontend/` | the React app (`src`), the Playwright specs (`e2e`), the static files (`public`) and the brand script (`scripts`) |
 | `deploy/` | the Caddy configuration (`Caddyfile`, `Caddyfile.tls`, `security-headers.caddy`) and the web image's `entrypoint.sh` |
 | `scripts/` | setup, backup, restore, update, diagnostics and test scripts, bash and PowerShell |
 | `docs/` | these pages, `field-debugging.md`, the brand original and the project's planning history (`superpowers/`) |
 | `certs/` | empty in git; holds the HTTPS and OPC UA certificates of an installation |
-| `compose.yaml` | the stack: `db`, `api`, `collector`, `web` and the `dev`-profile `simulator` |
+| `compose.yaml` | the stack: `db`, `api`, `collector`, `figures`, `web` and the `dev`-profile `simulator` |
 | `.env.example` | an example `.env`: the database password, the secret key, the timezone, the discovery limits, the TLS paths and the simulator's settings |
 
 ## Brand assets

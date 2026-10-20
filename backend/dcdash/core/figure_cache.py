@@ -40,7 +40,8 @@ checks on its own.
 
 Keep-warm. A request that finds a value older than the TTL would pay the data check (and, if the data moved, a whole
 recompute) on its own path, and a card that refetches every TTL seconds lands just past the TTL almost every time. So whenever
-an entry is stored or its check is renewed, one timer is set for 0.6 x TTL later; it re-checks the data on the cache's own
+an entry is stored or its check is renewed, one timer is set for 0.6 x TTL later (sooner for an entry the ledger back-dated,
+which expires sooner: see `_arm`); it re-checks the data on the cache's own
 engine and, if the data changed, recomputes with the very `compute` the entry was made with, as an ordinary shared task. The
 next request then finds a value that was checked a few seconds ago. It stops by itself: a key nobody used for
 `KEEP_WARM_SECONDS` is left to expire, and a background recompute does not count as a use. Nothing is served past the TTL (a
@@ -59,6 +60,22 @@ Stored values are READ-ONLY BY CONTRACT: the very same object is handed to every
 `DCDASH_FIGURE_CACHE=0` turns the cache off: `compute` then runs inline on a private session of the same engine in the same
 kind of snapshot, nothing is stored, nothing coalesces, no fingerprint is read and `stats()` counts nothing. Both
 environment variables are read at call time.
+
+The ledger (w26b) is a second SOURCE for a computation, not another cache: a caller may pass `ledger=` (a `LedgerSpec`), and
+then `_run` looks the key up in the table `figure_ledger` (`core/ledger.py`) in the same snapshot, after the configuration
+fingerprint and before the data fingerprint. A row that is provably current replaces the engine run (`compute` does not run and
+`computes` does not count); anything else, including every failure of the ledger, leaves the engine run exactly as it was. The
+entry such a lookup stores remembers the database time of its data (`data_at`), whether it was made from a row taken without a
+data check (`from_row`) and the spec, so `_put` never replaces an entry by an older figure and keep-warm recomputes through the
+ledger too. A row taken without a data check is at most 55 seconds old and its entry is back-dated by that age (keeping at least
+5 s of life), so no figure is trusted past `max(TTL, 60 s)` after the moment its data was checked. A request under
+`require_fresh` (a Billing close) neither consults the ledger nor trusts a cache entry that came from it (`from_ledger`, set for
+every row taken, open or exact: the entry's data fingerprint is the row's, so it would pass the revalidation although its value is
+the worker's decoded bytes): it computes privately with the engine, and that result replaces the entry. The entry it leaves is
+never older than the close's snapshot: it knows the database time of that snapshot (one `SELECT now()`, no ledger table), so `_put`
+lets it replace a row entry of older data that a later request stored first, and a row entry of newer data keeps its place (an exact
+row that a later request took may still stand after a close: its data is of a later snapshot, never older). The ledger has its own
+counters (`ledger.stats()`).
 """
 import asyncio
 import itertools
@@ -77,7 +94,9 @@ from typing import Any, TypeVar
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from dcdash.core import ledger as ledger_module
 from dcdash.core.config import get_settings
+from dcdash.core.ledger import LedgerSpec
 from dcdash.core.metrics import Metric
 
 T = TypeVar("T")
@@ -113,6 +132,22 @@ class _Entry:
     compute: Callable[[AsyncSession], Awaitable[Any]]  # what made it; the background recompute runs it again
     last_used: float  # `_monotonic()` of the last request that was served from this key (see `_warm`)
     timer: asyncio.TimerHandle | None = None  # the pending background revalidation, if any
+    # The fields below are for the ledger (False / None for a call that carries no ledger spec). `data_at` is the DATABASE time of
+    # the data the value reflects (the snapshot's `now()` of a computation or an exact row, the row's `checked_at` for one taken
+    # without a data check), so `_put` can refuse an older figure and `ledger.decide` can refuse a row older than this entry. It is
+    # known for every computation that carries a spec, a Billing close included (which does not consult the ledger but reads the
+    # snapshot's `now()` itself); None only without a spec, or when the ledger's header could not be read. Both `data_at` and
+    # the rows' `checked_at` are database times of a TRANSACTION START: exact only to within the gap between BEGIN and the
+    # snapshot (a few ms), so two of them are comparable to that precision, not better.
+    data_at: datetime | None = None
+    ledger: LedgerSpec | None = None  # so the keep-warm recompute looks the key up in the ledger again, as the request would
+    # True for a value taken from a row WITHOUT a data check (an open hit): its stamp is the later snapshot's but its data is the
+    # row's, so `_put` orders it by `data_at`, never by stamp (see there).
+    from_row: bool = False
+    # True for EVERY value taken from a ledger row, open or exact (`from_row` is only the open rule): the bytes are the worker's
+    # decoded payload, not this process's engine result. A request under `require_fresh` (a Billing close) never trusts such an
+    # entry, however equal its data fingerprint is: it computes privately instead (see `get_or_compute`).
+    from_ledger: bool = False
 
 
 _store: OrderedDict[tuple, _Entry] = OrderedDict()  # least recently used first
@@ -166,7 +201,8 @@ def stats() -> dict[str, int]:
 
 @contextmanager
 def require_fresh():
-    """Inside this block a stored value is used only after its data fingerprint was re-checked on the spot."""
+    """Inside this block a stored value is used only after its data fingerprint was re-checked on the spot, and never when it was
+    made from a ledger row (that is computed again by the engine); the ledger itself is not consulted either."""
     token = _fresh.set(True)
     try:
         yield
@@ -335,6 +371,12 @@ async def _data_fingerprint(session: AsyncSession, start: datetime, end: datetim
     return (await session.execute(_DATA, {**_METRICS, "start": start, "end": end})).scalar_one()
 
 
+async def data_fingerprint(session: AsyncSession, start: datetime, end: datetime) -> str:
+    """The data fingerprint of the window [start, end) as seen by `session`: what the figures worker (w26b) stores beside a
+    ledger row, read in the very snapshot the row's value is computed in (a public wrapper, like `config_fingerprint`)."""
+    return await _data_fingerprint(session, start, end)
+
+
 async def _config_for(db: AsyncSession | None) -> str:
     """The configuration fingerprint on `db`, or with no session on a short-lived one of the cache's own engine (a leaf: it
     ends before the caller awaits anything else, and it takes no semaphore)."""
@@ -369,8 +411,22 @@ def _cancel_timers() -> None:
 def _put(key: tuple, entry: _Entry) -> None:
     old = _store.get(key)
     if old is not None:
-        if old.stamp > entry.stamp:  # a computation that began later is already stored: never roll an entry back
-            return
+        if entry.from_row:
+            # A value taken from a ledger row reflects the ROW's time, which is older than the snapshot that took it, so its
+            # stamp says nothing about its data: it is ordered by what it reflects, and replaces nothing whose data it cannot
+            # show to be at least as new (an entry of unknown data time included).
+            if old.data_at is None or entry.data_at is None or entry.data_at < old.data_at:
+                return
+        elif old.stamp > entry.stamp:  # a computation that began later is already stored: never roll an entry back ...
+            # ... unless the stored one is a row's value and this one (an engine run or an exact row) reflects newer data:
+            # the stamp of a row entry is later than its data (a Billing close that began first and finished last must not lose
+            # to a dashboard request that took a younger-looking row). The database clock decides nothing else: an engine or
+            # exact entry is ordered by stamp alone, so a database clock stepped back cannot stall the cache.
+            newer_data = (
+                old.from_row and old.data_at is not None and entry.data_at is not None and entry.data_at > old.data_at
+            )
+            if not newer_data:
+                return
         _stats["replaced"] += 1
         _disarm(old)
     _store[key] = entry
@@ -439,6 +495,9 @@ async def dispose() -> None:
 # ---- computing -------------------------------------------------------------------------------------------------------------
 
 _SNAPSHOT = text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+# The database time of the snapshot (the transaction's `now()`, which is what the ledger's header reads too), for a computation that
+# does not consult the ledger but whose entry must still know the time of its data (see `_run`). No ledger table.
+_NOW = text("/* figure_cache now */ SELECT now()")
 
 
 async def _compute_uncached(compute: Callable[[AsyncSession], Awaitable[T]]) -> T:
@@ -456,32 +515,84 @@ async def _run(
     generation: int,
     strict: bool,
     idle_since: float | None = None,
+    ledger: LedgerSpec | None = None,
+    fresh: bool = False,
 ) -> Any:
     """The body of a computation task: one snapshot with the fingerprints and the value in it. `idle_since` is the
-    `last_used` of the entry a background recompute replaces (a request that asked made it: now)."""
+    `last_used` of the entry a background recompute replaces (a request that asked made it: now). `ledger` (a `LedgerSpec`) lets
+    a row of `figure_ledger` that is provably current stand in for the computation; `fresh` says the request is under
+    `require_fresh` (an argument, not read from the ContextVar here: this runs in a task of its own, whose context is a copy)."""
     async with _semaphore():
         async with _sessions()() as session:
             started = _monotonic()
             await session.execute(_SNAPSHOT)
-            matches = await _config_fingerprint(session) == key[4]
+            snapshot_fp = await _config_fingerprint(session)
+            matches = snapshot_fp == key[4]
             # Postgres takes the snapshot at this first SELECT, so the stamp is taken now: not before the SET TRANSACTION,
             # where a task that reaches its first SELECT later would get the older stamp for the newer data.
             stamp = next(_stamps)
             if strict and not matches:
                 raise _StaleSnapshot
-            data_fp = await _data_fingerprint(session, start, end)
-            _stats["computes"] += 1
-            value = await compute(session)
+            hit, data_fp, data_at, from_row = None, None, None, False
+            # A request under `require_fresh` (a Billing close: the frozen money of record) never consults the ledger: it computes,
+            # as in w26, so a close can never depend on what the worker wrote. (Nor does it trust a cache ENTRY that an earlier
+            # request made from a row: `get_or_compute` sends it here, to a private computation, instead of revalidating it.)
+            if ledger is not None and not fresh and ledger_module.enabled():
+                # The row is judged against the SNAPSHOT's configuration (what the engine below would compute with), and against
+                # the entry it would replace (whether there is one, when its data is from and what it holds): a row older than
+                # that entry, or the very value it already holds, is never taken on trust (see `ledger.decide`).
+                replaced = _store.get(key)
+                hit, data_fp, data_at = await ledger_module.consult(
+                    session, ledger, start, end, config_fp=snapshot_fp, fresh=fresh,
+                    replaced_exists=replaced is not None,
+                    replaced_data_at=None if replaced is None else replaced.data_at,
+                    replaced_data_fp=None if replaced is None else replaced.data_fp,
+                    read_data_fp=lambda: _data_fingerprint(session, start, end),
+                )
+            elif ledger is not None and matches:
+                # The ledger is not consulted (a close, or the ledger switched off) but the entry will be stored, and an entry must
+                # know the database time of its data: `_put` lets an engine entry replace a ROW entry (taken without a data check, so
+                # its data is up to 55 s older than the snapshot that stored it) only when both times are known and this one is
+                # newer, and `ledger.decide` takes a young row over an entry only when it knows that entry's time. The snapshot's
+                # `now()` is the same time the header read above would have given: one trivial statement, no ledger table. A call
+                # without a `ledger` spec pays nothing, as before.
+                data_at = (await session.execute(_NOW)).scalar_one()
+            if hit is not None:
+                value, data_fp, data_at = hit.value, hit.data_fp, hit.data_at
+                from_row = not hit.exact
+                # The TTL counts from the check of the data. A row taken without a data check was checked `age_seconds` ago, so
+                # its entry is back-dated by that, but never so far that it is born expired (it keeps at least
+                # `BORN_ALIVE_SECONDS`, or none at all for a TTL that short): the cache's own revalidation then compares
+                # fingerprints, and the next request or the keep-warm timer takes a newer row or runs the engine. The row is at
+                # most `OPEN_MAX_AGE - BORN_ALIVE_SECONDS` old, so the entry is trusted for no more than `max(TTL, OPEN_MAX_AGE)`
+                # after the check its data comes from.
+                back = 0.0 if hit.exact else min(hit.age_seconds, max(ttl_seconds() - ledger_module.BORN_ALIVE_SECONDS, 0.0))
+                checked_at = started - back
+            else:
+                if data_fp is None:  # `consult` read it when it had to (a check that failed); otherwise it is read here, as always
+                    data_fp = await _data_fingerprint(session, start, end)
+                _stats["computes"] += 1
+                value = await compute(session)
+                checked_at = started
     # An entry is labelled by what its snapshot saw: it is stored only under a key whose configuration is that one, and only
     # if nothing cleared the cache since the task began.
     if matches and generation == _generation:
-        _put(key, _Entry(value, data_fp, started, stamp, compute, _monotonic() if idle_since is None else idle_since))
+        _put(
+            key,
+            _Entry(
+                value, data_fp, checked_at, stamp, compute, _monotonic() if idle_since is None else idle_since,
+                data_at=data_at, ledger=ledger, from_row=from_row, from_ledger=hit is not None,
+            ),
+        )
     return value
 
 
 def _spawn(key: tuple, start: datetime, end: datetime, compute: Callable[[AsyncSession], Awaitable[Any]],
-           strict: bool, shared: bool, idle_since: float | None = None) -> asyncio.Task:
-    task = asyncio.get_running_loop().create_task(_run(key, start, end, compute, _generation, strict, idle_since))
+           strict: bool, shared: bool, idle_since: float | None = None, ledger: LedgerSpec | None = None,
+           fresh: bool = False) -> asyncio.Task:
+    task = asyncio.get_running_loop().create_task(
+        _run(key, start, end, compute, _generation, strict, idle_since, ledger, fresh)
+    )
     _tasks.add(task)
 
     def done(finished: asyncio.Task) -> None:
@@ -556,11 +667,15 @@ async def _checked(db: AsyncSession | None, key: tuple) -> tuple[str, float]:
 
 def _arm(key: tuple, entry: _Entry) -> None:
     """Set the one timer of a stored entry (replacing a pending one): the background revalidation runs WARM_FRACTION x TTL from
-    now. Nothing at TTL 0, with the cache off, or for an entry that is no longer the stored one."""
+    now, but for an entry back-dated by the ledger (it expires sooner) no later than 2 seconds before it expires and not sooner
+    than 1 second from now (so the burst of requests after a restart is not interrupted by a revalidation at once). An entry made
+    by a computation was checked just now: nothing changes for it. Nothing at TTL 0, with the cache off, or for an entry that is
+    no longer the stored one."""
     _disarm(entry)
     ttl = ttl_seconds()
     if ttl > 0 and enabled() and _store.get(key) is entry:
-        entry.timer = asyncio.get_running_loop().call_later(WARM_FRACTION * ttl, _fire, key, entry, _generation)
+        delay = min(WARM_FRACTION * ttl, max(1.0, entry.checked_at + ttl - _monotonic() - 2.0))
+        entry.timer = asyncio.get_running_loop().call_later(delay, _fire, key, entry, _generation)
 
 
 def _fire(key: tuple, entry: _Entry, generation: int) -> None:
@@ -603,7 +718,10 @@ async def _warm(key: tuple, entry: _Entry, generation: int) -> None:
             return
         task = _inflight.get(key)
         if task is None or task.done():
-            task = _spawn(key, key[1], key[2], entry.compute, strict=True, shared=True, idle_since=entry.last_used)
+            task = _spawn(
+                key, key[1], key[2], entry.compute, strict=True, shared=True, idle_since=entry.last_used,
+                ledger=entry.ledger, fresh=False,  # a background recompute is never `require_fresh`
+            )
             _stats["warm_recomputes"] += 1
         await asyncio.shield(task)  # its result is stored (and the next timer set) by `_run`
     except _StaleSnapshot:
@@ -619,6 +737,7 @@ async def get_or_compute(
     end: datetime,
     params: Hashable,
     compute: Callable[[AsyncSession], Awaitable[T]],
+    ledger: LedgerSpec | None = None,
 ) -> T:
     """The value of `compute` for the `readings_1h` window [start, end), from the store when nothing it depends on changed.
 
@@ -626,7 +745,8 @@ async def get_or_compute(
     holds a connection of the request pool through another call and must not ask for a second) reads them instead on a
     short-lived session of the cache's own engine, one statement at a time (a separate transaction: a caller with uncommitted
     configuration writes must pass its session); nothing else differs. `compute(session)` receives
-    the cache's own session (a repeatable-read snapshot) and must return a compact, read-only value.
+    the cache's own session (a repeatable-read snapshot) and must return a compact, read-only value. `ledger` (see the module
+    text) names the row of `figure_ledger` that may stand in for `compute`; without it nothing differs from before the ledger.
     """
     _bind_loop()  # first: a new event loop forgets the old one's state now, never between a task's registration and its start
     if not enabled():
@@ -636,7 +756,11 @@ async def get_or_compute(
     for attempt in range(1, MAX_ATTEMPTS + 1):
         key = (kind, start, end, params, await _config_for(db))
         entry = _store.get(key)
-        if entry is not None:
+        # A close (`fresh`) does not trust an entry made from a ledger row: its data fingerprint is the ROW's, so it would pass the
+        # revalidation below although its value is the worker's decoded bytes, and a close freezes the money of record. It goes
+        # straight to the private computation, whose engine result then replaces the entry (see `_put`), or leaves one that is not
+        # older than the close's snapshot (it knows its snapshot's database time, as every computation with a spec does).
+        if entry is not None and not (fresh and entry.from_ledger):
             if not fresh and _monotonic() - entry.checked_at < ttl_seconds():
                 _store.move_to_end(key)
                 entry.last_used = _monotonic()
@@ -665,9 +789,9 @@ async def get_or_compute(
             if fresh or last:
                 # a private task: a fresh request must not join one that may have read the database before the rows this
                 # caller needs landed, and the last attempt must not hand a stale snapshot to others
-                task = _spawn(key, start, end, compute, strict=not last, shared=False)
+                task = _spawn(key, start, end, compute, strict=not last, shared=False, ledger=ledger, fresh=fresh)
             elif task is None or task.done():
-                task = _spawn(key, start, end, compute, strict=True, shared=True)
+                task = _spawn(key, start, end, compute, strict=True, shared=True, ledger=ledger, fresh=fresh)
             value = await _await_task(task)
         except _StaleSnapshot:
             _stats["retries"] += 1

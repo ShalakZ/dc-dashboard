@@ -662,6 +662,25 @@ and works in whole hours; a day or a month is the sum of its hours in the site t
   `DCDASH_FIGURE_CACHE_TTL` sets the seconds. The maths runs on one worker thread and the rows are read in chunks, so a slow dashboard
   does not make the other pages wait.
 
+### The figure ledger
+
+A background service, `figures`, keeps each month's figures ready in the database table `figure_ledger`. It makes them with the very
+code a live request runs, and after an api restart the api reads them instead of computing them again. A stored figure is used only
+when it is provably current:
+
+- The configuration (tree, meters, tariffs, zone) and the code must be the same as when it was made.
+- For a month that ended more than a week ago the readings must be exactly the same too.
+- For the current month and the first week of the next, a figure may be up to 60 seconds behind the readings in all (the cache's own
+  30 seconds included, not on top of them). A history seed (`python -m dcdash.seed.history`) and its undo clear the stored figures
+  at once; a hand-run refresh of the rollups does not, and shows within about a minute.
+
+Closing a month and Check month always check on the spot: a close never uses a stored figure, and never trusts a cache entry that came
+from one: it computes from the readings. Check month uses its stored report only when the readings and the configuration it reads are
+exactly the same as now. If anything is in doubt the page computes the figure as before, only slower. The service is described in
+[Operating the stack](operating.md#the-figures-service). `DCDASH_FIGURE_LEDGER` set to `0`, `false`, `off` or `no` (any case)
+switches the ledger off; anything else, also empty, leaves it on. `DCDASH_FIGURE_CACHE=0` switches the whole figure cache off, and
+the ledger with it (the api stops reading the ledger; the `figures` service goes idle only with `DCDASH_FIGURE_LEDGER` off).
+
 ## How history is calculated
 
 Dashboards, and Billing for every month that is not closed, follow the current configuration: past months are recomputed from today's
@@ -692,9 +711,14 @@ Billing.
 - The site timezone must have a whole-hour UTC offset in both January and July (so that day and month edges fall on hourly buckets);
   Settings refuses other zones, and Billing and widget data answer 409 if a stored zone breaks the rule.
 - The rollups refresh over the last 7 days, so readings that arrive later than that are not included in energy figures.
-- A figure on a dashboard or in Billing can be up to 30 seconds behind the newest readings (a configuration change shows at once). The
+- A figure on a dashboard or in Billing can be up to 30 seconds (60 seconds for the current month and the first week of the next, see
+  [The figure ledger](#the-figure-ledger)) behind the newest readings (a configuration change shows at once). The
   first load after an api restart, or of a window nobody asked for lately, computes it once, which takes seconds on a big site;
   `python -m dcdash.diagnostics.speed` shows how long.
+- After an api restart, or when the api has not been asked for that window for a while, a figure may step back by up to 60 seconds: it
+  comes from the ledger, which can be that far behind the readings. The ledger keeps the 6 newest months (`DCDASH_FIGURES_MONTHS`); an
+  older month is computed live. Rolling windows (1 hour to 30 days), plain time-series charts and the asset and fleet summary do not
+  use it; the month comparison's chart does (it reads the month's day figures).
 - One counter reset per hour is recovered exactly; a second one inside the same hour may understate that hour.
 - Energy estimated from power is an estimate, not a measurement.
 - The currency is one per site, there are no time-of-use tariffs, and custom metrics cannot be used in widgets.
