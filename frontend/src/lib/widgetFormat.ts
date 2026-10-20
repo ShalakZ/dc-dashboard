@@ -1,5 +1,6 @@
 import type { CompareAsset, CompareSide, DataWidgetType, WidgetConfig, WidgetData } from "../api/types";
-import { exactText } from "./figures";
+import type { Scale } from "./figures";
+import { cardFigure, exactText } from "./figures";
 import { formatSiteTick } from "./siteTime";
 
 export interface Flags { estimated: boolean; partial: boolean }
@@ -21,6 +22,14 @@ export const NO_DATA = "no data";
  */
 export function figureOrNoData(value: number | null | undefined, flags: Flags, noData: boolean, source: WidgetData["source"]): string {
   return hasNoReading(value, noData, source) ? NO_DATA : figureText(value, flags);
+}
+
+/**
+ * The CARD face of `figureOrNoData` (w27): the figure at a scale (`pickScale` over the group it belongs to) with its marks and the scale letter, no unit; "no data" for a
+ * metric that recorded nothing; the dash for a figure that is missing otherwise.
+ */
+export function cardFigureOrNoData(value: number | null | undefined, flags: Flags, noData: boolean, source: WidgetData["source"], scale: Scale): string {
+  return hasNoReading(value, noData, source) ? NO_DATA : cardFigure(value, scale, flags);
 }
 
 /** A null that recorded nothing. A cost is never one: its null is a missing rate, whatever else was or was not recorded. */

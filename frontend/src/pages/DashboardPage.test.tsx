@@ -168,6 +168,21 @@ describe("DashboardPage (view)", () => {
     expect(FakeEventSource.instances).toHaveLength(1);
   });
 
+  it("reads a big streamed figure on the card face and keeps the exact value in the title (w27)", async () => {
+    open();
+    const stat = within(await region("Current power"));
+    await stat.findByText("10.50");
+    await waitFor(() => expect(FakeEventSource.open).toHaveLength(1));
+    act(() => FakeEventSource.open[0].onopen?.());
+    act(() => FakeEventSource.open[0].emit([[7, 1_760_000_000, 275430.2575, 0]]));
+    expect(stat.getByText("275.43")).toHaveClass("stat-num");
+    expect(stat.getByText("MW")).toHaveClass("stat-unit");
+    expect(stat.getByText("275.43").closest(".big")).toHaveAttribute("title", "275,430.26 kW");
+    act(() => FakeEventSource.open[0].emit([[7, 1_760_000_001, 1234.5, 0]]));
+    expect(stat.getByText("1,234.50")).toBeInTheDocument(); // below 10,000 the base unit keeps two decimals and gains separators
+    expect(stat.getByText("kW")).toHaveClass("stat-unit");
+  });
+
   it("goes back to the fetched figures when the stream drops, and to the stream when it is back", async () => {
     open();
     const stat = within(await region("Current power"));

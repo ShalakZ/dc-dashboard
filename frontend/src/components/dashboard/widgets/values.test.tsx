@@ -107,9 +107,51 @@ describe("stat", () => {
     expect(big).toHaveTextContent("—");
   });
 
-  it("gives a measured figure no title", () => {
+  it("titles a measured figure with its exact value, its marks and its unit", () => {
     render(<StatWidget data={valuesData()} live={false} />);
-    expect(bigOf("10.50")).not.toHaveAttribute("title");
+    expect(bigOf("10.50")).toHaveAttribute("title", "10.50 kW");
+  });
+
+  it("shows a big energy figure compactly and keeps the exact value, marks and unit in its title (w27)", () => {
+    const row = valueRow({ value: 275430.2575, estimated: true, point_id: null });
+    const { container } = render(<StatWidget data={valuesData({ source: "energy", metric: null, unit: "kWh", values: [row] })} live={false} />);
+    expect(container.querySelector(".big")).toHaveTextContent("~275.43 MWh");
+    expect(container.querySelector(".stat-num")).toHaveTextContent(/^~275\.43$/);
+    expect(container.querySelector(".stat-unit")).toHaveTextContent("MWh");
+    expect(container.querySelector(".big")).toHaveAttribute("title", "~275,430.26 kWh");
+  });
+
+  it.each([
+    [7.25, "7.25 kWh"], [9999.994, "9,999.99 kWh"], [9999.996, "10,000 kWh"], [33051.6309, "33,052 kWh"], [99999.4, "99,999 kWh"], [99999.5, "100.00 MWh"],
+    [1234567, "1,234.57 MWh"], [123456000, "123.46 GWh"], [-562.8195, "-562.82 kWh"], [-0.004, "0.00 kWh"], [-1234.5, "-1,234.50 kWh"],
+  ])("draws %s kWh as %s", (value, shown) => {
+    const { container } = render(<StatWidget data={valuesData({ source: "energy", metric: null, unit: "kWh", values: [valueRow({ value, point_id: null })] })} live={false} />);
+    expect(container.querySelector(".big")).toHaveTextContent(shown);
+  });
+
+  it("scales a cost with k and M behind the digits, and the star behind the letter: 275.43k* QAR", () => {
+    const show = (value: number, partial = false, unit: string | null = "QAR") =>
+      render(<StatWidget data={valuesData({ source: "cost", metric: null, unit, values: [valueRow({ value, partial, point_id: null })] })} live={false} />).container.querySelector(".big");
+    expect(show(33051.6309)).toHaveTextContent("33,051.63 QAR");
+    expect(show(275430.26, true)).toHaveTextContent("275.43k* QAR");
+    expect(show(1234567)).toHaveTextContent("1.23M QAR");
+    expect(show(275430.26, false, null)).toHaveTextContent(/^275\.43k$/);
+    expect(show(275430.26, true)).toHaveAttribute("title", "275,430.26* QAR");
+  });
+
+  it("never scales a unit that is not energy or cost: a voltage keeps its two decimals and separators", () => {
+    const { container } = render(<StatWidget data={valuesData({ metric: "voltage_v", unit: "V", values: [valueRow({ value: 12345.678 })] })} live={false} />);
+    expect(container.querySelector(".big")).toHaveTextContent("12,345.68 V");
+  });
+
+  it("draws a missing figure, even a NaN, as a dash with no unit and no title", () => {
+    for (const value of [null, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const { container, unmount } = render(<StatWidget data={valuesData({ source: "cost", metric: null, unit: "QAR", values: [valueRow({ value, point_id: null })] })} live={false} />);
+      expect(container.querySelector(".stat-num")).toHaveTextContent(/^—$/);
+      expect(container.querySelector(".stat-unit")).toBeNull();
+      expect(container.querySelector(".big")).not.toHaveAttribute("title");
+      unmount();
+    }
   });
 
   it("dims a stale reading and says how old it is", () => {
@@ -254,18 +296,101 @@ describe("stat, compared with the same days of last month (w24)", () => {
 
   it("draws the headline as before, then the window, last month's same days with their window, the change and an empty reserved note line", () => {
     const { container } = show();
-    expect(container.querySelector(".stat.stat-compare > .big > .stat-num")).toHaveTextContent("1500.00");
-    expect(container.querySelector(".big")).toHaveTextContent("1500.00 kWh");
+    expect(container.querySelector(".stat.stat-compare > .big > .stat-num")).toHaveTextContent("1,500.00");
+    expect(container.querySelector(".big")).toHaveTextContent("1,500.00 kWh");
     expect(container.querySelector(".stat-name")).toHaveTextContent("LV Panel 1");
     const windows = [...container.querySelectorAll(".stat-window")].map((el) => el.textContent);
     expect(windows).toEqual(["1 to 17 Oct", "1 to 17 Sep"]);
     expect(text(container, ".stat-last-label")).toBe("Same days last month");
     expect(container.querySelector(".stat-last-label")).toHaveAttribute("title", "Same days last month"); // the label can never be cut without its full text on hand
-    expect(text(container, ".stat-last-fig")).toBe("1300.00 kWh");
+    expect(text(container, ".stat-last-fig")).toBe("1,300.00 kWh");
     expect(text(container, ".stat-change")).toBe("up 15.4 % (+200.00 kWh)");
     const note = container.querySelector(".stat-note");
     expect(note).not.toBeNull(); // the slot is there with nothing in it, so a note appearing moves nothing
     expect(note).toBeEmptyDOMElement();
+  });
+
+  it("sets the demo's energy on the card face: ~275.43 MWh against ~275.99 MWh, the change in kWh, and the exact face in every title", () => {
+    const data = withAsset(
+      { this: compareSide({ kwh: 275430.2575, estimated: true }), last: compareSide({ kwh: 275993.077, estimated: true }), kwh: compareChange({ abs: -562.8195, percent: -0.2039 }) },
+      {}, { values: [valueRow({ value: 275430.2575, estimated: true, point_id: null })] },
+    );
+    const { container } = show(data);
+    expect(container.querySelector(".big")).toHaveTextContent("~275.43 MWh");
+    expect(container.querySelector(".big")).toHaveAttribute("title", "~275,430.26 kWh");
+    expect(text(container, ".stat-last-fig")).toBe("~275.99 MWh"); // one unit for both sides
+    expect(container.querySelector(".stat-last-fig")).toHaveAttribute("title", "~275,993.08 kWh");
+    expect(text(container, ".stat-change")).toBe("down ~0.2 % (~-562.82 kWh)"); // the amount picks its own unit
+    expect(container.querySelector(".stat-change")).toHaveAttribute("title", "down ~0.2 % (~-562.82 kWh)");
+  });
+
+  it("sets the demo's cost with no currency: ~33,051.63 against ~33,119.17, down ~0.2 % (~-67.54), no unit anywhere", () => {
+    const data = withAsset(
+      { this: compareSide({ cost: 33051.6309, estimated: true }), last: compareSide({ cost: 33119.1692, estimated: true }), cost: compareChange({ abs: -67.5383, percent: -0.2039 }) },
+      { currency: null }, { source: "cost", unit: null, values: [valueRow({ value: 33051.6309, estimated: true, point_id: null })] },
+    );
+    const { container } = show(data);
+    expect(container.querySelector(".stat-num")).toHaveTextContent(/^~33,051\.63$/);
+    expect(container.querySelector(".stat-unit")).toBeNull();
+    expect(text(container, ".stat-last-fig")).toBe("~33,119.17");
+    expect(text(container, ".stat-change")).toBe("down ~0.2 % (~-67.54)");
+  });
+
+  it("scales a cost of 275,430.26 to 275.43k QAR on both sides and keeps a star behind the letter", () => {
+    const data = withAsset(
+      { this: compareSide({ cost: 275430.26, partial: true }), last: compareSide({ cost: 280000 }), cost: compareChange({ abs: -4569.74, why_none: "partial" }) },
+      {}, { source: "cost", unit: "QAR", values: [valueRow({ value: 275430.26, partial: true, point_id: null })] },
+    );
+    const { container } = show(data);
+    expect(container.querySelector(".big")).toHaveTextContent("275.43k* QAR");
+    expect(container.querySelector(".big")).toHaveAttribute("title", "275,430.26* QAR");
+    expect(text(container, ".stat-last-fig")).toBe("280.00k QAR");
+    expect(text(container, ".stat-change")).toBe("down 4,569.74* QAR");
+  });
+
+  it("promotes a headline of 99,999.5 kWh to 100.00 MWh, with last month in the same unit", () => {
+    const data = withAsset(
+      { this: compareSide({ kwh: 99999.5 }), last: compareSide({ kwh: 90000 }), kwh: compareChange({ abs: 9999.5, percent: 11.1 }) },
+      {}, { values: [valueRow({ value: 99999.5, point_id: null })] },
+    );
+    const { container } = show(data);
+    expect(container.querySelector(".big")).toHaveTextContent("100.00 MWh");
+    expect(text(container, ".stat-last-fig")).toBe("90.00 MWh");
+    expect(text(container, ".stat-change")).toBe("up 11.1 % (+9,999.50 kWh)");
+  });
+
+  it("shares the base unit when one side is tiny: 500,000 kWh next to 4 kWh", () => {
+    const data = withAsset(
+      { this: compareSide({ kwh: 500000 }), last: compareSide({ kwh: 4 }), kwh: compareChange({ abs: 499996, why_none: "previous_zero" }) },
+      {}, { values: [valueRow({ value: 500000, point_id: null })] },
+    );
+    const { container } = show(data);
+    expect(container.querySelector(".big")).toHaveTextContent("500,000 kWh");
+    expect(text(container, ".stat-last-fig")).toBe("4.00 kWh");
+    expect(text(container, ".stat-change")).toBe("up 500.00 MWh"); // a change of its own size picks its own unit (499.996 rounds up)
+  });
+
+  it("steps a change of 150,000 kWh up to MWh while its title keeps the exact amount", () => {
+    const { container } = show(withAsset({ kwh: compareChange({ abs: 150000, percent: 12.4 }) }));
+    expect(text(container, ".stat-change")).toBe("up 12.4 % (+150.00 MWh)");
+    expect(container.querySelector(".stat-change")).toHaveAttribute("title", "up 12.4 % (+150,000.00 kWh)");
+  });
+
+  it("tells a half-cent change from nothing: 0.125 is up 0.13, -0.004 is no change", () => {
+    expect(text(show(withAsset({ kwh: compareChange({ abs: -0.125, percent: -1 }) })).container, ".stat-change")).toBe("down 1.0 % (-0.13 kWh)");
+    expect(text(show(withAsset({ kwh: compareChange({ abs: 0.125, percent: 1 }) })).container, ".stat-change")).toBe("up 1.0 % (+0.13 kWh)");
+    expect(text(show(withAsset({ kwh: compareChange({ abs: -0.004, percent: -0.01 }) })).container, ".stat-change")).toBe("no change");
+  });
+
+  it("draws the headline as a dash with no unit when the figure is missing, and the last month's dash needs none either", () => {
+    const data = withAsset(
+      { last: compareSide({ cost: null }), cost: compareChange({ why_none: "currency" }) },
+      {}, { source: "cost", unit: "QAR", values: [valueRow({ value: null, point_id: null })] },
+    );
+    const { container } = show(data);
+    expect(container.querySelector(".stat-num")).toHaveTextContent(/^—$/);
+    expect(container.querySelector(".stat-unit")).toBeNull();
+    expect(text(container, ".stat-last-fig")).toBe("—");
   });
 
   it("orders the rows: figure, name, window, last month, its window, change, note", () => {
@@ -319,7 +444,7 @@ describe("stat, compared with the same days of last month (w24)", () => {
 
   it("marks an estimated kWh side with ~ and never with a star, even when its cost is partial", () => {
     const { container } = show(withAsset({ last: compareSide({ kwh: 1300, estimated: true, partial: true }) }));
-    expect(text(container, ".stat-last-fig")).toBe("~1300.00 kWh");
+    expect(text(container, ".stat-last-fig")).toBe("~1,300.00 kWh");
   });
 
   it("shows one line for the notes: the reason first, how many more wait in Details, and every note in the title", () => {

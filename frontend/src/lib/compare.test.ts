@@ -1,7 +1,8 @@
 import { compareAsset, compareBlock, compareChange, compareSeriesData, compareSide, compareStatData, valueRow } from "../test/dashboardFixtures";
 import {
-  changeLine, changeMarks, CLOSED_NOTE, compareChartDescription, costMarkMeanings, compareLineNames, compareNotes, dayLabel, dayOfMonthLabel, detailNotes, lastStateText, leftOutText,
-  measureOf, measureUnit, monthName, noteLine, rateNoteText, sideFigure, sideText, whyNoneText, windowDates, windowLabel, withoutEnergyStars,
+  changeCard, changeLine, changeMarks, CLOSED_NOTE, compareChartDescription, costMarkMeanings, compareLineNames, compareNotes, compareScale, dayLabel, dayOfMonthLabel, detailNotes,
+  lastStateText, leftOutText, measureOf, measureUnit, monthName, noteLine, rateNoteText, sideCardFigure, sideCardText, sideFigure, sideText, whyNoneText, windowDates, windowLabel,
+  withoutEnergyStars,
 } from "./compare";
 
 const ctx = (over: Partial<{ days: number; thisSide: ReturnType<typeof compareSide> | null; lastSide: ReturnType<typeof compareSide> | null }> = {}) =>
@@ -65,10 +66,18 @@ describe("the figure of a side", () => {
   });
 
   it("adds the unit after a figure and none after a dash", () => {
-    expect(sideFigure(compareSide({ kwh: 1500 }), "kwh", 17, "QAR")).toBe("1500.00 kWh");
+    expect(sideFigure(compareSide({ kwh: 1500 }), "kwh", 17, "QAR")).toBe("1,500.00 kWh");
     expect(sideFigure(compareSide({ cost: 300 }), "cost", 17, "QAR")).toBe("300.00 QAR");
     expect(sideFigure(compareSide({ cost: 300 }), "cost", 17, null)).toBe("300.00");
     expect(sideFigure(null, "kwh", 17, "QAR")).toBe("—");
+  });
+
+  it("is the EXACT face: the base unit and grouped digits, never scaled, with the star last (costMarkMeanings reads endsWith)", () => {
+    expect(sideText(compareSide({ kwh: 275430.2575, estimated: true }), "kwh", 17)).toBe("~275,430.26");
+    expect(sideFigure(compareSide({ kwh: 275430.2575, estimated: true }), "kwh", 17, "QAR")).toBe("~275,430.26 kWh");
+    expect(sideText(compareSide({ cost: 275430.26, estimated: true, partial: true }), "cost", 17)).toBe("~275,430.26*");
+    expect(sideText(compareSide({ cost: 275430.26, partial: true }), "cost", 17).endsWith("*")).toBe(true);
+    expect(sideFigure(compareSide({ cost: 275430.26, partial: true }), "cost", 17, "QAR")).toBe("275,430.26* QAR");
   });
 
   it("knows the measure of a source and its unit", () => {
@@ -138,6 +147,128 @@ describe("the change line", () => {
     it("has no marks unless they are given", () => {
       expect(changeLine(compareChange({ abs: 340, percent: 12.4 }), "kWh", { estimated: false, partial: false })).toBe("up 12.4 % (+340.00 kWh)");
     });
+  });
+});
+
+describe("the change line reads its direction from the PRINTED amount (w27 review 4)", () => {
+  it("is down or up for a half cent, which prints as 0.13 and is not nothing", () => {
+    expect(changeLine(compareChange({ abs: -0.125, percent: -1 }), "kWh")).toBe("down 1.0 % (-0.13 kWh)");
+    expect(changeLine(compareChange({ abs: 0.125, percent: 1 }), "kWh")).toBe("up 1.0 % (+0.13 kWh)");
+    expect(changeCard(compareChange({ abs: -0.125, percent: -1 }), "kwh", "kWh")).toBe("down 1.0 % (-0.13 kWh)");
+    expect(changeCard(compareChange({ abs: 0.125, percent: 1 }), "kwh", "kWh")).toBe("up 1.0 % (+0.13 kWh)");
+  });
+
+  it("is no change for what prints as 0.00, either sign, on both faces, and never prints a minus on a zero", () => {
+    for (const abs of [-0.004, 0.004, 0, -0]) {
+      expect(changeLine(compareChange({ abs, percent: 0 }), "kWh")).toBe("no change");
+      expect(changeCard(compareChange({ abs, percent: 0 }), "kwh", "kWh")).toBe("no change");
+      expect(changeCard(compareChange({ abs }), "cost", "QAR", { estimated: true, partial: true })).toBe("no change");
+    }
+  });
+
+  it("groups a big amount and a big percentage on the exact face", () => {
+    expect(changeLine(compareChange({ abs: 150000, percent: 1234.56 }), "kWh")).toBe("up 1,234.6 % (+150,000.00 kWh)");
+    expect(changeLine(compareChange({ abs: -1234.5, percent: -2 }), "QAR")).toBe("down 2.0 % (-1,234.50 QAR)");
+  });
+
+  it("is a dash for an amount that is not a number, whatever the percentage says", () => {
+    expect(changeLine(compareChange({ abs: Number.NaN, percent: 1 }), "kWh")).toBe("—");
+    expect(changeCard(compareChange({ abs: Number.POSITIVE_INFINITY }), "kwh", "kWh")).toBe("—");
+  });
+});
+
+describe("the card face of a comparison (w27)", () => {
+  const EST = { estimated: true, partial: false };
+  const sides = (thisSide: ReturnType<typeof compareSide>, last: ReturnType<typeof compareSide>) => ({ this: thisSide, last });
+
+  it("sets both sides of the demo in MWh, the larger side's unit: ~275.43 MWh against ~275.99 MWh", () => {
+    const pair = sides(compareSide({ kwh: 275430.2575, estimated: true }), compareSide({ kwh: 275993.077, estimated: true }));
+    const scale = compareScale(pair, "kwh", 17, "QAR");
+    expect(sideCardFigure(pair.this, "kwh", 17, scale)).toBe("~275.43 MWh");
+    expect(sideCardFigure(pair.last, "kwh", 17, scale)).toBe("~275.99 MWh");
+    expect(sideCardText(pair.this, "kwh", 17, scale)).toBe("~275.43"); // no unit: the stat draws it apart
+    expect(sideFigure(pair.this, "kwh", 17, "QAR")).toBe("~275,430.26 kWh"); // the title: the exact face
+    expect(sideFigure(pair.last, "kwh", 17, "QAR")).toBe("~275,993.08 kWh");
+  });
+
+  it("keeps a cost in the site's currency below 100,000, with grouped digits and no scale letter", () => {
+    const pair = sides(compareSide({ cost: 33051.6309, estimated: true }), compareSide({ cost: 33119.1692, estimated: true }));
+    const none = compareScale(pair, "cost", 17, null);
+    expect(sideCardFigure(pair.this, "cost", 17, none)).toBe("~33,051.63");
+    expect(sideCardFigure(pair.last, "cost", 17, none)).toBe("~33,119.17");
+    const qar = compareScale(pair, "cost", 17, "QAR");
+    expect(sideCardFigure(pair.this, "cost", 17, qar)).toBe("~33,051.63 QAR");
+    expect(sideCardFigure(compareSide({ cost: 33051.6309 }), "cost", 17, qar)).toBe("33,051.63 QAR");
+  });
+
+  it("writes k behind a cost of 100,000 or more and keeps the star after it: 275.43k* QAR", () => {
+    const pair = sides(compareSide({ cost: 275430.26, partial: true }), compareSide({ cost: 280000 }));
+    const scale = compareScale(pair, "cost", 17, "QAR");
+    expect(scale.letter).toBe("k");
+    expect(sideCardFigure(pair.this, "cost", 17, scale)).toBe("275.43k* QAR");
+    expect(sideCardFigure(pair.last, "cost", 17, scale)).toBe("280.00k QAR");
+    expect(sideCardFigure(compareSide({ cost: 275430.26, estimated: true, partial: true }), "cost", 17, scale)).toBe("~275.43k* QAR");
+    expect(sideFigure(pair.this, "cost", 17, "QAR")).toBe("275,430.26* QAR"); // the title: exact, star last
+    expect(sideCardFigure(compareSide({ cost: 275430.26 }), "cost", 17, scale)).toBe("275.43k QAR");
+  });
+
+  it("promotes after rounding: 99,999.5 kWh is 100.00 MWh and 9,999.996 kWh is 10,000 kWh", () => {
+    const high = compareScale(sides(compareSide({ kwh: 99999.5 }), compareSide({ kwh: 99999.5 })), "kwh", 17, null);
+    expect(sideCardFigure(compareSide({ kwh: 99999.5 }), "kwh", 17, high)).toBe("100.00 MWh");
+    const edge = compareScale(sides(compareSide({ kwh: 9999.996 }), compareSide({ kwh: 9999.996 })), "kwh", 17, null);
+    expect(sideCardFigure(compareSide({ kwh: 9999.996 }), "kwh", 17, edge)).toBe("10,000 kWh");
+  });
+
+  it("shares the unit of the larger side, and steps down to the base unit so a small side never reads 0.00: 500,000 kWh and 4 kWh", () => {
+    const pair = sides(compareSide({ kwh: 500000 }), compareSide({ kwh: 4 }));
+    const scale = compareScale(pair, "kwh", 17, null);
+    expect(sideCardFigure(pair.this, "kwh", 17, scale)).toBe("500,000 kWh");
+    expect(sideCardFigure(pair.last, "kwh", 17, scale)).toBe("4.00 kWh");
+    const near = sides(compareSide({ kwh: 5200 }), compareSide({ kwh: 500000 }));
+    const mwh = compareScale(near, "kwh", 17, null);
+    expect(sideCardFigure(near.this, "kwh", 17, mwh)).toBe("5.20 MWh");
+    expect(sideCardFigure(near.last, "kwh", 17, mwh)).toBe("500.00 MWh");
+  });
+
+  it("leaves a side with no figure out of the pick, and draws it as a dash with no unit and no scale", () => {
+    const gone = compareSide({ kwh: 0, cost: null, no_data_days: 17 });
+    const scale = compareScale({ this: compareSide({ kwh: 275430.2575 }), last: gone }, "kwh", 17, null);
+    expect(scale.unit).toBe("MWh"); // the dash does not drag the other side down to kWh
+    expect(sideCardFigure(gone, "kwh", 17, scale)).toBe("—");
+    expect(sideCardText(gone, "kwh", 17, scale)).toBe("—");
+    expect(sideCardFigure(null, "kwh", 17, scale)).toBe("—");
+    expect(sideCardFigure(compareSide({ cost: null }), "cost", 17, compareScale(sides(compareSide({ cost: null }), compareSide({ cost: null })), "cost", 17, "QAR"))).toBe("—");
+    expect(compareScale({ this: null, last: null }, "kwh", 17, null).unit).toBe("kWh"); // nothing to pick from: the base unit
+  });
+
+  it("puts a star only on a cost, whatever the kWh side carries", () => {
+    const side = compareSide({ kwh: 275430.2575, estimated: true, partial: true });
+    expect(sideCardFigure(side, "kwh", 17, compareScale({ this: side, last: side }, "kwh", 17, null))).toBe("~275.43 MWh");
+  });
+
+  it("picks the change's OWN scale from its amount: the demo's down ~0.2 % (~-562.82 kWh) under two MWh figures", () => {
+    expect(changeCard(compareChange({ abs: -562.8195, percent: -0.2039 }), "kwh", "kWh", EST)).toBe("down ~0.2 % (~-562.82 kWh)");
+    expect(changeLine(compareChange({ abs: -562.8195, percent: -0.2039 }), "kWh", EST)).toBe("down ~0.2 % (~-562.82 kWh)"); // the title
+  });
+
+  it("shows the cost change of the demo with no currency: down ~0.2 % (~-67.54)", () => {
+    expect(changeCard(compareChange({ abs: -67.5383, percent: -0.2039 }), "cost", null, EST)).toBe("down ~0.2 % (~-67.54)");
+    expect(changeCard(compareChange({ abs: -67.5383, percent: -0.2039 }), "cost", "QAR", EST)).toBe("down ~0.2 % (~-67.54 QAR)");
+  });
+
+  it("steps a big change up: 150,000 kWh is +150.00 MWh on the card and +150,000.00 kWh in its title", () => {
+    expect(changeCard(compareChange({ abs: 150000, percent: 12.4 }), "kwh", "kWh")).toBe("up 12.4 % (+150.00 MWh)");
+    expect(changeCard(compareChange({ abs: 150000, why_none: "missing_days" }), "kwh", "kWh", EST)).toBe("up ~150.00 MWh");
+    expect(changeLine(compareChange({ abs: 150000, percent: 12.4 }), "kWh")).toBe("up 12.4 % (+150,000.00 kWh)");
+  });
+
+  it("writes a big cost change with k and the star behind it", () => {
+    expect(changeCard(compareChange({ abs: -250000, percent: -9 }), "cost", "QAR", { estimated: true, partial: true })).toBe("down ~9.0 % (~-250.00k* QAR)");
+    expect(changeCard(compareChange({ abs: 18.6, why_none: "partial" }), "cost", "QAR", { estimated: false, partial: true })).toBe("up 18.60* QAR");
+  });
+
+  it("never scales a change in a unit that is not energy or cost", () => {
+    expect(changeCard(compareChange({ abs: 150000, percent: 12.4 }), "kwh", "V")).toBe("up 12.4 % (+150,000.00 V)");
   });
 });
 

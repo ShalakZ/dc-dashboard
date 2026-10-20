@@ -1,4 +1,6 @@
 import type { CompareAsset, CompareChange, CompareSide, CompareWhyNone, WidgetCompare, WidgetData } from "../api/types";
+import type { Scale } from "./figures";
+import { amountText, cardFigure, familyOf, IDENTITY, percentDigits, pickScale } from "./figures";
 import type { Flags } from "./widgetFormat";
 import { figureText, lastCostGone, unitSuffix } from "./widgetFormat";
 
@@ -69,14 +71,23 @@ function listDays(days: readonly number[]): string {
 /** The unit after a figure of this measure: kWh, or the site currency (none when it has none). */
 export const measureUnit = (measure: Measure, currency: string | null): string | null => (measure === "kwh" ? "kWh" : currency);
 
+/** The figure of one side, or null when it has none: a side whose every day has no readings has no figure whatever its sum says (a sum of nothing is not a zero). */
+function sideValue(side: CompareSide | null | undefined, measure: Measure, days: number): number | null {
+  if (!side || (days > 0 && side.no_data_days >= days)) return null;
+  return measure === "kwh" ? side.kwh : side.cost;
+}
+
+/** The marks of one side's figure: `~` for an estimate, and `*` for a partial COST only (a kWh figure never gets a star). */
+const sideMarks = (side: CompareSide, measure: Measure): Flags => ({ estimated: side.estimated, partial: measure === "cost" && side.partial });
+
 /**
- * One side of the comparison as a figure with its marks and no unit: "~12.30", "12.30*", a dash when there is no figure. A side whose every day has no
- * readings has no figure whatever its sum says (a sum of nothing is not a zero), and a cost the rates did not reach is a dash too. The `*` belongs to cost only.
+ * One side of the comparison as an EXACT figure with its marks and no unit: "~12.30", "1,234.50*", a dash when there is no figure. A side whose every day has no
+ * readings has no figure whatever its sum says, and a cost the rates did not reach is a dash too. The `*` belongs to cost only and comes last (`costMarkMeanings`
+ * reads `.endsWith("*")`). The Details drawer and the `title` of a card figure use this face; the stat card uses `sideCardText`.
  */
 export function sideText(side: CompareSide | null | undefined, measure: Measure, days: number): string {
-  if (!side || (days > 0 && side.no_data_days >= days)) return DASH;
-  if (measure === "kwh") return figureText(side.kwh, { estimated: side.estimated, partial: false });
-  return figureText(side.cost, { estimated: side.estimated, partial: side.partial });
+  const value = sideValue(side, measure, days);
+  return value === null ? DASH : figureText(value, sideMarks(side!, measure));
 }
 
 /** `sideText` with its unit, on one line. A dash has no unit. */
@@ -85,7 +96,30 @@ export function sideFigure(side: CompareSide | null | undefined, measure: Measur
   return text === DASH ? text : `${text}${unitSuffix(measureUnit(measure, currency))}`;
 }
 
-const round2 = (value: number): number => Math.round(value * 100) / 100;
+/**
+ * The ONE scale both sides of a comparison share on the card (w27 R3): the larger side decides, so "~275.43 MWh" stands against "~275.99 MWh" and never against
+ * "275,993.08 kWh". A side with no figure (no readings, a cost without a rate) is left out of the pick. `extra` adds more members of the group (the stat's
+ * headline, which is this month's side). With no figure at all the scale is the base unit.
+ */
+export function compareScale(
+  asset: Pick<CompareAsset, "this" | "last">, measure: Measure, days: number, currency: string | null, extra: readonly (number | null | undefined)[] = [],
+): Scale {
+  const unit = measureUnit(measure, currency);
+  const values = [sideValue(asset.this, measure, days), sideValue(asset.last, measure, days), ...extra];
+  return pickScale(familyOf(unit, measure === "cost" ? "cost" : "energy"), unit, values);
+}
+
+/** One side on the CARD face at a scale (`compareScale`), without its unit: "~275.43", "275.43k*". A side with no figure is a dash. */
+export function sideCardText(side: CompareSide | null | undefined, measure: Measure, days: number, scale: Scale): string {
+  const value = sideValue(side, measure, days);
+  return value === null ? DASH : cardFigure(value, scale, sideMarks(side!, measure));
+}
+
+/** `sideCardText` with the scale's unit, on one line: "~275.99 MWh", "275.43k QAR". A dash has no unit. */
+export function sideCardFigure(side: CompareSide | null | undefined, measure: Measure, days: number, scale: Scale): string {
+  const text = sideCardText(side, measure, days, scale);
+  return text === DASH ? text : `${text}${unitSuffix(scale.unit)}`;
+}
 
 /**
  * The marks a change carries, the ones of the figures it is made from: `~` when either side is estimated, and `*` when either side is a partial COST (a kWh
@@ -96,22 +130,40 @@ export function changeMarks(asset: Pick<CompareAsset, "this" | "last">, measure:
   return { estimated: sides.some((side) => side?.estimated === true), partial: measure === "cost" && sides.some((side) => side?.partial === true) };
 }
 
+const NO_MARKS: Flags = { estimated: false, partial: false };
+
+/** The words of a change at a scale; the amount is printed in that scale and the direction is read from what is PRINTED (see `changeLine`). */
+function changeText(change: CompareChange, scale: Scale, marks: Flags): string {
+  if (change.abs === null || !Number.isFinite(change.abs)) return DASH;
+  const amount = amountText(change.abs, scale);
+  if (amount.zero) return "no change";
+  const direction = amount.negative ? "down" : "up";
+  const tilde = marks.estimated ? "~" : "";
+  const figure = `${amount.digits}${scale.letter}${marks.partial ? "*" : ""}${unitSuffix(scale.unit)}`;
+  if (change.percent === null || !Number.isFinite(change.percent)) return `${direction} ${tilde}${figure}`;
+  return `${direction} ${tilde}${percentDigits(change.percent)} % (${tilde}${amount.negative ? "-" : "+"}${figure})`;
+}
+
 /**
- * The change line: "up 12.4 % (+340.00 kWh)", "down 3.1 % (-120.00 kWh)", "no change", or just "up 340.00 kWh" when the server gave no percentage (the reason
- * is a note). The direction is read from the amount as it is shown (two decimals, like every figure of the stat), so -0.004 is "no change" and never
- * "down (-0.00 kWh)". The words and the sign carry the direction; colour never does. A change without an amount is a dash.
+ * The change line on the EXACT face (the base unit, grouped digits): "up 12.4 % (+340.00 kWh)", "down 3.1 % (-120.00 kWh)", "no change", or just
+ * "up 340.00 kWh" when the server gave no percentage (the reason is a note). The direction is read from the amount as it is PRINTED (two decimals, like every
+ * figure of the stat), so -0.004 is "no change" and never "down (-0.00 kWh)", while -0.125 prints "-0.13" and is "down". The words and the sign carry the
+ * direction; colour never does. A change without an amount is a dash.
  * The marks of its figures travel with it (`changeMarks`): `~` in front of the percentage and of the amount ("down ~0.2 % (~-294.32 kWh)"), `*` behind the
  * amount ("up 18.60* QAR", also when the percentage is withheld because the cost is partial). "no change" and a dash show no figure, so they carry none.
+ * The Details drawer and the `title` of the stat's change line use this face; the card itself uses `changeCard`.
  */
-export function changeLine(change: CompareChange, unit: string | null, marks: Flags = { estimated: false, partial: false }): string {
-  if (change.abs === null) return DASH;
-  const shown = round2(change.abs);
-  if (shown === 0) return "no change";
-  const direction = shown > 0 ? "up" : "down";
-  const tilde = marks.estimated ? "~" : "";
-  const amount = `${Math.abs(shown).toFixed(2)}${marks.partial ? "*" : ""}${unitSuffix(unit)}`;
-  if (change.percent === null) return `${direction} ${tilde}${amount}`;
-  return `${direction} ${tilde}${Math.abs(change.percent).toFixed(1)} % (${tilde}${shown > 0 ? "+" : "-"}${amount})`;
+export function changeLine(change: CompareChange, unit: string | null, marks: Flags = NO_MARKS): string {
+  return changeText(change, IDENTITY(unit), marks);
+}
+
+/**
+ * The change line on the CARD face: the same words and rules as `changeLine`, but the amount picks its OWN scale from its size ("up ... (+150.00 MWh)" for
+ * 150,000 kWh, "down ~0.2 % (~-562.82 kWh)" under two MWh figures) and a cost amount may carry k or M ("+18.60k* QAR"). Direction and "no change" still come
+ * from the printed amount.
+ */
+export function changeCard(change: CompareChange, measure: Measure, unit: string | null, marks: Flags = NO_MARKS): string {
+  return changeText(change, pickScale(familyOf(unit, measure === "cost" ? "cost" : "energy"), unit, [change.abs]), marks);
 }
 
 interface NoteContext { days: number; thisSide: CompareSide | null; lastSide: CompareSide | null }

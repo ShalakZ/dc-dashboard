@@ -407,8 +407,8 @@ describe("WidgetView: a breakdown by kind and a comparison (w24)", () => {
     });
     mockFetch({ "POST /api/widget-data": { body: data } });
     const { container } = show({ type: "stat", config: config({ source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" }) });
-    await screen.findByText("1500.00");
-    expect(container.querySelector(".big")).toHaveTextContent(/^1500\.00 ?kWh$/);
+    await screen.findByText("1,500.00");
+    expect(container.querySelector(".big")).toHaveTextContent(/^1,500\.00 ?kWh$/);
     expect(container.querySelector(".widget-foot")).toBeNull(); // nothing to explain on the card
     await userEvent.click(screen.getByRole("button", { name: "Details for Hall" }));
     const dialog = screen.getByRole("dialog");
@@ -420,7 +420,7 @@ describe("WidgetView: a breakdown by kind and a comparison (w24)", () => {
     const data = compareStatData({ compare: compareBlock({ left_out_days: ["2026-10-31"], assets: [compareAsset({ rate_change: { date: "2026-10-05" } })] }) });
     mockFetch({ "POST /api/widget-data": { body: data } });
     show({ type: "stat", config: config({ source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" }) });
-    await screen.findByText("1500.00");
+    await screen.findByText("1,500.00");
     await userEvent.click(screen.getByRole("button", { name: "Details for Hall" }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByRole("heading", { name: "Comparison" })).toBeInTheDocument();
@@ -428,6 +428,8 @@ describe("WidgetView: a breakdown by kind and a comparison (w24)", () => {
     expect(within(dialog).getByRole("cell", { name: "2026-09-01 to 2026-09-17" })).toBeInTheDocument();
     expect(within(dialog).getByText("up 15.4 % (+200.00 kWh)")).toBeInTheDocument();
     expect(within(dialog).getByText("up 15.4 % (+40.00 QAR)")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("1,500.00").length).toBeGreaterThan(0); // Details keeps the exact face, grouped
+    expect(within(dialog).getAllByText("1,300.00").length).toBeGreaterThan(0);
     expect(within(dialog).getByText("31 October has no matching day in September.")).toBeInTheDocument();
     expect(within(dialog).getByText("Cost: A rate changed on 5 Oct, so the cost change is not only usage.")).toBeInTheDocument();
   });

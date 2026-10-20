@@ -1,12 +1,45 @@
 import {
   breakdownBlock, breakdownData, compareAsset, compareBlock, compareChange, compareSeriesData, compareSide, compareStatData, seriesData, seriesPoint, valueRow, valuesData,
 } from "../test/dashboardFixtures";
+import { familyOf, pickScale } from "./figures";
 import {
-  ageText, chartLabels, escapeHtml, figureOrNoData, figureText, flagsOf, formatValue, labelBucket, markerHint, noMetricText, removedText, shortLabel,
+  ageText, cardFigureOrNoData, chartLabels, escapeHtml, figureOrNoData, figureText, flagsOf, formatValue, labelBucket, markerHint, noMetricText, removedText, shortLabel,
   shortLabels, sinceText, skeletonShape, uniqueLabels, unitSuffix,
 } from "./widgetFormat";
 
 const none = { estimated: false, partial: false };
+
+describe("figureText is the exact face (w27)", () => {
+  it("groups the digits and keeps two decimals, never scaling: 1,234.50 and ~275,430.26", () => {
+    expect(figureText(1234.5, none)).toBe("1,234.50");
+    expect(figureText(275430.2575, { estimated: true, partial: false })).toBe("~275,430.26");
+    expect(figureText(-1234.5, none)).toBe("-1,234.50");
+    expect(figureText(1234567.891, { estimated: false, partial: true })).toBe("1,234,567.89*");
+  });
+  it("prints a zero without a minus and a non-number as the dash", () => {
+    expect(figureText(-0.004, none)).toBe("0.00");
+    expect(figureText(Number.NaN, none)).toBe("—");
+    expect(figureText(Number.POSITIVE_INFINITY, { estimated: true, partial: true })).toBe("—");
+  });
+});
+
+describe("cardFigureOrNoData is the card face of figureOrNoData (w27)", () => {
+  const kwh = (value: number) => pickScale(familyOf("kWh", "energy"), "kWh", [value]);
+  it("scales a figure, keeps its marks and puts no unit behind it", () => {
+    expect(cardFigureOrNoData(275430.2575, { estimated: true, partial: false }, false, "energy", kwh(275430.2575))).toBe("~275.43");
+    expect(cardFigureOrNoData(33051.6309, none, false, "energy", kwh(33051.6309))).toBe("33,052");
+    expect(cardFigureOrNoData(275430.26, { estimated: false, partial: true }, false, "cost", pickScale("cost", "QAR", [275430.26]))).toBe("275.43k*");
+  });
+  it("says 'no data' for a metric that recorded nothing and the dash for any other missing figure, with no scaling", () => {
+    expect(cardFigureOrNoData(null, none, true, "metric", kwh(0))).toBe("no data");
+    expect(cardFigureOrNoData(null, none, false, "metric", kwh(0))).toBe("—");
+    expect(cardFigureOrNoData(null, none, true, "cost", pickScale("cost", "QAR", [0]))).toBe("—");
+    expect(cardFigureOrNoData(Number.NaN, none, false, "energy", kwh(0))).toBe("—");
+  });
+  it("shows a muted zero as a figure, as figureOrNoData does", () => {
+    expect(cardFigureOrNoData(0, none, true, "energy", kwh(0))).toBe("0.00");
+  });
+});
 
 describe("figureText", () => {
   it("shows two decimals, ~ in front of an estimated figure and * behind a partial one", () => {
