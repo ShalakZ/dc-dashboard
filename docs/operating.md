@@ -71,7 +71,8 @@ a setting.
   figure only when it has proof that it is current. `docker compose start figures` brings it back and it refills the table within a minute.
 - **Settings.** Put them in `.env` (Compose passes them to the api and the service; run `docker compose up -d` after a change).
   `DCDASH_FIGURE_LEDGER`: `0`, `false`, `off` or `no` (any case) switches the ledger off for the api and the service; anything else,
-  also empty, leaves it on. `DCDASH_FIGURE_CACHE=0` switches the whole figure cache off, and the ledger with it.
+  also empty, leaves it on. `DCDASH_FIGURE_CACHE=0` switches the whole figure cache off, and the ledger with it (the api stops
+  reading the ledger; the `figures` service goes idle only with `DCDASH_FIGURE_LEDGER` off).
   `DCDASH_FIGURES_INTERVAL`: seconds between two rounds, default 30, never below 5. `DCDASH_FIGURES_MONTHS`: how many months it keeps ready, 1 to 24, default 6.
 - **Where to look.** `docker compose ps` shows `figures` as `healthy`: it touches a heartbeat file after every figure and every round and
   is called unhealthy when that file is older than 3 minutes. `docker compose logs --tail 80 figures` shows what it did; a quiet log is
@@ -83,11 +84,12 @@ a setting.
   also running). For comparison, the api used about 120 MB idle and 220 MB under a busy dashboard, and the database 440 to 470 MB. Not
   measured: a site with 2,000 assets. The work grows with the number of meters (about five times at 2,000), so expect roughly five to
   ten times the CPU and memory there; that is an estimate.
-- **Database cost.** While readings land, every 30 seconds the service rewrites the current month's rows (about 100 to 300 KB each at
-  this size) and reads the month's rows to check them. At this size that writes several hundred MB of database log a day and takes about
-  a second of database time every 30 seconds; both grow with the number of assets. `DCDASH_FIGURES_INTERVAL` is the knob: a longer
-  interval writes less, but a stored row is used only while it is at most 55 seconds old, so beyond about 50 seconds the pages compute
-  for themselves most of the time.
+- **Database cost.** While readings land, every 30 seconds the service rewrites the current month's rows (the month's day figures,
+  about 150 KB at this size, and two small window rows of a few KB) and reads the month's rows to check them. At this size that writes
+  several hundred MB of database log a day and takes about a second of database time every 30 seconds; both grow with the number of
+  assets. `DCDASH_FIGURES_INTERVAL` is the knob: a longer interval writes less, but a stored row is used only while it is at most 55
+  seconds old, and the service refreshes every interval, so a page that has to compute finds a usable row about 55 / interval of the
+  time (about 9 times in 10 at 60 seconds, about half at 110 seconds).
 
 The check you can run yourself, and what to paste back to Claude, is in [Field debugging](field-debugging.md#the-figures-check).
 

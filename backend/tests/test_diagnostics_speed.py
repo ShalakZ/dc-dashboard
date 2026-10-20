@@ -189,6 +189,40 @@ async def test_the_figure_ledger_line_says_no_when_no_row_is_of_this_build_and_o
     assert re.fullmatch(r"figure ledger: off, 1 rows, newest checked \d+ s ago, engine id matches: no", ledger_line(out))
 
 
+async def test_the_figure_ledger_line_says_unused_when_the_installation_has_the_figure_cache_off(db, capsys, monkeypatch):
+    # Scoped re-review M3: the api never reads the ledger with the cache off, so "on" alone would mislead. The state is judged by the
+    # INSTALLATION's switch (what `main()` keeps in `_installed_switch` before it turns the cache off for its own run), never by the
+    # environment of the run, which `main()` always sets to 0.
+    await db.execute(_PLANT, "month-days", ledger.engine_id(), 5.0)
+    unused = r"figure ledger: on \(unused: the figure cache is off\), 1 rows, newest checked \d+ s ago, engine id matches: yes"
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE", "0")
+    _, out = await run(capsys)
+    assert "figure cache: off" in out.splitlines() and re.fullmatch(unused, ledger_line(out))
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE", "1")
+    monkeypatch.setattr(speed, "_installed_switch", "0")  # the run forced 0 in the environment; the installation itself says 0
+    _, out = await run(capsys)
+    assert re.fullmatch(unused, ledger_line(out))
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE", "0")  # what `main()` does for every run
+    monkeypatch.setattr(speed, "_installed_switch", "")  # ... on an installation whose cache is on: the ledger is in use
+    _, out = await run(capsys)
+    assert re.fullmatch(r"figure ledger: on, 1 rows, newest checked \d+ s ago, engine id matches: yes", ledger_line(out))
+    monkeypatch.setenv("DCDASH_FIGURE_LEDGER", "0")  # with the ledger itself off the line only says so
+    monkeypatch.setattr(speed, "_installed_switch", "0")
+    _, out = await run(capsys)
+    assert re.fullmatch(r"figure ledger: off, 1 rows, newest checked \d+ s ago, engine id matches: yes", ledger_line(out))
+
+
+async def test_the_figure_ledger_line_says_so_when_the_newest_row_is_dated_in_the_future(db, capsys):
+    # Scoped re-review M6: a row dated in the future (a restore from a machine whose clock was ahead; the readers refuse it) must
+    # not print as "checked 0 s ago", which looks perfectly fresh.
+    await db.execute(_PLANT, "month-days", ledger.engine_id(), -3600.0)
+    code, out = await run(capsys)
+    match = re.fullmatch(
+        r"figure ledger: on, 1 rows, newest checked in the future \((\d+) s\), engine id matches: yes", ledger_line(out)
+    )
+    assert code == 0 and match and 3500 <= int(match.group(1)) <= 3600
+
+
 async def test_the_figure_ledger_line_is_not_available_when_the_table_is_missing_and_the_run_still_ends_well(db, capsys):
     await db.execute("ALTER TABLE figure_ledger RENAME TO figure_ledger_hidden")
     try:

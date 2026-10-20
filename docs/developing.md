@@ -46,8 +46,8 @@ as a fresh calculation), `moved on` (readings arrived since the row was made: no
 named) and `error` (the row could not be judged). It proves only rows that are unchanged and settled: the rows of the open month are
 normally `moved on` (the summary says how many). Exit code 0: every row is fine; 1: at least one row is `DIFFERENT`; 3: the proof could
 not be completed (an `error` line, or a database that did not answer). On 1 or 3 paste the whole output. The check writes nothing.
-`--all` and `--month YYYY-MM` rebuild instead of checking (a month the worker does not keep is refused, exit 2); like the worker they
-run niced.
+`--all` and `--month YYYY-MM` rebuild instead of checking: a rebuild exits 1 if a figure failed and 2 if it is refused (ledger off, or a
+month the worker does not keep); like the worker they run niced.
 
 What this wave found about tests:
 

@@ -21,8 +21,10 @@ With the cache off the figure ledger (w26b, `figure_ledger`, read only through t
 still shows its true cost. The last line says what the ledger is on the installation: `figure ledger: <on|off>, <N> rows, newest
 checked <S> s ago, engine id matches: <yes|no>` (the switch DCDASH_FIGURE_LEDGER, the rows, how long ago the worker last saw a row
 current, and whether any row was made by the code that is running), so a pasted report shows a worker that is down or on another
-build. It is one read-only statement on this session, in a savepoint of its own; where the table is missing or the statement fails
-the line says `figure ledger: not available (<Class>)` and nothing else changes.
+build. With the installation's figure cache switched off the api never reads the ledger, and the state says so: `on (unused: the
+figure cache is off)`. A newest row dated in the future (a restore from a machine whose clock was ahead) prints `newest checked in
+the future (<N> s)`, never `0 s ago`. It is one read-only statement on this session, in a savepoint of its own; where the table is
+missing or the statement fails the line says `figure ledger: not available (<Class>)` and nothing else changes.
 
 It calls only the public functions the handlers call (`hourly_energy`, `cost_by_hour`, `month_costs`, `month_check`,
 `storage_stats`, `rows_per_day_range`) plus the engine's row statement, so a faster engine behind those names shows here.
@@ -133,11 +135,17 @@ def _months(tz_name: str) -> list[tuple[str, str]]:
     return [("last month", last_first.strftime("%Y-%m")), ("this month", this_first.strftime("%Y-%m"))]
 
 
+def _cache_is_off() -> bool:
+    """Whether the INSTALLATION has the figure cache switched off: its own setting (kept by `main()`), not the "0" `main()` puts in
+    the environment for the run."""
+    switch = os.environ.get(_SWITCH, "") if _installed_switch is None else _installed_switch
+    return switch.strip() == "0"
+
+
 def _figure_cache() -> str:
     # A later w26 task replaces this by a call into the figure cache module, so the line shows what the running code decides.
     # It reports the installation's setting, not the "0" `main()` puts in the environment for the run.
-    switch = os.environ.get(_SWITCH, "") if _installed_switch is None else _installed_switch
-    if switch.strip() == "0":
+    if _cache_is_off():
         return "off"
     try:
         line = f"on, {float(os.environ.get('DCDASH_FIGURE_CACHE_TTL', '30')):g} s"
@@ -152,12 +160,14 @@ async def _figure_ledger(db: AsyncSession) -> str:
     try:
         async with db.begin_nested():  # a failed statement must not leave the transaction aborted
             rows, age, matches = (await db.execute(_LEDGER, {"engine": ledger.engine_id()})).one()
-        state = "on" if ledger.enabled() else "off"
+        state = "off" if not ledger.enabled() else "on (unused: the figure cache is off)" if _cache_is_off() else "on"
         if not rows:
             return f"{state}, 0 rows"
-        seconds = 0 if age is None else max(float(age), 0.0)
+        seconds = 0.0 if age is None else float(age)
+        # A newest row dated in the future (a restore from a machine whose clock was ahead; the readers refuse it) must not look fresh.
+        checked = f"in the future ({-seconds:.0f} s)" if seconds < 0 else f"{seconds:.0f} s ago"
         same_build = bool(matches) and ledger.engine_id() != ledger.UNAVAILABLE
-        return f"{state}, {rows} rows, newest checked {seconds:.0f} s ago, engine id matches: {'yes' if same_build else 'no'}"
+        return f"{state}, {rows} rows, newest checked {checked}, engine id matches: {'yes' if same_build else 'no'}"
     except Exception as exc:  # noqa: BLE001 - whatever it raises is the finding
         return f"not available ({_cause(exc)})"
 

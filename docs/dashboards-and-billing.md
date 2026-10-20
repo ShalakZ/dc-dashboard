@@ -678,7 +678,7 @@ from one: it computes from the readings. Check month uses its stored report only
 exactly the same as now. If anything is in doubt the page computes the figure as before, only slower. The service is described in
 [Operating the stack](operating.md#the-figures-service). `DCDASH_FIGURE_LEDGER` set to `0`, `false`, `off` or `no` (any case)
 switches the ledger off; anything else, also empty, leaves it on. `DCDASH_FIGURE_CACHE=0` switches the whole figure cache off, and
-the ledger with it.
+the ledger with it (the api stops reading the ledger; the `figures` service goes idle only with `DCDASH_FIGURE_LEDGER` off).
 
 ## How history is calculated
 
@@ -710,7 +710,8 @@ Billing.
 - The site timezone must have a whole-hour UTC offset in both January and July (so that day and month edges fall on hourly buckets);
   Settings refuses other zones, and Billing and widget data answer 409 if a stored zone breaks the rule.
 - The rollups refresh over the last 7 days, so readings that arrive later than that are not included in energy figures.
-- A figure on a dashboard or in Billing can be up to 30 seconds behind the newest readings (a configuration change shows at once). The
+- A figure on a dashboard or in Billing can be up to 30 seconds (60 seconds for the current month and the first week of the next, see
+  [The figure ledger](#the-figure-ledger)) behind the newest readings (a configuration change shows at once). The
   first load after an api restart, or of a window nobody asked for lately, computes it once, which takes seconds on a big site;
   `python -m dcdash.diagnostics.speed` shows how long.
 - After an api restart, or when the api has not been asked for that window for a while, a figure may step back by up to 60 seconds: it
