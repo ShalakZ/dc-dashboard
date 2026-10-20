@@ -3,7 +3,9 @@ and the writer side and the header read against a real database.
 
 The consultation of the ledger from inside the figure cache (the hook in `_run`) is tested in test_figure_cache_ledger.py.
 """
+import ast
 import asyncio
+import importlib
 import importlib.metadata
 import json
 import logging
@@ -196,6 +198,13 @@ def test_the_counters_are_their_own_and_are_not_the_figure_caches():
     assert ledger.stats()["errors"] == 1
     ledger.reset_stats()
     assert ledger.stats()["errors"] == 0
+
+
+def test_every_failure_counts_an_error_and_one_miss_wherever_it_is_caught():
+    ledger.record_check_failure("reading the Check month row", ValueError("x"))
+    assert ledger.stats() == {"hits_exact": 0, "hits_open": 0, "misses": 1, "errors": 1}
+    ledger.record_check_failure("reading the Check month row", KeyError("y"))
+    assert ledger.stats() == {"hits_exact": 0, "hits_open": 0, "misses": 2, "errors": 2}
 
 
 def test_an_error_is_logged_once_per_exception_type_and_never_with_its_message(caplog):
@@ -417,7 +426,32 @@ NOT_HASHED_ON_PURPOSE = {
     "dcdash.api.auth": "imported by deps: sign-in and sessions",
     "dcdash.api.security": "imported by auth: password hashing and tokens",
     "dcdash.api.security_events": "imported by auth: the sign-in event log",
+    "dcdash.api.roles": "imported lazily by asset_kinds.clean_kind_name, the name check of the write path that creates a kind; no "
+                        "figure, and neither `month_report` nor the builders, ever calls it",
 }
+
+
+def lazy_imports_of_dcdash(root) -> dict[str, set[str]]:
+    """Every `dcdash.*` module a source `month_report` can reach (`core/` and `api/billing_check.py`; not the worker's package)
+    imports ANYWHERE in its text (inside a function too: a lazy import does not show in `sys.modules` after a plain import of the
+    module), as module name -> the files that import it."""
+    found: dict[str, set[str]] = {}
+    for name, path in ledger._engine_sources(root):
+        if not (name.startswith("core/") or name == "api/billing_check.py"):
+            continue
+        for node in ast.walk(ast.parse(path.read_text(), filename=name)):
+            targets: list[str] = []
+            if isinstance(node, ast.Import):
+                targets = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                targets = [node.module] + [f"{node.module}.{alias.name}" for alias in node.names]  # (a name, or a module)
+            for target in targets:
+                module_file = root.parent / target.replace(".", "/")
+                if (target == "dcdash" or target.startswith("dcdash.")) and (
+                    module_file.with_suffix(".py").is_file() or (module_file / "__init__.py").is_file()
+                ):
+                    found.setdefault(target, set()).add(name)
+    return found
 
 
 def test_every_module_the_builders_import_is_hashed_or_listed_as_not_feeding_a_figure():
@@ -437,6 +471,15 @@ def test_every_module_the_builders_import_is_hashed_or_listed_as_not_feeding_a_f
     assert {"dcdash.core.figures", "dcdash.core.energy", "dcdash.core.cost", "dcdash.api.billing_check"} <= set(reached)
     loose = [name for name in reached if name not in hashed and name not in NOT_HASHED_ON_PURPOSE]
     assert loose == [], f"a module the builders import is neither hashed into the engine id nor listed with a reason: {loose}"
+    # `dcdash.api.billing_check` is imported above, so everything `month_report` (the Check month figure the worker writes and
+    # `rebuild` rewrites) imports at the top of a module is in `reached`; what the list cannot show is an import inside a function
+    # body of a hashed file, so those are read from the source text, against the same two sets
+    assert callable(getattr(importlib.import_module("dcdash.api.billing_check"), "month_report"))
+    lazily = {
+        target: files for target, files in lazy_imports_of_dcdash(ledger._PACKAGE).items()
+        if target not in hashed and target not in NOT_HASHED_ON_PURPOSE
+    }
+    assert lazily == {}, f"a hashed file imports a module that is neither hashed nor listed with a reason, inside a function: {lazily}"
 
 
 # ---- the writer side and the header read, against a database ------------------------------------------------------------------

@@ -15,6 +15,7 @@ import copy
 import json
 import os
 import random
+import time
 import zlib
 from datetime import datetime, timedelta, timezone
 from unittest import mock
@@ -380,7 +381,7 @@ async def test_the_fingerprint_moves_with_every_row_the_report_reads_and_with_no
         await db.execute("INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, 0)", point, moment, value)
 
     base, only_midmonth = await fp(everyone), await fp([midmonth])
-    assert [part.split(":")[0] for part in base.split(";")] == ["before", "first", "row"]
+    assert [part.split(":")[0] for part in base.split(";")] == ["points", "before", "first", "row"]
     assert await fp(everyone) == base  # stable
 
     await add(hole, at(2026, 4, 5, 3), 5000.0)  # after the window: not read by the report, not in the fingerprint
@@ -406,10 +407,11 @@ async def test_a_value_changed_in_place_changes_the_fingerprint(db):
     assert await fingerprint(everyone, START, END) != base
 
 
-async def test_no_row_at_all_gives_the_empty_fingerprint(db):
+async def test_no_row_at_all_gives_the_fingerprint_of_the_point_set_only(db):
     await world(db)
-    assert await fingerprint([], START, END) == ""
-    assert await fingerprint([987654], START, END) == ""
+    assert await fingerprint([], START, END) == f"points:{billing_check.point_set_hash([])}"
+    assert await fingerprint([987654], START, END) == f"points:{billing_check.point_set_hash([987654])}"
+    assert billing_check.point_set_hash([]) != billing_check.point_set_hash([987654])
 
 
 # ---- (6) apply_names ----------------------------------------------------------------------------------------------------------
@@ -604,9 +606,10 @@ async def test_a_read_that_raises_is_the_live_answer_and_a_200(app, db, build_ca
         build_calls.clear()
         response = await ask(client)
         assert len(build_calls) == 1 and ledger.stats()["errors"] == 1 and ledger.stats()["hits_exact"] == 0
+        assert ledger.stats()["misses"] == 1  # every error is also a miss, counted once
         assert response.content == live.content
         await ask(client)  # and the next request works too
-        assert ledger.stats()["errors"] == 2
+        assert (ledger.stats()["errors"], ledger.stats()["misses"]) == (2, 2)
 
 
 async def test_a_statement_that_fails_in_the_database_leaves_the_requests_transaction_usable(app, db, build_calls, monkeypatch):
@@ -616,13 +619,14 @@ async def test_a_statement_that_fails_in_the_database_leaves_the_requests_transa
     # back. The live code that follows (the inputs, the names, the tariffs: an account with `sources.view`) must still run.
     monkeypatch.setattr(ledger, "_CHECK", text(
         "SELECT now() AS now FROM figure_ledger_that_is_not_there "
-        "WHERE :k = :k AND :s = :s AND :e = :e AND :p = :p AND :config_fp = :config_fp AND :data_fp = :data_fp"
+        "WHERE :k = :k AND :s = :s AND :e = :e AND :p = :p AND :config_fp = :config_fp AND :engine = :engine"
     ))
     async with signed_in(app, db, "admin", "ada") as client:
         live = await served_live(client)
         build_calls.clear()
         response = await ask(client)
     assert len(build_calls) == 1 and ledger.stats()["errors"] == 1 and ledger.stats()["hits_exact"] == 0
+    assert ledger.stats()["misses"] == 1  # every error is also a miss, counted once
     assert response.content == live.content
     assert by_asset(response.json(), "silent")[ids["Silent"]]["point"] is not None  # `_names` ran after the failure
 
@@ -635,6 +639,9 @@ async def test_a_statement_that_fails_in_the_database_leaves_the_requests_transa
     ("a report without its groups", ledger_codec.encode({"hours": 1, "meters": 1, "meter_hours": 1, "things": 0, "groups": {}}), None),
     ("an item without its names", None, lambda report: report["groups"]["silent"]["items"][0].pop("point")),
     ("an item without its asset", None, lambda report: report["groups"]["gaps"]["items"][0].pop("asset_id")),
+    ("hours one short", None, lambda report: report.__setitem__("hours", report["hours"] - 1)),
+    ("hours of another window", None, lambda report: report.__setitem__("hours", report["hours"] + 24)),
+    ("hours that are not an int", None, lambda report: report.__setitem__("hours", float(report["hours"]))),
 ])
 async def test_a_row_that_cannot_be_used_is_the_live_answer_and_a_200(app, db, build_calls, name, payload, tamper):
     await world(db)
@@ -646,7 +653,7 @@ async def test_a_row_that_cannot_be_used_is_the_live_answer_and_a_200(app, db, b
         response = await ask(client)
     stats = ledger.stats()
     assert len(build_calls) == 1, name
-    assert (stats["hits_exact"], stats["errors"]) == (0, 1), (name, stats)
+    assert (stats["hits_exact"], stats["misses"], stats["errors"]) == (0, 1, 1), (name, stats)  # an error is also ONE miss
     assert response.content == live.content
 
 
@@ -757,3 +764,182 @@ async def test_an_anonymous_request_is_refused_before_the_ledger_is_asked(app, d
     assert ledger.stats() == {"hits_exact": 0, "hits_open": 0, "misses": 0, "errors": 0}
     await login_as(client, db, "admin")
     assert (await client.get(URL, params={"month": MONTH})).status_code == 200 and ledger.stats()["hits_exact"] == 1
+
+
+# ---- (11) the row first, the month-wide fingerprint only for a candidate (review I2) -----------------------------------------------
+
+FINGERPRINT = "billing_check data fingerprint"
+
+
+async def ask_and_see(client) -> tuple[list[str], list[str]]:
+    """Ask once; return the statements of the ledger's row read and the ones of the month-wide fingerprint it ran."""
+    with statements() as found:
+        await ask(client)
+    return [s for s in found if "figure_ledger check" in s], [s for s in found if FINGERPRINT in s]
+
+
+async def weaken_the_config(db, ids) -> None:
+    await db.execute("UPDATE mappings SET scale = 2.0 WHERE asset_id = $1", ids["Power"])
+
+
+@pytest.mark.parametrize("scenario", ["no row", "another engine", "another configuration", "dated in the future"])
+async def test_a_miss_without_a_candidate_reads_no_fingerprint_of_the_month(app, db, build_calls, scenario):
+    ids = await world(db)
+    if scenario == "another engine":
+        await publish(START, END, engine="another-build")
+    elif scenario == "another configuration":
+        await publish(START, END)
+        await weaken_the_config(db, ids)
+    elif scenario == "dated in the future":
+        await publish(START, END, shift=timedelta(hours=1))
+    async with signed_in(app, db, "admin", "ada") as client:
+        ledger.reset_stats()
+        build_calls.clear()
+        row_reads, fingerprints = await ask_and_see(client)
+    assert len(row_reads) == 1 and fingerprints == [], scenario
+    assert len(build_calls) == 1
+    assert (ledger.stats()["hits_exact"], ledger.stats()["misses"], ledger.stats()["errors"]) == (0, 1, 0)
+
+
+async def test_only_a_candidate_costs_the_fingerprint_of_the_month_and_it_is_read_after_the_row(app, db, build_calls):
+    ids = await world(db)
+    await publish(START, END)
+    async with signed_in(app, db, "admin", "ada") as client:
+        build_calls.clear()
+        with statements() as found:
+            await ask(client)
+        row_read = next(i for i, s in enumerate(found) if "figure_ledger check" in s)
+        fingerprints = [i for i, s in enumerate(found) if FINGERPRINT in s]
+        assert len(fingerprints) == 1 and fingerprints[0] > row_read  # a hit: exactly one, after the row
+        assert build_calls == [] and ledger.stats()["hits_exact"] == 1
+        # the readings moved: the row is a candidate (same build, same configuration), the fingerprint is read once, and it is a miss
+        await db.execute(
+            "INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, 0)",
+            await point_of(db, ids["Hole"]), at(2026, 3, 10, 9) + timedelta(minutes=30), 1225.0,
+        )
+        ledger.reset_stats()
+        row_reads, fingerprints_read = await ask_and_see(client)
+        assert len(row_reads) == 1 and len(fingerprints_read) == 1
+        assert (ledger.stats()["hits_exact"], ledger.stats()["misses"], ledger.stats()["errors"]) == (0, 1, 0)
+    assert len(build_calls) == 1
+
+
+async def test_a_ledger_read_ends_its_savepoint_with_a_rollback_never_a_release(app, db):
+    await world(db)
+    await publish(START, END)
+    async with signed_in(app, db, "admin", "ada") as client:
+        with statements() as found:
+            await ask(client)  # a hit
+        starts = [i for i, s in enumerate(found) if s.startswith("SAVEPOINT")]
+        assert len(starts) == 1
+        assert found[starts[0] + 1].startswith("SET LOCAL lock_timeout")  # the first statement inside it
+        assert [s for s in found[starts[0]:] if s.startswith("ROLLBACK TO SAVEPOINT")] and not [
+            s for s in found if s.startswith("RELEASE")
+        ]
+        await db.execute("DELETE FROM figure_ledger")
+        with statements() as found:
+            await ask(client)  # a miss
+        assert [s for s in found if s.startswith("ROLLBACK TO SAVEPOINT")] and not [s for s in found if s.startswith("RELEASE")]
+
+
+# ---- (12) a lock on the ledger and the savepoint's own lock timeout (review M1) ----------------------------------------------------
+
+
+async def test_a_lock_on_the_ledger_table_is_a_prompt_live_answer_not_a_stall(app, db, build_calls, monkeypatch):
+    await world(db)
+    await publish(START, END)
+    seen: list[str] = []
+    real = billing_check._read_inputs
+
+    async def look(session, *args, **kwargs):
+        seen.append(await session.scalar(text("SHOW lock_timeout")))  # the live read that follows the miss: under no lock timeout
+        return await real(session, *args, **kwargs)
+
+    monkeypatch.setattr(billing_check, "_read_inputs", look)
+    async with signed_in(app, db, "admin", "ada") as client:
+        live = await served_live(client)
+        build_calls.clear()
+        seen.clear()
+        ledger.reset_stats()
+        async with db.acquire() as holder:
+            async with holder.transaction():
+                await holder.execute("LOCK TABLE figure_ledger IN ACCESS EXCLUSIVE MODE")
+                began = time.monotonic()
+                response = await ask(client)
+                waited = time.monotonic() - began
+    assert 0.15 <= waited < 3, waited  # about the 200 ms of the timeout plus the live answer: neither at once nor a stall
+    assert response.content == live.content and len(build_calls) == 1
+    assert (ledger.stats()["hits_exact"], ledger.stats()["misses"], ledger.stats()["errors"]) == (0, 1, 1)
+    assert seen == ["0"]
+
+
+async def test_the_lock_timeout_does_not_outlive_a_ledger_read_that_hits(app, db, monkeypatch):
+    await world(db)
+    await publish(START, END)
+    seen: list[str] = []
+    real = billing_check._names
+
+    async def look(session, *args, **kwargs):
+        seen.append(await session.scalar(text("SHOW lock_timeout")))
+        return await real(session, *args, **kwargs)
+
+    monkeypatch.setattr(billing_check, "_names", look)
+    async with signed_in(app, db, "admin", "ada") as client:
+        await ask(client)
+    assert ledger.stats()["hits_exact"] == 1 and seen == ["0"]
+
+
+# ---- (13) the point set belongs to the fingerprint (review M2) ---------------------------------------------------------------------
+
+
+async def test_a_meter_set_that_changes_between_the_reads_is_a_miss_not_a_hit_with_old_names(app, db, build_calls, monkeypatch):
+    ids = await world(db)
+    late = await meter(db, "Late", [], parent=ids["Priced"], counter=False)  # a power meter that has never recorded anything
+    mapping_id = await db.fetchval("SELECT id FROM mappings WHERE asset_id = $1", late)
+    late_point = await point_of(db, late)
+    await publish(START, END)  # state one: Late is a meter (the worker's view)
+    await db.execute("UPDATE mappings SET metric = 'voltage_v' WHERE id = $1", mapping_id)  # state zero: it is not
+    everyone = [
+        r["point_id"] for r in await db.fetch(
+            "SELECT point_id FROM mappings WHERE metric IN ('energy_kwh', 'active_power_kw') ORDER BY point_id"
+        )
+    ]
+    assert late_point not in everyone
+    with_late, without = await fingerprint([*everyone, late_point], START, END), await fingerprint(everyone, START, END)
+    # a point with no reading adds no row, so what the rows say is the same for both sets: only the point set tells them apart
+    assert with_late.split(";", 1)[1] == without.split(";", 1)[1] and with_late != without
+
+    real = figure_cache.config_fingerprint
+
+    async def flip_then_read(session):
+        """The race: the request loaded its meters in state zero; a mapping changes now; the configuration is read in state one."""
+        await db.execute("UPDATE mappings SET metric = 'active_power_kw' WHERE id = $1", mapping_id)
+        return await real(session)
+
+    monkeypatch.setattr(figure_cache, "config_fingerprint", flip_then_read)
+    async with signed_in(app, db, "admin", "ada") as client:
+        build_calls.clear()
+        ledger.reset_stats()
+        response = await ask(client)
+    assert response.status_code == 200 and len(build_calls) == 1
+    assert (ledger.stats()["hits_exact"], ledger.stats()["misses"], ledger.stats()["errors"]) == (0, 1, 0)
+
+
+# ---- (14) names are read live (review M5) ------------------------------------------------------------------------------------------
+
+
+async def test_a_renamed_point_or_source_is_still_a_hit_and_shows_the_new_name(app, db, build_calls):
+    ids = await world(db)
+    published = await publish(START, END)
+    assert all(item["point"] is None for group in THINGS for item in published["groups"][group]["items"])  # names are not stored
+    point = await point_of(db, ids["Silent"])
+    await db.execute("UPDATE points SET name = 'Renamed point' WHERE id = $1", point)
+    await db.execute("UPDATE sources SET name = 'Renamed source' WHERE id = (SELECT source_id FROM points WHERE id = $1)", point)
+    build_calls.clear()
+    async with signed_in(app, db, "admin", "ada") as client:
+        hit = await ask(client)
+        assert ledger.stats()["hits_exact"] == 1 and build_calls == []  # (the names are no part of the configuration)
+        live = await served_live(client)
+    silent = by_asset(hit.json(), "silent")[ids["Silent"]]
+    assert (silent["point"], silent["source"]) == ("Renamed point", "Renamed source")
+    assert hit.content == live.content

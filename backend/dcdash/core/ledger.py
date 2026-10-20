@@ -40,6 +40,7 @@ milliseconds). The comparisons of two such times (a row against the entry it wou
 
 `figure_cache` imports this module and `figures` builds the `LedgerSpec`s, so nothing here imports either of them.
 """
+import contextlib
 import hashlib
 import importlib.metadata
 import json
@@ -85,7 +86,8 @@ def enabled() -> bool:
 def stats() -> dict[str, int]:
     """Counters since the last `reset_stats()`: rows used after an exact data match (`hits_exact`), rows used on the open
     rule (`hits_open`), consultations that went on to the engine (`misses`) and failures of the ledger itself (`errors`; each
-    one is also a miss). They are not in `figure_cache.stats()`: two tests pin that dict."""
+    one is also a miss: wherever a failure is caught it counts BOTH, `consult` for the hook and `record_check_failure` for Check
+    month, so `misses >= errors`). They are not in `figure_cache.stats()`: two tests pin that dict."""
     return dict(_stats)
 
 
@@ -533,13 +535,17 @@ def check_params(tz_name: str) -> str:
 
 
 # ONE statement: the database clock and the row of the key, its payload included (the report is small, and the header and the
-# payload of one statement are one row, never a header of one row and the payload of another). The payload is read only when the
-# row carries the fingerprints that were asked for (a row that cannot be used is not shipped).
+# payload of one statement are one row, never a header of one row and the payload of another). The payload is shipped only for
+# a CANDIDATE: a row of this build (`:engine`), under the configuration that was just read (`:config_fp`), with
+# `snapshot_at <= checked_at <= now()`. Whatever else (no row, another engine, another configuration, bad times) is not shipped
+# and costs nothing more (see `read_check_candidate`: no data fingerprint is read for it).
 _CHECK = text(
     """
     /* figure_ledger check */
     SELECT now() AS now, h.engine, h.config_fp, h.data_fp, h.snapshot_at, h.checked_at,
-           CASE WHEN h.config_fp = :config_fp AND h.data_fp = :data_fp THEN h.payload END AS payload
+           CASE WHEN h.engine = :engine AND h.config_fp = :config_fp
+                     AND h.snapshot_at <= h.checked_at AND h.checked_at <= now()
+                THEN h.payload END AS payload
     FROM (SELECT 1) d
     LEFT JOIN figure_ledger h
       ON h.kind = :k AND h.start_ts = :s AND h.end_ts = :e AND h.params = :p
@@ -547,25 +553,74 @@ _CHECK = text(
 )
 
 
-async def read_check(
-    session: AsyncSession, start: datetime, stop: datetime, params: str, config_fp: str, data_fp: str,
-    *, validate: Callable[[dict], None] | None = None,
-) -> dict | None:
-    """The Check month report stored for the key (`CHECK_KIND`, `start`, `stop`, `params`), or None. `config_fp` and `data_fp`
-    are the fingerprints of the configuration and of the readings this window reads, taken just now on `session`. The row is used
-    only when it was made by this build (`engine_id`), BOTH fingerprints equal the row's, and `snapshot_at <= checked_at <= now()`
-    (a row dated in the future never counts). There is no 60 second rule: a Check month window holds complete hours only, so the
-    answer is always exact. The decode (zlib and JSON, and `validate(report)` when given: it raises for a report of a wrong
-    shape) runs on the compute thread. A bad row raises (the caller counts it and computes); it never returns a value that
-    failed to decode. The caller keeps the statement in a savepoint (see `billing_check._from_ledger`)."""
-    asked = {**_key(CHECK_KIND, start, stop, params), "config_fp": config_fp, "data_fp": data_fp}
+@contextlib.asynccontextmanager
+async def read_savepoint(session: AsyncSession):
+    """The savepoint every read of a Check month row runs in, for the caller's own statements as well (the fingerprints): it
+    starts with `SET LOCAL lock_timeout = '200ms'` (a lock on `figure_ledger` makes the read an error after 200 ms, never an
+    unbounded wait) and is ALWAYS rolled back, an error or not: a read needs no release, and a RELEASE would leave the
+    `SET LOCAL` in force for the rest of the request's transaction, so the live read that follows a miss would run under a
+    200 ms lock timeout. An SQL error inside leaves the surrounding transaction usable for the same reason."""
+    nested = await session.begin_nested()
+    try:
+        await session.execute(_LOCK_TIMEOUT)
+        yield
+    finally:
+        await nested.rollback()
+
+
+@dataclass(frozen=True)
+class CheckCandidate:
+    """The row of a Check month key that may be used if the readings have not moved: the data fingerprint it was made under and
+    its payload (still encoded)."""
+
+    data_fp: str
+    payload: bytes
+
+
+async def read_check_candidate(
+    session: AsyncSession, start: datetime, stop: datetime, params: str, config_fp: str
+) -> CheckCandidate | None:
+    """ONE statement; the row of the key (`CHECK_KIND`, `start`, `stop`, `params`) when it can be used, else None. `config_fp` is
+    the fingerprint of the configuration, taken just now on `session`. A candidate was made by this build (`engine_id`), under
+    that configuration, and `snapshot_at <= checked_at <= now()` (a row dated in the future never counts): everything but the
+    readings is settled. The caller then reads the data fingerprint, and only an equal one lets the row be used. No row, a row
+    of another build or configuration, a row with bad times: None, and nothing else was read. Counts nothing."""
+    asked = {**_key(CHECK_KIND, start, stop, params), "engine": engine_id(), "config_fp": config_fp}
     row = (await session.execute(_CHECK, asked)).one()
-    usable = (
-        engine_matches(row.engine) and row.config_fp == config_fp and row.data_fp == data_fp and row.payload is not None
-        and row.snapshot_at is not None and row.checked_at is not None
-        and row.snapshot_at <= row.checked_at <= row.now
+    candidate = (
+        engine_matches(row.engine) and row.config_fp == config_fp and row.payload is not None and row.data_fp is not None
+        and row.snapshot_at is not None and row.checked_at is not None and row.snapshot_at <= row.checked_at <= row.now
     )
-    if not usable:
+    return CheckCandidate(row.data_fp, bytes(row.payload)) if candidate else None
+
+
+def record_check_failure(where: str, exc: Exception) -> None:
+    """A failure of a Check month read: counted as an error AND as a miss, here and nowhere else (the rule of `stats()`: every
+    error is also a miss). `read_check` counts the misses that are not errors."""
+    record_error(where, exc)
+    _stats["misses"] += 1
+
+
+async def read_check(
+    session: AsyncSession, start: datetime, stop: datetime, params: str, config_fp: str,
+    data_fp: str | Callable[[], Awaitable[str]], *, validate: Callable[[dict], None] | None = None,
+) -> dict | None:
+    """The Check month report stored for the key (`CHECK_KIND`, `start`, `stop`, `params`), or None. `config_fp` is the
+    fingerprint of the configuration, taken just now on `session`; `data_fp` is the fingerprint of the readings this window reads
+    (taken just now on `session`) or a coroutine function that takes it (the endpoint passes one: it is called ONLY when there is
+    a candidate row, because that read is the cost of the month, see `read_check_candidate`). The row is used only when it was
+    made by this build, under this configuration, with `snapshot_at <= checked_at <= now()` and a data fingerprint equal to the
+    one read. There is no 60 second rule: a Check month window holds complete hours only, so the answer is always exact. The
+    decode (zlib and JSON, and `validate(report)` when given: it raises for a report of a wrong shape) runs on the compute thread.
+    A bad row raises (the caller counts it with `record_check_failure` and computes); it never returns a value that failed to
+    decode. This counts a hit and the misses that are not errors (no candidate, readings that moved). The caller keeps the
+    statements in `read_savepoint` (see `billing_check._from_ledger`)."""
+    candidate = await read_check_candidate(session, start, stop, params, config_fp)
+    if candidate is None:
+        _stats["misses"] += 1
+        return None
+    current = await data_fp() if callable(data_fp) else data_fp
+    if current != candidate.data_fp:  # the readings moved since the row was made: not a difference, only not current
         _stats["misses"] += 1
         return None
 
@@ -575,10 +630,6 @@ async def read_check(
             validate(report)
         return report
 
-    try:
-        report = await compute.run(decode, bytes(row.payload))
-    except Exception:
-        _stats["misses"] += 1  # (the caller counts the error)
-        raise
+    report = await compute.run(decode, candidate.payload)
     _stats["hits_exact"] += 1
     return report

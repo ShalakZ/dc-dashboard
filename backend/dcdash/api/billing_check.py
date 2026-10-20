@@ -1,6 +1,7 @@
 """The Billing month check (W21): `GET /api/billing/month-check`, a plain list of what to look at before a month is trusted or
 closed. It only reads. The maths is core/month_check.py (pure); this module resolves the month, reads the hourly rollup rows
 of every metered point with ONE statement, and hands both over. It changes no figure and writes nothing (no audit row)."""
+import hashlib
 import json
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -21,7 +22,7 @@ from dcdash.core import compute, figure_cache, ledger
 from dcdash.core.cost import TariffRow, load_tariffs, rate_at
 from dcdash.core.energy import PART_ROWS, HourRow, Meter, load_meters
 from dcdash.core.models import BillingClose, Point, Source, User
-from dcdash.core.month_check import LIMITS, THINGS, MeterInput, build_report
+from dcdash.core.month_check import LIMITS, THINGS, MeterInput, build_report, expected_hours
 from dcdash.core.timeutil import month_bounds, validate_whole_hour_zone
 from dcdash.core.tree import AssetTree
 
@@ -84,11 +85,22 @@ _FINGERPRINT = text(
 _FINGERPRINT_KEYS = text(f"SELECT x.kind, x.point_id, x.bucket FROM ({_ROWS_BODY}) x")
 
 
+def point_set_hash(point_ids: Sequence[int]) -> str:
+    """A short hash of the SET of point ids (sorted, each once): which meters a report was made for."""
+    ids = ",".join(str(point_id) for point_id in sorted(set(point_ids)))
+    return hashlib.sha256(ids.encode()).hexdigest()[:16]
+
+
 async def check_data_fingerprint(session: AsyncSession, point_ids: Sequence[int], start: datetime, stop: datetime) -> str:
     """A hash of exactly the rows the report of [start, stop) reads for these points: the rows of the window, the last bucket
     before it of EVERY point and the first bucket each point ever had. It covers nothing else, so a silent meter's hash is the
-    same for a longer window (the ledger's key carries `stop` for that reason)."""
-    return (await session.execute(_FINGERPRINT, {"ids": list(point_ids), "start": start, "end": stop})).scalar_one()
+    same for a longer window (the ledger's key carries `stop` for that reason). The string starts with `points:` and a hash of
+    the point ids it was computed over (a point with no reading adds no row, so without it two meter sets could give one
+    fingerprint: a request whose meters differ from the worker's must miss), then the parts of the rows (`before:...;first:...;
+    row:...`). The endpoint, the figures worker and `rebuild` all call this one function."""
+    ids = sorted(set(point_ids))
+    rows = (await session.execute(_FINGERPRINT, {"ids": ids, "start": start, "end": stop})).scalar_one()
+    return f"points:{point_set_hash(ids)};{rows}" if rows else f"points:{point_set_hash(ids)}"
 
 
 def _z(moment: datetime) -> str:
@@ -171,12 +183,18 @@ def apply_names(report: dict[str, Any], names: Mapping[int, tuple[str, str]]) ->
     return report
 
 
-def _check_shape(report: dict[str, Any]) -> None:
-    """Raise unless `report` has the shape `month_report` makes, as far as the endpoint and `apply_names` read it. The codec
-    guarantees the bytes of a stored row, not what they say; a row of a wrong shape must be a miss, not a 500 (or a `point` key
-    appended at the end of an item, which would be a different answer)."""
+def _check_shape(report: dict[str, Any], start: datetime, stop: datetime) -> None:
+    """Raise unless `report` has the shape `month_report` makes, as far as the endpoint and `apply_names` read it, and says it is
+    the report of THIS window (the reader does not trust the writer for it): its `hours` is the number of complete hours of
+    [start, stop), which the key's `stop` (a floored hour) and `start` (a whole hour, `validate_whole_hour_zone`) make exactly
+    `len(expected_hours(None, start, stop))`; a report of another window, or a silent meter's `hours` one short, is an error and
+    a miss. The codec guarantees the bytes of a stored row, not what they say; a row of a wrong shape must be a miss, not a 500
+    (or a `point` key appended at the end of an item, which would be a different answer)."""
     if not {"hours", "meters", "meter_hours", "things", "groups"} <= set(report):
         raise ValueError("a report without its totals")
+    hours = report["hours"]
+    if type(hours) is not int or hours != len(expected_hours(None, start, stop)):
+        raise ValueError("a report of another window than its key")
     groups = report["groups"]
     if list(groups) != [*THINGS, "unmetered", "later"]:
         raise ValueError("a report without its groups")
@@ -190,23 +208,42 @@ async def _from_ledger(
     db: AsyncSession, tz_name: str, start: datetime, stop: datetime, meters: dict[int, Meter]
 ) -> dict[str, Any] | None:
     """The report of [start, stop) without names from the figure ledger, or None. It is used only when the stored row is
-    provably the report of the readings and the configuration as they are NOW: made by this build, and the fingerprint of the
-    configuration and the one of the rows this window reads (`check_data_fingerprint`) both equal the row's (always exact: a
-    window of complete hours has no 60 second rule). It never raises: all of its statements run in ONE savepoint, so a failed
-    one (a missing table) leaves the request's transaction usable, and anything that goes wrong is counted, logged once per
-    kind of error and means "no row": the caller then computes, as it always did."""
+    provably the report of the readings and the configuration as they are NOW: made by this build, under the configuration
+    fingerprint read here, for the very set of points this request has (the data fingerprint starts with a hash of the point
+    ids), and the fingerprint of the rows this window reads (`check_data_fingerprint`) equal to the row's (always exact: a window
+    of complete hours has no 60 second rule). It never raises: all of its statements run in ONE savepoint (`ledger.read_savepoint`:
+    a lock timeout of 200 ms, always rolled back, so the live reads that follow run under no timeout), so a failed one (a
+    missing table, a lock) leaves the request's transaction usable, and anything that goes wrong is counted (an error AND a miss),
+    logged once per kind of error and means "no row": the caller then computes, as it always did.
+
+    The order is the cheapest first: the configuration fingerprint, then ONE statement for the row of the key (it ships the
+    payload only for a candidate: this build, this configuration, sane times), and only a candidate costs the month-wide data
+    fingerprint. No row, a row of another build or configuration, a row the worker has not yet written for this hour: one
+    primary-key lookup and no read of the month, so a miss costs a few cheap statements and no more.
+
+    Why the reads may be separate (the session is READ COMMITTED, so each statement sees what is committed at its own start: the
+    tree and the meters before this function, then the configuration fingerprint, the row, the data fingerprint): the worker
+    wrote the row, its two fingerprints and its report from ONE repeatable-read snapshot, so they describe a state that existed. A
+    request that finds the same configuration fingerprint, the same point set and the same data fingerprint (each an exact hash
+    of everything the report reads) has therefore read, in each of its separate looks, what that state held, and the report of
+    that state is what the live path computes from them (the live path also reads the tree, the meters, the rows and the tariffs
+    in separate statements). The names are read live afterwards, for this request's own meters, and are never in the row. What
+    stays open is a mapping change between the request's load of the meters and its configuration read that moves the SAME set
+    of points to other assets, within those milliseconds: the figures are still those of a state that existed, only the names
+    of the moved assets may be the earlier ones for that one request."""
     if not ledger.enabled() or not figure_cache.enabled():
         return None
     try:
-        async with db.begin_nested():
+        async with ledger.read_savepoint(db):
             config_fp = await figure_cache.config_fingerprint(db)
             point_ids = sorted({meter.point_id for meter in meters.values()})
-            data_fp = await check_data_fingerprint(db, point_ids, start, stop)
             return await ledger.read_check(
-                db, start, stop, ledger.check_params(tz_name), config_fp, data_fp, validate=_check_shape
+                db, start, stop, ledger.check_params(tz_name), config_fp,
+                partial(check_data_fingerprint, db, point_ids, start, stop),
+                validate=lambda report: _check_shape(report, start, stop),
             )
     except Exception as exc:  # (zlib.error, ValueError, KeyError, TypeError and a database error too)
-        ledger.record_error("reading the Check month row", exc)
+        ledger.record_check_failure("reading the Check month row", exc)
         return None
 
 
