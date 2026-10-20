@@ -284,6 +284,7 @@ describe("the page map", () => {
       storage: "storage.view",
       audit: "audit.view",
       diagnostics: ["diagnostics.view", "sources.view"],
+      displays: ["displays.manage", "dashboards.view"],
     });
   });
 });

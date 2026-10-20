@@ -22,6 +22,7 @@ EXPECTED = [
     ("dashboards.view", "Dashboards", "see"),
     ("dashboards.edit", "Dashboards", "change"),
     ("dashboards.default", "Dashboards", "risky"),
+    ("displays.manage", "Dashboards", "risky"),
     ("billing.view", "Billing and tariffs", "see"),
     ("billing.export", "Billing and tariffs", "risky"),
     ("billing.close", "Billing and tariffs", "risky"),
@@ -55,8 +56,8 @@ OPERATOR = VIEWER | {"dashboards.edit", "tariffs.view", "sources.view", "sources
 
 # ---- the catalogue ----------------------------------------------------------------------------------------------------
 
-def test_the_catalogue_is_the_31_ids_of_appendix_a_w9b_w7o_and_w11_in_order():
-    assert len(EXPECTED) == 31
+def test_the_catalogue_is_the_32_ids_of_appendix_a_w9b_w7o_w11_and_w28_in_order():
+    assert len(EXPECTED) == 32
     assert [p.id for p in CATALOGUE] == IDS
 
 
@@ -103,7 +104,7 @@ def test_the_built_in_sets_are_viewer_operator_and_everything():
     assert BUILTIN["viewer"] == VIEWER
     assert BUILTIN["operator"] == OPERATOR
     assert BUILTIN["admin"] == ALL_IDS
-    assert len(BUILTIN["admin"]) == 31
+    assert len(BUILTIN["admin"]) == 32
 
 
 def test_viewer_is_a_subset_of_operator_and_neither_manages_roles():

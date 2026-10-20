@@ -41,6 +41,8 @@ CATALOGUE: tuple[Permission, ...] = (
        "Open dashboards and their widgets, receive live values, and read the values of any point through a widget."),
     _p("dashboards.edit", "Dashboards", "change", "Change dashboards", "Create, edit and delete dashboards and their widgets."),
     _p("dashboards.default", "Dashboards", "risky", "Choose the default dashboard", "Choose the dashboard everybody lands on."),
+    _p("displays.manage", "Dashboards", "risky", "Manage display screens",
+       "Create playlists and display links that show dashboards on a screen without signing in, and revoke them."),
     _p("billing.view", "Billing and tariffs", "see", "See billing", "Open the Billing page: energy and cost per asset and month."),
     _p("billing.export", "Billing and tariffs", "risky", "Export billing as CSV", "Download the billing table as a CSV file."),
     _p("billing.close", "Billing and tariffs", "risky", "Close and reopen billing months",

@@ -266,7 +266,7 @@ def test_clear_on_the_shared_limiter_restores_the_constructor_numbers():
 async def test_setup_and_login_and_me_list_the_admin_s_permissions_sorted(client):
     created = await client.post("/api/setup", json=ADMIN)
     assert created.json()["role"] == "admin"
-    assert created.json()["permissions"] == sorted(ALL_IDS) and len(ALL_IDS) == 31
+    assert created.json()["permissions"] == sorted(ALL_IDS) and len(ALL_IDS) == 32
     assert (await client.get("/api/me")).json()["permissions"] == sorted(ALL_IDS)
     await client.post("/api/logout")
     assert (await client.post("/api/login", json=ADMIN)).json()["permissions"] == sorted(ALL_IDS)

@@ -26,6 +26,7 @@ export const PAGE_NEED = {
   storage: "storage.view",
   audit: "audit.view",
   diagnostics: ["diagnostics.view", "sources.view"],
+  displays: ["displays.manage", "dashboards.view"], // playlists and display links; the playlist dialog lists dashboards
 } as const satisfies Record<string, Need>;
 
 /** `match`: the item is the current page on this path and everything below it (whole segments), not only on `to`. `need`: the permissions to see the link. */

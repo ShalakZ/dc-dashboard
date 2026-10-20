@@ -2,15 +2,15 @@
 
 This page is for the administrator who decides who may do what, and for a developer who calls the API. Every action in the API needs a
 named permission; an account holds one role, and a role is a set of permissions. The screens only hide what the server would refuse.
-The page lists the 31 permissions, the three built-in roles, how to make a role of your own, the safeguards, and the same through the API.
+The page lists the 32 permissions, the three built-in roles, how to make a role of your own, the safeguards, and the same through the API.
 
 ## The permissions
 
 `backend/dcdash/core/permissions.py` is the one list (the `CATALOGUE`); the Roles tab and `GET /api/permissions` draw from it, and
 `frontend/src/lib/permissions.ts` mirrors its ids and labels (`backend/tests/test_permissions_parity.py` fails when the two drift).
-There are 31 permissions, in groups by area. Each has a kind: a **see** permission opens a page, a **change** permission edits what is
+There are 32 permissions, in groups by area. Each has a kind: a **see** permission opens a page, a **change** permission edits what is
 on it, and a **risky** permission is a sensitive action kept apart on purpose (deleting assets, managing asset kinds, choosing the
-default dashboard, exporting billing or the audit log, closing billing months, running scans, accepting scan results, changing sign-in protection, managing
+default dashboard, managing display screens, exporting billing or the audit log, closing billing months, running scans, accepting scan results, changing sign-in protection, managing
 roles). The Roles editor shows the risky ones under **Sensitive actions**.
 
 "Also needs" is what the Roles editor suggests ticking with it (`PERMISSION_NEEDS` in `frontend/src/lib/roleEditor.ts`): without
@@ -25,6 +25,7 @@ those, the page or the control shows nothing. The server does not enforce these 
 | Dashboards | `dashboards.view` | See dashboards | see | Open dashboards and their widgets, receive live values, and read the values of any point through a widget. | |
 | | `dashboards.edit` | Change dashboards | change | Create (from a template), edit, copy and delete dashboards and their widgets. | `dashboards.view`, `assets.view`, `discovery.view` |
 | | `dashboards.default` | Choose the default dashboard | risky | Choose the dashboard everybody lands on. | `dashboards.view` |
+| | `displays.manage` | Manage display screens | risky | Create playlists and display links that show dashboards on a screen without signing in, and revoke them. | `dashboards.view`, `assets.view` |
 | Billing and tariffs | `billing.view` | See billing | see | Open the Billing page: energy and cost per asset and month. | |
 | | `billing.export` | Export billing as CSV | risky | Download the billing table as a CSV file. | `billing.view` |
 | | `billing.close` | Close and reopen billing months | risky | Close a finished month so its billed figures stop changing, and reopen it with a reason ([Closing a month](dashboards-and-billing.md#closing-a-month)). Admin only by default. | `billing.view` |
