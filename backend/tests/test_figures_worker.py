@@ -29,7 +29,7 @@ import pytest
 from sqlalchemy import text
 
 from billing_helpers import set_zone
-from dcdash.api import billing
+from dcdash.api import billing, billing_check
 from dcdash.core import compute, figure_cache, figures, ledger, ledger_codec
 from dcdash.core import widgets as widgets_module
 from dcdash.core.config import get_settings
@@ -161,6 +161,19 @@ async def data_fp(start: datetime, end: datetime) -> str:
         return await figure_cache.data_fingerprint(session, start, end)
 
 
+async def fp_of(target: worker.Target) -> str:
+    """The data fingerprint the worker labels the target's row with, read afresh."""
+    async with get_sessionmaker()() as session:
+        if target.data_fp_of is not None:
+            return await target.data_fp_of(session)
+        return await figure_cache.data_fingerprint(session, target.start, target.end)
+
+
+def figure_targets(plan: list[worker.Target]) -> list[worker.Target]:
+    """The targets of the figure cache's kinds (the Check month rows are no `MonthDays` or `WindowValues`)."""
+    return [t for t in plan if t.kind != ledger.CHECK_KIND]
+
+
 async def consumer_values() -> dict[tuple, object]:
     """What the consumers' own entry points give for the keys of the three months and the two presets at NOW, with the figure cache
     OFF (nothing stored, the ledger never read), by the key the cache would use. Derived the way Billing, the comparison and
@@ -271,9 +284,10 @@ def test_the_targets_are_the_months_newest_first_then_the_two_windows_of_the_pre
         ("month-days", False), ("window-values", False), ("window-values", False),
         ("month-days", True), ("window-values", True), ("window-values", True),
         ("month-days", True),
+        ("month-check", False), ("month-check", True), ("month-check", True),  # Check month, newest first, after everything else
     ]
-    assert len(plan_of(6)) == 6 + 4 and len(plan_of(1)) == 3 and len(plan_of(24)) == 24 + 4
-    assert len({t.key for t in plan_of(24)}) == 28  # no two targets share a key
+    assert len(plan_of(6)) == 6 + 4 + 6 and len(plan_of(1)) == 3 + 1 and len(plan_of(24)) == 24 + 4 + 24
+    assert len({t.key for t in plan_of(24)}) == 52  # no two targets share a key
     april = plan[0]
     start, end = month_bounds("2026-04", TZ)
     assert (april.start, april.end) == (start, end) and april.spec.params == '["UTC"]' and april.spec.window_end == end
@@ -282,6 +296,11 @@ def test_the_targets_are_the_months_newest_first_then_the_two_windows_of_the_pre
     assert this_energy.spec.params == '["2026-04-08","UTC",false]' and this_cost.spec.params == '["2026-04-08","UTC",true]'
     assert plan[4].spec.params == '["2026-03-31","UTC",false]'  # last_month ends on 31 March
     assert (plan[4].start, plan[4].end) == (datetime(2026, 3, 1, tzinfo=UTC), datetime(2026, 4, 1, tzinfo=UTC))
+    check_april, check_march = plan[7], plan[8]
+    assert (check_april.start, check_april.end) == (datetime(2026, 4, 1, tzinfo=UTC), NOW)  # an open month: up to the last complete hour
+    assert (check_march.start, check_march.end) == (datetime(2026, 3, 1, tzinfo=UTC), datetime(2026, 4, 1, tzinfo=UTC))  # a finished one
+    assert check_april.spec.params == '["UTC"]' and check_april.spec.window_end == NOW and check_april.spec.kind == "month-check"
+    assert check_april.config_of(object()) is None and check_april.data_fp_of is not None and plan[0].data_fp_of is None
 
 
 def test_this_months_window_ends_at_the_next_hour_boundary_and_a_local_zone_moves_the_month_bounds():
@@ -307,7 +326,9 @@ def test_a_year_boundary_is_stepped_over_and_the_open_flag_follows_the_week_afte
 
 def test_the_first_instant_of_a_month_has_no_empty_window_target():
     first = worker.targets(datetime(2026, 4, 1, tzinfo=UTC), TZ, 2)
-    assert [t.kind for t in first] == ["month-days", "month-days", "window-values", "window-values"]  # last_month's only
+    # last_month's windows only, and no Check month row for April either: its first hour has not finished (nothing to read)
+    assert [t.kind for t in first] == ["month-days", "month-days", "window-values", "window-values", "month-check"]
+    assert first[-1].start == datetime(2026, 3, 1, tzinfo=UTC)
 
 
 def test_an_unusable_site_zone_has_no_targets_and_one_log_line_per_zone(caplog):
@@ -345,26 +366,32 @@ def test_the_heartbeat_is_created_then_touched_and_never_raises(tmp_path):
 async def test_one_cycle_writes_every_target_and_each_row_equals_the_consumers_value(db, engine_calls):
     await build(db)
     plan = plan_of()
-    assert len(plan) == 7
+    assert len(plan) == 10
     report = await cycle(make_state())
-    assert counts(report) == (7, 0, 7, 0, 0, 0, 0, 0)  # targets, touched, written, unchanged, deleted, errors, skipped, refused
-    assert len(engine_calls) == 7  # the engine really ran once per target
+    assert counts(report) == (10, 0, 10, 0, 0, 0, 0, 0)  # targets, touched, written, unchanged, deleted, errors, skipped, refused
+    assert len(engine_calls) == 7  # the engine really ran once per figure target (and the Check month report once per month)
     stored = await by_key(db)
     assert set(stored) == {t.key for t in plan}
     config = await config_fp()
     for target in plan:
         row = stored[target.key]
         assert row["engine"] == ledger.engine_id() and row["config_fp"] == config and row["size_bytes"] > 0
-        assert row["data_fp"] == await data_fp(target.start, target.end)
+        assert row["data_fp"] == await fp_of(target)
         assert row["snapshot_at"] == row["checked_at"] and row["snapshot_at"] <= await db.fetchval("SELECT now()")
     engine_calls.clear()
     reference = await consumer_values()
     assert engine_calls  # the reference ran the engine itself
-    assert set(reference) == {t.key for t in plan}  # the targets are the very keys the consumers use
-    for target in plan:
+    assert set(reference) == {t.key for t in figure_targets(plan)}  # the targets are the very keys the consumers use
+    for target in figure_targets(plan):
         value = target.spec.decode(await payload_of(db, target.key))
         assert same(value, reference[target.key]), target.key
         assert value.config_fp == stored[target.key]["config_fp"]
+    # the Check month rows: the report the endpoint would compute, without names (the `month_report` of the same window)
+    for target in plan:
+        if target.kind == ledger.CHECK_KIND:
+            async with get_sessionmaker()() as session:
+                live = await billing_check.month_report(session, TZ, target.start, target.end)
+            assert same(target.spec.decode(await payload_of(db, target.key)), live), target.key
 
 
 # ---- 2: label and value from ONE snapshot --------------------------------------------------------------------------------------
@@ -385,12 +412,12 @@ async def test_the_label_is_the_configuration_of_the_snapshot_the_value_was_made
     monkeypatch.setattr(figures, "compute_month_days", edit_then_compute)
     state = make_state()
     report = await cycle(state, months=1)
-    assert edits and counts(report) == (3, 0, 3, 0, 0, 0, 0, 0)
+    assert edits and counts(report) == (4, 0, 4, 0, 0, 0, 0, 0)
     new = await config_fp()
     assert new != old
     plan = plan_of(1)
     stored = await by_key(db)
-    for target in plan:
+    for target in figure_targets(plan):
         value = target.spec.decode(await payload_of(db, target.key))
         assert value.config_fp == stored[target.key]["config_fp"], target.key  # label and value agree, always
     april = stored[plan[0].key]
@@ -398,7 +425,7 @@ async def test_the_label_is_the_configuration_of_the_snapshot_the_value_was_made
     assert stored[plan[1].key]["config_fp"] == new  # the next targets' snapshots saw the edit
     # The edit makes the next cycle (this fingerprint differs from the one the cycle began with) look at everything again.
     second = await cycle(state, months=1)
-    assert counts(second) == (3, 2, 1, 0, 0, 0, 0, 0)  # April rewritten under the new label; the two windows only touched
+    assert counts(second) == (4, 3, 1, 0, 0, 0, 0, 0)  # April rewritten under the new label; the two windows and the Check row only touched
     assert (await by_key(db))[plan[0].key]["config_fp"] == new
 
 
@@ -411,8 +438,8 @@ async def test_a_value_that_carries_another_configuration_than_its_label_is_not_
 
     monkeypatch.setattr(figures, "compute_month_days", wrong)
     report = await cycle(make_state(), months=1)
-    assert counts(report) == (3, 0, 2, 0, 0, 1, 0, 0)  # the month is an error; the two windows are written
-    assert {r["kind"] for r in await rows(db)} == {"window-values"}
+    assert counts(report) == (4, 0, 3, 0, 0, 1, 0, 0)  # the month is an error; the two windows and the Check row are written
+    assert {r["kind"] for r in await rows(db)} == {"window-values", "month-check"}
 
 
 # ---- 3 to 5: when a target is looked at ----------------------------------------------------------------------------------------
@@ -422,11 +449,11 @@ async def test_a_second_cycle_with_nothing_changed_only_touches_the_open_rows_an
     await build(db)
     state = make_state()
     first = await cycle(state)
-    assert first.written == 7
+    assert first.written == 10
     before = await by_key(db)
     engine_calls.clear()
     second = await cycle(state)
-    assert counts(second) == (7, 3, 0, 0, 0, 0, 4, 0)  # three open rows touched; four settled targets not looked at
+    assert counts(second) == (10, 4, 0, 0, 0, 0, 6, 0)  # four open rows touched; six settled targets not looked at
     assert engine_calls == []  # nothing was recomputed
     after = await by_key(db)
     for target in plan_of():
@@ -438,7 +465,7 @@ async def test_a_second_cycle_with_nothing_changed_only_touches_the_open_rows_an
             assert (new["engine"], new["config_fp"], new["data_fp"], new["size_bytes"]) == (old["engine"], old["config_fp"], old["data_fp"], old["size_bytes"])
     clock.now += worker.SETTLED_EVERY + 1  # ten minutes later every target is looked at, and every row is still current
     third = await cycle(state)
-    assert counts(third) == (7, 7, 0, 0, 0, 0, 0, 0) and engine_calls == []
+    assert counts(third) == (10, 10, 0, 0, 0, 0, 0, 0) and engine_calls == []
     assert all(row["checked_at"] > after[key]["checked_at"] for key, row in (await by_key(db)).items())
 
 
@@ -446,15 +473,15 @@ async def test_a_rate_change_makes_every_target_due_at_once_settled_ones_include
     await build(db)
     state = make_state()
     await cycle(state)
-    assert counts(await cycle(state))[6] == 4  # four settled targets skipped
+    assert counts(await cycle(state))[6] == 6  # six settled targets skipped
     old = await config_fp()
     await db.execute("UPDATE tariffs SET rate_per_kwh = rate_per_kwh + 0.01")
     engine_calls.clear()
     report = await cycle(state)  # the clock has not moved: only the new configuration can make a settled target due
-    assert counts(report) == (7, 0, 7, 0, 0, 0, 0, 0) and len(engine_calls) == 7
+    assert counts(report) == (10, 0, 10, 0, 0, 0, 0, 0) and len(engine_calls) == 7
     new = await config_fp()
     assert new != old and {r["config_fp"] for r in await rows(db)} == {new}
-    assert counts(await cycle(state))[6] == 4  # and it is remembered: settled targets rest again
+    assert counts(await cycle(state))[6] == 6  # and it is remembered: settled targets rest again
 
 
 async def test_a_new_reading_in_the_open_month_recomputes_only_the_open_targets(db, clock, engine_calls):
@@ -466,7 +493,10 @@ async def test_a_new_reading_in_the_open_month_recomputes_only_the_open_targets(
     await add_reading(db, when + 2 * HOUR, value + 2.0)  # a counter reading two hours after the last: the figure grows
     engine_calls.clear()
     report = await cycle(state)
-    assert (report.touched, report.written, report.unchanged, report.skipped, report.errors) == (0, 3, 0, 4, 0)
+    # the three figures grew; the Check month row was rebuilt too (its readings moved), and is written or only relabelled by what
+    # the report says about the new hour
+    assert (report.touched, report.skipped, report.errors) == (0, 6, 0)
+    assert report.written >= 3 and report.written + report.unchanged == 4
     assert len(engine_calls) == 3
     after = await by_key(db)
     for target in plan_of():
@@ -477,7 +507,7 @@ async def test_a_new_reading_in_the_open_month_recomputes_only_the_open_targets(
             assert after[target.key]["snapshot_at"] > before[target.key]["snapshot_at"]
     clock.now += worker.SETTLED_EVERY + 1
     engine_calls.clear()
-    assert counts(await cycle(state)) == (7, 7, 0, 0, 0, 0, 0, 0) and engine_calls == []  # ten minutes: the settled ones are looked at, unchanged
+    assert counts(await cycle(state)) == (10, 10, 0, 0, 0, 0, 0, 0) and engine_calls == []  # ten minutes: the settled ones are looked at, unchanged
 
 
 async def test_a_reading_that_moves_the_data_fingerprint_but_not_the_figure_only_brings_the_header_up_to_date(db, clock, engine_calls):
@@ -490,13 +520,13 @@ async def test_a_reading_that_moves_the_data_fingerprint_but_not_the_figure_only
     await add_reading(db, when + timedelta(seconds=1), value)  # the same value again, in the same hour: n and the sum move, the figure does not
     engine_calls.clear()
     report = await cycle(state)
-    assert (report.touched, report.written, report.unchanged, report.skipped, report.errors) == (0, 0, 3, 4, 0)
+    assert (report.touched, report.written, report.unchanged, report.skipped, report.errors) == (0, 0, 4, 6, 0)
     assert len(engine_calls) == 3  # it did recompute: the fingerprint moved
     after = await by_key(db)
     for target in plan_of():
         if target.settled:
             continue
-        assert after[target.key]["data_fp"] == await data_fp(target.start, target.end) != before[target.key]["data_fp"]
+        assert after[target.key]["data_fp"] == await fp_of(target) != before[target.key]["data_fp"]
         assert after[target.key]["size_bytes"] == before[target.key]["size_bytes"]
         assert after[target.key]["snapshot_at"] > before[target.key]["snapshot_at"]
         assert after[target.key]["snapshot_at"] == after[target.key]["checked_at"]
@@ -513,10 +543,12 @@ async def test_a_new_engine_id_relabels_every_row_without_rewriting_the_payloads
     state = make_state()
     await cycle(state)
     payloads = {key: await payload_of(db, key) for key in await by_key(db)}
-    monkeypatch.setattr(ledger, "engine_id", lambda: "another-build")
+    # the module's own cached id, which `engine_id()` returns and the readers' judgement (`decide`, `engine_matches`) compares with
+    # (patching the function alone would change the worker's id and leave the readers on the real one)
+    monkeypatch.setattr(ledger, "_engine_id", "another-build")
     clock.now += worker.SETTLED_EVERY + 1  # (settled targets look at the new engine only when they are due)
     report = await cycle(state)
-    assert (report.touched, report.written, report.unchanged, report.errors) == (0, 0, 7, 0)  # same bytes, new label: relabelled
+    assert (report.touched, report.written, report.unchanged, report.errors) == (0, 0, 10, 0)  # same bytes, new label: relabelled
     assert {r["engine"] for r in await rows(db)} == {"another-build"}
     assert {key: await payload_of(db, key) for key in payloads} == payloads
     async with get_sessionmaker()() as session:
@@ -535,10 +567,10 @@ async def test_a_row_that_is_no_longer_a_target_is_deleted(db):
     await plant(other_zone, shift=timedelta(minutes=-5))
     await plant(long_ago, shift=timedelta(minutes=-5))
     report = await cycle(state)
-    assert (report.written, report.deleted, report.errors) == (7, 2, 0)
+    assert (report.written, report.deleted, report.errors) == (10, 2, 0)
     assert set(await by_key(db)) == {t.key for t in plan_of()}
     narrower = await cycle(state, months=2)  # DCDASH_FIGURES_MONTHS was lowered: February is not kept any more
-    assert narrower.deleted == 1 and narrower.errors == 0
+    assert narrower.deleted == 2 and narrower.errors == 0  # its month figure and its Check month row
     assert set(await by_key(db)) == {t.key for t in plan_of(2)}
 
 
@@ -550,7 +582,7 @@ async def test_a_future_dated_row_is_deleted_or_replaced_and_a_normal_row_is_wri
     await plant(march.key, shift=timedelta(hours=1))  # a target's row dated an hour ahead (a restore from a machine with a fast clock)
     await plant(elsewhere, shift=timedelta(hours=2))
     report = await cycle(make_state())
-    assert (report.written, report.deleted, report.errors, report.refused) == (7, 1, 0, 0)  # `elsewhere`; March's row was replaced
+    assert (report.written, report.deleted, report.errors, report.refused) == (10, 1, 0, 0)  # `elsewhere`; March's row was replaced
     assert await db.fetchval("SELECT count(*) FROM figure_ledger WHERE snapshot_at > now() OR checked_at > now()") == 0
     stored = await by_key(db)
     assert set(stored) == {t.key for t in plan} and stored[march.key]["engine"] == ledger.engine_id()
@@ -627,7 +659,7 @@ async def test_a_worker_whose_snapshot_is_older_than_a_stored_row_never_overwrit
 
     monkeypatch.setattr(figures, "compute_month_days", meanwhile)
     report = await cycle(make_state(), months=1)
-    assert report.written == 2  # the two windows
+    assert report.written == 3  # the two windows and the Check month row
     # The month lost to the newer row, and the protection is the isolation level, not the upsert's WHERE guard: under REPEATABLE
     # READ Postgres raises a serialization failure for an ON CONFLICT DO UPDATE whose conflicting row the snapshot cannot see,
     # before the guard is evaluated. (A writer under READ COMMITTED would need the guard, and the guard compares with `now()`,
@@ -662,7 +694,8 @@ async def test_a_reader_never_sees_a_missing_or_half_row_while_the_worker_rewrit
                 except Exception as exc:
                     seen["bad"].append(("half", target.key, repr(exc)))
                     continue
-                if value.config_fp != head.config_fp or head.snapshot_at > head.checked_at or head.checked_at > head.now:
+                carried = getattr(value, "config_fp", head.config_fp)  # (a Check month report is a plain dict: it carries none)
+                if carried != head.config_fp or head.snapshot_at > head.checked_at or head.checked_at > head.now:
                     seen["bad"].append(("label", target.key))
                 seen["polls"] += 1
             await asyncio.sleep(0)
@@ -671,9 +704,9 @@ async def test_a_reader_never_sees_a_missing_or_half_row_while_the_worker_rewrit
     try:
         when, value = await last_pump_reading(db)
         for step in range(1, 4):  # 07:30, 08:30, 09:30: inside this month's window, which ends at 10:00
-            await add_reading(db, when + step * HOUR, value + 2.0 * step)  # every cycle really rewrites the three open rows
+            await add_reading(db, when + step * HOUR, value + 2.0 * step)  # every cycle really rewrites the open rows
             report = await cycle(state, months=1)
-            assert report.written == 3 and report.errors == 0, counts(report)
+            assert report.written >= 3 and report.written + report.unchanged == 4 and report.errors == 0, counts(report)
     finally:
         stop.set()
         await polling
@@ -697,13 +730,13 @@ async def test_an_error_in_one_target_does_not_stop_the_others_and_is_retried_ne
     monkeypatch.setattr(figures, "compute_window_values", sometimes)
     state = make_state()
     report = await cycle(state)
-    assert counts(report) == (7, 0, 5, 0, 0, 2, 0, 0)  # the two cost windows failed: the other five were written
-    assert len(await rows(db)) == 5
+    assert counts(report) == (10, 0, 8, 0, 0, 2, 0, 0)  # the two cost windows failed: the other eight were written
+    assert len(await rows(db)) == 8
     assert sum("RuntimeError" in r.getMessage() for r in caplog.records) == 1  # one line per kind per minute, not one per target
     broken["on"] = False
     fixed = await cycle(state)  # the failed settled target is retried at once, not in ten minutes
-    assert (fixed.written, fixed.touched, fixed.skipped, fixed.errors) == (2, 2, 3, 0)
-    assert len(await rows(db)) == 7
+    assert (fixed.written, fixed.touched, fixed.skipped, fixed.errors) == (2, 3, 5, 0)
+    assert len(await rows(db)) == 10
 
 
 async def test_a_value_the_codec_refuses_is_counted_and_named_once_never_stored_and_rests_ten_minutes(db, clock, monkeypatch, caplog, engine_calls):
@@ -716,20 +749,20 @@ async def test_a_value_the_codec_refuses_is_counted_and_named_once_never_stored_
     monkeypatch.setattr(ledger_codec, "encode", refuse)
     state = make_state()
     report = await cycle(state)
-    assert counts(report) == (7, 0, 0, 0, 0, 0, 0, 7) and await rows(db) == []
+    assert counts(report) == (10, 0, 0, 0, 0, 0, 0, 10) and await rows(db) == []
     assert len(engine_calls) == 7
     # M9: a key the codec refused is not built again at every cycle (open or not): it would be refused again, and the build is
     # the worker's whole cost; the refusal counter is the cycle's, so the second cycle has nothing to count
     engine_calls.clear()
     second = await cycle(state)
-    assert counts(second) == (7, 0, 0, 0, 0, 0, 7, 0) and engine_calls == []
+    assert counts(second) == (10, 0, 0, 0, 0, 0, 10, 0) and engine_calls == []
     clock.now += worker.SETTLED_EVERY - 1
-    assert counts(await cycle(state)) == (7, 0, 0, 0, 0, 0, 7, 0)
+    assert counts(await cycle(state)) == (10, 0, 0, 0, 0, 0, 10, 0)
     clock.now += 2  # ten minutes after the refusal: tried again
     fourth = await cycle(state)
-    assert counts(fourth) == (7, 0, 0, 0, 0, 0, 0, 7) and len(engine_calls) == 7
+    assert counts(fourth) == (10, 0, 0, 0, 0, 0, 0, 10) and len(engine_calls) == 7
     lines = [r.getMessage() for r in caplog.records if "was not stored" in r.getMessage()]
-    assert len(lines) == 2 and sum("month-days" in line for line in lines) == 1 and sum("window-values" in line for line in lines) == 1
+    assert len(lines) == 3 and all(sum(kind in line for line in lines) == 1 for kind in ("month-days", "window-values", "month-check"))
 
 
 async def test_a_row_that_does_not_come_back_unchanged_from_the_codec_is_refused(db, monkeypatch):
@@ -737,8 +770,8 @@ async def test_a_row_that_does_not_come_back_unchanged_from_the_codec_is_refused
     real = ledger_codec.decode_month_days
     monkeypatch.setattr(ledger_codec, "decode_month_days", lambda raw: dataclasses.replace(real(raw), tz_name="somewhere else"))
     report = await cycle(make_state(), months=1)
-    assert counts(report) == (3, 0, 2, 0, 0, 0, 0, 1)  # the month fails its round trip; the two windows are stored
-    assert {r["kind"] for r in await rows(db)} == {"window-values"}
+    assert counts(report) == (4, 0, 3, 0, 0, 0, 0, 1)  # the month fails its round trip; the two windows and the Check row are stored
+    assert {r["kind"] for r in await rows(db)} == {"window-values", "month-check"}
 
 
 # ---- 11: a missing table -------------------------------------------------------------------------------------------------------
@@ -760,9 +793,9 @@ async def test_a_missing_table_is_counted_per_target_without_raising_and_recover
     state = make_state()
     async with table_away(db):
         report = await cycle(state)
-        assert report.written == 0 and report.touched == 0 and report.errors >= report.targets == 7
-    recovered = await cycle(state)  # the failed settled targets were not remembered as looked at: all seven are written
-    assert counts(recovered) == (7, 0, 7, 0, 0, 0, 0, 0)
+        assert report.written == 0 and report.touched == 0 and report.errors >= report.targets == 10
+    recovered = await cycle(state)  # the failed targets were retried at once: all ten are written
+    assert counts(recovered) == (10, 0, 10, 0, 0, 0, 0, 0)
 
 
 async def test_the_loop_backs_off_while_the_table_is_missing_and_recovers_when_it_returns(db, fast_loop):
@@ -858,7 +891,7 @@ async def test_the_site_zone_of_the_settings_is_what_the_loop_prepares(db, fast_
     await set_zone(db, "Europe/Berlin")
     async with running() as (state, task):
         await wait_until(lambda: rows_exist(db))
-        await wait_until(lambda: row_count_is(db, 6))  # April and March, and the four windows
+        await wait_until(lambda: row_count_is(db, 8))  # April and March, the four windows and the two Check month rows
     assert {r["params"] for r in await rows(db) if r["kind"] == "month-days"} == {'["Europe/Berlin"]'}
     assert {t.key for t in plan_of(2, "Europe/Berlin")} == {key_of(r) for r in await rows(db)}
 
@@ -917,7 +950,7 @@ async def test_the_targets_contain_every_key_a_widget_a_comparison_and_billing_a
     assert {k for k in asked if k[0] == "month-days"} == {t.key for t in plan_of(2, zone, now) if t.kind == "month-days"}  # this month and the one before
     # and what the worker stores for them is what those consumers get: one cycle, then a request served from the rows
     report = await cycle(make_state(), tz=zone, now=now)
-    assert report.written == 7 and report.errors == 0 and report.refused == 0
+    assert report.written == 10 and report.errors == 0 and report.refused == 0
     await figure_cache.aclear()  # (the requests above filled the in-memory cache: the next one must go to the ledger)
     asked.clear()
     ledger.reset_stats()
@@ -991,7 +1024,7 @@ async def test_a_failing_target_is_retried_at_once_then_rests_longer_each_time_a
     assert (healed.errors, len(attempts)) == (0, 4)
     assert state.failures == {} and state.not_before == {}  # a success forgets it all
     again = await cycle(state, months=1)  # and the open targets are looked at every cycle again (the rows are current: touched)
-    assert (again.errors, again.touched, again.skipped) == (0, 3, 0) and len(attempts) == 4
+    assert (again.errors, again.touched, again.skipped) == (0, 4, 0) and len(attempts) == 4
 
 
 async def test_after_a_failing_cycle_the_loop_waits_at_least_an_interval_and_failed_targets_do_not_rebuild_every_cycle(
@@ -1034,8 +1067,8 @@ async def test_a_worker_that_loses_the_lock_in_the_middle_of_a_cycle_stops_writi
     standby = worker.AdvisoryLock(get_settings().database_url)
     cut = {"done": False}
 
-    async def spy(session_factory, target, report, guard=None):
-        result = await real_look(session_factory, target, report, guard)
+    async def spy(session_factory, target, report, guard=None, **kwargs):
+        result = await real_look(session_factory, target, report, guard, **kwargs)
         looks.append(target.key)
         if not cut["done"]:
             cut["done"] = True  # after the first target: the lock connection is cut, and another worker takes the lock
@@ -1055,7 +1088,7 @@ async def test_a_worker_that_loses_the_lock_in_the_middle_of_a_cycle_stops_writi
             assert not task.done()
             assert any("advisory lock was lost" in r.getMessage() for r in caplog.records)
             await standby.close()  # the standby goes away: the worker takes the lock again and finishes the job
-            await wait_until(lambda: row_count_is(db, 6))
+            await wait_until(lambda: row_count_is(db, 8))
     finally:
         await standby.close()
 
@@ -1193,7 +1226,7 @@ async def test_the_report_carries_the_cycles_duration_and_the_age_of_the_oldest_
     first = await cycle(state)
     assert first.oldest_open_age is None and first.duration == 0.0  # (no row existed yet; the manual clock does not move)
     second = await cycle(state)
-    assert second.touched == 3 and second.oldest_open_age is not None and 0.0 <= second.oldest_open_age < 60.0
+    assert second.touched == 4 and second.oldest_open_age is not None and 0.0 <= second.oldest_open_age < 60.0
     await db.execute("UPDATE figure_ledger SET snapshot_at = snapshot_at - interval '100 seconds', checked_at = checked_at - interval '100 seconds'")
     third = await cycle(state)
     assert 100.0 <= third.oldest_open_age < 160.0  # the OPEN rows (the settled ones are not counted) were 100 s old when refreshed
@@ -1211,9 +1244,9 @@ async def test_in_a_long_cycle_the_open_targets_are_looked_at_again_between_the_
     real_month = figures.compute_month_days
     march = month_bounds("2026-03", TZ)[0]
 
-    async def spy(session_factory, target, report, guard=None):
+    async def spy(session_factory, target, report, guard=None, **kwargs):
         order.append(target.key)
-        return await real_look(session_factory, target, report, guard)
+        return await real_look(session_factory, target, report, guard, **kwargs)
 
     async def slow(session, tz_name, start, end):
         if start == march:
@@ -1224,8 +1257,8 @@ async def test_in_a_long_cycle_the_open_targets_are_looked_at_again_between_the_
     monkeypatch.setattr(figures, "compute_month_days", slow)
     report = await cycle(state)
     keys = [t.key for t in plan_of()]  # April, this_month x2 (open), March, last_month x2, February (settled)
-    assert order == keys[0:4] + keys[0:3] + keys[4:7]  # the three open ones again after March: their rows were ten seconds old
-    assert report.errors == 0 and report.written >= 7
+    assert order == keys[0:4] + keys[0:3] + keys[4:]  # the three open ones again after March: their rows were ten seconds old
+    assert report.errors == 0 and report.written >= 10
 
 
 async def test_a_configuration_that_moved_and_came_back_during_a_cycle_leaves_everything_due_for_the_next_one(db, clock, monkeypatch):
@@ -1250,14 +1283,14 @@ async def test_a_configuration_that_moved_and_came_back_during_a_cycle_leaves_ev
     state = make_state()
     start_config = await config_fp()
     first = await cycle(state)
-    assert flips == ["away", "back"] and first.written == 7 and await config_fp() == start_config
+    assert flips == ["away", "back"] and first.written == 10 and await config_fp() == start_config
     assert len({row["config_fp"] for row in await rows(db)}) == 2  # the targets in between were labelled with the other one
     assert state.config_fp_seen is None  # so the cycle remembers NO configuration
     second = await cycle(state)
     assert second.skipped == 0  # every target, settled ones too, is looked at again
     assert {row["config_fp"] for row in await rows(db)} == {start_config}
     assert state.config_fp_seen == start_config
-    assert (await cycle(state)).skipped == 4  # and now the settled ones rest again
+    assert (await cycle(state)).skipped == 6  # and now the settled ones rest again
 
 
 async def test_a_relabel_is_tried_only_for_a_row_of_the_same_configuration_and_compares_by_digest(db, clock, monkeypatch):
@@ -1275,11 +1308,11 @@ async def test_a_relabel_is_tried_only_for_a_row_of_the_same_configuration_and_c
     assert calls == []  # no row yet: the write goes straight
     await db.execute("UPDATE tariffs SET rate_per_kwh = rate_per_kwh + 0.01")  # another configuration: no row can be the same bytes
     report = await cycle(state)
-    assert calls == [] and report.written == 7
+    assert calls == [] and report.written == 10
     monkeypatch.setattr(ledger, "engine_id", lambda: "another-build")
     clock.now += worker.SETTLED_EVERY + 1
     report = await cycle(state)
-    assert len(calls) == 7 and report.unchanged == 7  # the same configuration, new engine: relabelled by digest
+    assert len(calls) == 10 and report.unchanged == 10  # the same configuration, new engine: relabelled by digest
     sql = worker._RELABEL.text
     assert ":payload" not in sql and "size_bytes = :size AND sha256(payload) = :digest" in sql  # no payload travels to be compared
 
@@ -1302,7 +1335,7 @@ def test_the_next_hours_keys_are_added_only_in_the_last_minute_and_a_half_before
     assert extra(NOW - timedelta(minutes=10)) == [] and extra(NOW - timedelta(minutes=30)) == []
     last_hour = datetime(2026, 4, 30, 23, 59, 30, tzinfo=UTC)  # the last hour of April: the new month's keys come too
     new_month = datetime(2026, 5, 1, 0, 0, 5, tzinfo=UTC)
-    assert {t.key for t in extra(last_hour)} == {t.key for t in worker.targets(new_month, TZ, MONTHS)} - {
+    assert {t.key for t in extra(last_hour)} == {t.key for t in figure_targets(worker.targets(new_month, TZ, MONTHS))} - {
         t.key for t in worker.targets(last_hour, TZ, MONTHS)
     }
     assert {t.kind for t in extra(last_hour)} == {"month-days", "window-values"}
@@ -1313,7 +1346,7 @@ async def test_the_first_request_of_a_new_hour_is_served_from_a_row_built_before
     state = make_state()
     before = NOW - timedelta(seconds=20)
     first = await cycle(state, now=before)
-    assert (first.targets, first.written, first.errors) == (7, 9, 0)  # the plan's seven and the two keys of the next hour
+    assert (first.targets, first.written, first.errors) == (10, 12, 0)  # the plan's ten and the two keys of the next hour
     plan_before = plan_of(now=before)
     extras = worker.upcoming_targets(before, TZ, MONTHS, plan_before, worker.interval_seconds())
     assert {key_of(r) for r in await rows(db)} == {t.key for t in plan_before} | {t.key for t in extras}  # none is cleaned up
@@ -1329,7 +1362,8 @@ async def test_the_first_request_of_a_new_hour_is_served_from_a_row_built_before
     # the cycle after the boundary: the extras are the plan now, only touched; the old keys are gone
     plan_after = plan_of(now=after)
     second = await cycle(state, now=after)
-    assert (second.written, second.errors, second.deleted) == (0, 0, 2)
+    # (the Check month row of the open month is read up to the last complete hour: its key moved to 10:00, a new row; the old one goes)
+    assert (second.written, second.errors, second.deleted) == (1, 0, 3)
     assert {key_of(r) for r in await rows(db)} == {t.key for t in plan_after}
 
 

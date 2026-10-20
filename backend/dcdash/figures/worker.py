@@ -15,6 +15,11 @@ month and the `DCDASH_FIGURES_MONTHS - 1` (6) before it; `window-values` (energy
 now asks for with the presets `this_month` and `last_month` (derived with `resolve_range` and `_hour_window`, never copied). An
 OPEN target (its window ends later than 7 days and an hour ago) is looked at every cycle; a SETTLED one every ten minutes, and at
 once when the configuration fingerprint changed. A row that is no longer a target is deleted, and so is a row dated in the future.
+`month-check` (the report of Billing's Check month) for the same months, last in the list: the window is the one the endpoint asks
+for (an open month up to the last complete hour, so its key moves with the hour; a month that has not begun has none), and its data
+fingerprint is the one of the rows that report reads (`billing_check.check_data_fingerprint`). Once per local day, at the first
+cycle at or after 03:00 site time, a nightly self-check compares every stored row with what the live code computes from the same
+data (`rebuild.check_rows`); a row that differs is deleted and written to the journal (`figures.mismatch`).
 In the last minute and a half before an hour boundary the keys a request in the NEXT hour will ask for (`this_month`'s window
 moves with the hour) are built too, so that the first refresh of a kiosk in a new hour finds its row; they are not deleted by the
 clean-up, and become the targets when the boundary has passed.
@@ -45,10 +50,11 @@ import os
 import signal
 import threading
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import partial
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -57,11 +63,14 @@ import asyncpg
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from dcdash.api import billing_check
 from dcdash.api.settings import current_timezone
 from dcdash.collector.logs import configure_logging
-from dcdash.core import compute, figure_cache, figures, ledger, ledger_codec
+from dcdash.core import compute, figure_cache, figures, journal, ledger, ledger_codec, pg
 from dcdash.core.config import get_settings
+from dcdash.core.energy import load_meters
 from dcdash.core.timeutil import month_bounds, resolve_range, validate_whole_hour_zone
+from dcdash.core.tree import AssetTree
 
 # One source of truth for the window a widget asks for: the very function `compute_widget` calls (a private name of its module).
 from dcdash.core.widgets import _ceil_hour, _hour_window
@@ -170,7 +179,9 @@ class Target:
     parameters, where the window ends, how to decode), `build` the coroutine function of the snapshot session that makes the value
     (the very function the figure cache runs), `settled` whether the window ended long enough ago that only a restore, a migration
     or a hand-run refresh can change its readings, `config_of` the configuration fingerprint a value carries (None: this kind of
-    value does not carry one, so there is nothing to compare)."""
+    value does not carry one, so there is nothing to compare), `data_fp_of` the coroutine function of the snapshot session that
+    reads the data fingerprint of the window (None: `figure_cache.data_fingerprint` of `[start, end)`, which the figure cache's own
+    kinds use; a Check month row has a fingerprint of its own, see `check_data_fp`)."""
 
     kind: str
     start: datetime
@@ -179,10 +190,19 @@ class Target:
     build: Callable[[AsyncSession], Awaitable[Any]]
     settled: bool
     config_of: Callable[[Any], str | None] = _config_fp_of
+    data_fp_of: Callable[[AsyncSession], Awaitable[str]] | None = None
 
     @property
     def key(self) -> tuple:
         return (self.kind, self.start, self.end, self.spec.params)
+
+
+async def check_data_fp(session: AsyncSession, start: datetime, stop: datetime) -> str:
+    """The data fingerprint of a Check month row: the tree and the meters are loaded in `session` (the caller's ONE snapshot), and
+    the fingerprint hashes exactly the rows the report of [start, stop) reads for those meters (`billing_check`). The point ids
+    are the endpoint's own: the sorted points of the meters."""
+    meters = await load_meters(session, await AssetTree.load(session))
+    return await billing_check.check_data_fingerprint(session, sorted({meter.point_id for meter in meters.values()}), start, stop)
 
 
 _reported_zones: set[str] = set()  # the site zones already named in a warning (one line per zone)
@@ -228,6 +248,24 @@ def targets(now: datetime, tz_name: str, months: int) -> list[Target]:
                 partial(figures.compute_window_values, first=first, last=last, last_day=last_day, tz_name=tz_name, cost=cost),
                 spec.window_end <= settled_before,
             ))
+    # Check month (`billing_check.month_check`), the same months, newest first, after everything the dashboards read. The window is
+    # the one the endpoint asks for, by the endpoint's own rule: a month that has not begun has none, an open month is read up to
+    # the last complete hour (so its key moves with the hour), a finished month to its end; nothing to read, no target.
+    for back in range(months):
+        year, month0 = divmod(local.year * 12 + local.month - 1 - back, 12)
+        start, end = month_bounds(f"{year:04d}-{month0 + 1:02d}", tz_name)
+        start_utc, end_utc = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+        if now < start_utc:
+            continue
+        stop = min(end_utc, now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)) if now < end_utc else end_utc
+        if stop <= start_utc:
+            continue
+        spec = ledger.LedgerSpec(ledger.CHECK_KIND, ledger.check_params(tz_name), stop, ledger_codec.decode_json)
+        plan.append(Target(
+            ledger.CHECK_KIND, start_utc, stop, spec,
+            partial(billing_check.month_report, tz_name=tz_name, start=start_utc, stop=stop), spec.window_end <= settled_before,
+            config_of=lambda value: None, data_fp_of=partial(check_data_fp, start=start_utc, stop=stop),
+        ))
     return plan
 
 
@@ -244,7 +282,12 @@ def upcoming_targets(now: datetime, tz_name: str, months: int, plan: list[Target
     if not 0 < gap < 2 * interval + UPCOMING_MARGIN:
         return []
     known = {target.key for target in plan}
-    return [target for target in targets(boundary + timedelta(microseconds=1), tz_name, months) if target.key not in known]
+    # (not the Check month rows: the hour that just ended is not complete before the boundary, so a row built now would not match
+    # the readings the first request after it fingerprints; that row is built by the first cycle after the boundary)
+    return [
+        target for target in targets(boundary + timedelta(microseconds=1), tz_name, months)
+        if target.key not in known and target.kind != ledger.CHECK_KIND
+    ]
 
 
 # ---- one cycle -------------------------------------------------------------------------------------------------------------------
@@ -328,6 +371,9 @@ class WorkerState:
         self.not_before: dict[tuple, float] = {}
         self.failures: dict[tuple, int] = {}
         self.summary = Summary()
+        self.nightly_done: date | None = None  # the local day of the last nightly check (see `prime_nightly`)
+        self.nightly_primed = False  # `nightly_done` is set from the first cycle's clock: the site zone is not known before that
+        self.refused_since = 0  # values the codec refused since the last nightly check (it logs them)
         self.stop = asyncio.Event()
         self.stop_at: float | None = None  # `time.monotonic()` when the stop was first seen (not `_monotonic`: a test moves that one)
         self.heartbeat_path = heartbeat_path  # None: the module's HEARTBEAT_PATH, read when it beats
@@ -427,16 +473,20 @@ class Looked:
 
 async def _look(
     session_factory: async_sessionmaker[AsyncSession], target: Target, report: Report,
-    guard: Callable[[], Awaitable[bool]] | None = None,
+    guard: Callable[[], Awaitable[bool]] | None = None, *, force: bool = False,
 ) -> Looked:
     """Bring the row of one target up to date, in ONE repeatable-read transaction (see the module text). Raises for any failure of
     the database or of the build; the caller counts it. `guard` says whether this process still holds the advisory lock: it is
-    asked just before anything is written, and `LockLost` is raised when it does not."""
+    asked just before anything is written, and `LockLost` is raised when it does not. With `force` (the rebuild command) the row
+    is recomputed and stored even when its engine and both fingerprints are the current ones."""
     async with session_factory() as session:
         await session.execute(_SNAPSHOT)
         config_fp = await figure_cache.config_fingerprint(session)
         header = await ledger.read_header(session, target.kind, target.start, target.end, target.spec.params)  # carries `now()`
-        data_fp = await figure_cache.data_fingerprint(session, target.start, target.end)
+        if target.data_fp_of is not None:
+            data_fp = await target.data_fp_of(session)
+        else:
+            data_fp = await figure_cache.data_fingerprint(session, target.start, target.end)
         engine = ledger.engine_id()
         # How old the row of an OPEN target was when this cycle brought it up to date: what the readers' 60 second rule measures.
         age = None
@@ -448,7 +498,8 @@ async def _look(
                 report.oldest_open_age = age if report.oldest_open_age is None else max(report.oldest_open_age, age)
 
         if (
-            header.engine == engine and header.config_fp == config_fp and header.data_fp == data_fp
+            not force
+            and header.engine == engine and header.config_fp == config_fp and header.data_fp == data_fp
             and header.snapshot_at is not None and header.snapshot_at <= header.now
             and header.checked_at is not None and header.checked_at <= header.now  # a future `checked_at` would stay one: rewrite
         ):
@@ -518,7 +569,7 @@ async def _clean_up(session_factory: async_sessionmaker[AsyncSession], keep: set
 
 async def run_once(
     session_factory: async_sessionmaker[AsyncSession], now: datetime, tz_name: str, months: int, state: WorkerState,
-    *, lock: "AdvisoryLock | None" = None,
+    *, lock: "AdvisoryLock | None" = None, only: Callable[[Target], bool] | None = None, force: bool = False,
 ) -> Report:
     """One cycle over the targets at `now`, newest first. Stops between targets when `state.stop` is set (and then cleans nothing
     up). A failing target is logged and counted and the next one goes on; only a failure to read the configuration fingerprint at the
@@ -535,6 +586,10 @@ async def run_once(
 
     With `lock` the cycle asks, before every look and before every write, whether this process still holds the advisory lock; when
     it does not the cycle ends there (`report.lost_lock`): nothing more is written, nothing is cleaned up, nothing is remembered.
+
+    The rebuild command (`rebuild.py`) uses two more arguments: with `only` the targets it rejects are left out altogether (and, as
+    the worker would delete what a partial rebuild wrote, nothing is cleaned up and nothing is remembered); with `force` every
+    target is looked at, rests and fresh rows included, and its figure is recomputed and stored even when the row is current.
 
     The configuration fingerprint is remembered (so that settled targets rest) only when every look read the one the cycle began
     with: a configuration that moved and came back during a long cycle leaves the settled targets labelled with the other one, so
@@ -560,7 +615,7 @@ async def run_once(
             raise LockLost()
         clock = _monotonic()
         try:
-            looked = await _look(session_factory, target, report, guard)
+            looked = await _look(session_factory, target, report, guard, force=force)
         except LockLost:
             raise
         except Exception as exc:
@@ -584,6 +639,8 @@ async def run_once(
         state.heartbeat()
 
     def due(target: Target, clock: float) -> bool:
+        if force:
+            return True
         if clock < state.not_before.get(target.key, -math.inf):
             return False
         return not (target.settled and not config_changed and clock - state.looked.get(target.key, -math.inf) < SETTLED_EVERY)
@@ -595,7 +652,7 @@ async def run_once(
             if state.stop.is_set():
                 return
             clock = _monotonic()
-            if target.key in refreshed and not target.settled and clock - state.looked[target.key] >= every and due(target, clock):
+            if not force and target.key in refreshed and not target.settled and clock - state.looked[target.key] >= every and due(target, clock):
                 await look(target)
 
     def finish() -> Report:
@@ -606,6 +663,8 @@ async def run_once(
         for target in (*plan, *upcoming):
             if state.stop.is_set():
                 return finish()
+            if only is not None and not only(target):
+                continue
             passed.append(target)
             if not due(target, _monotonic()):
                 report.skipped += 1
@@ -618,6 +677,8 @@ async def run_once(
             raise LockLost()
     except LockLost:
         report.lost_lock = True
+        return finish()
+    if only is not None:  # a partial rebuild: what the worker would clean up is the worker's to decide
         return finish()
     keep = {target.key for target in (*plan, *upcoming)}
     try:
@@ -709,6 +770,116 @@ async def _sleep(state: WorkerState, seconds: float) -> None:
         state.heartbeat()
 
 
+# ---- the nightly self-check ------------------------------------------------------------------------------------------------------
+
+NIGHTLY_HOUR = 3  # local (site) time of day after which the self-check of every stored row runs, once per local day
+
+
+def nightly_due(now_local: datetime, last_done: date | None) -> bool:
+    """Whether the nightly check runs now: the local clock is at or past 03:00 and it has not run on this local date. "At or
+    past" (not "03:xx"): a clock change that skips the hour (or a worker that was busy or down at 03:00) runs it at the first cycle
+    after it, still once per local date."""
+    return now_local.hour >= NIGHTLY_HOUR and last_done != now_local.date()
+
+
+def prime_nightly(state: WorkerState, now_local: datetime) -> None:
+    """A worker that starts after 03:00 treats today's check as done (a restart at 15:00 must not run the check at once, and a
+    worker that restarts every few minutes must not run it every few minutes); one that starts before 03:00 runs it at 03:00.
+    Done once, at the first cycle (the site zone is read then)."""
+    state.nightly_done = now_local.date() if now_local.hour >= NIGHTLY_HOUR else None
+    state.nightly_primed = True
+
+
+class JournalPool:
+    """The worker's ONE small asyncpg pool for journal events, created the first time an event is needed (most workers never write
+    one) and closed on stop. `record` never raises: a database that cannot be reached for the journal loses the event, and says so
+    in the log (once per kind per minute)."""
+
+    def __init__(self, dsn: str) -> None:
+        self.dsn = dsn
+        self.pool: asyncpg.Pool | None = None
+
+    async def record(self, message: str, **kwargs: Any) -> bool:
+        try:
+            if self.pool is None:
+                self.pool = await asyncpg.create_pool(
+                    self.dsn, min_size=1, max_size=1, init=pg._init_connection, timeout=CONNECT_TIMEOUT, command_timeout=COMMAND_TIMEOUT
+                )
+            return await journal.record(self.pool, "figures", journal.FIGURES_MISMATCH, message, level="warning", **kwargs)
+        except Exception as exc:
+            _log_throttled("journal", "figures worker: a journal event could not be written (%s)", type(exc).__name__)
+            return False
+
+    async def close(self) -> None:
+        pool, self.pool = self.pool, None
+        if pool is not None:
+            try:
+                await asyncio.wait_for(pool.close(), CONNECT_TIMEOUT)
+            except Exception:
+                pool.terminate()
+
+    def abort(self) -> None:
+        pool, self.pool = self.pool, None
+        if pool is not None:
+            with suppress(Exception):
+                pool.terminate()
+
+
+async def run_nightly(sessions: async_sessionmaker[AsyncSession], events: JournalPool, state: WorkerState) -> list:
+    """The self-check of every stored row (`rebuild.check_rows`: each row is compared, in one snapshot, with what the live code
+    computes from the same data). A row that DIFFERS is deleted (readers compute that figure live until the worker stores it again)
+    and one `figures.mismatch` event is written for it: the kind, the window, the first differing asset and day or item (no values,
+    no names). The summary is logged. Raises when the check itself failed (nothing is deleted then: the rows are judged first); the
+    caller tries again at the next cycle."""
+    from dcdash.figures import rebuild  # here and not at the top: the rebuild module imports this one
+
+    lines = await rebuild.check_rows(sessions, beat=state.heartbeat)
+    for line in lines:
+        if line.status != "DIFFERENT":
+            continue
+        if line.key is not None:
+            async with sessions() as session:
+                await ledger.delete(session, *line.key)
+                await session.commit()
+        await events.record(
+            f"a stored figure differed from the live one and was deleted: {line.kind} {line.window}: {line.detail}",
+            code=line.kind, detail={"kind": line.kind, "window": line.window},
+        )
+    found = Counter(line.status for line in lines)
+    log.info(
+        "figures: nightly check of %d stored rows: %d equal, %d moved on, %d stale, %d DIFFERENT%s; %d values were refused by the codec "
+        "since the last check",
+        len(lines), found["equal"], found["moved on"], found["stale"], found["DIFFERENT"],
+        " (deleted)" if found["DIFFERENT"] else "", state.refused_since,
+    )
+    state.refused_since = 0
+    return lines
+
+
+async def _nightly_step(
+    state: WorkerState, now: datetime, tz_name: str, sessions: async_sessionmaker[AsyncSession], events: JournalPool
+) -> None:
+    """After a cycle: prime the nightly state at the first cycle, then run the check when it is due. A check that raised is logged
+    (once per kind per minute) and is tried again at the next cycle; one that finished is done for the local day. The loop does not
+    cycle while the check runs (a few seconds per stored row, in the small hours): the rows of the open windows may age past the
+    readers' 60 seconds meanwhile, and the readers compute those figures live, as they always could."""
+    local = now.astimezone(ZoneInfo(tz_name))
+    if not state.nightly_primed:
+        prime_nightly(state, local)
+        return
+    if not nightly_due(local, state.nightly_done):
+        return
+    try:
+        await run_nightly(sessions, events, state)
+    except Exception as exc:
+        _log_throttled(
+            f"nightly:{type(exc).__name__}", "figures worker: the nightly check failed (%s: %s); trying again at the next cycle",
+            type(exc).__name__, str(exc)[:200],
+        )
+        return
+    state.nightly_done = local.date()
+
+
 class _Stopped(Exception):
     """The stop flag was set while the loop waited for something; the loop ends quietly."""
 
@@ -760,6 +931,17 @@ async def _run_cycle(
             task.cancel()
 
 
+def make_engine(url: str) -> Any:
+    """ONE engine for all the work (the worker's and the rebuild command's): a session per target, one at a time. The pool is ONE
+    connection on purpose: this process must never be a noticeable client of the database, and it never holds more than two (the
+    pool's and the lock's; a journal pool is made only when an event is written). Every statement has a timeout of its own (see
+    SERVER_SETTINGS)."""
+    return create_async_engine(
+        url, pool_size=1, max_overflow=0, pool_pre_ping=True,
+        connect_args={"timeout": CONNECT_TIMEOUT, "command_timeout": COMMAND_TIMEOUT, "server_settings": SERVER_SETTINGS},
+    )
+
+
 def next_delay(interval: float, elapsed: float) -> float:
     """The sleep after a cycle that took `elapsed` seconds: the cycles keep a fixed rate (one start per `interval`), but never
     run back to back (at least a third of the interval)."""
@@ -787,16 +969,20 @@ def _log_report(report: Report, state: WorkerState) -> None:
             "report:refused", "figures worker: %d values were not stored in this cycle (the codec refused them); readers compute them",
             report.refused,
         )
+    state.refused_since += report.refused
     state.summary.add(report)
     if state.summary.due():
         log.info(state.summary.line())
         state.summary.reset()
 
 
-async def _close_down(lock: AdvisoryLock, engine: Any, state: WorkerState) -> None:
-    """Close the lock connection and the engine, within what is left of the stop's deadline (at least `CLOSE_MIN_SECONDS`)."""
+async def _close_down(lock: AdvisoryLock, engine: Any, state: WorkerState, events: JournalPool | None = None) -> None:
+    """Close the lock connection, the journal pool and the engine, within what is left of the stop's deadline (at least
+    `CLOSE_MIN_SECONDS`)."""
     async def steps() -> None:
         await lock.close()
+        if events is not None:
+            await events.close()
         await engine.dispose()
 
     closing = asyncio.ensure_future(steps())
@@ -804,6 +990,8 @@ async def _close_down(lock: AdvisoryLock, engine: Any, state: WorkerState) -> No
     if not done:
         log.warning("figures worker: shutdown did not finish within its %d s deadline", WORKER_SHUTDOWN_SECONDS)
         lock.abort()  # (the process is about to end: the server frees the session when the socket goes)
+        if events is not None:
+            events.abort()
         closing.cancel()
         await asyncio.wait({closing}, timeout=ABANDON_SECONDS)
 
@@ -821,15 +1009,10 @@ async def amain(state: WorkerState | None = None, *, clock: Callable[[], datetim
         except (NotImplementedError, RuntimeError, ValueError):  # Windows event loops cannot; not the main thread
             break
         installed.append(sig)
-    # ONE engine for all the work: a session per target, one at a time (the pool is ONE connection on purpose: this process must
-    # never be a noticeable client of the database, and never holds more than two: the pool's and the lock's). Every statement has
-    # a timeout of its own (see SERVER_SETTINGS).
-    engine = create_async_engine(
-        settings.sqlalchemy_url, pool_size=1, max_overflow=0, pool_pre_ping=True,
-        connect_args={"timeout": CONNECT_TIMEOUT, "command_timeout": COMMAND_TIMEOUT, "server_settings": SERVER_SETTINGS},
-    )
+    engine = make_engine(settings.sqlalchemy_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     lock = AdvisoryLock(settings.database_url)
+    events = JournalPool(settings.database_url)
     backoff = 0.0
     log.info("figures worker started")
     try:
@@ -845,7 +1028,8 @@ async def amain(state: WorkerState | None = None, *, clock: Callable[[], datetim
                     pass  # another worker is the writer: an idle standby, which still beats the heartbeat
                 else:
                     tz_name = await _unless_stopped(state, _site_zone(sessions))
-                    report = await _run_cycle(sessions, clock(), tz_name, state, lock)
+                    now = clock()
+                    report = await _run_cycle(sessions, now, tz_name, state, lock)
                     if report is not None:
                         _log_report(report, state)
                         if report.lost_lock:
@@ -857,6 +1041,8 @@ async def amain(state: WorkerState | None = None, *, clock: Callable[[], datetim
                             delay = backoff
                         else:
                             backoff = 0.0
+                        if not (report.lost_lock or state.stop.is_set()):  # the check of every stored row, once per local day
+                            await _unless_stopped(state, _nightly_step(state, now, tz_name, sessions, events))
             except _Stopped:
                 pass
             except Exception as exc:
@@ -872,7 +1058,7 @@ async def amain(state: WorkerState | None = None, *, clock: Callable[[], datetim
     finally:
         for sig in installed:
             loop.remove_signal_handler(sig)
-        await _close_down(lock, engine, state)
+        await _close_down(lock, engine, state, events)
         compute.shutdown()
         log.info("figures worker stopped")
 
