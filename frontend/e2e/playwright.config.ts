@@ -376,5 +376,18 @@ export default defineConfig({
       dependencies: ["w24"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // The dashboard experience (figures on the card, the two-step template gallery, the first-run guide, Updated and Refresh, Make a copy). It runs only when COMPOSE_PROJECT_NAME starts with
+    // `dcdash_e2e_` (like w11, w21 and w24 case R) and is skipped with its message otherwise: beforeAll raises the raw retention to 90 days, seeds the pilot hall INSIDE the stack, makes a site-wide
+    // rate when there is none, and makes the starter dashboards `w27 <run> power` and `w27 <run> <60 characters>` through POST /api/dashboards. Its figure cases read the expected numbers from
+    // POST /api/widget-data (the body the page sent) through lib/figures.ts, never from fixed values; the gallery cases make and delete `w27 <run> ...` dashboards; one case makes a role and an
+    // account (`w27-dash-only`, `w27-viewer`) and removes both; the guide cases use browser contexts of their own (every other case marks the guide as seen first, e2e/shell.ts). Its cases set
+    // the admin's look (light navy-gold, dark desert-gold) through PUT /api/me/preferences before a page opens, and afterAll deletes every dashboard, the role, the account, the rate, the seeded
+    // subtree and its source, puts the retention back and puts the account's own look back. Each case sets its own window size (1920 x 1080, 1440 x 900, 1024 x 640 or 768, 800 x 600). The cases are serial.
+    {
+      name: "w27",
+      testMatch: "w27.spec.ts",
+      dependencies: ["w25"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });
