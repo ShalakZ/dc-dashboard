@@ -330,6 +330,8 @@ async def copy_dashboard(
 
     Locks are taken in one order, the cap lock and then the source row, which no other path reverses: create takes the cap lock
     only, save and delete the row only, and the default takes its own lock and then the row."""
+    if not 1 <= dashboard_id <= MAX_ID:  # no such row can exist; the driver would raise (a 500) on an id past 4 bytes
+        raise HTTPException(404, "dashboard not found")
     await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": DASHBOARD_CAP_LOCK})
     # Read under the row lock: a save in progress finishes first, so the copy has the widgets that save stored.
     source = await load_dashboard(db, dashboard_id, lock=True)

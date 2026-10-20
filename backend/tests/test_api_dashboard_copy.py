@@ -137,6 +137,18 @@ async def test_a_missing_dashboard_is_404_and_leaves_nothing_behind(client, db):
     assert (await client.post("/api/dashboards/not-a-number/copy")).status_code == 422
 
 
+async def test_an_id_outside_the_integer_range_is_404_not_a_500(client, db):
+    # dashboards.id is a 4-byte integer: asyncpg raises on a bigger number, so the route must answer before it gets there.
+    await login_as(client, db, "operator")
+    for bad_id in (0, -1, dashboards_module.MAX_ID + 1, 99999999999):
+        response = await client.post(copy_url(bad_id))
+        assert response.status_code == 404 and detail_text(response) == "dashboard not found", (bad_id, response.text)
+    response = await client.post(copy_url(dashboards_module.MAX_ID))  # the largest legal id parses and is just missing
+    assert response.status_code == 404 and detail_text(response) == "dashboard not found"
+    assert await db.fetchval("SELECT count(*) FROM dashboards") == 0
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'dashboard.created'") == 0
+
+
 async def test_the_fiftieth_dashboard_can_be_a_copy_and_the_fifty_first_is_422(client, db):
     await login_as(client, db, "operator")
     source = await make_source(client, db)
@@ -150,18 +162,19 @@ async def test_the_fiftieth_dashboard_can_be_a_copy_and_the_fifty_first_is_422(c
     assert await db.fetchval("SELECT count(*) FROM widgets") == 8  # no half-made copy: the source and one copy, four each
 
 
-async def test_copies_of_one_source_at_once_all_land_with_different_names_or_get_409(client, db):
+async def test_copies_of_one_source_at_once_all_land_with_four_different_names(client, db):
+    # The cap lock makes the copies take turns, so each one sees the names the earlier ones took: no 409, no duplicate.
+    # (Without the lock they would all pick "Ops (copy)" and the UNIQUE constraint would turn the losers into 409s; the
+    # cap-race and lock-wait tests below pin the lock itself.)
     await login_as(client, db, "operator")
     source = await make_source(client, db)
     responses = await asyncio.gather(*(client.post(copy_url(source)) for _ in range(4)))
-    statuses = sorted(r.status_code for r in responses)
-    assert all(status in (201, 409) for status in statuses), statuses  # never a 500
-    assert 201 in statuses
-    created = [r.json()["name"] for r in responses if r.status_code == 201]
-    assert len(set(created)) == len(created)
-    rows = await db.fetch("SELECT name FROM dashboards ORDER BY name")
-    assert len({r["name"] for r in rows}) == len(rows) == 1 + len(created)
-    assert await db.fetchval("SELECT count(*) FROM widgets") == 4 * (1 + len(created))
+    assert [r.status_code for r in responses] == [201, 201, 201, 201], [r.text for r in responses]
+    names = [r.json()["name"] for r in responses]
+    assert sorted(names) == ["Ops (copy 2)", "Ops (copy 3)", "Ops (copy 4)", "Ops (copy)"]  # four distinct, whatever the order
+    rows = await db.fetch("SELECT name FROM dashboards")
+    assert sorted(r["name"] for r in rows) == sorted(["Ops", *names])  # sorted in Python: the database's collation may differ
+    assert await db.fetchval("SELECT count(*) FROM widgets") == 4 * 5  # the source and four copies, four widgets each
 
 
 async def test_the_cap_holds_when_copies_race(client, db):
