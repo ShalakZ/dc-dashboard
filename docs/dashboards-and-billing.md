@@ -652,6 +652,15 @@ and works in whole hours; a day or a month is the sum of its hours in the site t
 - A parent asset uses its own meter if it has one, otherwise the sum of its children; a meter with no readings at all counts as 0, and
   an asset with no energy or power mapping anywhere beneath it has no figure.
 - **Check month** reads the same hourly rows and mirrors these rules without changing them; see [Checking a month](#checking-a-month).
+- **One shared read per window, kept for 30 seconds.** Billing, a month's comparison, a closed month's live line and the plain value
+  widgets (a stat, a gauge, a table, a breakdown) do not read the rollup once per card. The server reads a window once, in one
+  consistent snapshot, with this same engine, keeps a compact result (every asset's day figures for a month, or every asset's value for
+  a window) and gives it to every card that asks for the same window. The figures are exactly the ones the engine always gave: the same
+  maths in the same order. A change of configuration (a rename or move that changes the order, a scale, a mapping, a tariff, the zone)
+  shows at once; new readings, a seed, a restore or a manual rollup refresh show within 30 seconds; closing a month always checks again
+  first. The memory belongs to one api process and is empty after a restart. `DCDASH_FIGURE_CACHE=0` turns it off and
+  `DCDASH_FIGURE_CACHE_TTL` sets the seconds. The maths runs on one worker thread and the rows are read in chunks, so a slow dashboard
+  does not make the other pages wait.
 
 ## How history is calculated
 
@@ -683,6 +692,9 @@ Billing.
 - The site timezone must have a whole-hour UTC offset in both January and July (so that day and month edges fall on hourly buckets);
   Settings refuses other zones, and Billing and widget data answer 409 if a stored zone breaks the rule.
 - The rollups refresh over the last 7 days, so readings that arrive later than that are not included in energy figures.
+- A figure on a dashboard or in Billing can be up to 30 seconds behind the newest readings (a configuration change shows at once). The
+  first load after an api restart, or of a window nobody asked for lately, computes it once, which takes seconds on a big site;
+  `python -m dcdash.diagnostics.speed` shows how long.
 - One counter reset per hour is recovered exactly; a second one inside the same hour may understate that hour.
 - Energy estimated from power is an estimate, not a measurement.
 - The currency is one per site, there are no time-of-use tariffs, and custom metrics cannot be used in widgets.
