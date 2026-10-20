@@ -16,7 +16,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w26 (2026-10-20, MERGEHASH)
+## w26 (2026-10-20, 43660da)
 
 Dashboard speed, part 1. No migration, no new permission, no changed figure (byte for byte the old answers on four frozen test sites). The Power dashboard drew its last card after about 10 s; warm it now takes under a second, the first load after an api restart 2 to 3 s. Billing, a month's comparison, a closed month's live line and the plain cards read a window once (one consistent snapshot, the same engine, a compact result kept 30 seconds) instead of once per card; the maths runs on one worker thread and the rows are read in chunks, so one slow dashboard no longer makes other pages wait. Figures can be up to 30 seconds behind the readings; a configuration change shows at once; closing a month checks again first; `DCDASH_FIGURE_CACHE=0` turns it off. Storage's rows per day is one query (366 days: 8.5 s to 26 ms). New: `docker compose exec -T api python -m dcdash.diagnostics.speed` shows where the time goes.
 
