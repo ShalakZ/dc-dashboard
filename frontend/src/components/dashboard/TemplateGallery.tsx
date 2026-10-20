@@ -21,18 +21,19 @@ function TemplateCard({ card, onPick, register }: { card: Card; onPick: (choice:
   const descId = useId();
   const needsId = useId();
   // Named by the title alone and described by the line (and what it needs): the tag is not part of the name, so "Power" stays "Power" with or without it.
+  // The tag sits in the corner of the picture (w27 P1), out of the text: it can never wrap under a title or move it, and every picture is the same box.
   return (
     <li>
       <button
         type="button" className="tpl-card" data-template={card.id} ref={(element) => register(card.id, element)}
         aria-labelledby={titleId} aria-describedby={card.needs ? `${descId} ${needsId}` : descId} onClick={() => onPick(card.id)}
       >
-        <TemplatePreview widgets={card.widgets} />
+        <span className="tpl-shot">
+          <TemplatePreview widgets={card.widgets} />
+          {card.recommended && <span className="tpl-tag">Recommended</span>}
+        </span>
         <span className="tpl-text">
-          <span className="tpl-title-row">
-            <span className="tpl-title" id={titleId}>{card.title}</span>
-            {card.recommended && <span className="tpl-tag">Recommended</span>}
-          </span>
+          <span className="tpl-title" id={titleId}>{card.title}</span>
           <span className="tpl-desc" id={descId}>{card.description}</span>
           {card.needs && <span className="tpl-needs" id={needsId}>{card.needs}</span>}
         </span>

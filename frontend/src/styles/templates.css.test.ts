@@ -22,6 +22,23 @@ describe("styles/templates.css", () => {
     expect(radiusPx("--radius-sm")).toBeLessThanOrEqual(4);
   });
 
+  it("every picture is the same 2 to 1 box, and the tag is pinned to its top-right corner, out of the flow, on one line (w27 P1)", () => {
+    expect(prop(body(".tpl-preview"), "aspect-ratio")).toBe("2 / 1");
+    expect(prop(body(".tpl-preview"), "width")).toBe("100%");
+    expect(prop(body(".tpl-shot"), "position")).toBe("relative");
+    const tag = body(".tpl-tag");
+    expect(prop(tag, "position")).toBe("absolute");
+    expect(prop(tag, "top")).toBe("6px");
+    expect(prop(tag, "right")).toBe("6px");
+    expect(prop(tag, "white-space")).toBe("nowrap");
+    expect(css).not.toMatch(/\.tpl-title-row/); // the title has a row of its own no more: nothing can wrap under it
+  });
+
+  it("a card keeps its text at the top: the base button centres a shorter text in the stretched card, and the titles of a row would not line up (w27 P1)", () => {
+    expect(prop(body(".tpl-card"), "align-items")).toBe("start");
+    expect(prop(body(".tpl-card"), "align-content")).toBe("start");
+  });
+
   it("has no pill, no italic, no monospace and no gradient anywhere", () => {
     expect(css).not.toMatch(/border-radius:\s*(999|9999|50%|100%)/);
     expect(css).not.toMatch(/font-style:\s*italic|monospace|gradient\(/);

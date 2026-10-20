@@ -37,7 +37,7 @@ export function TemplatePreview({ widgets }: { widgets: readonly TemplateWidget[
   const rows = Math.max(STANDARD_ROWS, ...widgets.map((w) => w.y + w.h));
   const rowH = HEIGHT / rows;
   return (
-    <svg className="tpl-preview" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} aria-hidden="true" focusable="false">
+    <svg className="tpl-preview" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true" focusable="false">
       {widgets.length === 0 && (
         <>
           <path className="tpl-blank" d={`M${GAP} ${GAP}H${WIDTH - GAP}V${HEIGHT - GAP}H${GAP}Z`} />

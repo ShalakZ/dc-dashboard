@@ -25,17 +25,18 @@
   .tpl-cards > li { display: flex; min-width: 0; } /* the cards of a row are as tall as the tallest */
 
   /* A card is a button: the base button's box (border, radius, focus ring) with its content laid out as a column. */
-  .tpl-card { display: grid; grid-template-rows: auto 1fr; align-content: start; justify-items: stretch; gap: 10px; width: 100%; height: 100%; min-height: 0; padding: 10px; border-color: var(--border); background: var(--bg); text-align: left; font-weight: 400; }
+  .tpl-card { display: grid; grid-template-rows: auto 1fr; align-content: start; align-items: start; justify-items: stretch; gap: 10px; width: 100%; height: 100%; min-height: 0; padding: 10px; border-color: var(--border); background: var(--bg); text-align: left; font-weight: 400; } /* align-items: start, or the base button centres a shorter text in the stretched card and the titles of a row do not line up (w27 P1) */
   .tpl-card:hover { border-color: var(--accent); }
   .tpl-text { display: grid; align-content: start; gap: 4px; min-width: 0; }
-  .tpl-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
   .tpl-title { min-width: 0; overflow-wrap: anywhere; color: var(--text); font-size: var(--fs-base); font-weight: 600; }
-  .tpl-tag { flex: none; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent-ink); font-size: var(--fs-xs); font-weight: 600; line-height: 1.4; }
+  /* The picture and the tag: the tag is in the picture's top-right corner, out of the flow, so it never wraps under a title or moves it (w27 P1). */
+  .tpl-shot { position: relative; display: block; min-width: 0; }
+  .tpl-tag { position: absolute; top: 6px; right: 6px; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent-ink); font-size: var(--fs-xs); font-weight: 600; line-height: 1.4; white-space: nowrap; }
   .tpl-desc { color: var(--text-2); font-size: var(--fs-sm); }
   .tpl-needs { color: var(--text-2); font-size: var(--fs-xs); }
 
   /* The picture: one rectangle per widget on the 12-column grid (TemplatePreview.tsx); text widgets are thin bars, a template with no widget (Blank) is a dashed frame. */
-  .tpl-preview { display: block; width: 100%; height: auto; border-radius: var(--radius-sm); background: var(--surface); }
+  .tpl-preview { display: block; width: 100%; height: auto; aspect-ratio: 2 / 1; border-radius: var(--radius-sm); background: var(--surface); } /* one box for every card: 2 to 1, whatever the drawing holds (the SVG is scaled to fit it, preserveAspectRatio) */
   .tpl-glyph { fill: var(--bg); stroke: var(--border-strong); stroke-width: 0.6; }
   .tpl-glyph-text { fill: var(--border-strong); stroke: none; }
   .tpl-mark { fill: none; stroke: var(--accent); stroke-width: 1.1; stroke-linecap: round; stroke-linejoin: round; }

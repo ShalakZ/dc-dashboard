@@ -19,6 +19,7 @@ describe("TemplatePreview", () => {
     expect(svg.textContent).toBe("");
     expect(svg.querySelector("image, foreignObject")).toBeNull();
     expect(svg.getAttribute("viewBox")).toBe("0 0 120 60"); // a small fixed box: 12 columns of 10
+    expect(svg.getAttribute("preserveAspectRatio")).toBe("xMidYMid meet"); // scaled to fit the one 2 to 1 box every card gives it (styles/templates.css)
   });
 
   it("draws one rectangle for each widget, in order, at its place on the 12-column grid", () => {

@@ -33,6 +33,22 @@ describe("TemplateGallery", () => {
     expect(document.getElementById(label)).toHaveTextContent(/^Power$/);
   });
 
+  it("puts the Recommended tag in the corner of the picture, out of the title's row, so it can never wrap under a title or move it (w27 P1)", () => {
+    show();
+    for (const card of screen.getAllByRole("button")) {
+      const tag = card.querySelector(".tpl-tag");
+      const recommended = ["power", "cost", "areas"].includes(card.getAttribute("data-template")!);
+      expect(tag !== null, `${card.getAttribute("data-template")} has the tag`).toBe(recommended);
+      if (tag) {
+        expect(tag.closest(".tpl-shot")).not.toBeNull(); // in the picture's box, which is where the stylesheet pins it
+        expect(tag.closest(".tpl-text")).toBeNull();
+        expect(card.querySelector(".tpl-shot svg")).not.toBeNull();
+      }
+      expect(card.querySelector(".tpl-title")!.children).toHaveLength(0); // the title is its words alone
+      expect(card.querySelector(".tpl-title-row")).toBeNull();
+    }
+  });
+
   it("every card is a real button with a hidden picture and no raster", () => {
     const { container } = show();
     for (const card of screen.getAllByRole("button")) {
