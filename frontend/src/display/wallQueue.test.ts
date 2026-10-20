@@ -494,6 +494,142 @@ describe("createWidgetQueue: failures back off (R4)", () => {
   });
 });
 
+// ---- whole-wave review I1: two jobs that always fail must not starve every job queued after them ----
+//
+// `best()` takes the lowest `seq`. A failed job used to keep its `seq` and go back to waiting, so with MAX_IN_FLIGHT = 2 two failing jobs were the two
+// lowest at every cool-down and nothing queued after them ever started (the reviewer saw widgets 4 and 5 never requested in 140 s). A failed (or
+// unauthorized) job now takes a NEW `seq`, the back of its priority class; the queue-wide cool-down is untouched. A 429 says nothing about the job:
+// it keeps its place.
+
+/** Advances the manual clock in 1 s steps and lets the instant answers of `auto` run after each step. */
+async function run(t: ReturnType<typeof setup>, ms: number) {
+  await settle();
+  for (let left = ms; left > 0; left -= 1_000) {
+    t.clock.advance(Math.min(left, 1_000));
+    await settle();
+  }
+}
+const serverError = () => reply({ status: 500, data: null, serverDate: null });
+const widgetsAsked = (t: ReturnType<typeof setup>) => t.calls.map((call) => call.widget);
+const timesAsked = (t: ReturnType<typeof setup>) => t.calls.map((call) => call.at);
+const answerOf = (t: ReturnType<typeof setup>, key: string) => t.results.filter((entry) => entry.key === key).map((entry) => entry.result.kind);
+
+describe("createWidgetQueue: a failed job goes to the back of the queue (whole-wave review I1)", () => {
+  it("(a) asks every healthy job once, before a failing job is asked again: two failing jobs in the middle of five", async () => {
+    // The reviewer's case: widget 1 healthy, widgets 2 and 3 answer 500, widgets 4 and 5 were never asked.
+    const t = setup({ auto: ({ widget }) => (widget === 2 || widget === 3 ? serverError() : reply()) });
+    for (let id = 1; id <= 5; id += 1) t.queue.enqueue(t.job(id));
+    await run(t, 10_000); // the two failures at once make the first cool-down 10 s
+    expect(widgetsAsked(t)).toEqual([1, 2, 3, 4, 5, 2, 3]);
+    expect(timesAsked(t)).toEqual([0, 0, 0, 10_000, 10_000, 10_000, 10_000]);
+    expect(answerOf(t, "k4")).toEqual(["ok"]);
+    expect(answerOf(t, "k5")).toEqual(["ok"]);
+    expect(answerOf(t, "k2")).toEqual(["failed", "failed"]);
+  });
+
+  it("(b) the same with the failing jobs first and every job urgent (the pinned item's cards)", async () => {
+    const t = setup({ auto: ({ widget }) => (widget <= 2 ? serverError() : reply()) });
+    for (let id = 1; id <= 5; id += 1) t.queue.enqueue(t.job(id, true));
+    await run(t, 10_000);
+    expect(widgetsAsked(t)).toEqual([1, 2, 3, 4, 5, 1, 2]);
+    expect(timesAsked(t)).toEqual([0, 0, 10_000, 10_000, 10_000, 10_000, 10_000]);
+    for (const key of ["k3", "k4", "k5"]) expect(answerOf(t, key)).toEqual(["ok"]); // each healthy job exactly once
+  });
+
+  it("(c) the same with every job not urgent (the prefetch of the next item): the healthy ones behind two failing ones also start", async () => {
+    const t = setup({ auto: ({ widget }) => (widget <= 2 ? serverError() : reply()) });
+    for (let id = 1; id <= 5; id += 1) t.queue.enqueue(t.job(id, false));
+    await run(t, 10_000);
+    expect(widgetsAsked(t)).toEqual([1, 2, 3, 4, 5, 1, 2]);
+    for (const key of ["k3", "k4", "k5"]) expect(answerOf(t, key)).toEqual(["ok"]);
+  });
+
+  it("(d) an urgent job still beats a non-urgent one whatever the seq: a failing urgent job at the back goes before a waiting non-urgent one", async () => {
+    const failing = new Set([1, 2]);
+    const t = setup({ auto: ({ widget }) => (failing.has(widget) ? serverError() : reply()) });
+    t.queue.enqueue(t.job(1, true)); // the two urgent jobs run and fail; their new seq (5 and 6) is higher than the waiting prefetch jobs' (3 and 4)
+    t.queue.enqueue(t.job(2, true));
+    t.queue.enqueue(t.job(3, false));
+    t.queue.enqueue(t.job(4, false));
+    await run(t, 10_000);
+    expect(widgetsAsked(t)).toEqual([1, 2, 1, 2]); // the screen's own cards are asked again before the prefetch starts: urgent first, as before
+    failing.clear(); // they recover: the prefetch jobs then start, right behind them
+    await run(t, 20_000); // the second cool-down (two more failures at 10 s) ends at 30 s
+    expect(widgetsAsked(t)).toEqual([1, 2, 1, 2, 1, 2, 3, 4]);
+    expect(answerOf(t, "k3")).toEqual(["ok"]);
+    expect(answerOf(t, "k4")).toEqual(["ok"]);
+  });
+
+  it("(e) a 429 does not move the job: it is asked again before the jobs that were waiting behind it", async () => {
+    const t = setup();
+    for (let id = 1; id <= 4; id += 1) t.queue.enqueue(t.job(id)); // 1 and 2 run, 3 and 4 wait
+    t.calls[0].resolve(reply({ status: 429, data: null, retryAfter: 5 })); // busy says nothing about job 1
+    t.calls[1].resolve(reply());
+    await settle();
+    t.clock.advance(5_000);
+    expect(widgetsAsked(t)).toEqual([1, 2, 1, 3]);
+  });
+
+  it("(e') a 500 moves the job behind the jobs that were waiting, the contrast of (e)", async () => {
+    const t = setup();
+    for (let id = 1; id <= 4; id += 1) t.queue.enqueue(t.job(id));
+    t.calls[0].resolve(serverError());
+    t.calls[1].resolve(reply());
+    await settle();
+    t.clock.advance(5_000);
+    expect(widgetsAsked(t)).toEqual([1, 2, 3, 4]); // 3 and 4 fill both slots; job 1 waits its turn
+  });
+
+  it("a 401 also goes to the back of the queue", async () => {
+    const t = setup();
+    for (let id = 1; id <= 4; id += 1) t.queue.enqueue(t.job(id));
+    t.calls[0].resolve(reply({ status: 401, data: null }));
+    t.calls[1].resolve(reply());
+    await settle();
+    t.clock.advance(5_000);
+    expect(widgetsAsked(t)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("a request that never completed (a timeout) also goes to the back of the queue", async () => {
+    const t = setup();
+    for (let id = 1; id <= 4; id += 1) t.queue.enqueue(t.job(id));
+    t.calls[0].reject(new DOMException("timed out", "TimeoutError"));
+    t.calls[1].resolve(reply());
+    await settle();
+    t.clock.advance(5_000);
+    expect(widgetsAsked(t)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("(f) with only failing jobs the cadence is unchanged: one cool-down for the whole queue, 5, 10, then 20 s", async () => {
+    const t = setup({ auto: () => "network" });
+    t.queue.enqueue(t.job(1));
+    t.queue.enqueue(t.job(2));
+    await run(t, 50_000);
+    // The two failures at one instant make the cool-down 5 s and then 10 s (the 2nd failure in a row); then 20 s, 20 s.
+    expect(timesAsked(t)).toEqual([0, 0, 10_000, 10_000, 30_000, 30_000, 50_000, 50_000]);
+    expect(widgetsAsked(t)).toEqual([1, 2, 1, 2, 1, 2, 1, 2]);
+  });
+
+  it("(f') a single failing job still waits 5, 10, 20, 20 s", async () => {
+    const t = setup({ auto: () => "network" });
+    t.queue.enqueue(t.job(1));
+    await run(t, 55_000);
+    expect(timesAsked(t)).toEqual([0, 5_000, 15_000, 35_000, 55_000]);
+  });
+
+  it("a cancelled failing job is not asked again and does not hold a place", async () => {
+    const t = setup();
+    for (let id = 1; id <= 3; id += 1) t.queue.enqueue(t.job(id));
+    t.calls[0].resolve(serverError());
+    t.calls[1].resolve(reply());
+    await settle();
+    t.queue.cancel("k1");
+    t.clock.advance(5_000);
+    expect(widgetsAsked(t)).toEqual([1, 2, 3]);
+    expect(t.queue.waiting()).toBe(0);
+  });
+});
+
 describe("createWidgetQueue: ten walls do not return in lockstep", () => {
   it("spreads the restart of ten queues that failed together at t=0 over at least 20 percent of the wait", async () => {
     const restarts: number[] = [];

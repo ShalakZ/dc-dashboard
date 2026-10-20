@@ -18,6 +18,11 @@ export const WAKE_JUMP_MS = 15_000;
 export const NOT_UPDATED_MS = 120_000;
 /** No answer for this long: the band "This screen has not been updated". */
 export const SCREEN_BAND_MS = 120_000;
+/**
+ * A playlist read this old counts as no answer for the screen band (whole-wave review M5): the band clock follows the card answers, so without this a
+ * playlist that never reads again (a 5xx for good) would freeze the collector and readings status and keep "Updated" fresh over figures that stopped changing.
+ */
+export const PLAYLIST_STALE_MS = 300_000;
 /** After a wake the screen band stays away this long (the first reads are on their way). */
 export const WAKE_HOLD_MS = 10_000;
 /** At most one automatic reload in this time. */
@@ -103,7 +108,7 @@ export function jittered(ms: number, random: () => number): number {
   return Math.round(ms * (1 + JITTER_MAX * random()));
 }
 
-/** The wait after a failure; `attempt` 0 is the first failure in a row: 5, 10, 20, 40, 60 s, then 60 s, each jittered. */
+/** The wait after a failure; `attempt` 0 is the first failure in a row: 5, 10, 20 s, then 20 s, each jittered. */
 export function failureWait(attempt: number, random: () => number): number {
   const step = Math.min(Math.max(Math.trunc(attempt), 0), BACKOFF_STEPS_MS.length - 1);
   return jittered(BACKOFF_STEPS_MS[step], random);

@@ -48,7 +48,7 @@ interface Job {
   item: number;
   widget: number;
   urgent: boolean;
-  seq: number;
+  seq: number; // the place in the queue (lowest first within a priority); a failed job takes a new, higher one
   running: boolean;
   cancelled: boolean;
 }
@@ -155,8 +155,16 @@ export function createWidgetQueue(deps: QueueDeps): WidgetQueue {
 
     const live = !job.cancelled;
     if (live) {
-      if (again) job.running = false;
-      else jobs.delete(job.key);
+      if (again) {
+        job.running = false;
+        // A job that FAILED goes to the back of its priority class: `best()` takes the lowest `seq`, and with the queue-wide cool-down two jobs that
+        // always fail would otherwise be the two lowest at every cool-down and nothing queued behind them would ever start (whole-wave review I1).
+        // The cool-down above is unchanged. A busy job (result null, a 429) keeps its place: that answer says nothing about this job.
+        if (result !== null) {
+          seq += 1;
+          job.seq = seq;
+        }
+      } else jobs.delete(job.key);
     }
     try {
       if (live && result !== null) onResult(job.key, result);

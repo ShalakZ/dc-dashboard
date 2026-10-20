@@ -2,7 +2,7 @@ import type { WidgetConfig, WidgetData } from "../api/types";
 import type { DisplayItem, DisplayPlaylist, DisplayWidget } from "./displayApi";
 import { createWidgetQueue, type QueueResult } from "./wallQueue";
 import {
-  FADE_HALF_MS, FETCH_AHEAD_MS, NOT_UPDATED_MS, REREAD_MIN_MS, SWAP_WAIT_MS, WAKE_HOLD_MS,
+  FADE_HALF_MS, FETCH_AHEAD_MS, NOT_UPDATED_MS, PLAYLIST_STALE_MS, REREAD_MIN_MS, SWAP_WAIT_MS, WAKE_HOLD_MS,
   bandFor, buildChanged, clockOffset, isDataWidget, itemsDiffer, nextShown, positionOf, readingsStoppedAt, refetchDue, reloadAllowed, shownItems,
 } from "./wallRules";
 import type { CardState, Wall, WallDeps, WallSnapshot } from "./wallTypes";
@@ -419,11 +419,16 @@ export function createWall(deps: WallDeps): Wall {
     refreshNotUpdated(t);
     const timezone = reply?.site?.timezone ?? "";
     let band = snap.band;
+    // The band clock follows the card answers (A3), so a playlist that never reads again would freeze `status` (the collector and readings bands)
+    // and keep "Updated" fresh over figures that stopped changing. A read older than 5 minutes therefore counts as no answer: the clock falls back to
+    // that read, which makes the 120 s rule true and the text say "since <the last read>". Never before the first read; the wake hold still applies.
+    const feedAt = lastFeedAt;
+    const clock = bandClock !== null && feedAt !== null && t - feedAt >= PLAYLIST_STALE_MS ? Math.min(bandClock, feedAt) : bandClock;
     const found =
-      reply === null || bandClock === null
+      reply === null || clock === null
         ? null
         : bandFor({
-            now: t, bandClock, wakeHoldUntil, status: reply.status, collectorDownMs, readingsStoppedAt: readingsStop?.at ?? null,
+            now: t, bandClock: clock, wakeHoldUntil, status: reply.status, collectorDownMs, readingsStoppedAt: readingsStop?.at ?? null,
             timeZone: timezone !== "" ? timezone : browserZone(),
           });
     if (found === null) band = null;

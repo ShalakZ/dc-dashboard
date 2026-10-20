@@ -1,7 +1,7 @@
 import type { WidgetConfig } from "../api/types";
 import type { DisplayItem, DisplayStatus, DisplayWidget } from "./displayApi";
 import {
-  BACKOFF_STEPS_MS, COLLECTOR_DOWN_MS, FADE_HALF_MS, FETCH_AHEAD_MS, HEARTBEAT_MS, JITTER_MAX, MAX_IN_FLIGHT, NOT_UPDATED_MS, READINGS_FLOOR_SECONDS,
+  BACKOFF_STEPS_MS, COLLECTOR_DOWN_MS, FADE_HALF_MS, FETCH_AHEAD_MS, HEARTBEAT_MS, JITTER_MAX, MAX_IN_FLIGHT, NOT_UPDATED_MS, PLAYLIST_STALE_MS, READINGS_FLOOR_SECONDS,
   RELOAD_GUARD_MS, REREAD_MIN_MS, REVOKED_STEPS_MS, SCREEN_BAND_MS, SWAP_WAIT_MS, WAKE_HOLD_MS, WAKE_JUMP_MS, bandFor, buildChanged, busyWait,
   clockOffset, failureWait, formatClock, isDataWidget, itemsDiffer, jittered, nextShown, positionOf, readingsStoppedAt, refetchDue, reloadAllowed,
   revokedWait, shownItems, wallRefetchMs,
@@ -22,6 +22,7 @@ describe("the constants of the brief", () => {
     expect(JITTER_MAX).toBe(0.3);
     expect(REVOKED_STEPS_MS).toEqual([300_000, 900_000, 3_600_000]);
     expect([COLLECTOR_DOWN_MS, READINGS_FLOOR_SECONDS]).toEqual([50_000, 60]);
+    expect(PLAYLIST_STALE_MS).toBe(300_000); // whole-wave review M5: a playlist read this old counts as no answer for the screen band
   });
 });
 

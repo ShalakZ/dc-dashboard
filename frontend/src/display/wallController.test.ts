@@ -372,7 +372,7 @@ describe("a 404: the playlist moved", () => {
     expect(t.refreshes).toEqual([T0 + 30_000]);
     expect(t.snap().cards[11]).toMatchObject({ status: "ok", data: FIGURES, answeredAt: T0, failingSince: null, notUpdated: false });
     const asked = t.asks(1, 11).length;
-    await t.run(5 * 60_000);
+    await t.run(4 * 60_000); // 270 s after the last read: from 300 s with no read the screen band rises by itself (whole-wave review M5), which is not what this test is about
     expect(t.asks(1, 11)).toHaveLength(asked); // a moved card is not asked again before a feed
     expect(t.refreshes).toHaveLength(1);
     expect(t.snap().cards[11].failingSince).toBeNull();
@@ -476,6 +476,29 @@ describe("failures, 401 and refused cards", () => {
     expect(t.snap().item?.id).toBe(1);
     expect(t.snap().cards[11].status).toBe("unavailable");
     expect(t.asks(1, 11)).toEqual([0]);
+  });
+
+  it("two cards that always fail do not starve the other two of the item (whole-wave review I1)", async () => {
+    // The reviewer's Power repro: widgets 2 and 3 answer 500 for ever, widgets 4 and 5 are healthy. The queue used to ask 2 and 3 again at every
+    // cool-down and never reached 4 and 5: their cards stayed skeletons and band 2 blamed the screen. A failed request now goes to the back.
+    const power = item(1, { dashboard: dash(1, [stat(2), stat(3), stat(4), stat(5)]) });
+    const t = setup({ respond: (call) => (call.widget === 2 || call.widget === 3 ? reply({ status: 500, data: null }) : reply()) });
+    t.feed(list([power]));
+    await t.run(60_000);
+    expect(t.snap().cards[4]).toMatchObject({ status: "ok", data: FIGURES, failingSince: null, notUpdated: false });
+    expect(t.snap().cards[5]).toMatchObject({ status: "ok", data: FIGURES, failingSince: null, notUpdated: false });
+    expect(t.snap().cards[2]).toMatchObject({ status: "error", data: null, failingSince: T0 });
+    expect(t.snap().cards[3]).toMatchObject({ status: "error", data: null, failingSince: T0 });
+    expect(t.asks(1, 4)[0]).toBeLessThanOrEqual(10_000); // asked at the first cool-down, not never
+    expect(t.asks(1, 5)[0]).toBeLessThanOrEqual(10_000);
+    await t.run(65_000); // 125 s: the two failing cards have failed for more than 120 s
+    expect(t.snap().cards[2]).toMatchObject({ notUpdated: true, failingSince: T0 });
+    expect(t.snap().cards[3]).toMatchObject({ notUpdated: true, failingSince: T0 });
+    expect(t.snap().cards[4]).toMatchObject({ status: "ok", notUpdated: false });
+    expect(t.snap().cards[5]).toMatchObject({ status: "ok", notUpdated: false });
+    expect(t.asks(1, 4).length).toBeGreaterThanOrEqual(3); // they keep being refreshed behind the failing ones
+    expect(t.asks(1, 5).length).toBeGreaterThanOrEqual(3);
+    expect(t.snap().band).toBeNull(); // the band clock follows the card answers: the screen is not dead, two cards are
   });
 });
 
@@ -601,6 +624,63 @@ describe("the bands", () => {
     t.feed(bad);
     expect(t.snap().band?.kind).toBe("collector");
     await t.run(60_000);
+    expect(t.snap().band?.kind).toBe("screen");
+  });
+
+  // Whole-wave review M5: the band clock follows the card answers, so a playlist that never reads again (a 5xx for good) while the figure requests
+  // work would freeze `status` for ever and keep "Updated" fresh over figures that stopped changing. A read older than 5 minutes counts as no answer.
+  it("raises the screen band 300 s after the last playlist read although every card keeps answering, and says since when", async () => {
+    const t = setup();
+    t.feed(list([item(1)]));
+    await t.run(299_000);
+    expect(t.snap().band).toBeNull(); // the cards answered at 270 s: the screen is alive, only the playlist is silent
+    expect(t.snap().cards[11].answeredAt).toBeGreaterThanOrEqual(T0 + 270_000);
+    await t.run(1_000);
+    expect(t.snap().band).toEqual({ kind: "screen", text: "This screen has not been updated since 12:00. Trying again..." });
+    await t.run(60_000); // still silent: the band stays although the cards answered a moment ago
+    expect(t.snap().band?.kind).toBe("screen");
+    expect(t.snap().cards[11].answeredAt).toBeGreaterThanOrEqual(T0 + 330_000);
+  });
+
+  it("clears that band with the next playlist read, and it comes back 300 s after that read", async () => {
+    const t = setup();
+    t.feed(list([item(1)]));
+    await t.run(360_000);
+    expect(t.snap().band?.kind).toBe("screen");
+    t.feed(list([item(1)]));
+    expect(t.snap().band).toBeNull();
+    await t.run(299_000);
+    expect(t.snap().band).toBeNull();
+    await t.run(1_000);
+    expect(t.snap().band).toEqual({ kind: "screen", text: "This screen has not been updated since 12:06. Trying again..." });
+  });
+
+  it("never raises it while the playlist is read every 60 s", async () => {
+    const t = setup();
+    t.feed(list([item(1)]));
+    for (let minute = 1; minute <= 10; minute += 1) {
+      await t.run(60_000);
+      expect(t.snap().band).toBeNull();
+      t.feed(list([item(1)]));
+      expect(t.snap().band).toBeNull();
+    }
+  });
+
+  it("raises nothing before the first playlist read, however long the wall waits", async () => {
+    const t = setup();
+    await t.run(900_000);
+    expect(t.snap().band).toBeNull();
+    expect(t.calls).toEqual([]);
+  });
+
+  it("holds the stale-playlist band back for 10 s after a wake() like the other screen band", async () => {
+    const t = setup();
+    t.feed(list([item(1)]));
+    await t.run(299_000);
+    t.wall.wake();
+    await t.run(9_000); // 308 s: the playlist read is 308 s old, the wake holds the band
+    expect(t.snap().band).toBeNull();
+    await t.run(1_000);
     expect(t.snap().band?.kind).toBe("screen");
   });
 });
