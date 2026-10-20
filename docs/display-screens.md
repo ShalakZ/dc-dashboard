@@ -77,8 +77,13 @@ request; the screen notices within a minute and shows the "revoked" sentence abo
 does nothing more. **Delete** removes the record and the link stops for good. A revoked display keeps its name until you delete it, so
 another display cannot take that name meanwhile.
 
-A playlist that a display shows cannot be deleted: the answer names the displays ("this playlist is shown by: Hall TV, Wall B"; revoked
-ones are marked "(revoked)"). Change their playlist or delete them first.
+A playlist that a display shows cannot be deleted: the answer names the displays ("this playlist is shown by 2 screens: Hall TV, Wall B
+(revoked). Change their playlist or delete them first."; with more than three it lists three and "and N more"). Revoked screens are
+marked "(revoked)".
+
+A link is not tied to the account that made it. It keeps working when that person leaves or loses a permission, and it shows the
+playlist as it is saved now (a focus added later is shown to the link too). When someone who managed displays leaves, revoke the
+links they made (the Audit log says who created each display).
 
 Deleting a dashboard or an asset never blocks anything. The playlist item is **skipped** and the Displays page says why: "The dashboard
 Ops was deleted", "The asset Hall 1 no longer exists" or "This dashboard has no widgets". The name shown is the name at the last playlist
@@ -86,11 +91,14 @@ save. A playlist with a skipped item can still be renamed and reordered; choose 
 
 ## Wrong links and the rate limit
 
-Ten wrong links from one address within 15 minutes block that address from opening any link for 15 minutes, and the Audit log gets one
-entry ("Too many wrong display links from ..."). Only opening a link counts, so a screen that is already connected keeps working, and
-the link of a display you have revoked is answered like any wrong link but is not counted (a revoked screen that keeps reloading cannot
-block its own address). The address is the one the server sees; screens behind one shared address share the block, and restarting the
-`api` service clears it.
+Ten wrong links from one address within 15 minutes make the server refuse further wrong links from that address for 15 minutes, and the
+Audit log gets one entry ("Too many wrong display links from ..."). The block never refuses a RIGHT link: a screen with a valid link
+connects even from a blocked address, so nobody can keep your screens from reconnecting by sending junk. Only opening a wrong link
+counts, a screen that is already connected keeps working, and the link of a display you have revoked is answered like any wrong link but
+is not counted (a revoked screen that keeps reloading cannot block its own address). The address is the one the server sees. On
+Docker Desktop (the usual Windows install) every browser reaches the server through one gateway, so every screen and every person
+shows as the same address: the block then covers the whole site, the Audit log cannot tell machines apart, and the "last connected
+from" address of a screen is not evidence of where a link was used. Restarting the `api` service clears a block.
 A connection is also an Audit log entry. A screen that reloads in a loop adds a few entries per 5 minutes (the next entry says how many
 were left out), and a connection from an address the display has not used before is always written. A screen may also have at most 6
 requests running at once (12 for all screens together) and 300 figure requests a minute; beyond that the server answers "busy" and the
