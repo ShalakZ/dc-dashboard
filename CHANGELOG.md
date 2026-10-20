@@ -16,7 +16,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w28 (2026-10-20, MERGE)
+## w28 (2026-10-20, 9267224)
 
 Display links, playlists and the Displays page (display mode, part 1; the rotating wall screen is w29). Migration `0015`, one new permission (`displays.manage`, Admin only, the 32nd), three new tables, no changed figure. Administer > Displays: make a playlist of dashboards (optional focus asset, seconds on screen), make a display, copy its secret link once, revoke it at once, delete it. A browser that opens the link becomes a connected display with no sign-in: it reads only its own playlist through three routes under `/api/display` (no session, no CSV, no stream), and for now the page only says "Connected as ...". The secret sits in the link's fragment, goes to the server in one JSON body and is stored only as a SHA-256 hash; ten wrong links from one address in 15 minutes make that address's wrong links refused for 15 minutes (a right link is never refused). See [Display screens](docs/display-screens.md).
 
