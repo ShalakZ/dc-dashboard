@@ -43,27 +43,46 @@ import { AppearanceProvider } from "./auth/AppearanceProvider";
 import { AuthProvider } from "./auth/AuthProvider";
 import { RouteError } from "./components/RouteError";
 import { ToastProvider } from "./components/Toasts";
+import { DisplayApp } from "./display/DisplayApp";
+import { isDisplayPath } from "./display/isDisplayPath";
+import { takeFragment } from "./display/takeFragment";
 import { installChunkReload } from "./lib/chunkReload";
 
-const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
+function mountApp() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
 
-// A tab left open across an update reloads once when a lazy chunk it needs is gone (a second failure within 10 s does not loop).
-installChunkReload();
+  // A tab left open across an update reloads once when a lazy chunk it needs is gone (a second failure within 10 s does not loop).
+  installChunkReload();
 
-// A data router, because useBlocker (unsaved dashboard edits) only works under one. A single catch-all route keeps
-// App's own <Routes> tree (in App.tsx) exactly as it is. Its errorElement replaces React Router's developer error page.
-const router = createBrowserRouter([{ path: "*", element: <App />, errorElement: <RouteError /> }]);
+  // A data router, because useBlocker (unsaved dashboard edits) only works under one. A single catch-all route keeps
+  // App's own <Routes> tree (in App.tsx) exactly as it is. Its errorElement replaces React Router's developer error page.
+  const router = createBrowserRouter([{ path: "*", element: <App />, errorElement: <RouteError /> }]);
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <AppearanceProvider>
-          <ToastProvider>
-            <RouterProvider router={router} />
-          </ToastProvider>
-        </AppearanceProvider>
-      </AuthProvider>
-    </QueryClientProvider>
-  </StrictMode>,
-);
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <AppearanceProvider>
+            <ToastProvider>
+              <RouterProvider router={router} />
+            </ToastProvider>
+          </AppearanceProvider>
+        </AuthProvider>
+      </QueryClientProvider>
+    </StrictMode>,
+  );
+}
+
+// A display screen (w28) is not the app: no sign-in, no providers, no router and no chunk reload ever exist on its page. The secret of its
+// link is taken out of the address first, synchronously, before anything is mounted or requested; it must be a full page load
+// (nothing in the app links here with a router Link, which would skip this branch).
+if (isDisplayPath(window.location.pathname)) {
+  const secret = takeFragment();
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <DisplayApp secret={secret} />
+    </StrictMode>,
+  );
+} else {
+  mountApp();
+}

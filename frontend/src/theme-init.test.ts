@@ -133,9 +133,19 @@ describe("theme-init.js: data-shell", () => {
   const defaults = { "data-mode": "light", "data-theme": "navy-gold" };
 
   it("is expanded on the app's pages", () => {
-    for (const path of ["/", "/assets", "/assets/3", "/users", "/loginx", "/settings/setup"]) {
+    for (const path of ["/", "/assets", "/assets/3", "/users", "/loginx", "/settings/setup", "/displays", "/display/x", "/displayed", "/x/display"]) {
       expect(run({ path }).attributes, path).toEqual(withShell("expanded"));
     }
+  });
+
+  it("is not set on the display screen (/display and /display/), so the admin shell never paints on a TV; the Displays page /displays keeps it", () => {
+    for (const path of ["/display", "/display/", "/Display", "/DISPLAY/"]) {
+      expect(run({ path, sidebar: "minimized", narrow: true }).attributes, path).toEqual(defaults);
+    }
+    expect(run({ path: "/displays" }).attributes).toEqual(withShell("expanded"));
+    const display = run({ path: "/display", matches: false, narrow: true });
+    expect(display.keys, "the path is tested before any storage read but the appearance's").toEqual([MIRROR_KEY]);
+    expect(display.queries).toEqual([]);
   });
 
   it("is not set on the sign-in and setup pages, whatever the case or the trailing path (the router matches case-insensitively)", () => {

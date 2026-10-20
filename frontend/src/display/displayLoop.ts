@@ -1,0 +1,164 @@
+import { claim, getPlaylist, type PlaylistReply } from "./displayApi";
+
+// What the display screen does after the page loaded: trade the link's secret for the cookie (once), read the playlist, read it again
+// every minute, and say in one sentence how it is doing. No React in here, so the clock and the requests can be stood in for.
+
+/** Timers the tests can move by hand (the shape of lib/progress's, which this file does not import). */
+export interface Timers {
+  set(fn: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+}
+export const realTimers: Timers = {
+  set: (fn, ms) => setTimeout(fn, ms),
+  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+/** How the screen reads the playlist while all is well. */
+export const POLL_MS = 60_000;
+/** A revoked or unknown link: ask again this rarely (an administrator may have made the link valid again by restoring a backup). */
+export const REVOKED_RECHECK_MS = 300_000;
+/** A blocked address stays blocked for 15 minutes. */
+export const BLOCKED_RETRY_MS = 900_000;
+/** The wait after the first failure to reach the server; it doubles each time up to the cap and starts again after any answer. */
+export const BACKOFF_START_MS = 5_000;
+export const BACKOFF_CAP_MS = 60_000;
+
+export type DisplayState =
+  | { kind: "connecting" }
+  | { kind: "connected"; displayName: string; playlistName: string; dashboards: number; skipped: number }
+  | { kind: "notConnected" }
+  | { kind: "revoked" }
+  | { kind: "blocked" }
+  | { kind: "offline" };
+
+type ClaimOutcome = "ok" | "refused" | "blocked" | "unreachable";
+
+/**
+ * The one claim of this page load. The address was cleared before anything ran, so the secret exists only in the page's memory: a second
+ * claim for the same secret (StrictMode runs an effect twice; an error boundary mounts the screen again) must share the first one, and a
+ * claim that failed for lack of an answer (no network, a 5xx, a block) is forgotten so the next try can be made. A definite answer
+ * (accepted, or refused as wrong, revoked or malformed) is kept: asking again would only be a wrong secret to count.
+ */
+let claimed: { secret: string; outcome: Promise<ClaimOutcome> } | null = null;
+
+function claimOnce(secret: string): Promise<ClaimOutcome> {
+  if (claimed?.secret === secret) return claimed.outcome;
+  const entry = {
+    secret,
+    outcome: claim(secret).then(
+      (status): ClaimOutcome => {
+        if (status >= 200 && status < 300) return "ok";
+        if (status === 401 || status === 403 || status === 422) return "refused";
+        return status === 429 ? "blocked" : "unreachable";
+      },
+      (): ClaimOutcome => "unreachable",
+    ),
+  };
+  claimed = entry;
+  void entry.outcome.then((outcome) => {
+    if ((outcome === "blocked" || outcome === "unreachable") && claimed === entry) claimed = null;
+  });
+  return entry.outcome;
+}
+
+/** For tests: forgets the claim of the page load, so the next test starts clean. */
+export function resetClaimMemo(): void {
+  claimed = null;
+}
+
+export interface DisplayDeps {
+  timers?: Timers;
+}
+
+/**
+ * Starts the screen. `secret` is the link's secret when the page was opened with one, else null (the cookie may already be there).
+ * `onState` hears every change of state, never after `stop()`. Returns `stop()`, which clears the timer and ignores any answer still on its way.
+ */
+export function startDisplay(secret: string | null, onState: (state: DisplayState) => void, deps: DisplayDeps = {}): () => void {
+  const timers = deps.timers ?? realTimers;
+  let stopped = false;
+  let handle: unknown = null;
+  let backoff = BACKOFF_START_MS;
+  // A 401 on the playlist reads "not connected" only on a screen that never had a link and never was connected.
+  const linkTried = secret !== null;
+  let wasConnected = false;
+
+  const emit = (state: DisplayState) => {
+    if (!stopped) onState(state);
+  };
+  const later = (ms: number, next: () => Promise<void>) => {
+    if (stopped) return;
+    handle = timers.set(() => {
+      handle = null;
+      void next();
+    }, ms);
+  };
+  const unreachable = (next: () => Promise<void>) => {
+    emit({ kind: "offline" });
+    later(backoff, next);
+    backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
+  };
+
+  async function checkPlaylist(): Promise<void> {
+    let reply: PlaylistReply;
+    try {
+      reply = await getPlaylist();
+    } catch {
+      if (!stopped) unreachable(checkPlaylist);
+      return;
+    }
+    if (stopped) return;
+    if (reply.status === 200 && reply.playlist) {
+      backoff = BACKOFF_START_MS;
+      wasConnected = true;
+      const { items, name } = reply.playlist.playlist;
+      emit({
+        kind: "connected",
+        displayName: reply.playlist.display.name,
+        playlistName: name,
+        dashboards: items.length,
+        skipped: items.filter((item) => item.skipped !== null).length,
+      });
+      later(POLL_MS, checkPlaylist);
+    } else if (reply.status === 401) {
+      backoff = BACKOFF_START_MS;
+      const revoked = linkTried || wasConnected;
+      emit({ kind: revoked ? "revoked" : "notConnected" });
+      later(revoked ? REVOKED_RECHECK_MS : POLL_MS, checkPlaylist);
+    } else if (reply.status === 429) {
+      backoff = BACKOFF_START_MS;
+      emit({ kind: "blocked" });
+      later(POLL_MS, checkPlaylist); // the playlist's own limit (a few reads a minute too many) lifts within a minute
+    } else {
+      unreachable(checkPlaylist); // a 5xx, a proxy's page, an answer that is not a playlist
+    }
+  }
+
+  async function makeClaim(): Promise<void> {
+    if (secret === null) return;
+    const outcome = await claimOnce(secret);
+    if (stopped) return;
+    if (outcome === "ok") {
+      backoff = BACKOFF_START_MS;
+      await checkPlaylist();
+    } else if (outcome === "refused") {
+      backoff = BACKOFF_START_MS;
+      emit({ kind: "revoked" });
+      later(REVOKED_RECHECK_MS, checkPlaylist); // an older cookie may still be good, or a restored backup may have brought the link back
+    } else if (outcome === "blocked") {
+      backoff = BACKOFF_START_MS;
+      emit({ kind: "blocked" });
+      later(BLOCKED_RETRY_MS, makeClaim); // the link is still in memory: try it once the block has run out
+    } else {
+      unreachable(makeClaim); // no answer: the claim is made again, the playlist would only say 401
+    }
+  }
+
+  void (secret === null ? checkPlaylist() : makeClaim());
+
+  return () => {
+    stopped = true;
+    if (handle !== null) timers.clear(handle);
+    handle = null;
+  };
+}
