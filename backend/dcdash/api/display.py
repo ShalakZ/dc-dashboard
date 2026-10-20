@@ -6,7 +6,9 @@ It is not an account: it never starts a session, never looks at a sign-in cookie
 and a signed-in account's cookie means nothing on them. Only the SHA-256 hash of the secret is stored; every request looks the
 row up again (no cache of any kind), so a revoked or deleted display is refused on its very next request.
 
-  POST /api/display/claim        the secret in the body is the credential; rate limited per client address
+  POST /api/display/claim        the secret in the body is the credential; WRONG secrets are counted per client address (ten block
+                                 that address for fifteen minutes) and a right secret is never refused by that block; the claims of
+                                 one display and the claims in flight are capped
   GET  /api/display/playlist     the display's own playlist, its dashboards and widgets, the site timezone, the build, the status
   POST /api/display/widget-data  the figures of one widget of that playlist, by ids; the stored config is used, never a sent one
 
@@ -16,6 +18,7 @@ the admin routes is the one exception). Nothing here echoes the request body.
 import logging
 import math
 import re
+import time
 from collections.abc import AsyncIterator, Callable
 from typing import Annotated, Any, NoReturn, TypeVar
 from urllib.parse import urlsplit
@@ -53,9 +56,13 @@ CLAIM_BODY_LIMIT = 1024  # bytes: a claim is {"secret": "<43 characters>"}; anyt
 PLAYLIST_BUDGET_PER_MINUTE = 30  # a screen asks once a minute; this leaves room for reloads and a few screens behind one proxy
 LAST_SEEN_EVERY_SECONDS = 50  # the playlist answer writes last_seen_at at most this often, so a 60 s poll always writes
 # Requests a display may have in flight at once, and all displays together. The request pool is 5 + 10 connections and every request
-# of a display holds one until its answer is out, so 12 leaves 3 for the people using the dashboard.
+# of a display holds one until its answer is out, so 12 leaves 3 for the people using the dashboard. A display with nothing in flight
+# is always let in (one reserved slot each), so that two abused links cannot stall every other screen.
 PER_DISPLAY_IN_FLIGHT = 6
 ALL_DISPLAYS_IN_FLIGHT = 12
+CLAIMS_IN_FLIGHT = 8  # claims of a valid link being answered at once (each holds a connection and the display's row lock)
+CLAIM_BUDGET_PER_MINUTE = 30  # claims of ONE display in a minute: a kiosk claims once per start, so this is room for a restart loop
+FORCED_ROWS_PER_HOUR = 20  # the "new address" display.connected rows a display may write over its ordinary budget
 BUSY = "busy, try again"
 # What a secret can look like (`secrets.token_urlsafe`). Anything else cannot be a secret: it is refused before it is hashed.
 _SECRET_SHAPE = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -65,35 +72,63 @@ Budget = TypeVar("Budget", bound=RowBudget)
 
 
 class ConnectedBudget(RowBudget):
-    """The `display.connected` rows of ONE display (10 in 5 minutes). A claim from an address the display was not last seen at
-    must always be written, over budget too: that row is exactly what an administrator needs to see."""
+    """The `display.connected` rows of ONE display (10 in 5 minutes). A claim from an address the display was not last seen at is
+    written over that budget too, because that row is what an administrator needs to see - but at most `forced_cap` such rows in
+    `forced_window` seconds (20 an hour), since two addresses taking turns are each "new" every time."""
+
+    def __init__(
+        self, cap: int, window_seconds: float, clock: Callable[[], float] = time.monotonic,
+        forced_cap: int = FORCED_ROWS_PER_HOUR, forced_window: float = 3600.0,
+    ) -> None:
+        super().__init__(cap, window_seconds, clock)
+        self._forced = RowBudget(forced_cap, forced_window, clock)
 
     def take_row(self, must_write: bool) -> int | None:
         """Like `take()`: None when the row is left out, else how many were left out since the last row. With `must_write` the row
-        is never left out; the refused count it carries is then the count of the claims before it."""
+        is left out only when the forced budget is spent too; the refused count it carries is then the count of the claims before it,
+        and a row that is left out stays counted for the next one."""
         refused = self.take()
-        if refused is None and must_write:
+        if refused is None and must_write and self._forced.take() is not None:
             self._refused -= 1  # take() counted this claim among the left-out ones, but it is written
             refused, self._refused = self._refused, 0
         return refused
 
+    def clear(self) -> None:
+        super().clear()
+        self._forced.clear()
+
 
 class InFlight:
-    """How many data requests (the playlist, the figures) are being answered right now, in total and per display. Plain integers
-    changed only between two awaits, so there is no lock to forget or to deadlock on."""
+    """How many data requests (the playlist, the figures) are being answered right now, in total and per display, and how many
+    claims of a valid link are. Plain integers changed only between two awaits, so there is no lock to forget or to deadlock on."""
 
     def __init__(self) -> None:
         self.total = 0
         self.by_display: dict[int, int] = {}
+        self.claims = 0
 
     def enter(self, display_id: int) -> bool:
-        """Take a slot; False (and nothing changes) when the display or all displays together are at their cap."""
+        """Take a slot; False (and nothing changes) when the display or all displays together are at their cap. A display with
+        nothing in flight is always let in: it has one slot of its own that the others cannot use up."""
         mine = self.by_display.get(display_id, 0)
-        if self.total >= ALL_DISPLAYS_IN_FLIGHT or mine >= PER_DISPLAY_IN_FLIGHT:
+        if mine > 0 and (self.total >= ALL_DISPLAYS_IN_FLIGHT or mine >= PER_DISPLAY_IN_FLIGHT):
             return False
         self.total += 1
         self.by_display[display_id] = mine + 1
         return True
+
+    def claims_full(self) -> bool:
+        return self.claims >= CLAIMS_IN_FLIGHT
+
+    def enter_claim(self) -> bool:
+        """Take a claim slot; False (and nothing changes) when CLAIMS_IN_FLIGHT claims are already being answered."""
+        if self.claims_full():
+            return False
+        self.claims += 1
+        return True
+
+    def leave_claim(self) -> None:
+        self.claims = max(0, self.claims - 1)
 
     def leave(self, display_id: int) -> None:
         self.total = max(0, self.total - 1)
@@ -106,6 +141,7 @@ class InFlight:
     def clear(self) -> None:
         self.total = 0
         self.by_display.clear()
+        self.claims = 0
 
 
 # Module state, in one place; `reset_display_state` empties it (the test fixture calls it). One api worker, like the sign-in limiter:
@@ -113,8 +149,9 @@ class InFlight:
 claim_limiter = LoginLimiter(10, 900)  # 10 wrong secrets from one address in 15 minutes block that address for 15 minutes
 blocked_budget = RowBudget(10, 300)  # display.claim_blocked rows
 connected_budgets: dict[int, ConnectedBudget] = {}  # display.connected rows, per display id: one noisy screen cannot silence the rest
-widget_budgets: dict[int, RowBudget] = {}  # per display id; all three dicts are bounded by `_budget`
+widget_budgets: dict[int, RowBudget] = {}  # per display id; all four dicts are bounded by `_budget`
 playlist_budgets: dict[int, RowBudget] = {}
+claim_budgets: dict[int, RowBudget] = {}  # the claims of a valid link, per display id
 in_flight = InFlight()
 
 
@@ -124,6 +161,7 @@ def reset_display_state() -> None:
     connected_budgets.clear()
     widget_budgets.clear()
     playlist_budgets.clear()
+    claim_budgets.clear()
     in_flight.clear()
 
 
@@ -135,7 +173,8 @@ async def current_display(request: Request, db: AsyncSession = Depends(get_db)) 
 
     It also holds one of the display's in-flight slots until the answer is out (a yield dependency: FastAPI runs the `finally` after
     the response, on an error and when the request is cancelled). A display over its cap, or all displays together over theirs, get
-    429 "busy" with `Retry-After: 1` - and only a display that is connected learns that: a stranger gets the 401."""
+    429 "busy" with `Retry-After: 1` - except a display with nothing in flight, which is always let in - and only a display that is
+    connected learns that: a stranger gets the 401."""
     token = request.cookies.get(COOKIE)
     display = None
     if token and _SECRET_SHAPE.fullmatch(token):  # a longer or odd value cannot be a secret: 401 without hashing it
@@ -237,14 +276,23 @@ def _retry_after(seconds: float) -> dict[str, str]:
     openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": ClaimBody.model_json_schema()}}}},
 )
 async def claim(request: Request, db: AsyncSession = Depends(get_db)) -> Response:
-    """Swap the secret of a display link for the display cookie. The order is fixed, and only a wrong secret counts toward
-    the block: a blocked address (429, before any database work), another site (403), not JSON (422), a malformed body (422),
-    then the lookup (401 for a wrong, a revoked and a deleted secret alike; a wrong or deleted one counts, a revoked one does not)."""
+    """Swap the secret of a display link for the display cookie. A RIGHT secret is never refused because of an address: on an
+    install that loses client addresses (Docker Desktop) every client is one address, and a block that refused right secrets would
+    let anyone keep every wall screen from reconnecting. The order is fixed, and only a wrong secret counts toward the block:
+    another site (403), not JSON or a malformed body (422; 429 for a blocked address), claims in flight at the cap (503), then the
+    lookup (401 for a wrong, a revoked and a deleted secret alike - 429 for a blocked address, uncounted and unwritten; a wrong or
+    deleted one counts, a revoked one does not). A secret that is found is let in whatever the block says, within the claim budget
+    of its display (429) and the claim slots (503)."""
     client = client_address(request)
-    _refuse_a_blocked_address(client)
     if _comes_from_another_site(request):
         raise HTTPException(403, "a display link can only be opened from its own address")
-    body = await _read_claim(request)
+    try:
+        body = await _read_claim(request)
+    except HTTPException:
+        _refuse_a_blocked_address(client)  # a blocked address is told 429 whatever its claim lacks: it is no right secret
+        raise
+    if in_flight.claims_full():  # shed before any lookup: a claim that is turned away here holds no connection
+        raise _claims_busy()
 
     row = None
     if _SECRET_SHAPE.fullmatch(body.secret):  # the revoked ones are found too: the work is the same for every kind of secret
@@ -253,25 +301,41 @@ async def claim(request: Request, db: AsyncSession = Depends(get_db)) -> Respons
         await _refuse_a_claim(client, counted=row is None, db=db)
     display_id, display_name = row.id, row.name  # (read before anything commits: a committed row is expired)
 
-    answer = Response(status_code=204)
-    answer.set_cookie(
-        COOKIE, body.secret, max_age=COOKIE_MAX_AGE, httponly=True, samesite="strict", path="/api/display",
-        secure=_is_https(request),
-    )
-    answer.headers["Cache-Control"] = "no-store"
-    # Where the display connected from is noted on its row (the playlist poll does the same, at most once in 50 s): a claim from an
-    # address it was not last seen at is "new" exactly once, so that rule cannot be used to flood the audit table either.
-    new_address = await _note_where_seen(db, display_id, client)
-    budget = await _budget(connected_budgets, display_id, lambda: ConnectedBudget(10, 300), db)
-    refused = budget.take_row(must_write=new_address)  # 10 rows in 5 minutes for a display, and always one for a new address
-    if refused is not None:
-        detail: dict[str, object] = {"display_id": display_id, "name": display_name, "client": client}
-        if refused:
-            detail["suppressed_before"] = refused  # as the sign-in rows do: how many were left out since the last one
-        await audit(db, None, "display.connected", detail)
-    if new_address or refused is not None:
-        await db.commit()
-    return answer
+    # Only a claim that FOUND a display takes a slot, so a flood of wrong secrets (which the block limits) can never use the slots up
+    # and keep the real screens out. The check above is the same test made early; this one is the one that counts.
+    if not in_flight.enter_claim():
+        raise _claims_busy()
+    try:
+        budget = await _budget(claim_budgets, display_id, lambda: RowBudget(CLAIM_BUDGET_PER_MINUTE, 60), db)
+        if budget.take() is None:  # a valid link claimed 30 times in a minute: not counted toward the block, no row
+            raise HTTPException(429, BUSY, headers={"Retry-After": "60"})
+        answer = Response(status_code=204)
+        answer.set_cookie(
+            COOKIE, body.secret, max_age=COOKIE_MAX_AGE, httponly=True, samesite="strict", path="/api/display",
+            secure=_is_https(request),
+        )
+        answer.headers["Cache-Control"] = "no-store"
+        # Where the display connected from is noted on its row (the playlist poll does the same, at most once in 50 s). A claim from an
+        # address it was not last seen at is written over the ordinary row budget, but two addresses taking turns are each "new" every
+        # time, so those forced rows have a budget of their own (20 an hour) and the rest are only counted.
+        new_address = await _note_where_seen(db, display_id, client)
+        connected = await _budget(connected_budgets, display_id, lambda: ConnectedBudget(10, 300), db)
+        refused = connected.take_row(must_write=new_address)  # 10 rows in 5 minutes for a display, and 20 an hour for new addresses
+        if refused is not None:
+            detail: dict[str, object] = {"display_id": display_id, "name": display_name, "client": client}
+            if refused:
+                detail["suppressed_before"] = refused  # as the sign-in rows do: how many were left out since the last one
+            await audit(db, None, "display.connected", detail)
+        if new_address or refused is not None:
+            await db.commit()
+        return answer
+    finally:
+        in_flight.leave_claim()
+
+
+def _claims_busy() -> HTTPException:
+    """503 (not 429: a 429 on a claim reads as a blocked address), so the screen tries again a second later."""
+    return HTTPException(503, BUSY, headers={"Retry-After": "1"})
 
 
 def _refuse_a_blocked_address(client: str) -> None:
