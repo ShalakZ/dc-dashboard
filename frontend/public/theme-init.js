@@ -51,7 +51,11 @@
   var NARROW_QUERY = "(max-width: 1179.98px)";
   try {
     var path = String(window.location.pathname).toLowerCase();
-    if (!/^\/(login|setup)(\/|$)|^\/display\/?$/.test(path)) {
+    if (/^\/display\/?$/.test(path)) {
+      /* The display screen is dark in every theme (DisplayApp sets the same attribute once it runs): the first frame, before the bundle has
+         loaded, must be dark too, or a TV in a dark room flashes white at every boot and reload. The saved theme is kept. */
+      document.documentElement.setAttribute("data-mode", "dark");
+    } else if (!/^\/(login|setup)(\/|$)/.test(path)) {
       var shell = "expanded";
       try {
         if (typeof window.matchMedia === "function" && window.matchMedia(NARROW_QUERY).matches) shell = "minimized";

@@ -16,6 +16,7 @@ import { navLink, rowAction } from "./shell";
 //   2   A NEW BROWSER OPENS THE LINK. The address becomes exactly /display (no fragment) and the page loads again after the claim, so its navigation entry has no fragment either, the cookie `dcdash_display` is httpOnly, SameSite=Strict, Path=/api/display and not readable by the page, the
 //       page says "Connected as ... 2 dashboards."; that cookie (also sent by hand) gets 401 on /api/me, /api/widget-data, /api/dashboards and /api/assets; the display routes answer 200, the figures equal the
 //       admin's /api/widget-data for the stored widget, and an administrator's own session means nothing on them.
+//   2b  THE LINK OPENED IN THE OPEN TAB. /display says "not connected"; the same page then goes to /display#<secret> (a fragment-only change, no page load): the page loads itself again, ends on /display with no fragment and says "Connected as".
 //   3   REVOKE. A display page under page.clock; the administrator revokes it (Actions > Revoke > Revoke); one minute later the page says "revoked or is not valid" and the Screens card says Revoked.
 //   4   A DELETED DASHBOARD. Deleting one dashboard of a playlist in use: the Displays page says "The dashboard ... was deleted" and "1 item is skipped", the display page "(1 skipped)".
 //   5   KEYBOARD ONLY, 1440 x 900 and 1024 x 640, light and dark. Tab and Enter reach New playlist and New display; the playlist is made with Move up, Move down and Remove; the row menu and Revoke work
@@ -431,6 +432,32 @@ test.describe("W28: display screens", () => {
       await openDisplays(page);
       await expect(rowOf(page, SCREEN)).toContainText("Last connected");
       await expect(rowOf(page, SCREEN)).not.toContainText("Never connected");
+    } finally {
+      await context.close();
+    }
+  });
+
+  // -------------------------------------------------------------------------------------------------------------------------------
+  // Case 2b
+
+  test("2b. a link opened in the tab that already shows /display connects it and leaves no fragment", async ({ browser, page }) => {
+    const sameList = name("same list");
+    const sameScreen = name("same tv");
+    await signIn(page);
+    const shown = await createDisplay(page.request, sameScreen, (await createPlaylist(page.request, sameList, [real.dashA, real.dashB])).id);
+
+    const { context, screen } = await newScreen(browser);
+    try {
+      await screen.goto("/display");
+      await expect(screenText(screen)).toHaveText("This screen is not connected. Open its display link once.");
+
+      // The natural next step: paste the link into this very tab. Only the fragment differs, so the browser loads nothing (review I1); the page must load itself again,
+      // take the secret out of the address and claim. Booleans only: a failure never prints the secret.
+      await screen.goto(shown.url);
+      await expectBareDisplayAddress(screen);
+      await expect(screenText(screen)).toHaveText(connected(sameScreen, sameList, 2));
+      await expectReloadedWithoutFragment(screen);
+      expect((await context.cookies()).some((c) => c.name === COOKIE), `the cookie ${COOKIE} is set`).toBe(true);
     } finally {
       await context.close();
     }

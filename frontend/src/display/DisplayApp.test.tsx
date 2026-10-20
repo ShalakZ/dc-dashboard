@@ -37,7 +37,7 @@ let calls: Call[] = [];
 
 function answer(reply: Exclude<Reply, "network">): Response {
   if (typeof reply === "number") return new Response(reply === 204 ? null : JSON.stringify({ detail: "x" }), { status: reply });
-  return new Response(JSON.stringify(reply.body), { status: reply.status, headers: { "content-type": "application/json", ...reply.headers } });
+  return new Response(typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body), { status: reply.status, headers: { "content-type": "application/json", ...reply.headers } });
 }
 /** A 429 as the server sends it: with a `Retry-After` in seconds (or without one, or with text that is not a number). */
 const tooMany = (retryAfter?: string): Reply => ({ status: 429, body: { detail: "x" }, headers: retryAfter === undefined ? {} : { "Retry-After": retryAfter } });
@@ -227,6 +227,44 @@ describe("the states", () => {
     stubFetch({ [PLAYLIST]: [401] });
     render(<DisplayApp handle={null} timers={clock().timers} />);
     expect(await screen.findByText(NOT_CONNECTED)).toBeInTheDocument();
+  });
+
+  // The server tells a cookie that matches no active display (revoked, deleted, forged) from no cookie at all (review M7): after a reload of a
+  // revoked screen the page cannot read the HttpOnly cookie, and "open its link once" would send the person to a link that no longer works.
+  it("a 401 'this display link is not valid' with no link tried says the link was revoked, and asks again every 5 minutes", async () => {
+    stubFetch({ [PLAYLIST]: [{ status: 401, body: { detail: "this display link is not valid" } }] });
+    const c = clock();
+    render(<DisplayApp handle={null} timers={c.timers} />);
+    expect(await screen.findByText(REVOKED)).toBeInTheDocument();
+    expect(c.delays).toEqual([FIVE_MINUTES]);
+    await advance(c, FIVE_MINUTES);
+    await waitFor(() => expect(count(PLAYLIST)).toBe(2));
+    await settle();
+    expect(text()).toBe(REVOKED);
+    expect(c.delays).toEqual([FIVE_MINUTES, FIVE_MINUTES]);
+    expect(count(CLAIM)).toBe(0);
+  });
+
+  it.each([
+    ["not connected", { status: 401, body: { detail: "not connected" } }],
+    ["another sentence", { status: 401, body: { detail: "this display link is not valid, really" } }],
+    ["no JSON at all", { status: 401, body: "<html>nope</html>" }],
+    ["a non-text detail", { status: 401, body: { detail: ["this display link is not valid"] } }],
+  ] as const)("a 401 with %s as its detail and no link tried keeps 'not connected' and the 60 second poll", async (_name, reply) => {
+    stubFetch({ [PLAYLIST]: [reply] });
+    const c = clock();
+    render(<DisplayApp handle={null} timers={c.timers} />);
+    expect(await screen.findByText(NOT_CONNECTED)).toBeInTheDocument();
+    expect(c.delays).toEqual([60_000]);
+  });
+
+  it("a 401 'this display link is not valid' is revoked, and goes back to connected when the answer turns good", async () => {
+    stubFetch({ [PLAYLIST]: [{ status: 401, body: { detail: "this display link is not valid" } }, three] });
+    const c = clock();
+    render(<DisplayApp handle={null} timers={c.timers} />);
+    expect(await screen.findByText(REVOKED)).toBeInTheDocument();
+    await advance(c, FIVE_MINUTES);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
   });
 
   it.each([401, 403, 422])("a claim answered %i says the link was revoked or is not valid", async (status) => {

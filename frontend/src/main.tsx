@@ -45,6 +45,7 @@ import { RouteError } from "./components/RouteError";
 import { ToastProvider } from "./components/Toasts";
 import { DisplayApp } from "./display/DisplayApp";
 import { isDisplayPath } from "./display/isDisplayPath";
+import { reloadOnLink } from "./display/reloadOnLink";
 import { holdSecret } from "./display/secretHandle";
 import { takeFragment } from "./display/takeFragment";
 import { installChunkReload } from "./lib/chunkReload";
@@ -80,6 +81,8 @@ function mountApp() {
 // releases the secret at its first definite answer, and no variable here holds it.
 if (isDisplayPath(window.location.pathname)) {
   const handle = holdSecret(takeFragment());
+  // A link opened in this same tab changes only the fragment (no page load, no claim, the secret stays in the address bar): load the page again.
+  reloadOnLink();
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
       <DisplayApp handle={handle} />

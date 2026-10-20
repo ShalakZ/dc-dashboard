@@ -14,6 +14,14 @@ describe("main.tsx: the /display branch", () => {
     expect(branch.indexOf("takeFragment()")).toBeLessThan(branch.indexOf("render("));
   });
 
+  it("watches for a link opened in the open tab (a fragment-only change loads nothing), after the first take of the secret and before it renders", () => {
+    expect(branch).toContain("reloadOnLink();");
+    expect(branch.indexOf("takeFragment()")).toBeLessThan(branch.indexOf("reloadOnLink();"));
+    expect(branch.indexOf("reloadOnLink();")).toBeLessThan(branch.indexOf("render("));
+    expect(main).toMatch(/^import \{ reloadOnLink \} from "\.\/display\/reloadOnLink";$/m);
+    expect(mountApp).not.toContain("reloadOnLink");
+  });
+
   it("hands the screen a handle, never the secret: no variable of main.tsx holds the string (the claim releases it at the first definite answer)", () => {
     expect(branch).not.toMatch(/\b(?:const|let|var)\s+secret\b/);
     expect(branch).not.toMatch(/secret=\{/);

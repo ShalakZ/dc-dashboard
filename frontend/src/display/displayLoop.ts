@@ -115,7 +115,8 @@ export function startDisplay(link: SecretHandle | null, onState: (state: Display
   let stopped = false;
   let handle: unknown = null;
   let backoff = BACKOFF_START_MS;
-  // A 401 on the playlist reads "not connected" only on a screen that never had a link and never was connected.
+  // A 401 on the playlist reads "not connected" only on a screen that never had a link, never was connected, and was not told that its
+  // cookie matches no display.
   const linkTried = link !== null;
   let wasConnected = false;
 
@@ -158,7 +159,8 @@ export function startDisplay(link: SecretHandle | null, onState: (state: Display
       later(POLL_MS, checkPlaylist);
     } else if (reply.status === 401) {
       backoff = BACKOFF_START_MS;
-      const revoked = linkTried || wasConnected;
+      // A cookie that matches no active display is a revoked link even on a fresh load (the page cannot read an HttpOnly cookie to know).
+      const revoked = linkTried || wasConnected || reply.linkNotValid;
       emit({ kind: revoked ? "revoked" : "notConnected" });
       later(revoked ? REVOKED_RECHECK_MS : POLL_MS, checkPlaylist);
     } else if (reply.status === 429) {

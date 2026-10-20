@@ -73,7 +73,12 @@ export interface PlaylistReply {
   playlist: DisplayPlaylist | null;
   /** The seconds the server asked to wait (a 429 sends them), else null. */
   retryAfter: number | null;
+  /** True for a 401 whose detail says a cookie WAS sent but matches no active display (revoked, deleted or forged), not "no cookie". */
+  linkNotValid: boolean;
 }
+
+/** The detail of a 401 from a display route that had a cookie which matches no active display (a cookie being present is no secret). */
+export const LINK_NOT_VALID = "this display link is not valid";
 
 /** Reads the connected display's playlist (the cookie is the credential). Rejects when the request never completed. */
 export async function getPlaylist(): Promise<PlaylistReply> {
@@ -84,10 +89,20 @@ export async function getPlaylist(): Promise<PlaylistReply> {
     headers: { Accept: "application/json" },
   });
   const retryAfter = retryAfterSeconds(response);
-  if (response.status !== 200) return { status: response.status, playlist: null, retryAfter };
+  if (response.status === 401) {
+    let linkNotValid = false;
+    try {
+      const body: unknown = await response.json();
+      linkNotValid = record(body) && body.detail === LINK_NOT_VALID;
+    } catch {
+      // not JSON (a proxy's page): the same as any other 401, "not connected"
+    }
+    return { status: 401, playlist: null, retryAfter, linkNotValid };
+  }
+  if (response.status !== 200) return { status: response.status, playlist: null, retryAfter, linkNotValid: false };
   try {
-    return { status: 200, playlist: parsePlaylist(await response.json()), retryAfter };
+    return { status: 200, playlist: parsePlaylist(await response.json()), retryAfter, linkNotValid: false };
   } catch {
-    return { status: 200, playlist: null, retryAfter };
+    return { status: 200, playlist: null, retryAfter, linkNotValid: false };
   }
 }
