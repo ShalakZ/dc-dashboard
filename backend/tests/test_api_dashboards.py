@@ -871,3 +871,29 @@ async def test_ordinary_titles_with_unicode_are_still_fine(client, db):
     saved = await save(client, dash, [widget(t, y=3 * n) for n, t in enumerate(titles)])
     assert saved.status_code == 200, saved.text
     assert [w["title"] for w in saved.json()["widgets"]] == titles
+
+
+# w27: the new recipes go through the very guards a blank create does.
+
+
+@pytest.mark.parametrize("recipe", ["power", "cost", "areas", "day"])
+async def test_a_template_create_obeys_the_cap_and_the_name_check_and_leaves_nothing_behind(client, db, recipe):
+    await login_as(client, db, "operator")
+    assert (await client.post("/api/dashboards", json={"name": "Taken", "recipe": recipe})).status_code == 201
+    widgets_before = await db.fetchval("SELECT count(*) FROM widgets")
+    again = await client.post("/api/dashboards", json={"name": "Taken", "recipe": recipe})
+    assert again.status_code == 409 and "already exists" in again.json()["detail"]
+    await db.executemany("INSERT INTO dashboards (name) VALUES ($1)", [(f"Seed {n:02d}",) for n in range(49)])
+    over = await client.post("/api/dashboards", json={"name": "Fifty first", "recipe": recipe})
+    assert over.status_code == 422 and "50" in over.json()["detail"]
+    assert await db.fetchval("SELECT count(*) FROM widgets") == widgets_before
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'dashboard.created'") == 1
+
+
+async def test_the_template_list_does_not_shadow_the_dashboard_routes(client, db):
+    await login_as(client, db, "operator")
+    dash = await create(client)
+    assert (await client.get("/api/dashboard-templates")).status_code == 200
+    assert (await client.get("/api/dashboards/default")).status_code == 200
+    assert (await client.get(f"/api/dashboards/{dash['id']}")).json()["id"] == dash["id"]
+    assert [d["id"] for d in (await client.get("/api/dashboards")).json()] == [dash["id"]]

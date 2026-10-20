@@ -3,11 +3,13 @@
 The first half is pure (no database): `best_kind` and `power_widgets` over a hand-built tree. The second half creates the
 dashboard through the API and checks what is stored, what is audited and that a refusal leaves nothing behind.
 """
+from typing import get_args
+
 import pytest
 from helpers import login_as, make_asset, make_mapping, make_point, make_source
 
 from dcdash.api.dashboards import GRID_COLUMNS, MAX_WIDGETS, WidgetIn, checked_configs
-from dcdash.core.recipes import best_kind, power_widgets
+from dcdash.core.recipes import RECIPES, RecipeId, _bar_title, best_kind, power_widgets, recipe_range, recipe_widgets
 from dcdash.core.tree import AssetNode, AssetTree
 from dcdash.core.widgets import KIND_MAX, validate_config
 
@@ -323,7 +325,7 @@ async def test_a_widget_that_fails_the_checks_leaves_no_dashboard_behind(client,
     await login_as(client, db, "operator")
     broken = power_widgets(AssetTree([]), {}, set())
     broken[2]["config"]["aggregation"] = "avg"  # a cost cannot be averaged
-    monkeypatch.setattr("dcdash.api.dashboards.power_widgets", lambda *_args: broken)
+    monkeypatch.setattr("dcdash.api.dashboards.recipe_widgets", lambda *_args: broken)
     response = await power(client)
     assert response.status_code == 422 and "aggregation" in response.json()["detail"]
     assert await db.fetchval("SELECT count(*) FROM dashboards") == 0
@@ -358,7 +360,25 @@ async def test_an_unknown_recipe_is_a_422(client, db):
     assert await db.fetchval("SELECT count(*) FROM dashboards") == 0
 
 
-
 def test_the_bar_title_keeps_the_spelling_of_the_kind():
     assert power_widgets(*world(("A", "UPS", True)))[3]["title"] == "Energy by UPS"
     assert power_widgets(*world(("A", "LV panel", True)))[3]["title"] == "Energy by LV panel"
+
+
+def test_a_cost_bar_title_is_cost_by_the_kind_and_has_the_same_guard():
+    assert _bar_title("UPS", "Cost") == "Cost by UPS"
+    assert _bar_title("LV panel") == "Energy by LV panel"
+    assert _bar_title("K" * 100, "Cost") == "Cost by kind"  # "Cost by " + 100 characters is over a title
+    assert _bar_title("K" * 100) == "Energy by kind"
+    assert _bar_title("Line\nbreak", "Cost") == "Cost by kind"
+    assert len(_bar_title("K" * 91, "Cost")) == 99 and _bar_title("K" * 92, "Cost") == "Cost by " + "K" * 92  # exactly 100 still fits
+
+
+def test_the_power_recipe_is_the_unchanged_starter():
+    built = world(("P1", "Panel", True), ("F1", "Feed", True))
+    assert recipe_widgets("power", *built) == power_widgets(*built)
+    assert recipe_range("power") == "this_month"
+
+
+def test_the_recipe_type_and_the_list_of_recipes_agree():
+    assert RECIPES == get_args(RecipeId) == ("power", "cost", "areas", "day")

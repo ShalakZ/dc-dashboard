@@ -75,6 +75,8 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
          "POST /api/widget-data", "POST /api/widget-data/csv"),
     _all("dashboards.edit", "POST /api/dashboards", "PUT /api/dashboards/{dashboard_id}",
          "DELETE /api/dashboards/{dashboard_id}"),
+    # Added in W27 (the template gallery): after the freeze, so not in auth_matrix_pre_w9a.json; the gate and isolation tests cover it.
+    _all("dashboards.edit", "GET /api/dashboard-templates"),
     _all("dashboards.default", "PUT /api/dashboards/default"),
     _all("billing.view", "GET /api/billing/costs", "GET /api/billing/months"),
     _all("billing.export", "GET /api/billing/costs.csv"),

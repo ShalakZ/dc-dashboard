@@ -68,7 +68,9 @@ with `?asset=<id>` is ignored (the page says "This link opens the dashboard on o
 whole site."), and the server refuses a `POST /api/widget-data` or `/api/widget-data/csv` that carries a `focus` with a 403
 (`INSUFFICIENT_PERMISSION`). A request without `focus` is unchanged. **Change dashboards** lists See the Assets Tree under "Also needs"
 (the widget form picks assets), so a role with both sees the Focus button when it views a dashboard; starting a
-dashboard from Power needs only `dashboards.edit`. There is no per-asset visibility, so See the Assets Tree opens the whole tree and a
+dashboard from a template (Power, Cost, Energy by area, Last 24 hours: `POST /api/dashboards` with a `recipe`) needs only `dashboards.edit`,
+and so does the list that fills the template gallery (`GET /api/dashboard-templates`: each template, the widgets it creates and whether it
+suits this site); a role with only `dashboards.view` gets a 403 there and sees no gallery. There is no per-asset visibility, so See the Assets Tree opens the whole tree and a
 focus can name any asset in it.
 
 `assets.edit` also lets a person move assets in the Assets Tree ([Moving assets](assets-and-kinds.md#moving-assets)); deleting the picked

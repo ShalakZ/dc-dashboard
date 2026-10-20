@@ -11,6 +11,7 @@ import math
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import (
@@ -21,10 +22,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import current_user, get_db, require_permission
+from dcdash.api.settings import current_timezone
 from dcdash.core.audit import audit, audit_change
+from dcdash.core.cost import load_tariffs
 from dcdash.core.energy import load_meters
 from dcdash.core.models import Asset, Dashboard, User, Widget
-from dcdash.core.recipes import power_widgets
+from dcdash.core.recipes import RecipeId, recipe_range, recipe_widgets, template_catalog
 from dcdash.core.settings_store import DEFAULT_DASHBOARD_KEY, get_setting, set_setting
 from dcdash.core.timeutil import RANGE_PRESETS
 from dcdash.core.tree import AssetTree
@@ -40,7 +43,6 @@ MAX_ID = 2_147_483_647  # dashboards.id is a 4-byte SERIAL; the driver raises on
 GRID_COLUMNS = 12
 MAX_ROWS = 1000
 DEFAULT_RANGE = "24h"
-RECIPE_RANGE = "this_month"  # a recipe's dashboard starts here unless the body names a range: its comparisons are of this month
 NAME_TAKEN = "a dashboard with this name already exists"
 STALE = "dashboard changed since you loaded it"
 
@@ -58,7 +60,7 @@ Preset = Annotated[str, AfterValidator(_preset)]
 class DashboardIn(BaseModel):
     name: Name
     range: Preset = DEFAULT_RANGE
-    recipe: Literal["power"] | None = None  # w25: a starter dashboard with its widgets; left out, the dashboard is blank
+    recipe: RecipeId | None = None  # w25, w27: a template dashboard with its widgets (core/recipes.py); left out, the dashboard is blank
 
 
 class WidgetIn(BaseModel):
@@ -209,13 +211,56 @@ async def list_dashboards(db: AsyncSession = Depends(get_db)) -> list[DashboardL
     ]
 
 
-async def _recipe_widgets(db: AsyncSession) -> list[dict[str, Any]]:
-    """The widgets of the "power" starter, built from the site as it is now: its asset tree, each asset's kind and which
-    assets have a meter of their own (what decides the kind of the breakdown)."""
+async def _site_for_recipes(db: AsyncSession) -> tuple[AssetTree, dict[int, str], set[int]]:
+    """What a recipe is built from: the asset tree, each asset's kind and which assets have a meter of their own (what decides
+    the kind of a breakdown and which templates are recommended)."""
     tree = await AssetTree.load(db)
     rows = (await db.execute(select(Asset.id, Asset.kind))).all()
     kinds = {asset_id: kind for asset_id, kind in rows if asset_id in tree.nodes}  # an asset made since the tree was read is left out
-    return power_widgets(tree, kinds, set(await load_meters(db, tree)))
+    return tree, kinds, set(await load_meters(db, tree))
+
+
+async def _recipe_widgets(db: AsyncSession, recipe: str) -> list[dict[str, Any]]:
+    """The widgets of a template, built from the site as it is now."""
+    return recipe_widgets(recipe, *await _site_for_recipes(db))
+
+
+class TemplateWidgetOut(BaseModel):
+    type: str
+    x: int
+    y: int
+    w: int
+    h: int
+    source: Literal["metric", "energy", "cost"] | None  # None for a text widget
+    compare: Literal["none", "same_days_last_month"]
+    bars: Literal["asset", "time", "kind"]
+    scope: Literal["fixed", "focus", "children"]
+
+
+class TemplateOut(BaseModel):
+    id: RecipeId
+    title: str
+    description: str
+    range: str  # what a new dashboard of this template starts on
+    recommended: bool
+    needs: str | None  # why it is not recommended for this site, in a sentence; None when nothing is missing
+    widgets: list[TemplateWidgetOut]  # exactly the widgets POST /api/dashboards creates for this recipe, in that order
+
+
+class TemplatesOut(BaseModel):
+    nothing_metered: bool
+    templates: list[TemplateOut]
+
+
+@router.get(
+    "/dashboard-templates", response_model=TemplatesOut, dependencies=[Depends(require_permission("dashboards.edit"))]
+)
+async def list_dashboard_templates(db: AsyncSession = Depends(get_db)) -> TemplatesOut:
+    """The templates the New dashboard gallery offers, with what each would create and whether it suits this site. A rate
+    counts from the site's own date (the zone `POST /api/widget-data` uses for its days)."""
+    tree, kinds, metered = await _site_for_recipes(db)
+    today = datetime.now(UTC).astimezone(ZoneInfo(await current_timezone(db))).date()
+    return TemplatesOut(**template_catalog(tree, kinds, metered, await load_tariffs(db), today))
 
 
 @router.post(
@@ -230,10 +275,10 @@ async def create_dashboard(
         raise HTTPException(422, f"at most {MAX_DASHBOARDS} dashboards")
     if await name_taken(db, body.name):
         raise HTTPException(409, NAME_TAKEN)
-    recipe_widgets = await _recipe_widgets(db) if body.recipe == "power" else []
-    configs = checked_configs([WidgetIn(**widget) for widget in recipe_widgets])  # the checks a save runs, before any write
-    # A recipe that is given a range the body does not name starts on this month; a body that names one keeps it.
-    range_ = RECIPE_RANGE if body.recipe and "range" not in body.model_fields_set else body.range
+    starter = await _recipe_widgets(db, body.recipe) if body.recipe else []
+    configs = checked_configs([WidgetIn(**widget) for widget in starter])  # the checks a save runs, before any write
+    # A recipe starts on its own range (this month, or 24 hours for "day") unless the body names one; a body that names one keeps it.
+    range_ = recipe_range(body.recipe) if body.recipe and "range" not in body.model_fields_set else body.range
     now = datetime.now(UTC)
     dashboard = Dashboard(name=body.name, range=range_, created_by=user.id, created_at=now, updated_at=now)
     try:
@@ -243,7 +288,7 @@ async def create_dashboard(
             Widget(
                 dashboard_id=dashboard.id, type=w["type"], title=w["title"], config=config, x=w["x"], y=w["y"], w=w["w"], h=w["h"]
             )
-            for w, config in zip(recipe_widgets, configs, strict=True)
+            for w, config in zip(starter, configs, strict=True)
         ]
         db.add_all(widgets)
         await db.flush()
