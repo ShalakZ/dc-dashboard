@@ -180,7 +180,7 @@ dashboard. Only one shows at a time, and it goes away by itself on the first ans
 - **"This screen has not been updated since 14:02. Trying again..."** No figure has reached the screen for two minutes. A restart of the
   server that lasts a few seconds, or one failed request, never shows it. The screen keeps trying and shows its last figures dimmed.
 
-A single card whose own figures could not be refreshed for two minutes is dimmed and says "Not updated since 14:02" in its title line.
+A single card whose own figures could not be refreshed for two minutes is dimmed and says "Not updated since 14:02" at the top of the card.
 A card the server refuses to give figures for, or one that fails to draw, says "This card cannot be shown."; the other cards go on.
 Once a dashboard has been drawn, a lost connection or a restarting server never replaces the whole screen with a sentence (a revoked
 link still does).
@@ -200,7 +200,7 @@ distance. A 4K window is twice as many pixels tall, so the same limits are twice
 A TV at 3840 x 2160 with Windows scaling at 200 percent counts as 1920 x 1080 to the page and looks the same too.
 
 The one exception is the small numbers and dates around a chart (the axis labels). They only follow the scaling, so on the Power
-template at 1,080 rows they are about 17 pixels tall, below the 24, and smaller still on a chart with many bars or points. Read the
+template at 1,080 rows they are about 17 pixels tall, below the 24, and smaller still on a chart with many bars or points, or on a taller dashboard such as Cost. Read the
 figures, not the axes, from across a room.
 
 ### Updates, sleep and wake
@@ -299,9 +299,8 @@ WantedBy=graphical-session.target
 ```
 
 Then run `systemctl --user daemon-reload` and `systemctl --user enable --now display.service`. The unit works only if your desktop gives
-the user's systemd the display variables (many do); if Chromium says it cannot open a display, use the autostart file instead. The
-unit passed `systemd-analyze verify`, apart from the path of Chromium, which is not installed on the machine used for the check. The
-autostart file was not run through `desktop-file-validate` (not installed there). Neither file was tried on a TV.
+the user's systemd the display variables (many do); if Chromium says it cannot open a display, use the autostart file instead. Neither
+file was tried on a TV.
 
 ### Scale, sleep and the screen saver
 
