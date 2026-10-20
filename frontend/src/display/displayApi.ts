@@ -161,6 +161,7 @@ export async function claim(secret: string): Promise<ClaimReply> {
     cache: "no-store",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify({ secret }),
+    signal: timeoutSignal(), // a claim that never answers rejects like a network error: "unreachable", the secret stays in the handle
   });
   let busy = false;
   if (response.status === 429) {

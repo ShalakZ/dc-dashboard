@@ -1,4 +1,4 @@
-import { CHUNK_RELOAD_KEY, installChunkReload } from "./chunkReload";
+import { CHUNK_RELOAD_KEY, installChunkReload, reloadIfServerAnswers } from "./chunkReload";
 
 // A map-backed stand-in for sessionStorage; `fail` makes the named calls throw, as a browser with storage blocked does.
 function fakeStorage(fail: { get?: boolean; set?: boolean } = {}) {
@@ -215,5 +215,73 @@ describe("installChunkReload (a tab left open across an update)", () => {
     await settle();
     expect(probe).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
+  });
+});
+
+// The shared helper: the chunk reload above and the display wall's build reload go through it, with one guard and one sessionStorage key.
+describe("reloadIfServerAnswers (the one reload path)", () => {
+  it("probes the server, records the time under dcdash.chunkReload, reloads and says true", async () => {
+    const storage = fakeStorage();
+    const reload = vi.fn();
+    const probe = answers(404);
+    await expect(reloadIfServerAnswers(storage, reload, () => 2_000_000, probe)).resolves.toBe(true);
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(storage.data.get(CHUNK_RELOAD_KEY)).toBe("2000000");
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("says false and does nothing without a usable storage", async () => {
+    const reload = vi.fn();
+    const probe = answers();
+    await expect(reloadIfServerAnswers(null, reload, () => 2_000_000, probe)).resolves.toBe(false);
+    expect(probe).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+    await expect(reloadIfServerAnswers(fakeStorage({ get: true }), reload, () => 2_000_000, probe)).resolves.toBe(false); // the guard cannot be read
+    await expect(reloadIfServerAnswers(fakeStorage({ set: true }), reload, () => 2_000_000, probe)).resolves.toBe(false); // the time cannot be recorded
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("says false within 10 seconds of the last reload (the server is not even asked), and true at exactly 10 seconds", async () => {
+    const storage = fakeStorage();
+    storage.data.set(CHUNK_RELOAD_KEY, "2000000");
+    const reload = vi.fn();
+    const probe = answers();
+    await expect(reloadIfServerAnswers(storage, reload, () => 2_009_999, probe)).resolves.toBe(false);
+    expect(probe).not.toHaveBeenCalled();
+    expect(storage.data.get(CHUNK_RELOAD_KEY)).toBe("2000000");
+    await expect(reloadIfServerAnswers(storage, reload, () => 2_010_000, probe)).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(storage.data.get(CHUNK_RELOAD_KEY)).toBe("2010000");
+  });
+
+  it("says false and records nothing when the server does not answer, or the probe cannot be made", async () => {
+    const storage = fakeStorage();
+    const reload = vi.fn();
+    await expect(reloadIfServerAnswers(storage, reload, () => 2_000_000, silent())).resolves.toBe(false);
+    await expect(reloadIfServerAnswers(storage, reload, () => 2_000_000, () => { throw new ReferenceError("fetch is not defined"); })).resolves.toBe(false);
+    expect(storage.data.has(CHUNK_RELOAD_KEY)).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("shares the guard with the chunk reload: a reload by either blocks the other for 10 seconds", async () => {
+    const storage = fakeStorage();
+    const reload = vi.fn();
+    await expect(reloadIfServerAnswers(storage, reload, () => 3_000_000, answers())).resolves.toBe(true);
+    uninstall = installChunkReload(storage, reload, () => 3_005_000, answers());
+    preloadError();
+    await settle();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the tab's sessionStorage, the page's own reload and the HEAD probe when nothing is passed", async () => {
+    const reload = vi.fn();
+    const fetchMock = vi.fn(() => Promise.resolve({ status: 200 }));
+    vi.stubGlobal("location", { ...window.location, reload });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(reloadIfServerAnswers()).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith("/", { method: "HEAD", cache: "no-store" });
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(Number(window.sessionStorage.getItem(CHUNK_RELOAD_KEY))).toBeGreaterThan(0);
+    await expect(reloadIfServerAnswers()).resolves.toBe(false); // the guard
   });
 });

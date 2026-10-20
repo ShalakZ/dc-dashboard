@@ -10,7 +10,7 @@ import {
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData, widgetRefetchMs,
   useCopyDashboard, useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
   useAddStarterKinds, useAssetKinds, useAssets, useBulkDeleteAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
-  loadMovePreview, useMoveAssets, useRemoveDiscoveredSources, useTidyLayout, useBillingMonths, useBillingMonthCheck, useCloseBillingMonth, useReopenBillingMonth, monthCheckRefetchMs,
+  loadMovePreview, useMoveAssets, useRemoveDiscoveredSources, useTidyLayout, useBillingMonths, useBillingMonthCheck, useCloseBillingMonth, useReopenBillingMonth, monthCheckRefetchMs, useDisplays,
 } from "./queries";
 import { ApiError } from "./client";
 import type { MoveBody, RangePreset, WidgetConfig } from "./types";
@@ -1670,5 +1670,23 @@ describe("copying a dashboard (w27)", () => {
     await waitFor(() => expect(reads()).toBe(2));
     if (status === 201) expect(result.current.copy.data).toMatchObject({ id: 9, name: "Hall A (copy)" });
     else expect(result.current.copy.error).toBeInstanceOf(ApiError);
+  });
+});
+
+describe("the Displays list (w29)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("reads again every 60 seconds while the page is open, so 'Last connected' tells the truth about a screen that stopped", async () => {
+    vi.useFakeTimers();
+    const calls = mockFetch({ "GET /api/displays": { body: { displays: [], playlists: [], limits: {} } } });
+    renderHook(() => useDisplays(), { wrapper: stableWrapper() });
+    const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+    const asked = () => calls.filter((c) => c.path === "/api/displays").length;
+    await advance(1_000);
+    expect(asked()).toBe(1);
+    await advance(58_000); // 59 s
+    expect(asked()).toBe(1);
+    await advance(2_000); // 61 s
+    expect(asked()).toBe(2);
   });
 });

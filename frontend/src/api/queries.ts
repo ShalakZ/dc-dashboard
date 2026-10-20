@@ -775,8 +775,11 @@ export function useBuildReport() {
   });
 }
 
-/** Needs displays.manage. The screens, the playlists and the limits, in one answer; it never carries a link secret. */
-export const useDisplays = () => useQuery({ queryKey: keys.displays, queryFn: () => api.get<DisplaysList>("/api/displays") });
+/**
+ * Needs displays.manage. The screens, the playlists and the limits, in one answer; it never carries a link secret. It reads again every minute while the
+ * page is open and visible, so "Last connected" (a screen reads its playlist every minute) tells the truth about a screen that stopped.
+ */
+export const useDisplays = () => useQuery({ queryKey: keys.displays, queryFn: () => api.get<DisplaysList>("/api/displays"), refetchInterval: 60_000 });
 
 /**
  * What a write to a playlist or a screen moves: the displays answer (both lists, and the counts each shows of the other) and the audit log. `onSettled`,
