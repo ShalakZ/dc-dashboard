@@ -71,7 +71,10 @@ ledger too. A row taken without a data check is at most 55 seconds old and its e
 5 s of life), so no figure is trusted past `max(TTL, 60 s)` after the moment its data was checked. A request under
 `require_fresh` (a Billing close) neither consults the ledger nor trusts a cache entry that came from it (`from_ledger`, set for
 every row taken, open or exact: the entry's data fingerprint is the row's, so it would pass the revalidation although its value is
-the worker's decoded bytes): it computes privately with the engine, and that result replaces the entry. The ledger has its own
+the worker's decoded bytes): it computes privately with the engine, and that result replaces the entry. The entry it leaves is
+never older than the close's snapshot: it knows the database time of that snapshot (one `SELECT now()`, no ledger table), so `_put`
+lets it replace a row entry of older data that a later request stored first, and a row entry of newer data keeps its place (an exact
+row that a later request took may still stand after a close: its data is of a later snapshot, never older). The ledger has its own
 counters (`ledger.stats()`).
 """
 import asyncio
@@ -129,9 +132,11 @@ class _Entry:
     compute: Callable[[AsyncSession], Awaitable[Any]]  # what made it; the background recompute runs it again
     last_used: float  # `_monotonic()` of the last request that was served from this key (see `_warm`)
     timer: asyncio.TimerHandle | None = None  # the pending background revalidation, if any
-    # The fields below are for the ledger (None / False when it was not consulted). `data_at` is the DATABASE time of the data the
-    # value reflects (the snapshot's `now()` of a computation or an exact row, the row's `checked_at` for one taken without a data
-    # check), so `_put` can refuse an older figure and `ledger.decide` can refuse a row older than this entry. Both `data_at` and
+    # The fields below are for the ledger (False / None for a call that carries no ledger spec). `data_at` is the DATABASE time of
+    # the data the value reflects (the snapshot's `now()` of a computation or an exact row, the row's `checked_at` for one taken
+    # without a data check), so `_put` can refuse an older figure and `ledger.decide` can refuse a row older than this entry. It is
+    # known for every computation that carries a spec, a Billing close included (which does not consult the ledger but reads the
+    # snapshot's `now()` itself); None only without a spec, or when the ledger's header could not be read. Both `data_at` and
     # the rows' `checked_at` are database times of a TRANSACTION START: exact only to within the gap between BEGIN and the
     # snapshot (a few ms), so two of them are comparable to that precision, not better.
     data_at: datetime | None = None
@@ -490,6 +495,9 @@ async def dispose() -> None:
 # ---- computing -------------------------------------------------------------------------------------------------------------
 
 _SNAPSHOT = text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+# The database time of the snapshot (the transaction's `now()`, which is what the ledger's header reads too), for a computation that
+# does not consult the ledger but whose entry must still know the time of its data (see `_run`). No ledger table.
+_NOW = text("/* figure_cache now */ SELECT now()")
 
 
 async def _compute_uncached(compute: Callable[[AsyncSession], Awaitable[T]]) -> T:
@@ -541,6 +549,14 @@ async def _run(
                     replaced_data_fp=None if replaced is None else replaced.data_fp,
                     read_data_fp=lambda: _data_fingerprint(session, start, end),
                 )
+            elif ledger is not None and matches:
+                # The ledger is not consulted (a close, or the ledger switched off) but the entry will be stored, and an entry must
+                # know the database time of its data: `_put` lets an engine entry replace a ROW entry (taken without a data check, so
+                # its data is up to 55 s older than the snapshot that stored it) only when both times are known and this one is
+                # newer, and `ledger.decide` takes a young row over an entry only when it knows that entry's time. The snapshot's
+                # `now()` is the same time the header read above would have given: one trivial statement, no ledger table. A call
+                # without a `ledger` spec pays nothing, as before.
+                data_at = (await session.execute(_NOW)).scalar_one()
             if hit is not None:
                 value, data_fp, data_at = hit.value, hit.data_fp, hit.data_at
                 from_row = not hit.exact
@@ -742,7 +758,8 @@ async def get_or_compute(
         entry = _store.get(key)
         # A close (`fresh`) does not trust an entry made from a ledger row: its data fingerprint is the ROW's, so it would pass the
         # revalidation below although its value is the worker's decoded bytes, and a close freezes the money of record. It goes
-        # straight to the private computation, whose engine result then replaces the entry (see `_put`).
+        # straight to the private computation, whose engine result then replaces the entry (see `_put`), or leaves one that is not
+        # older than the close's snapshot (it knows its snapshot's database time, as every computation with a spec does).
         if entry is not None and not (fresh and entry.from_ledger):
             if not fresh and _monotonic() - entry.checked_at < ttl_seconds():
                 _store.move_to_end(key)

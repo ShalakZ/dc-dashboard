@@ -550,7 +550,11 @@ async def test_require_fresh_never_consults_the_ledger_even_for_a_row_whose_data
     assert same(value, published) and same(value, await case.off())
     assert ledger.stats() == {"hits_exact": 0, "hits_open": 0, "misses": 0, "errors": 0}
     assert not [s for s in seen if "figure_ledger" in s or "SAVEPOINT" in s.upper()]
-    assert the_entry()[1].data_at is None and not the_entry()[1].from_row  # its entry knows no data time: the ledger was not asked
+    # Scoped re-review C1: the ledger was not asked, but its entry still knows the database time of its snapshot (one `SELECT now()`
+    # in that snapshot, no ledger table), so `_put` can tell it from an entry of older data; it is not a row's entry.
+    assert len([s for s in seen if "figure_cache now" in s]) == 1
+    entry = the_entry()[1]
+    assert entry.data_at is not None and not entry.from_row and not entry.from_ledger
 
 
 # ---- 9b: a close never trusts a cache ENTRY that was made from a row (whole-wave review C1) ------------------------------------------
@@ -650,7 +654,8 @@ async def figure_cache_config_fp():
 
 def no_row(case: Case) -> ledger.LedgerSpec:
     """The case's spec for a key that has no row: a run that carries it consults the ledger, misses, and runs the engine, and its
-    entry knows the database time of its snapshot (an engine run under `require_fresh` would know none: it does not consult)."""
+    entry knows the database time of its snapshot (the header read gives it). A run under `require_fresh` does not consult, but it
+    reads the same time with a statement of its own, so its entry knows it too."""
     return dataclasses.replace(case.spec, params="[]")
 
 
@@ -708,10 +713,11 @@ async def test_the_task_that_took_the_row_first_is_replaced_by_the_later_engine_
 
 
 async def test_the_engine_that_began_first_and_finished_last_replaces_the_row_that_looked_younger(db):
-    # Review C1, the REVERSE interleaving of the test above and a Billing close's real shape: the engine takes its snapshot FIRST
-    # (older stamp) and computes for a while; meanwhile a request takes a young row (a LATER stamp, but older data) and stores it.
-    # The engine's figure reflects newer data: it must replace the row's entry although its stamp is older, and must not be
-    # replaced by it afterwards.
+    # Review C1, the REVERSE interleaving of the test above, for a NORMAL engine run (it consults the ledger, finds no row, and its
+    # entry carries the header's database time; a Billing close has its own test below, which runs under `require_fresh`): the
+    # engine takes its snapshot FIRST (older stamp) and computes for a while; meanwhile a request takes a young row (a LATER
+    # stamp, but older data) and stores it. The engine's figure reflects newer data: it must replace the row's entry although its
+    # stamp is older, and must not be replaced by it afterwards.
     case, published, row, key = await _two_tasks(db)
     in_engine, release_engine = asyncio.Event(), asyncio.Event()
 
@@ -762,6 +768,63 @@ async def test_an_engine_figure_of_older_data_does_not_replace_a_row_entry_of_ne
     engine_value = await engine_task
     assert engine_value is not row_value
     assert figure_cache._store[key] is row_entry, "an engine figure of older data replaced the row entry of newer data"
+    assert figure_cache.stats()["replaced"] == 0
+
+
+async def _close_parked_then_a_later_task_takes_the_row(db):
+    """The REAL shape of a Billing close (scoped re-review C1, I1): the close runs under `require_fresh` (`fresh=True`, with the
+    case's own spec, so it neither consults the ledger nor trusts an entry made from a row) and is parked inside its engine run;
+    then a LATER normal task takes the young row and stores its entry FIRST. The caller releases the close."""
+    case, published, row, key = await _two_tasks(db)
+    in_engine, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_engine(session):
+        in_engine.set()
+        await release.wait()
+        return await case.build(session)
+
+    close = figure_cache._spawn(
+        key, case.start, case.end, slow_engine, strict=False, shared=False, ledger=case.spec, fresh=True
+    )
+    await in_engine.wait()
+    ledger.reset_stats()
+    row_value = await figure_cache._spawn(
+        key, case.start, case.end, case.build, strict=False, shared=False, ledger=case.spec, fresh=False
+    )
+    row_entry = figure_cache._store[key]
+    assert ledger.stats()["hits_open"] == 1, "the later task must really take the row"
+    assert row_entry.value is row_value and row_entry.from_row and row_entry.from_ledger and same(row_value, published)
+    return SimpleNamespace(case=case, row=row, key=key, close=close, release=release, row_value=row_value, row_entry=row_entry)
+
+
+async def test_a_close_that_began_first_replaces_the_row_entry_a_later_normal_task_stored_before_it(db):
+    # Scoped re-review C1: the close's entry used to know no data time, so `_put` could not tell it from an entry of older data and
+    # dropped it: the cache kept the ROW entry, whose data is up to 55 s older than the close's snapshot, and Billing's `live` line
+    # could differ from the frozen figures. It now reads the snapshot's `now()` and replaces the row entry by the data rule.
+    s = await _close_parked_then_a_later_task_takes_the_row(db)
+    s.release.set()
+    close_value = await s.close
+    entry = figure_cache._store[s.key]
+    assert entry.value is close_value and entry is not s.row_entry, "the close's figure lost to an entry of older data"
+    assert not entry.from_ledger and not entry.from_row
+    assert entry.data_at is not None and entry.data_at > s.row["checked_at"] and entry.stamp < s.row_entry.stamp
+    assert not same(close_value, s.row_value) and same(close_value, await s.case.off())
+    assert figure_cache.stats()["replaced"] == 1
+    # a normal request now is handed the close's value (TTL 0: it compares fingerprints, finds them equal and renews the entry)
+    stats_before = ledger.stats()
+    assert await s.case.ask() is close_value
+    assert ledger.stats() == stats_before and figure_cache._store[s.key] is entry
+
+
+async def test_a_close_does_not_replace_a_row_entry_of_data_newer_than_its_snapshot(db):
+    # The mirror of the test above: the worker checked the row AFTER the close's snapshot (its data time is moved by hand to make
+    # it so), so the entry the later task stored reflects newer data and keeps its place. The close still returns its own figure.
+    s = await _close_parked_then_a_later_task_takes_the_row(db)
+    s.row_entry.data_at = s.row_entry.data_at + timedelta(hours=1)
+    s.release.set()
+    close_value = await s.close
+    assert close_value is not s.row_value and same(close_value, await s.case.off())
+    assert figure_cache._store[s.key] is s.row_entry, "an engine figure of older data replaced the row entry of newer data"
     assert figure_cache.stats()["replaced"] == 0
 
 
@@ -829,9 +892,10 @@ async def test_put_lets_an_engine_entry_of_newer_data_replace_a_row_entry_even_w
     assert put_value(_entry("engine, unknown data, older stamp", 5, None)) == "row 2"
 
 
-async def test_put_replaces_an_entry_made_from_a_row_by_the_engine_entry_of_a_close_by_stamp():
-    # C1: a close's private engine run (under `require_fresh` it reads no ledger, so its entry knows no data time) replaces the
-    # entry a row made, open or exact, because its snapshot is later; the stored entry then no longer comes from the ledger.
+async def test_put_replaces_an_entry_made_from_a_row_by_an_engine_entry_of_unknown_data_time_by_stamp():
+    # C1 as it stood before the scoped re-review: an engine entry that knows NO data time (what a close's used to be; now it reads the
+    # snapshot's `now()`, see the tests of a parked close above) replaces the entry a row made, open or exact, when its snapshot is
+    # later; the stored entry then no longer comes from the ledger, and a row entry never replaces an entry of unknown data time.
     assert put_value(_entry("exact row", 5, T2, from_ledger=True)) == "exact row"
     assert put_value(_entry("engine of the close", 6, None)) == "engine of the close"
     assert not figure_cache._store[KEY].from_ledger
@@ -844,8 +908,9 @@ async def test_put_replaces_an_entry_made_from_a_row_by_the_engine_entry_of_a_cl
 
 
 async def test_put_replaces_an_entry_made_from_a_row_by_an_engine_entry_of_newer_data_with_an_older_stamp():
-    # The close began first (older stamp) but its snapshot saw newer data than the row: a row entry that a request stored in the
-    # meantime gives way when both data times are known; an EXACT row's entry is ordered by stamp alone, as an engine entry is.
+    # An engine entry (a close's too: it knows its snapshot's time since the scoped re-review) that began first (older stamp) but
+    # saw newer data than the row: a row entry that a request stored in the meantime gives way when both data times are known; an
+    # EXACT row's entry is ordered by stamp alone, as an engine entry is.
     assert put_value(_entry("open row", 9, T1, from_row=True, from_ledger=True)) == "open row"
     assert put_value(_entry("engine, newer data, older stamp", 3, T2)) == "engine, newer data, older stamp"
     assert not figure_cache._store[KEY].from_ledger
@@ -893,6 +958,9 @@ async def test_with_the_ledger_off_no_ledger_statement_runs_and_the_values_are_t
     assert engine_calls and same(value, live)
     assert not [s for s in seen if "figure_ledger" in s or "SAVEPOINT" in s.upper()]
     assert ledger.stats() == {"hits_exact": 0, "hits_open": 0, "misses": 0, "errors": 0}
+    # the ledger was not asked, but the entry still knows the time of its snapshot (one `SELECT now()`, scoped re-review C1)
+    assert len([s for s in seen if "figure_cache now" in s]) == 1
+    assert the_entry()[1].data_at is not None and not the_entry()[1].from_ledger
 
 
 async def test_with_the_cache_off_the_ledger_is_not_consulted_either(db, engine_calls, monkeypatch):
@@ -916,6 +984,7 @@ async def test_a_call_without_a_ledger_spec_runs_no_ledger_statement(db):
         with statements() as seen:
             assert await figure_cache.get_or_compute(session, "plain", start, end, (), compute) == "value"
     assert not [s for s in seen if "figure_ledger" in s or "SAVEPOINT" in s.upper()]
+    assert not [s for s in seen if "figure_cache now" in s]  # no spec, no extra statement: nothing differs from before the ledger
 
 
 # ---- 13: the ledger fails, the request does not ------------------------------------------------------------------------------------------
