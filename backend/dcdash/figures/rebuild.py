@@ -12,25 +12,36 @@ repeatable-read snapshot and, inside it, reads the row's header and decides:
   and the two are compared by `ledger_codec.canonical` (every type, every digit, every key order): `equal`, or `DIFFERENT` with
   the first differing asset and local day (or, for a Check month row, the first group and item). A payload that cannot be
   decoded is `DIFFERENT` too (the error type is the detail).
+- `stale` is also the verdict for a row dated in the future (`snapshot_at <= checked_at <= now()` does not hold): no reader uses
+  it either.
+- `error`: the row could not be judged (a builder raised, a statement timed out): the exception's type name is the detail. One
+  bad row never ends the proof: the others are still judged.
 
 A row whose data moved on, or whose configuration or engine changed, is never a difference: there is no false alarm. A row that
-is stale or moved on cannot be proven either way, which is why the summary always prints all four counts. Nothing is written.
-The exit code is 1 when any row is `DIFFERENT`.
+is stale, moved on or in error cannot be proven either way, which is why the summary always prints all five counts. Nothing is
+written. Exit codes of `--check`: 0 every row is fine (equal, moved on or stale), 1 at least one row is `DIFFERENT` (a difference
+wins over an error), 3 the proof could not be completed (the database cannot be read, a row is in `error`, any other failure
+outside a row). 2 is for the arguments (see below).
 
 `--all` and `--month YYYY-MM` rebuild: they run the worker's own cycle once with `force`, so every target (or every target of that
 month) is recomputed and stored even when its row is current. `--month` refuses (exit 2) a month the worker does not keep: the
 worker would delete what the rebuild wrote. The rebuild does not take the worker's advisory lock (it must run inside the
 running figures container): correctness holds through the repeatable-read snapshot and the guarded writes, only the CPU of both
-adds up while they run together, and a write that loses a race to the worker is counted as an error of that target.
+adds up while they run together (so the process runs at the worker's lower priority too). A write that loses a race to the worker
+(a serialization failure) is tried once more in a new snapshot; a second loss is counted as `lost race` in the printed report and
+is neither an error nor a reason for a bad exit code: the winner's row stands. `--all` does not clean up (the worker owns the
+rows that are no target any more). Exit codes of a rebuild: 0 well, 1 a target failed, 2 refused (see above).
 """
 import argparse
 import asyncio
 import dataclasses
+import hashlib
 import json
 import os
 import sys
 from collections import Counter
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from functools import partial
@@ -48,8 +59,11 @@ from dcdash.core.config import get_settings
 from dcdash.core.timeutil import month_bounds
 from dcdash.figures import worker
 
-EQUAL, MOVED_ON, STALE, DIFFERENT = "equal", "moved on", "stale", "DIFFERENT"
-STATUSES = (EQUAL, MOVED_ON, STALE, DIFFERENT)
+EQUAL, MOVED_ON, STALE, DIFFERENT, ERROR = "equal", "moved on", "stale", "DIFFERENT", "error"
+STATUSES = (EQUAL, MOVED_ON, STALE, DIFFERENT, ERROR)
+EXIT_DIFFERENT = 1  # `--check`: at least one row is DIFFERENT
+EXIT_USAGE = 2  # the arguments make no sense, or the rebuild is refused
+EXIT_UNPROVEN = 3  # `--check`: the proof could not be completed (database, an `error` row, anything outside a row)
 
 _SNAPSHOT = text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
 _DECODERS = {
@@ -63,13 +77,18 @@ _DECODERS = {
 class Line:
     """What the check found for one row: its kind, its window as a person reads it (a month row: the LOCAL month `YYYY-MM`, a Check
     month row also the hour it was read up to; a window row: `first..last` in UTC), the verdict (one of `STATUSES`) and a short
-    detail (never a value or a name). `key` is the row's key, for a caller that deletes it; it is not printed."""
+    detail (never a value or a name; for `error` the exception's type name). `key` is the row's key, for a caller that deletes it; it
+    is not printed. `snapshot_at`, `data_fp` and `digest` (the SHA-256 of the stored payload, when it was read) say WHICH row was
+    judged, so that a caller deletes it only while it is still that very row; none of them takes part in comparisons or prints."""
 
     kind: str
     window: str
     status: str
     detail: str = ""
     key: tuple | None = field(default=None, compare=False, repr=False)
+    snapshot_at: datetime | None = field(default=None, compare=False, repr=False)
+    data_fp: str | None = field(default=None, compare=False, repr=False)
+    digest: bytes | None = field(default=None, compare=False, repr=False)
 
     def text(self) -> str:
         return " ".join(part for part in (self.kind, self.window, self.status, self.detail) if part)
@@ -206,14 +225,19 @@ def _report_difference(stored: dict, live: dict) -> str:
 
 def first_difference(stored: Any, live: Any) -> str:
     """Where a stored value first differs from the live one, in words that name an asset id and a local day (a month), an asset id
-    (a window), a group and an item (a Check month report), or else the first differing top-level member. Never a value."""
-    if isinstance(stored, figures.MonthDays) and isinstance(live, figures.MonthDays):
-        return _month_days_difference(stored, live)
-    if isinstance(stored, figures.WindowValues) and isinstance(live, figures.WindowValues):
-        return _window_values_difference(stored, live)
-    if isinstance(stored, dict) and isinstance(live, dict):
-        return _report_difference(stored, live)
-    return _members(stored, live)
+    (a window), a group and an item (a Check month report), or else the first differing top-level member. Never a value. Never
+    raises: a stored value of a shape the comparison cannot walk (a group whose items are no list, a number where a list belongs)
+    is a difference that "cannot be named", and the type of what went wrong is all that is said."""
+    try:
+        if isinstance(stored, figures.MonthDays) and isinstance(live, figures.MonthDays):
+            return _month_days_difference(stored, live)
+        if isinstance(stored, figures.WindowValues) and isinstance(live, figures.WindowValues):
+            return _window_values_difference(stored, live)
+        if isinstance(stored, dict) and isinstance(live, dict):
+            return _report_difference(stored, live)
+        return _members(stored, live)
+    except Exception as exc:
+        return f"the first difference cannot be named ({type(exc).__name__})"
 
 
 def _compare(decode: Callable[[bytes], Any], raw: bytes, live: Any) -> tuple[str, str]:
@@ -227,7 +251,10 @@ def _compare(decode: Callable[[bytes], Any], raw: bytes, live: Any) -> tuple[str
             return EQUAL, ""
     except Exception as exc:  # (the live value cannot be encoded: the worker would have refused to store it)
         return DIFFERENT, f"the live figure cannot be compared ({type(exc).__name__})"
-    return DIFFERENT, first_difference(stored, live)
+    try:
+        return DIFFERENT, first_difference(stored, live)  # (it does not raise; the belt: a failure to NAME it stays a DIFFERENT)
+    except Exception as exc:
+        return DIFFERENT, f"the first difference cannot be named ({type(exc).__name__})"
 
 
 async def _check_row(session_factory: async_sessionmaker[AsyncSession], row: ledger.Row) -> Line | None:
@@ -246,29 +273,47 @@ async def _check_row(session_factory: async_sessionmaker[AsyncSession], row: led
         header = await ledger.read_header(session, kind, row.start_ts, row.end_ts, params)
         if header.engine is None:
             return None
-        if header.engine != ledger.engine_id():
-            return Line(kind, label, STALE, "made by another build", key)
+        who = {"snapshot_at": header.snapshot_at, "data_fp": header.data_fp}  # which row this is (see `Line`)
+        if not ledger.engine_matches(header.engine):  # (never, when this process's own engine id is unavailable)
+            return Line(kind, label, STALE, "made by another build", key, **who)
         if header.config_fp != config_fp:
-            return Line(kind, label, STALE, "made under another configuration", key)
+            return Line(kind, label, STALE, "made under another configuration", key, **who)
+        if not (
+            header.snapshot_at is not None and header.checked_at is not None and header.snapshot_at <= header.checked_at <= header.now
+        ):  # the readers' own guard (`ledger.decide`, `read_check`): a row dated in the future is no row to them
+            return Line(kind, label, STALE, "dated in the future", key, **who)
         if await _data_fp(session, kind, start, end) != header.data_fp:
-            return Line(kind, label, MOVED_ON, "the readings changed since the row was made", key)
+            return Line(kind, label, MOVED_ON, "the readings changed since the row was made", key, **who)
         raw = await ledger.read_payload(session, kind, row.start_ts, row.end_ts, params)
         if raw is None:
             return None
         live = await _live(session, kind, start, end, params)
         status, detail = await compute.run(_compare, _DECODERS[kind], raw, live)
-    return Line(kind, label, status, detail, key)
+    return Line(kind, label, status, detail, key, **who, digest=hashlib.sha256(raw).digest())
 
 
 async def check_rows(session_factory: async_sessionmaker[AsyncSession], *, beat: Callable[[], None] | None = None) -> list[Line]:
     """One `Line` for every row of the ledger, read-only (nothing is written, nothing deleted). The rows are listed first and the
     session closed (the engine's pool is one connection), then each row is judged in a snapshot of its own. `beat` is called after
-    every row (the worker beats its heartbeat). Raises when the database or a builder fails: the check did not finish."""
+    every row (the worker beats its heartbeat). A row that raises while it is judged (a builder, a statement that times out) is an
+    `error` line with the exception's type name, and the rows after it are still judged: one bad row never ends the proof. Raises
+    only when the rows cannot be listed (the database cannot be read) or the task is cancelled."""
     async with session_factory() as session:
         rows = await ledger.list_rows(session)
     lines: list[Line] = []
     for row in rows:
-        line = await _check_row(session_factory, row)
+        try:
+            line = await _check_row(session_factory, row)
+        except Exception as exc:  # (never `CancelledError`: it is no `Exception`, so a stop still ends the check)
+            start, end = row.start_ts.astimezone(timezone.utc), row.end_ts.astimezone(timezone.utc)
+            try:
+                label = window_label(row.kind, start, end, row.params)
+            except Exception:
+                label = f"{_z(start)}..{_z(end)}"
+            line = Line(
+                row.kind, label, ERROR, type(exc).__name__, (row.kind, row.start_ts, row.end_ts, row.params),
+                snapshot_at=row.snapshot_at, data_fp=row.data_fp,
+            )
         if line is not None:
             lines.append(line)
         if beat is not None:
@@ -283,9 +328,18 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m dcdash.figures.rebuild",
         description="Prove that the figure ledger equals the live computation (--check), or rebuild it (--all, --month).",
+        epilog=(
+            "exit codes: 0 all well; 1 --check: at least one row DIFFERS (a rebuild: a figure failed); 2 the arguments make no sense, "
+            "or the rebuild is refused; 3 --check: the proof could not be completed (the database could not be read, or a row could "
+            "not be judged: an `error` row)."
+        ),
     )
-    parser.add_argument("--check", action="store_true", help="compare every stored row with the live computation; writes nothing; exit 1 if any DIFFERS")
-    parser.add_argument("--all", action="store_true", help="recompute and store every figure the worker keeps")
+    parser.add_argument(
+        "--check", action="store_true",
+        help="compare every stored row with the live computation; writes nothing; exit 0 if every row is fine, 1 if any DIFFERS, 3 if the "
+        "proof could not be completed",
+    )
+    parser.add_argument("--all", action="store_true", help="recompute and store every figure the worker keeps (the clean-up is the worker's)")
     parser.add_argument("--month", metavar="YYYY-MM", help="recompute and store the figures of one local month the worker keeps")
     return parser
 
@@ -301,28 +355,32 @@ def _in_month(target: worker.Target, tz_name: str, month: str) -> bool:
 
 
 async def _check(sessions: async_sessionmaker[AsyncSession]) -> int:
+    """0 every row is fine, 1 a row DIFFERS (a difference wins over an error: it is a disproof), 3 the proof could not be completed
+    (the rows could not be read at all, or a row is in `error`)."""
     try:
         lines = await check_rows(sessions)
     except Exception as exc:
         print(f"the check could not be completed: {type(exc).__name__}: {str(exc)[:200]}", file=sys.stderr)
-        return 1
+        return EXIT_UNPROVEN
     for line in lines:
         print(line.text())
     found = Counter(line.status for line in lines)
     print(f"{len(lines)} rows: " + ", ".join(f"{found[status]} {status}" for status in STATUSES))
-    return 1 if found[DIFFERENT] else 0
+    if found[DIFFERENT]:
+        return EXIT_DIFFERENT
+    return EXIT_UNPROVEN if found[ERROR] else 0
 
 
 async def _rebuild(sessions: async_sessionmaker[AsyncSession], month: str | None, clock: Callable[[], datetime]) -> int:
     if not ledger.enabled():
         print("DCDASH_FIGURE_LEDGER=0: the ledger is switched off, so nothing is rebuilt", file=sys.stderr)
-        return 2
+        return EXIT_USAGE
     async with sessions() as session:
         tz_name = await current_timezone(session)
     now = clock()
     months = worker.months_kept()
     plan = worker.targets(now, tz_name, months)
-    only: Callable[[worker.Target], bool] | None = None
+    only: Callable[[worker.Target], bool]
     if month is not None:
         kept = sorted({_month_of(target, tz_name) for target in plan}, reverse=True)
         if month not in kept:
@@ -331,23 +389,32 @@ async def _rebuild(sessions: async_sessionmaker[AsyncSession], month: str | None
                 "the worker would delete what a rebuild of it wrote",
                 file=sys.stderr,
             )
-            return 2
+            return EXIT_USAGE
         only = partial(_in_month, tz_name=tz_name, month=month)
+    else:
+        # `--all` recomputes every target, but is NOT the clean-up: with an `only` the worker's cycle deletes nothing and remembers
+        # nothing. The worker owns the rows that are no target any more (and runs beside this command: a clean-up made with
+        # the plan of this command's start could delete the rows of an hour that began meanwhile).
+        only = lambda target: True  # noqa: E731
 
-    wanted = sum(1 for target in plan if only is None or only(target))
+    # the targets a cycle looks at: the plan, and (within 90 s before an hour boundary) the keys of the next hour
+    upcoming = worker.upcoming_targets(now, tz_name, months, plan, worker.interval_seconds())
+    wanted = sum(1 for target in (*plan, *upcoming) if only(target))
     # the heartbeat file is the worker's: a rebuild run inside its container must not make a stuck worker look alive
     state = worker.WorkerState(heartbeat_path=os.devnull)
-    report = await worker.run_once(sessions, now, tz_name, months, state, only=only, force=True)
+    report = await worker.run_once(sessions, now, tz_name, months, state, only=only, force=True, race_retry=True)
     print(
         f"rebuilt {wanted} figures{'' if month is None else f' of {month}'}: {report.written} written, {report.unchanged} unchanged, "
-        f"{report.touched} touched, {report.skipped} skipped, {report.deleted} deleted, {report.refused} refused, {report.errors} errors"
+        f"{report.touched} touched, {report.skipped} skipped, {report.deleted} deleted, {report.refused} refused, "
+        f"{report.lost_race} lost race, {report.errors} errors"
     )
     return 1 if report.errors else 0
 
 
 async def amain(argv: list[str] | None = None, *, clock: Callable[[], datetime] = worker._utcnow) -> int:
-    """The command, as a coroutine (`main` runs it; `clock` is for tests). Returns the exit code: 0 all well, 1 a row DIFFERS or a
-    target failed, 2 for arguments that make no sense or a rebuild that is refused."""
+    """The command, as a coroutine (`main` runs it; `clock` is for tests). Returns the exit code: 0 all well, 1 a row DIFFERS
+    (`--check`) or a target failed (a rebuild), 2 for arguments that make no sense or a rebuild that is refused, 3 the proof of
+    `--check` could not be completed (see the module text)."""
     parser = _parser()
     try:
         args = parser.parse_args(argv)
@@ -374,6 +441,8 @@ async def amain(argv: list[str] | None = None, *, clock: Callable[[], datetime] 
 
 def main(argv: list[str] | None = None) -> int:
     configure_logging()
+    with suppress(OSError, AttributeError):  # (no os.nice on Windows; a restricted container may refuse) as the worker does
+        os.nice(worker.NICE)  # beside the api and the worker: the CPU of both adds up while they run together, so this one yields
     return asyncio.run(amain(argv))
 
 

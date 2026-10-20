@@ -17,9 +17,14 @@ OPEN target (its window ends later than 7 days and an hour ago) is looked at eve
 once when the configuration fingerprint changed. A row that is no longer a target is deleted, and so is a row dated in the future.
 `month-check` (the report of Billing's Check month) for the same months, last in the list: the window is the one the endpoint asks
 for (an open month up to the last complete hour, so its key moves with the hour; a month that has not begun has none), and its data
-fingerprint is the one of the rows that report reads (`billing_check.check_data_fingerprint`). Once per local day, at the first
+fingerprint is the one of the rows that report reads (`billing_check.check_data_fingerprint`). A look at one reads a month-wide
+fingerprint on the database the api shares, so an OPEN one has a cadence of its own: it is looked at when its key is new, when the
+configuration changed, or when its last look is older than `CHECK_EVERY` (five minutes); it does not count in `oldest_open_age`
+(no reader applies the 60 second rule to it); a settled one keeps `SETTLED_EVERY`. Once per local day, at the first
 cycle at or after 03:00 site time, a nightly self-check compares every stored row with what the live code computes from the same
-data (`rebuild.check_rows`); a row that differs is deleted and written to the journal (`figures.mismatch`).
+data (`rebuild.check_rows`); a row that differs is deleted (only while it is still the very row that was judged) and written to
+the journal (`figures.mismatch`); a row the check could not judge (`error`) is never deleted, and ONE event (`check-failed`) says
+how many; a check that fails as a whole is tried at most `NIGHTLY_ATTEMPTS` times a local day, then one event says it gave up.
 In the last minute and a half before an hour boundary the keys a request in the NEXT hour will ask for (`this_month`'s window
 moves with the hour) are built too, so that the first refresh of a kiosk in a new hour finds its row; they are not deleted by the
 clean-up, and become the targets when the boundary has passed.
@@ -27,7 +32,9 @@ clean-up, and become the targets when the boundary has passed.
 One writer at a time. A session-level advisory lock on a DEDICATED connection (not from the engine's pool) is checked at the start
 of every cycle, between targets and before every write; a worker that does not hold it writes nothing, beats the heartbeat, sleeps
 one interval and tries again (an idle standby), and a worker that LOSES it in the middle of a cycle stops that cycle at once (no
-more writes, no clean-up). At most two connections: the pool's one and the lock's.
+more writes, no clean-up). At most two connections: the pool's one and the lock's (the nightly check opens a third one only while
+it writes its events, and closes it again). A worker whose engine id could not be computed (`ledger.UNAVAILABLE`: no reader
+would take a row it labelled) writes nothing: each target is counted as refused and ONE line says why.
 
 Never in the way. The process runs at a lower CPU priority (`os.nice(10)`, set in `main`), the cycles keep a fixed rate (`interval`
 from the start of one cycle to the start of the next, never back to back), every statement has a timeout, and a failing target
@@ -81,6 +88,8 @@ INTERVAL_DEFAULT = 30.0  # seconds between two cycles (`DCDASH_FIGURES_INTERVAL`
 MIN_INTERVAL = 5.0  # a smaller setting means this
 MONTHS_DEFAULT = 6  # local months kept ready, the current one included (`DCDASH_FIGURES_MONTHS`, 1 to 24)
 SETTLED_EVERY = 600.0  # seconds between two looks at a settled target
+CHECK_EVERY = 300.0  # seconds between two looks at an OPEN month-check target (a look reads a month-wide fingerprint)
+NIGHTLY_ATTEMPTS = 3  # a nightly check that fails as a whole is tried this many times per local day, then given up for the day
 # The deadline of the WHOLE stop, measured from the signal: the wait for the current target and the closing of the connections share
 # it, and `main` ends the process when a compute thread is still busy after it. It is the number the stop is held to, not a promise
 # that the process is gone by then: `WORST_STOP_SECONDS` below is the longest a stop can take, and compose.yaml's `stop_grace_period`
@@ -132,6 +141,19 @@ _RELABEL = text(
     """
 )
 
+# The nightly check's delete of a row it judged DIFFERENT. The verdict was taken in the row's own snapshot, but the delete runs
+# minutes later in another transaction: a rebuild beside the worker, or another worker after the lock was lost, may have replaced
+# the bad row with a good one meanwhile. So the row is deleted only while it is still the very row that was judged: the same
+# snapshot, the same data fingerprint and the same bytes (compared by their SHA-256, which the database computes itself).
+_DELETE_CHECKED = text(
+    """
+    /* figure_ledger delete judged */
+    DELETE FROM figure_ledger
+    WHERE kind = :k AND start_ts = :s AND end_ts = :e AND params = :p
+      AND snapshot_at = :snapshot_at AND data_fp = :data_fp AND sha256(payload) = :digest
+    """
+)
+
 
 def _monotonic() -> float:
     """The clock of the settled-target schedule and of the log throttle. A function of its own so that a test can replace it."""
@@ -140,6 +162,22 @@ def _monotonic() -> float:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def lost_a_race(exc: BaseException) -> bool:
+    """Whether `exc` is a serialization failure (SQLSTATE 40001, `asyncpg.exceptions.SerializationError`), as the database raises
+    it, wrapped by SQLAlchemy or not, for a write whose repeatable-read snapshot another writer's commit overtook."""
+    seen: set[int] = set()
+    pending: list[BaseException | None] = [exc]
+    while pending:
+        item = pending.pop()
+        if item is None or id(item) in seen:
+            continue
+        seen.add(id(item))
+        if isinstance(item, asyncpg.exceptions.SerializationError) or getattr(item, "sqlstate", None) == "40001":
+            return True
+        pending.extend((getattr(item, "orig", None), item.__cause__))  # (SQLAlchemy's `orig`, and what the adapter raised it from)
+    return False
 
 
 def interval_seconds() -> float:
@@ -302,8 +340,10 @@ class Report:
     codec cannot hold them or did not give them back unchanged (see `_refused`), `targets` is the length of the list (the next
     hour's extra targets and a second look at an open target in a long cycle are counted in the others only). `duration` is the
     cycle's length in seconds, `oldest_open_age` the age (seconds, by the database's clock, since it was last seen current) of the
-    oldest OPEN row at the moment it was refreshed (None: no open row was refreshed), `lost_lock` that the advisory lock was lost
-    in the middle of the cycle, which ended it there (no further writes, no clean-up)."""
+    oldest OPEN row at the moment it was refreshed (None: no open row was refreshed; the Check month rows are not counted: no
+    reader applies the 60 second rule to them), `lost_lock` that the advisory lock was lost in the middle of the cycle, which
+    ended it there (no further writes, no clean-up), `lost_race` targets that lost a race for their row twice (only a cycle run
+    with `race_retry`, the rebuild command beside a running worker: not an error, the winner's row stands)."""
 
     touched: int = 0
     written: int = 0
@@ -316,6 +356,7 @@ class Report:
     duration: float = 0.0
     oldest_open_age: float | None = None
     lost_lock: bool = False
+    lost_race: int = 0
 
 
 @dataclass
@@ -414,7 +455,8 @@ class WorkerState:
 
 
 _last_logged: dict[str, float] = {}
-_refused_kinds: set[str] = set()  # the kinds of value already named in a "not stored" line (one line per kind per process)
+_refused_kinds: set[str] = set()  # the kinds of value already named in a "not stored" line (one line per kind per process), and
+# "engine-id" once the line about an unavailable engine id was written (the same once-per-process rule)
 
 
 def _log_throttled(kind: str, message: str, *args: Any) -> None:
@@ -491,9 +533,10 @@ async def _look(
         else:
             data_fp = await figure_cache.data_fingerprint(session, target.start, target.end)
         engine = ledger.engine_id()
-        # How old the row of an OPEN target was when this cycle brought it up to date: what the readers' 60 second rule measures.
+        # How old the row of an OPEN target was when this cycle brought it up to date: what the readers' 60 second rule measures
+        # (so not a Check month row: it has no such rule, and its own, slower cadence would only blur the number).
         age = None
-        if not target.settled and header.checked_at is not None:
+        if not target.settled and target.kind != ledger.CHECK_KIND and header.checked_at is not None:
             age = max((header.now - header.checked_at).total_seconds(), 0.0)
 
         def refreshed() -> None:
@@ -573,13 +616,15 @@ async def _clean_up(session_factory: async_sessionmaker[AsyncSession], keep: set
 async def run_once(
     session_factory: async_sessionmaker[AsyncSession], now: datetime, tz_name: str, months: int, state: WorkerState,
     *, lock: "AdvisoryLock | None" = None, only: Callable[[Target], bool] | None = None, force: bool = False,
+    race_retry: bool = False,
 ) -> Report:
     """One cycle over the targets at `now`, newest first. Stops between targets when `state.stop` is set (and then cleans nothing
     up). A failing target is logged and counted and the next one goes on; only a failure to read the configuration fingerprint at the
     start (the database is down) is raised.
 
     Which targets are looked at: an OPEN one every cycle, a SETTLED one when its last look is older than `SETTLED_EVERY` or the
-    configuration changed since the last complete cycle; but never one that is resting. A target that failed is retried at the next
+    configuration changed since the last complete cycle (an OPEN Check month one: when its key is new, the configuration changed
+    or its last look is older than `CHECK_EVERY`); but never one that is resting. A target that failed is retried at the next
     cycle once; if it fails again it rests `RETRY_UNIT * 2**n` seconds (`n` failures in a row, at most `SETTLED_EVERY`), and a
     success forgets the failures. A value the codec refused rests `SETTLED_EVERY` (open or not): it would be refused again, and
     building it is the worker's whole cost. A configuration change ends every rest (everything is due once).
@@ -593,6 +638,12 @@ async def run_once(
     The rebuild command (`rebuild.py`) uses two more arguments: with `only` the targets it rejects are left out altogether (and, as
     the worker would delete what a partial rebuild wrote, nothing is cleaned up and nothing is remembered); with `force` every
     target is looked at, rests and fresh rows included, and its figure is recomputed and stored even when the row is current.
+    With `race_retry` (the rebuild command, which runs beside the worker and takes no lock) a target whose write lost a race to
+    another writer (a serialization failure: its snapshot was overtaken by a commit) is tried once more in a new snapshot, and a
+    second loss is counted in `report.lost_race`: neither is an error, nor does it make the target rest.
+
+    A process whose engine id is `ledger.UNAVAILABLE` writes nothing: every target it would have looked at is counted as refused,
+    one line says why, and nothing is cleaned up (no reader would take a row it labelled).
 
     The configuration fingerprint is remembered (so that settled targets rest) only when every look read the one the cycle began
     with: a configuration that moved and came back during a long cycle leaves the settled targets labelled with the other one, so
@@ -602,6 +653,7 @@ async def run_once(
     every = interval_seconds()
     upcoming = upcoming_targets(now, tz_name, months, plan, every)
     report = Report(targets=len(plan))
+    unavailable = ledger.engine_id() == ledger.UNAVAILABLE  # no reader would take a row labelled with it: write none
     async with session_factory() as session:
         config_fp = await figure_cache.config_fingerprint(session)
     config_changed = config_fp != state.config_fp_seen  # a new configuration makes every target due, settled ones included
@@ -618,10 +670,19 @@ async def run_once(
             raise LockLost()
         clock = _monotonic()
         try:
-            looked = await _look(session_factory, target, report, guard, force=force)
+            try:
+                looked = await _look(session_factory, target, report, guard, force=force)
+            except Exception as exc:
+                if not (race_retry and lost_a_race(exc)):
+                    raise
+                looked = await _look(session_factory, target, report, guard, force=force)  # a new snapshot sees the winner's row
         except LockLost:
             raise
         except Exception as exc:
+            if race_retry and lost_a_race(exc):  # lost twice: the winner's row stands. Not a failure, so the target does not rest
+                report.lost_race += 1
+                state.heartbeat()
+                return
             failures = state.failures[target.key] = state.failures.get(target.key, 0) + 1
             # one prompt retry (the next cycle), then a rest that doubles with every failure in a row
             wait = 0.0 if failures == 1 else min(RETRY_UNIT * 2 ** min(failures, 30), SETTLED_EVERY)
@@ -646,7 +707,12 @@ async def run_once(
             return True
         if clock < state.not_before.get(target.key, -math.inf):
             return False
-        return not (target.settled and not config_changed and clock - state.looked.get(target.key, -math.inf) < SETTLED_EVERY)
+        last = state.looked.get(target.key)
+        if target.kind == ledger.CHECK_KIND and not target.settled:
+            # its own cadence: a look reads a month-wide fingerprint, only to say "seen current" for a row no reader gives the
+            # 60 second rule. A new key (the hour moved, or the worker just started) and a new configuration are looked at at once.
+            return last is None or config_changed or clock - last >= CHECK_EVERY
+        return not (target.settled and not config_changed and clock - (-math.inf if last is None else last) < SETTLED_EVERY)
 
     passed: list[Target] = []  # the targets this cycle has already dealt with, in order
 
@@ -668,6 +734,9 @@ async def run_once(
                 return finish()
             if only is not None and not only(target):
                 continue
+            if unavailable:  # (nothing is looked at, so nothing is written)
+                report.refused += 1
+                continue
             passed.append(target)
             if not due(target, _monotonic()):
                 report.skipped += 1
@@ -681,6 +750,14 @@ async def run_once(
     except LockLost:
         report.lost_lock = True
         return finish()
+    if unavailable:
+        if "engine-id" not in _refused_kinds:
+            _refused_kinds.add("engine-id")
+            log.warning(
+                "figures worker: the engine id could not be computed, so no stored row would be used by a reader; "
+                "nothing is written until the process restarts with readable sources"
+            )
+        return finish()  # (no clean-up either: the rows that stand are not this process's to judge)
     if only is not None:  # a partial rebuild: what the worker would clean up is the worker's to decide
         return finish()
     keep = {target.key for target in (*plan, *upcoming)}
@@ -795,8 +872,9 @@ def prime_nightly(state: WorkerState, now_local: datetime) -> None:
 
 class JournalPool:
     """The worker's ONE small asyncpg pool for journal events, created the first time an event is needed (most workers never write
-    one) and closed on stop. `record` never raises: a database that cannot be reached for the journal loses the event, and says so
-    in the log (once per kind per minute)."""
+    one) and closed by the nightly check when it has written its events (they come at most once a day, so the process never holds
+    a third connection between them), and on stop. `record` never raises: a database that cannot be reached for the journal loses
+    the event, and says so in the log (once per kind per minute)."""
 
     def __init__(self, dsn: str) -> None:
         self.dsn = dsn
@@ -828,44 +906,90 @@ class JournalPool:
                 pool.terminate()
 
 
-async def run_nightly(sessions: async_sessionmaker[AsyncSession], events: JournalPool, state: WorkerState) -> list:
+async def _delete_judged(sessions: async_sessionmaker[AsyncSession], line: Any) -> bool:
+    """Delete the row a check line judged, but only while it is still the very row that was judged (see `_DELETE_CHECKED`). True
+    when a row was deleted; a line that does not carry what identifies its row deletes nothing."""
+    if line.key is None or line.snapshot_at is None or line.data_fp is None or line.digest is None:
+        return False
+    kind, start, end, params = line.key
+    async with sessions() as session:
+        result = await session.execute(
+            _DELETE_CHECKED,
+            {"k": kind, "s": start, "e": end, "p": params, "snapshot_at": line.snapshot_at, "data_fp": line.data_fp, "digest": line.digest},
+        )
+        await session.commit()
+    return result.rowcount > 0
+
+
+async def run_nightly(
+    sessions: async_sessionmaker[AsyncSession], events: JournalPool, state: WorkerState, lock: "AdvisoryLock | None" = None
+) -> list:
     """The self-check of every stored row (`rebuild.check_rows`: each row is compared, in one snapshot, with what the live code
     computes from the same data). A row that DIFFERS is deleted (readers compute that figure live until the worker stores it again)
-    and one `figures.mismatch` event is written for it: the kind, the window, the first differing asset and day or item (no values,
-    no names). The summary is logged. Raises when the check itself failed (nothing is deleted then: the rows are judged first); the
-    caller tries again at the next cycle."""
+    and one `figures.mismatch` event is written for it: the kind, the window, the first differing asset and day or item (no
+    values, no names). The delete is conditional (`_DELETE_CHECKED`: the row must still be the one that was judged) and is skipped
+    when the advisory lock is gone (`lock`); the event says which of these happened, and a delete that fails does not void the
+    other verdicts. A row the check could not judge (`error`) is never deleted; ONE event (`check-failed`, with the count) names
+    them. The summary is logged. Raises when the check itself failed (nothing is deleted then: the rows are judged first); the
+    caller decides about a new attempt. The journal pool is closed at the end: its events come at most once a day."""
     from dcdash.figures import rebuild  # here and not at the top: the rebuild module imports this one
 
-    lines = await rebuild.check_rows(sessions, beat=state.heartbeat)
-    for line in lines:
-        if line.status != "DIFFERENT":
-            continue
-        if line.key is not None:
-            async with sessions() as session:
-                await ledger.delete(session, *line.key)
-                await session.commit()
-        await events.record(
-            f"a stored figure differed from the live one and was deleted: {line.kind} {line.window}: {line.detail}",
-            code=line.kind, detail={"kind": line.kind, "window": line.window},
+    try:
+        lines = await rebuild.check_rows(sessions, beat=state.heartbeat)
+        deleted = 0
+        for line in lines:
+            if line.status != rebuild.DIFFERENT:
+                continue
+            try:
+                if lock is not None and not await lock.held_now():
+                    fate = "; it was not deleted (the advisory lock was lost)"
+                elif await _delete_judged(sessions, line):
+                    deleted += 1
+                    fate = " and was deleted"
+                else:
+                    fate = "; it was replaced or removed before it could be deleted"
+            except Exception as exc:  # (one failing delete must not void the other verdicts, nor the events already written)
+                fate = f"; deleting it failed ({type(exc).__name__})"
+            await events.record(
+                f"a stored figure differed from the live one{fate}: {line.kind} {line.window}: {line.detail}",
+                code=line.kind, detail={"kind": line.kind, "window": line.window},
+            )
+        failed = [line for line in lines if line.status == rebuild.ERROR]
+        if failed:  # ONE event: the rows themselves are named in the check's own output (`--check`), not here
+            names = Counter(line.detail for line in failed)
+            await events.record(
+                f"check-failed: the nightly check could not judge {len(failed)} of {len(lines)} stored rows "
+                f"({', '.join(f'{count} x {name}' for name, count in sorted(names.items()))}); none of them was deleted",
+                code="check-failed", detail={"rows": len(failed), "of": len(lines), "errors": dict(names)},
+            )
+        found = Counter(line.status for line in lines)
+        log.info(
+            "figures: nightly check of %d stored rows: %d equal, %d moved on, %d stale, %d DIFFERENT%s, %d error; %d values were "
+            "refused by the codec since the last check",
+            len(lines), found[rebuild.EQUAL], found[rebuild.MOVED_ON], found[rebuild.STALE], found[rebuild.DIFFERENT],
+            "" if not found[rebuild.DIFFERENT] else " (deleted)" if deleted == found[rebuild.DIFFERENT] else f" ({deleted} deleted)",
+            found[rebuild.ERROR], state.refused_since,
         )
-    found = Counter(line.status for line in lines)
-    log.info(
-        "figures: nightly check of %d stored rows: %d equal, %d moved on, %d stale, %d DIFFERENT%s; %d values were refused by the codec "
-        "since the last check",
-        len(lines), found["equal"], found["moved on"], found["stale"], found["DIFFERENT"],
-        " (deleted)" if found["DIFFERENT"] else "", state.refused_since,
-    )
-    state.refused_since = 0
-    return lines
+        state.refused_since = 0
+        return lines
+    finally:
+        await events.close()
 
 
 async def _nightly_step(
-    state: WorkerState, now: datetime, tz_name: str, sessions: async_sessionmaker[AsyncSession], events: JournalPool
+    state: WorkerState, now: datetime, tz_name: str, sessions: async_sessionmaker[AsyncSession], events: JournalPool,
+    lock: "AdvisoryLock | None" = None,
 ) -> None:
     """After a cycle: prime the nightly state at the first cycle, then run the check when it is due. A check that raised is logged
-    (once per kind per minute) and is tried again at the next cycle, then after a growing rest; one that finished is done for the
-    local day. The loop does not cycle while the check runs (a few seconds per stored row, in the small hours): the rows of the open
-    windows may age past the readers' 60 seconds meanwhile, and the readers compute those figures live, as they always could."""
+    (once per kind per minute) and is tried again at the next cycle, then after a growing rest, but at most `NIGHTLY_ATTEMPTS`
+    times per local day: the third failure gives the day up, writes ONE journal event (`check-failed`) and leaves the next day
+    to start afresh; one that finished is done for the local day. The loop does not cycle while the check runs (a few seconds per
+    stored row, in the small hours): the rows of the open windows may age past the readers' 60 seconds meanwhile, and the readers
+    compute those figures live, as they always could. A site zone that cannot be used has no check (`targets` has named it)."""
+    try:
+        validate_whole_hour_zone(tz_name)
+    except ValueError:
+        return
     local = now.astimezone(ZoneInfo(tz_name))
     if not state.nightly_primed:
         prime_nightly(state, local)
@@ -878,12 +1002,28 @@ async def _nightly_step(
     if clock < state.nightly_not_before:
         return
     try:
-        await run_nightly(sessions, events, state)
+        await run_nightly(sessions, events, state, lock)
     except Exception as exc:
         # One prompt retry at the next cycle, then the rest of a failing target (`RETRY_UNIT * 2**n`, at most `SETTLED_EVERY`): a
-        # check that fails every time (a builder that raises on a row, a statement that times out) recomputes every stored row at
-        # each attempt, and must not do that every cycle for the rest of the day.
+        # check that fails every time (the database is down, a statement that times out) recomputes every stored row at each
+        # attempt, and must not do that every cycle for the rest of the day: the third failure gives the day up.
         state.nightly_failures += 1
+        if state.nightly_failures >= NIGHTLY_ATTEMPTS:
+            state.nightly_done = local.date()  # done for today, as far as this process goes; the next local day starts afresh
+            state.nightly_not_before = -math.inf
+            log.warning(
+                "figures worker: the nightly check failed %d times today (last: %s: %s); giving it up until tomorrow",
+                state.nightly_failures, type(exc).__name__, str(exc)[:200],
+            )
+            try:
+                await events.record(
+                    f"check-failed: the nightly check of the stored figures could not be completed in {state.nightly_failures} "
+                    f"attempts today and was given up until tomorrow ({type(exc).__name__})",
+                    code="check-failed", detail={"attempts": state.nightly_failures, "error": type(exc).__name__},
+                )
+            finally:
+                await events.close()
+            return
         wait = 0.0 if state.nightly_failures == 1 else min(RETRY_UNIT * 2 ** min(state.nightly_failures, 30), SETTLED_EVERY)
         state.nightly_not_before = clock + wait
         _log_throttled(
@@ -981,7 +1121,9 @@ def _log_report(report: Report, state: WorkerState) -> None:
         )
     if report.refused:
         _log_throttled(
-            "report:refused", "figures worker: %d values were not stored in this cycle (the codec refused them); readers compute them",
+            "report:refused",
+            "figures worker: %d values were not stored in this cycle (the codec refused them, or the engine id is unavailable); "
+            "readers compute them",
             report.refused,
         )
     state.refused_since += report.refused
@@ -1057,7 +1199,7 @@ async def amain(state: WorkerState | None = None, *, clock: Callable[[], datetim
                         else:
                             backoff = 0.0
                         if not (report.lost_lock or state.stop.is_set()):  # the check of every stored row, once per local day
-                            await _unless_stopped(state, _nightly_step(state, now, tz_name, sessions, events))
+                            await _unless_stopped(state, _nightly_step(state, now, tz_name, sessions, events, lock))
             except _Stopped:
                 pass
             except Exception as exc:

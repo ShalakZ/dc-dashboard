@@ -12,6 +12,7 @@ miss that an equality test alone would not see.
 """
 import asyncio
 import dataclasses
+import hashlib
 import json
 import os
 import subprocess
@@ -23,7 +24,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from dcdash.api import billing_check
-from dcdash.core import ledger, ledger_codec
+from dcdash.core import figures, ledger, ledger_codec
 from dcdash.core.db import get_sessionmaker
 from dcdash.core.timeutil import month_bounds
 from dcdash.figures import rebuild, worker
@@ -42,6 +43,15 @@ PUMP_DAY = 3  # the day (index) of April that the planted differences change: 4 
 def _cli_world(monkeypatch):
     monkeypatch.setenv("DCDASH_FIGURES_MONTHS", str(MONTHS))  # the command reads the number of months the worker keeps from here
     monkeypatch.delenv("DCDASH_FIGURE_LEDGER", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def nices(monkeypatch) -> list[int]:
+    """`os.nice` as a recorder: `main` lowers the priority of its process, and a test that runs it in a thread of this process must
+    not leave that thread (and every test after it that borrows it) at a lower priority."""
+    seen: list[int] = []
+    monkeypatch.setattr(os, "nice", lambda increment: seen.append(increment) or increment)
+    return seen
 
 
 # ---- helpers -------------------------------------------------------------------------------------------------------------------
@@ -113,6 +123,11 @@ async def test_every_unchanged_row_is_equal_for_every_kind_and_each_row_was_real
     assert ("window-values", "2026-04-01T00:00Z..2026-04-08T10:00Z") in windows  # this_month, up to the hour
     assert ("window-values", "2026-03-01T00:00Z..2026-04-01T00:00Z") in windows  # last_month
     assert all(line.detail == "" and line.key is not None for line in found)
+    stored = await by_key(db)
+    for line in found:  # a line says WHICH row it judged (the nightly delete is conditional on it)
+        row = stored[line.key]
+        assert (line.snapshot_at, line.data_fp) == (row["snapshot_at"], row["data_fp"])
+        assert line.digest == hashlib.sha256(await payload_of(db, line.key)).digest()
 
 
 async def test_the_command_prints_one_line_per_row_and_a_summary_with_the_four_counts_and_exits_0(db, capsys):
@@ -122,14 +137,14 @@ async def test_the_command_prints_one_line_per_row_and_a_summary_with_the_four_c
     out = capsys.readouterr().out.splitlines()
     assert code == 0 and len(out) == 11
     assert "month-days 2026-04 equal" in out and "month-check 2026-04 stop 2026-04-08T10:00Z equal" in out
-    assert out[-1] == "10 rows: 10 equal, 0 moved on, 0 stale, 0 DIFFERENT"
+    assert out[-1] == "10 rows: 10 equal, 0 moved on, 0 stale, 0 DIFFERENT, 0 error"
     assert await whole_table(db) == before  # nothing written, not even a touch
 
 
 async def test_an_empty_ledger_has_nothing_to_prove_and_says_so(db, capsys):
     await build(db)
     assert await rebuild.amain(["--check"]) == 0
-    assert capsys.readouterr().out.splitlines() == ["0 rows: 0 equal, 0 moved on, 0 stale, 0 DIFFERENT"]
+    assert capsys.readouterr().out.splitlines() == ["0 rows: 0 equal, 0 moved on, 0 stale, 0 DIFFERENT, 0 error"]
 
 
 # ---- 2: a planted difference is found, named, exit 1, nothing written ------------------------------------------------------------
@@ -153,7 +168,7 @@ async def test_a_planted_difference_in_a_month_row_is_found_with_its_asset_and_d
     out = capsys.readouterr().out
     assert code == 1
     assert f"month-days 2026-04 DIFFERENT asset {ids['Pump']}, day 2026-04-04" in out
-    assert out.splitlines()[-1] == "10 rows: 9 equal, 0 moved on, 0 stale, 1 DIFFERENT"
+    assert out.splitlines()[-1] == "10 rows: 9 equal, 0 moved on, 0 stale, 1 DIFFERENT, 0 error"
     assert await whole_table(db) == before  # the check wrote nothing: the planted row is still planted
 
 
@@ -208,7 +223,7 @@ async def test_a_reading_in_the_open_month_makes_its_rows_moved_on_and_the_settl
     assert ("month-days", "2026-04") in moved and ("month-check", "2026-04 stop 2026-04-08T10:00Z") in moved
     assert {line.status for line in found if line.window.startswith(("2026-03", "2026-02"))} == {"equal"}
     code = await rebuild.amain(["--check"])
-    assert code == 0 and capsys.readouterr().out.splitlines()[-1] == "10 rows: 6 equal, 4 moved on, 0 stale, 0 DIFFERENT"
+    assert code == 0 and capsys.readouterr().out.splitlines()[-1] == "10 rows: 6 equal, 4 moved on, 0 stale, 0 DIFFERENT, 0 error"
 
 
 async def test_a_wrong_row_whose_data_moved_on_is_moved_on_because_it_cannot_be_judged_and_never_a_false_alarm(db):
@@ -226,11 +241,11 @@ async def test_a_wrong_row_whose_data_moved_on_is_moved_on_because_it_cannot_be_
 
 async def test_another_engine_makes_every_row_stale_and_the_command_exits_0(db, monkeypatch, capsys):
     await publish(db)
-    monkeypatch.setattr(ledger, "engine_id", lambda: "another-build")
+    monkeypatch.setattr(ledger, "_engine_id", "another-build")  # (the id `engine_matches`, which the readers use too, compares with)
     found = await check()
     assert statuses(found) == {"stale": 10} and {line.detail for line in found} == {"made by another build"}
     assert await rebuild.amain(["--check"]) == 0
-    assert capsys.readouterr().out.splitlines()[-1] == "10 rows: 0 equal, 0 moved on, 10 stale, 0 DIFFERENT"
+    assert capsys.readouterr().out.splitlines()[-1] == "10 rows: 0 equal, 0 moved on, 10 stale, 0 DIFFERENT, 0 error"
 
 
 async def test_a_changed_rate_makes_every_row_stale_and_the_command_exits_0(db, capsys):
@@ -239,7 +254,7 @@ async def test_a_changed_rate_makes_every_row_stale_and_the_command_exits_0(db, 
     found = await check()
     assert statuses(found) == {"stale": 10} and {line.detail for line in found} == {"made under another configuration"}
     assert await rebuild.amain(["--check"]) == 0
-    assert capsys.readouterr().out.splitlines()[-1] == "10 rows: 0 equal, 0 moved on, 10 stale, 0 DIFFERENT"
+    assert capsys.readouterr().out.splitlines()[-1] == "10 rows: 0 equal, 0 moved on, 10 stale, 0 DIFFERENT, 0 error"
 
 
 async def test_a_row_with_a_key_the_check_cannot_read_is_stale_never_an_alarm(db):
@@ -309,7 +324,9 @@ async def test_all_rebuilds_every_row_of_the_targets_and_the_command_prints_what
     before = await by_key(db)
     code = await rebuild.amain(["--all"], clock=lambda: NOW)
     out = capsys.readouterr().out.strip()
-    assert code == 0 and out == "rebuilt 10 figures: 0 written, 10 unchanged, 0 touched, 0 skipped, 0 deleted, 0 refused, 0 errors"
+    assert code == 0 and out == (
+        "rebuilt 10 figures: 0 written, 10 unchanged, 0 touched, 0 skipped, 0 deleted, 0 refused, 0 lost race, 0 errors"
+    )
     after = await by_key(db)
     assert set(after) == set(before)
     for key, row in after.items():
@@ -318,14 +335,29 @@ async def test_all_rebuilds_every_row_of_the_targets_and_the_command_prints_what
     assert statuses(await check()) == {"equal": 10}  # and still the figures the live code computes
 
 
-async def test_all_writes_rows_for_an_empty_ledger_and_deletes_what_is_no_target(db, capsys):
+async def test_all_writes_rows_for_an_empty_ledger_and_leaves_the_clean_up_to_the_worker(db, capsys):
     await build(db)
     stale = ("month-days", datetime(2020, 1, 1, tzinfo=UTC), datetime(2020, 2, 1, tzinfo=UTC), '["UTC"]')
     await plant(stale, shift=timedelta(minutes=-5))
     assert await rebuild.amain(["--all"], clock=lambda: NOW) == 0
-    assert "10 written, 0 unchanged" in capsys.readouterr().out
-    assert set(await by_key(db)) == {t.key for t in plan_of()}  # (the cleanup of a whole rebuild is the worker's own)
-    assert statuses(await check()) == {"equal": 10}
+    out = capsys.readouterr().out
+    assert "10 written, 0 unchanged" in out and "0 deleted" in out
+    # M4: the rebuild runs beside the worker and is NOT the clean-up (a rebuild that spans an hour boundary would delete the
+    # keys of the hour the worker built meanwhile): the row that is no target stands, and the worker's next cycle removes it
+    assert set(await by_key(db)) == {t.key for t in plan_of()} | {stale}
+    assert statuses(await check()) == {"equal": 10, "stale": 1}
+    report = await cycle(make_state())
+    assert report.deleted == 1 and set(await by_key(db)) == {t.key for t in plan_of()}
+
+
+async def test_a_rebuild_within_a_minute_and_a_half_of_an_hour_boundary_counts_the_keys_of_the_next_hour_in_its_total(db, capsys):
+    await build(db)
+    before = NOW - timedelta(seconds=20)  # 09:59:40: the two windows of the next hour are built too
+    assert await rebuild.amain(["--all"], clock=lambda: before) == 0
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("rebuilt 12 figures: 12 written, ") and len(await by_key(db)) == 12
+    assert await rebuild.amain(["--month", "2026-04"], clock=lambda: before) == 0
+    assert capsys.readouterr().out.startswith("rebuilt 6 figures of 2026-04: ")  # its month, the windows of both hours, its Check row
 
 
 async def test_month_rebuilds_only_the_rows_of_that_month_and_leaves_the_others_alone(db, capsys):
@@ -333,7 +365,7 @@ async def test_month_rebuilds_only_the_rows_of_that_month_and_leaves_the_others_
     before = await by_key(db)
     code = await rebuild.amain(["--month", "2026-03"], clock=lambda: NOW)
     out = capsys.readouterr().out.strip()
-    assert code == 0 and out.startswith("rebuilt 4 figures of 2026-03: ") and out.endswith("0 deleted, 0 refused, 0 errors")
+    assert code == 0 and out.startswith("rebuilt 4 figures of 2026-03: ") and out.endswith("0 deleted, 0 refused, 0 lost race, 0 errors")
     after = await by_key(db)
     march = {t.key for t in plan_of() if t.start >= datetime(2026, 3, 1, tzinfo=UTC) and t.start < datetime(2026, 4, 1, tzinfo=UTC)}
     assert len(march) == 4  # its month, the two windows of last_month, its Check month row
@@ -386,7 +418,7 @@ async def test_a_rebuild_is_refused_while_the_ledger_is_switched_off_but_the_che
     assert await rebuild.amain(["--month", "2026-03"], clock=lambda: NOW) == 2
     capsys.readouterr()
     assert await rebuild.amain(["--check"]) == 0  # it only reads: the proof is still there to ask for
-    assert capsys.readouterr().out.splitlines()[-1] == "10 rows: 10 equal, 0 moved on, 0 stale, 0 DIFFERENT"
+    assert capsys.readouterr().out.splitlines()[-1] == "10 rows: 10 equal, 0 moved on, 0 stale, 0 DIFFERENT, 0 error"
 
 
 @pytest.mark.parametrize("argv", [[], ["--check", "--all"], ["--all", "--month", "2026-03"], ["--check", "--month", "2026-03"]])
@@ -412,7 +444,7 @@ async def test_main_runs_the_command_to_the_end_and_disposes_its_engine(db, caps
     monkeypatch.setattr(rebuild, "configure_logging", lambda: None)  # (it would put the scrubbing filter on pytest's own handlers)
     await publish(db)
     assert await asyncio.to_thread(rebuild.main, ["--check"]) == 0  # (asyncio.run needs a thread without a running loop)
-    assert capsys.readouterr().out.splitlines()[-1] == "10 rows: 10 equal, 0 moved on, 0 stale, 0 DIFFERENT"
+    assert capsys.readouterr().out.splitlines()[-1] == "10 rows: 10 equal, 0 moved on, 0 stale, 0 DIFFERENT, 0 error"
 
 
 async def test_it_runs_as_a_module_without_a_terminal_and_exits_with_the_proof(db):
@@ -426,7 +458,7 @@ async def test_it_runs_as_a_module_without_a_terminal_and_exits_with_the_proof(d
 
     result = await asyncio.to_thread(run)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines()[-1] == "10 rows: 10 equal, 0 moved on, 0 stale, 0 DIFFERENT"
+    assert result.stdout.splitlines()[-1] == "10 rows: 10 equal, 0 moved on, 0 stale, 0 DIFFERENT, 0 error"
 
 
 # ---- 7: the nightly check is due once per local day, from 03:00 ------------------------------------------------------------------
@@ -504,6 +536,7 @@ async def test_the_nightly_check_deletes_a_different_row_and_writes_one_event_an
     try:
         with caplog.at_level("INFO", logger=worker.log.name):
             lines = await worker.run_nightly(get_sessionmaker(), pool, state)
+        assert pool.pool is None  # M7: the event opened a connection, and the check closed it again (a third one is never kept)
     finally:
         await pool.close()
     assert statuses(lines) == {"equal": 9, "DIFFERENT": 1}
@@ -577,7 +610,9 @@ async def test_the_nightly_check_that_fails_is_tried_again_at_the_next_cycle_and
         await pool.close()
 
 
-async def test_a_nightly_check_that_keeps_failing_rests_longer_each_time_and_starts_afresh_on_a_new_day(db, clock, monkeypatch):
+async def test_a_nightly_check_that_keeps_failing_rests_gives_up_after_three_attempts_with_one_event_and_starts_afresh_on_a_new_day(
+    db, clock, monkeypatch
+):
     _, state = await publish(db)
     pool = worker.JournalPool(os.environ["DCDASH_DATABASE_URL"])
     worker.prime_nightly(state, local("UTC", 2026, 4, 8, 2, 0))
@@ -605,22 +640,35 @@ async def test_a_nightly_check_that_keeps_failing_rests_longer_each_time_and_sta
         clock.now += 100
         await step(timedelta(minutes=2))
         assert len(calls) == 2  # resting: the whole check is not recomputed at every cycle
+        assert await events(db) == []  # (two failures are not news: the check is still being tried)
         clock.now += 141
         await step(timedelta(minutes=5))
-        assert len(calls) == 3 and state.nightly_failures == 3
-        assert state.nightly_not_before == clock.now + min(worker.RETRY_UNIT * 8, worker.SETTLED_EVERY)  # 480 s
-        assert state.nightly_done is None
-        failing["on"] = False
-        clock.now += 481
-        await step(timedelta(minutes=14))
-        assert len(calls) == 4 and state.nightly_done == date(2026, 4, 9) and state.nightly_failures == 0  # a success forgets it all
-        # the next day starts afresh, even after failures the day before
-        failing["on"] = True
+        # I1 (3): the third failure of the local day gives it up: done for today, ONE event, no more attempts
+        assert len(calls) == 3 and state.nightly_failures == worker.NIGHTLY_ATTEMPTS == 3 and state.nightly_done == date(2026, 4, 9)
+        assert pool.pool is None  # (the event's connection was closed again)
+        recorded = await events(db)
+        assert len(recorded) == 1
+        event = recorded[0]
+        assert (event["component"], event["kind"], event["level"], event["code"]) == ("figures", "figures.mismatch", "warning", "check-failed")
+        assert "check-failed" in event["message"] and "3 attempts" in event["message"] and "RuntimeError" in event["message"]
+        detail = json.loads(event["detail"]) if isinstance(event["detail"], str) else event["detail"]
+        assert detail == {"attempts": 3, "error": "RuntimeError"}  # a count and a type name: no values, no names, nothing from the message
+        clock.now += 5000
+        for later in (timedelta(minutes=20), timedelta(hours=3), timedelta(hours=20)):
+            await step(later)
+        assert len(calls) == 3 and len(await events(db)) == 1  # the rest of the local day: not tried again, nothing more written
+        # the next local day tries again, from a clean count (and gives up the same way)
         await step(timedelta(days=1))
         await step(timedelta(days=1, seconds=30))
-        assert len(calls) == 6 and state.nightly_failures == 2 and state.nightly_failure_day == date(2026, 4, 10)
-        await step(timedelta(days=2))  # a day later still: its own count
-        assert state.nightly_failure_day == date(2026, 4, 11) and state.nightly_failures == 1 and len(calls) == 7
+        assert len(calls) == 5 and state.nightly_failures == 2 and state.nightly_failure_day == date(2026, 4, 10)
+        clock.now += 241
+        await step(timedelta(days=1, minutes=5))
+        assert len(calls) == 6 and state.nightly_done == date(2026, 4, 10) and len(await events(db)) == 2
+        # and a day that succeeds forgets it all
+        failing["on"] = False
+        await step(timedelta(days=2))
+        assert len(calls) == 7 and state.nightly_done == date(2026, 4, 11) and state.nightly_failures == 0
+        assert state.nightly_failure_day == date(2026, 4, 11) and len(await events(db)) == 2
     finally:
         await pool.close()
 
@@ -718,7 +766,7 @@ async def test_the_worker_asks_for_the_endpoints_window_in_a_local_zone_with_a_c
     assert check_target(now, "2026-03", "Europe/Berlin").end == datetime(2026, 3, 29, 12, tzinfo=UTC)  # March is open, to the last hour
 
 
-async def test_a_cycle_writes_the_check_rows_and_the_next_one_only_touches_the_open_one(db, clock):
+async def test_a_cycle_writes_the_check_rows_and_the_open_one_is_touched_on_its_own_cadence(db, clock):
     await build(db)
     state = make_state()
     first = await cycle(state)
@@ -729,9 +777,13 @@ async def test_a_cycle_writes_the_check_rows_and_the_next_one_only_touches_the_o
         assert key in stored and stored[key]["size_bytes"] > 0 and stored[key]["data_fp"] == await _fp(target)
         assert ledger_codec.canonical(target.spec.decode(await payload_of(db, key))) == ledger_codec.canonical(await _live_report(target))
     second = await cycle(state)
-    assert (second.touched, second.written, second.skipped) == (4, 0, 6)  # the open ones touched (April's Check row among them)
-    again = await by_key(db)
+    assert (second.touched, second.written, second.skipped) == (3, 0, 7)  # the open figures touched; not the Check rows (M5)
     open_check = next(k for k, t in checks.items() if not t.settled)
+    assert {key: row for key, row in (await by_key(db)).items() if key in checks} == {key: stored[key] for key in checks}
+    clock.now += worker.CHECK_EVERY + 1  # its own cadence: five minutes later it is touched (the settled ones wait for ten)
+    third = await cycle(state)
+    assert (third.touched, third.written, third.skipped) == (4, 0, 6)
+    again = await by_key(db)
     assert again[open_check]["checked_at"] > stored[open_check]["checked_at"] and again[open_check]["snapshot_at"] == stored[open_check]["snapshot_at"]
     for key in checks:
         if key != open_check:
@@ -772,3 +824,404 @@ async def test_a_check_row_is_the_one_the_endpoint_serves_exactly(db, endpoint, 
     monkeypatch.setenv("DCDASH_FIGURE_LEDGER", "0")
     live = await client.get("/api/billing/month-check", params={"month": "2026-04"})
     assert served.content == live.content and ledger.stats()["hits_exact"] == 0
+
+
+# ---- the fixes after the Opus review of Task 6 (T6b) -------------------------------------------------------------------------------
+
+
+def boom_on(monkeypatch, *labels: str) -> None:
+    """The month builder raises for the months with these labels (for instance "2026-03"), as a builder that fails on one row would."""
+    real = figures.compute_month_days
+    starts = {month_bounds(label, TZ)[0].astimezone(UTC) for label in labels}
+
+    async def boom(session, tz_name, start, end):
+        if start in starts:
+            raise RuntimeError("a builder fails on one row")
+        return await real(session, tz_name, start, end)
+
+    monkeypatch.setattr(figures, "compute_month_days", boom)
+
+
+def bump_pump(ids):
+    def bump(value) -> None:
+        value.entries[ids["Pump"]][PUMP_DAY]["kwh"] += 1.0
+
+    return bump
+
+
+# I1: one bad row must not end the proof ------------------------------------------------------------------------------------------
+
+
+async def test_a_row_that_raises_is_an_error_line_the_others_are_still_judged_and_the_command_says_it_could_not_prove_it(db, monkeypatch, capsys):
+    await publish(db)
+    boom_on(monkeypatch, "2026-03")
+    beats: list[int] = []
+    found = await rebuild.check_rows(get_sessionmaker(), beat=lambda: beats.append(1))
+    assert statuses(found) == {"equal": 9, "error": 1} and len(beats) == 10  # (the heartbeat beat for the failing row too)
+    bad = [line for line in found if line.status == "error"]
+    assert [(line.kind, line.window, line.detail) for line in bad] == [("month-days", "2026-03", "RuntimeError")]  # the type name only
+    assert bad[0].key is not None
+    code = await rebuild.amain(["--check"])
+    out = capsys.readouterr().out.splitlines()
+    assert code == 3  # M3: no disproof, but no proof either
+    assert "month-days 2026-03 error RuntimeError" in out
+    assert out[-1] == "10 rows: 9 equal, 0 moved on, 0 stale, 0 DIFFERENT, 1 error"
+
+
+async def test_a_difference_wins_over_an_error_in_the_exit_code_and_both_are_printed(db, monkeypatch, capsys):
+    ids, _ = await publish(db)
+    await alter(db, plan_of()[0].key, bump_pump(ids))
+    boom_on(monkeypatch, "2026-03")
+    assert await rebuild.amain(["--check"]) == 1
+    out = capsys.readouterr().out
+    assert "month-days 2026-04 DIFFERENT" in out and "month-days 2026-03 error RuntimeError" in out
+    assert out.splitlines()[-1] == "10 rows: 8 equal, 0 moved on, 0 stale, 1 DIFFERENT, 1 error"
+
+
+async def test_a_check_that_cannot_read_the_ledger_exits_3_not_1(db, monkeypatch, capsys):
+    await publish(db)
+
+    async def down(session):
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr(ledger, "list_rows", down)
+    assert await rebuild.amain(["--check"]) == 3
+    captured = capsys.readouterr()
+    assert captured.out == "" and "the check could not be completed: ConnectionError" in captured.err
+
+
+async def test_help_says_what_the_exit_codes_mean(db, capsys):
+    assert await rebuild.amain(["--help"]) == 0
+    out = " ".join(capsys.readouterr().out.split())
+    assert "exit codes: 0 all well" in out and "1 --check: at least one row DIFFERS" in out
+    assert "3 --check: the proof could not be completed" in out and "exit 0 if every row is fine, 1 if any DIFFERS, 3 if the proof" in out
+
+
+async def test_a_stored_report_of_a_shape_the_comparison_cannot_walk_is_different_and_never_an_exception(db, capsys):
+    await publish(db)
+    check_march = by_kind(plan_of(), "month-check")[1]
+    live = await _live_report(check_march)
+    group = next(name for name, items in live["groups"].items() if items["items"])
+    await alter(db, check_march.key, lambda report: report["groups"][group].__setitem__("items", None))  # a group whose items are no list
+    found = await check()
+    assert statuses(found) == {"equal": 9, "DIFFERENT": 1}
+    wrong = [line for line in found if line.status == "DIFFERENT"]
+    assert [(line.window, line.detail) for line in wrong] == [("2026-03 stop 2026-04-01T00:00Z", "the first difference cannot be named (TypeError)")]
+    assert await rebuild.amain(["--check"]) == 1
+    capsys.readouterr()
+
+
+def test_first_difference_never_raises_whatever_the_shape_of_the_stored_value():
+    live = {"groups": {"a": {"items": [{"asset_id": 1}]}}, "hours": 3}
+    for items in (None, 5, 1.5, True):  # a number (or nothing) where a list belongs
+        stored = {"groups": {"a": {"items": items}}, "hours": 3}
+        assert rebuild.first_difference(stored, live) == "the first difference cannot be named (TypeError)"
+    for stored in ({"groups": 5}, {"groups": []}, {"groups": {"a": 7}}, {"groups": {"a": {}}}, {}, None, 3, [1], "x", ("a",)):
+        assert isinstance(rebuild.first_difference(stored, live), str), stored
+    status, detail = rebuild._compare(
+        ledger_codec.decode_json, ledger_codec.encode({"groups": {"a": {"items": None}}, "hours": 3}), live
+    )
+    assert (status, detail) == ("DIFFERENT", "the first difference cannot be named (TypeError)")  # still DIFFERENT, never an error
+
+
+async def test_the_nightly_check_keeps_the_rows_it_could_not_judge_and_names_them_in_one_event_without_values_or_names(db, monkeypatch, caplog):
+    ids, state = await publish(db)
+    boom_on(monkeypatch, "2026-03", "2026-02")
+    before = await whole_table(db)
+    pool = worker.JournalPool(os.environ["DCDASH_DATABASE_URL"])
+    try:
+        with caplog.at_level("INFO", logger=worker.log.name):
+            lines = await worker.run_nightly(get_sessionmaker(), pool, state)
+    finally:
+        await pool.close()
+    assert statuses(lines) == {"equal": 8, "error": 2}
+    assert await whole_table(db) == before  # an `error` row is never deleted
+    recorded = await events(db)
+    assert len(recorded) == 1  # ONE event for the two rows
+    event = recorded[0]
+    assert (event["component"], event["kind"], event["level"], event["code"]) == ("figures", "figures.mismatch", "warning", "check-failed")
+    assert "check-failed" in event["message"] and "2 of 10" in event["message"] and "2 x RuntimeError" in event["message"]
+    detail = json.loads(event["detail"]) if isinstance(event["detail"], str) else event["detail"]
+    assert detail == {"rows": 2, "of": 10, "errors": {"RuntimeError": 2}}
+    for name in ("Pump", "Fan", "Hall A", "Hall B", "Annex", "Site", "Pump_kWh"):
+        assert name not in event["message"] and name not in json.dumps(detail)
+    summary = [r.getMessage() for r in caplog.records if "nightly check" in r.getMessage()]
+    assert len(summary) == 1 and "10 stored rows: 8 equal, 0 moved on, 0 stale, 0 DIFFERENT, 2 error" in summary[0]
+
+
+# M1, M7, M8: the delete is conditional, guarded by the lock, and one failure does not void the others ------------------------------
+
+
+async def test_the_nightly_delete_leaves_a_row_that_was_replaced_by_a_good_one_after_it_was_judged(db, monkeypatch):
+    ids, state = await publish(db)
+    april = plan_of()[0]
+    await alter(db, april.key, bump_pump(ids))
+    real = rebuild.check_rows
+
+    async def replaced_meanwhile(*args, **kwargs):
+        lines = await real(*args, **kwargs)  # the planted row is judged DIFFERENT ...
+        report = await worker.run_once(  # ... and a rebuild beside the worker stores the live figure before the nightly deletes
+            get_sessionmaker(), NOW, TZ, MONTHS, make_state(), only=lambda target: target.key == april.key, force=True
+        )
+        assert report.written == 1
+        return lines
+
+    monkeypatch.setattr(rebuild, "check_rows", replaced_meanwhile)
+    pool = worker.JournalPool(os.environ["DCDASH_DATABASE_URL"])
+    try:
+        lines = await worker.run_nightly(get_sessionmaker(), pool, state)
+    finally:
+        await pool.close()
+    assert statuses(lines) == {"equal": 9, "DIFFERENT": 1}
+    assert april.key in await by_key(db)  # NOT deleted: it is not the row that was judged any more
+    monkeypatch.setattr(rebuild, "check_rows", real)
+    assert statuses(await check()) == {"equal": 10}  # and it is the good one
+    recorded = await events(db)
+    assert len(recorded) == 1  # (the difference was real when it was judged: the event says so, and says what became of the row)
+    assert "replaced or removed before it could be deleted" in recorded[0]["message"] and "was deleted" not in recorded[0]["message"]
+
+
+async def test_the_nightly_check_under_a_lost_lock_deletes_nothing_and_says_so_and_with_the_lock_it_deletes(db):
+    ids, state = await publish(db)
+    april = plan_of()[0]
+    await alter(db, april.key, bump_pump(ids))
+
+    class Gone:
+        async def held_now(self) -> bool:
+            return False
+
+    class Held:
+        async def held_now(self) -> bool:
+            return True
+
+    pool = worker.JournalPool(os.environ["DCDASH_DATABASE_URL"])
+    try:
+        lines = await worker.run_nightly(get_sessionmaker(), pool, state, Gone())
+        assert statuses(lines) == {"equal": 9, "DIFFERENT": 1} and april.key in await by_key(db)  # the standby leaves the row alone
+        first = (await events(db))[0]["message"]
+        assert "it was not deleted (the advisory lock was lost)" in first and "was deleted" not in first  # the finding is still news
+        await worker.run_nightly(get_sessionmaker(), pool, state, Held())
+        assert april.key not in await by_key(db)
+        assert "and was deleted" in (await events(db))[1]["message"]
+    finally:
+        await pool.close()
+
+
+async def test_one_failing_delete_does_not_void_the_other_verdicts_or_the_events(db, monkeypatch, caplog):
+    ids, state = await publish(db)
+    april, this_energy = plan_of()[0], plan_of()[1]
+    await alter(db, april.key, bump_pump(ids))
+
+    def bump_hall(value) -> None:
+        kwh, estimated, partial, no_data = value.values[ids["Hall A"]]
+        value.values[ids["Hall A"]] = (kwh + 0.001, estimated, partial, no_data)
+
+    await alter(db, this_energy.key, bump_hall)
+    real = worker._delete_judged
+    asked: list[tuple] = []
+
+    async def flaky(sessions, line):
+        asked.append(line.key)
+        if len(asked) == 1:
+            raise RuntimeError("the delete fails")
+        return await real(sessions, line)
+
+    monkeypatch.setattr(worker, "_delete_judged", flaky)
+    pool = worker.JournalPool(os.environ["DCDASH_DATABASE_URL"])
+    try:
+        with caplog.at_level("INFO", logger=worker.log.name):
+            lines = await worker.run_nightly(get_sessionmaker(), pool, state)  # (it does not raise)
+    finally:
+        await pool.close()
+    assert statuses(lines) == {"equal": 8, "DIFFERENT": 2} and asked == [april.key, this_energy.key]
+    stored = await by_key(db)
+    assert april.key in stored and this_energy.key not in stored  # the first delete failed, the second was made
+    recorded = await events(db)
+    assert len(recorded) == 2  # both differences are in the journal
+    assert "deleting it failed (RuntimeError)" in recorded[0]["message"] and "month-days 2026-04" in recorded[0]["message"]
+    assert "and was deleted" in recorded[1]["message"] and "window-values" in recorded[1]["message"]
+    assert any("2 DIFFERENT (1 deleted)" in r.getMessage() for r in caplog.records)
+
+
+async def test_a_planted_difference_in_the_cost_window_row_is_found_and_names_the_asset(db):
+    ids, _ = await publish(db)
+    this_cost = plan_of()[2]
+    assert this_cost.spec.params.endswith("true]")  # the COST row of this month's window, not the energy one
+
+    def bump(value) -> None:
+        kwh, estimated, partial, no_data = value.values[ids["Hall A"]]
+        value.values[ids["Hall A"]] = (kwh + 0.01, estimated, partial, no_data)
+
+    await alter(db, this_cost.key, bump)
+    found = await check()
+    assert statuses(found) == {"equal": 9, "DIFFERENT": 1}
+    wrong = [line for line in found if line.status == "DIFFERENT"]
+    assert [(line.kind, line.window, line.detail, line.key) for line in wrong] == [
+        ("window-values", "2026-04-01T00:00Z..2026-04-08T10:00Z", f"asset {ids['Hall A']}", this_cost.key)
+    ]
+
+
+# M2 and the engine id: a row no reader would use is never "equal" ---------------------------------------------------------------
+
+
+async def test_a_row_dated_in_the_future_is_stale_never_equal_because_no_reader_uses_it(db, capsys):
+    await publish(db)
+    plan = plan_of()
+    later, much_later = plan[3], plan[4]
+    where = "WHERE kind = $1 AND start_ts = $2 AND end_ts = $3 AND params = $4"
+    await db.execute(f"UPDATE figure_ledger SET checked_at = now() + interval '1 hour' {where}", *later.key)  # only `checked_at` ahead
+    await db.execute(
+        f"UPDATE figure_ledger SET snapshot_at = now() + interval '1 hour', checked_at = now() + interval '1 hour' {where}", *much_later.key
+    )
+    found = await check()
+    assert statuses(found) == {"equal": 8, "stale": 2}
+    stale = {line.key: line.detail for line in found if line.status == "stale"}
+    assert stale == {later.key: "dated in the future", much_later.key: "dated in the future"}
+    assert await rebuild.amain(["--check"]) == 0  # not a difference: the worker's clean-up removes such a row
+    assert capsys.readouterr().out.splitlines()[-1] == "10 rows: 8 equal, 0 moved on, 2 stale, 0 DIFFERENT, 0 error"
+
+
+async def test_with_an_unavailable_engine_id_a_row_labelled_with_it_is_stale_never_equal(db, monkeypatch):
+    await publish(db)
+    await db.execute("UPDATE figure_ledger SET engine = $1", ledger.UNAVAILABLE)  # rows an old process wrote under the same label
+    monkeypatch.setattr(ledger, "_engine_id", ledger.UNAVAILABLE)  # (what this process says when its sources could not be read)
+    found = await check()
+    assert statuses(found) == {"stale": 10} and {line.detail for line in found} == {"made by another build"}  # no reader would take one
+
+
+# M6 and the clock changes: `_nightly_step` itself, in a local zone ---------------------------------------------------------------
+
+
+async def test_the_nightly_step_returns_quietly_when_the_site_zone_cannot_be_used(db):
+    state = make_state()
+    pool = worker.JournalPool(os.environ["DCDASH_DATABASE_URL"])
+    try:
+        for zone in ("Mars/Base", "Asia/Kolkata"):  # unknown; a half-hour offset: `targets` has refused both
+            await worker._nightly_step(state, NOW, zone, get_sessionmaker(), pool)  # no exception (the loop's handler is not reached)
+    finally:
+        await pool.close()
+    assert not state.nightly_primed and state.nightly_done is None and pool.pool is None
+
+
+@pytest.mark.parametrize(
+    "zone, primed, not_yet, due, same_day, next_not_yet, next_due",
+    [
+        ("Europe/London", (2026, 3, 28, 22, 0), (2026, 3, 29, 1, 59), (2026, 3, 29, 2, 0), (2026, 3, 29, 12, 0), (2026, 3, 30, 1, 59), (2026, 3, 30, 2, 0)),
+        ("Europe/London", (2026, 10, 24, 20, 0), (2026, 10, 25, 2, 59), (2026, 10, 25, 3, 0), (2026, 10, 25, 20, 0), (2026, 10, 26, 2, 59), (2026, 10, 26, 3, 0)),
+        ("America/New_York", (2026, 3, 7, 20, 0), (2026, 3, 8, 6, 59), (2026, 3, 8, 7, 0), (2026, 3, 8, 20, 0), (2026, 3, 9, 6, 59), (2026, 3, 9, 7, 0)),
+        ("America/New_York", (2026, 10, 31, 20, 0), (2026, 11, 1, 7, 59), (2026, 11, 1, 8, 0), (2026, 11, 1, 20, 0), (2026, 11, 2, 7, 59), (2026, 11, 2, 8, 0)),
+    ],
+)
+async def test_the_nightly_step_runs_the_check_at_03_00_local_time_on_a_day_the_clocks_change(
+    db, monkeypatch, zone, primed, not_yet, due, same_day, next_not_yet, next_due
+):
+    """`nightly_due` is tested across clock changes as a pure function; this is the step the loop calls, with the zone, the UTC
+    instants and the state: one run per local date, at 03:00 LOCAL time, in UTC that is 02:00, 03:00, 07:00 or 08:00."""
+    calls: list[int] = []
+
+    async def counting(*args, **kwargs):
+        calls.append(1)
+        return []
+
+    monkeypatch.setattr(rebuild, "check_rows", counting)
+    state = make_state()
+    pool = worker.JournalPool(os.environ["DCDASH_DATABASE_URL"])
+    tz = ZoneInfo(zone)
+
+    async def step(moment: tuple) -> None:
+        await worker._nightly_step(state, datetime(*moment, tzinfo=UTC), zone, get_sessionmaker(), pool)
+
+    try:
+        await step(primed)  # the first cycle only primes: it is after 03:00 local, so that day's check counts as done
+        assert state.nightly_primed and calls == []
+        await step(not_yet)
+        assert calls == []  # 02:59 local
+        await step(due)
+        assert calls == [1] and state.nightly_done == datetime(*due, tzinfo=UTC).astimezone(tz).date()  # 03:00 local
+        assert datetime(*due, tzinfo=UTC).astimezone(tz).hour == 3 and datetime(*not_yet, tzinfo=UTC).astimezone(tz).hour < 3
+        await step(same_day)
+        assert calls == [1]  # once per local date
+        await step(next_not_yet)
+        assert calls == [1]
+        await step(next_due)
+        assert calls == [1, 1]
+    finally:
+        await pool.close()
+
+
+# M4: beside a running worker, and the priority -------------------------------------------------------------------------------------
+
+
+async def committed_behind_the_rebuilds_back(db, monkeypatch, key: tuple, times: int) -> list[bool]:
+    """Make the figure builder of the month of `key` do what the worker does to an open row every cycle: commit a header update
+    (`checked_at`) for it on another connection AFTER the rebuild's snapshot began, so that the rebuild's write finds a row its
+    snapshot cannot see and the database raises a serialization failure. It happens the first `times` times."""
+    real = figures.compute_month_days
+    done: list[bool] = []
+
+    async def meanwhile(session, tz_name, start, end):
+        if start == key[1] and len(done) < times:
+            done.append(True)
+            await db.execute(
+                "UPDATE figure_ledger SET checked_at = clock_timestamp() WHERE kind = $1 AND start_ts = $2 AND end_ts = $3 AND params = $4", *key
+            )
+        return await real(session, tz_name, start, end)
+
+    monkeypatch.setattr(figures, "compute_month_days", meanwhile)
+    return done
+
+
+async def test_a_rebuild_that_loses_a_race_to_the_worker_tries_again_once_in_a_new_snapshot_and_it_is_no_error(db, monkeypatch, capsys):
+    await publish(db)
+    april = plan_of()[0]
+    done = await committed_behind_the_rebuilds_back(db, monkeypatch, april.key, times=1)
+    assert await rebuild.amain(["--month", "2026-04"], clock=lambda: NOW) == 0
+    out = capsys.readouterr().out.strip()
+    assert len(done) == 1  # the first attempt lost ...
+    assert out == "rebuilt 4 figures of 2026-04: 0 written, 4 unchanged, 0 touched, 0 skipped, 0 deleted, 0 refused, 0 lost race, 0 errors"
+    assert statuses(await check()) == {"equal": 10}  # ... the second made the row (its figure, relabelled), and it is the live one
+
+
+async def test_a_second_loss_is_counted_as_a_lost_race_not_an_error_and_the_exit_code_stays_0(db, monkeypatch, capsys):
+    await publish(db)
+    april = plan_of()[0]
+    done = await committed_behind_the_rebuilds_back(db, monkeypatch, april.key, times=2)
+    assert await rebuild.amain(["--month", "2026-04"], clock=lambda: NOW) == 0
+    out = capsys.readouterr().out.strip()
+    assert len(done) == 2  # tried twice, no more
+    assert out == "rebuilt 4 figures of 2026-04: 0 written, 3 unchanged, 0 touched, 0 skipped, 0 deleted, 0 refused, 1 lost race, 0 errors"
+    assert statuses(await check()) == {"equal": 10}  # the winner's row stands, whole: no half row, nothing rolled back
+
+
+async def test_all_retries_a_lost_race_the_same_way(db, monkeypatch, capsys):
+    await publish(db)
+    await committed_behind_the_rebuilds_back(db, monkeypatch, plan_of()[0].key, times=2)
+    assert await rebuild.amain(["--all"], clock=lambda: NOW) == 0
+    assert capsys.readouterr().out.strip() == (
+        "rebuilt 10 figures: 0 written, 9 unchanged, 0 touched, 0 skipped, 0 deleted, 0 refused, 1 lost race, 0 errors"
+    )
+
+
+async def test_a_failure_that_is_no_lost_race_is_still_an_error_and_the_exit_code_is_1(db, monkeypatch, capsys):
+    await publish(db)
+    boom_on(monkeypatch, "2026-04")
+    assert await rebuild.amain(["--month", "2026-04"], clock=lambda: NOW) == 1
+    out = capsys.readouterr().out.strip()
+    assert out.endswith("0 refused, 0 lost race, 1 errors") and out.startswith("rebuilt 4 figures of 2026-04: ")
+
+
+@pytest.mark.parametrize("failure", [None, OSError("not permitted"), AttributeError("no os.nice here")])
+async def test_main_lowers_its_priority_like_the_worker_and_goes_on_when_it_cannot(db, nices, monkeypatch, capsys, failure):
+    monkeypatch.setattr(rebuild, "configure_logging", lambda: None)
+    await publish(db)
+
+    def fake_nice(increment):
+        nices.append(increment)
+        if failure is not None:
+            raise failure
+        return increment
+
+    monkeypatch.setattr(os, "nice", fake_nice)
+    assert await asyncio.to_thread(rebuild.main, ["--check"]) == 0
+    assert nices == [worker.NICE] == [10]
+    assert capsys.readouterr().out.splitlines()[-1] == "10 rows: 10 equal, 0 moved on, 0 stale, 0 DIFFERENT, 0 error"
