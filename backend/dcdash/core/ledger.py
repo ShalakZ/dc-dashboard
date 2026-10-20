@@ -397,3 +397,67 @@ class Row:
 async def list_rows(session: AsyncSession) -> list[Row]:
     """The key and header columns and the size of every row, never the payload."""
     return [Row(*row) for row in (await session.execute(_LIST)).all()]
+
+
+# ---- Check month (w26b task 5): the reader of the one row kind that is always exact ------------------------------------------------
+
+CHECK_KIND = "month-check"  # the `kind` of a Check month row; its key is (kind, the window's start, its STOP, check_params(zone))
+
+
+def check_params(tz_name: str) -> str:
+    """The `params` of a Check month row: the site zone, as canonical JSON text (what the reader asks for and the worker writes)."""
+    import json  # here and not at the top: this part of the module is only ever appended to
+
+    return json.dumps([tz_name], separators=(",", ":"))
+
+
+# ONE statement: the database clock and the row of the key, its payload included (the report is small, and the header and the
+# payload of one statement are one row, never a header of one row and the payload of another). The payload is read only when the
+# row carries the fingerprints that were asked for (a row that cannot be used is not shipped).
+_CHECK = text(
+    """
+    /* figure_ledger check */
+    SELECT now() AS now, h.engine, h.config_fp, h.data_fp, h.snapshot_at, h.checked_at,
+           CASE WHEN h.config_fp = :config_fp AND h.data_fp = :data_fp THEN h.payload END AS payload
+    FROM (SELECT 1) d
+    LEFT JOIN figure_ledger h
+      ON h.kind = :k AND h.start_ts = :s AND h.end_ts = :e AND h.params = :p
+    """
+)
+
+
+async def read_check(
+    session: AsyncSession, start: datetime, stop: datetime, params: str, config_fp: str, data_fp: str,
+    *, validate: Callable[[dict], None] | None = None,
+) -> dict | None:
+    """The Check month report stored for the key (`CHECK_KIND`, `start`, `stop`, `params`), or None. `config_fp` and `data_fp`
+    are the fingerprints of the configuration and of the readings this window reads, taken just now on `session`. The row is used
+    only when it was made by this build (`engine_id`), BOTH fingerprints equal the row's, and `snapshot_at <= checked_at <= now()`
+    (a row dated in the future never counts). There is no 60 second rule: a Check month window holds complete hours only, so the
+    answer is always exact. The decode (zlib and JSON, and `validate(report)` when given: it raises for a report of a wrong
+    shape) runs on the compute thread. A bad row raises (the caller counts it and computes); it never returns a value that
+    failed to decode. The caller keeps the statement in a savepoint (see `billing_check._from_ledger`)."""
+    asked = {**_key(CHECK_KIND, start, stop, params), "config_fp": config_fp, "data_fp": data_fp}
+    row = (await session.execute(_CHECK, asked)).one()
+    usable = (
+        row.engine == engine_id() and row.config_fp == config_fp and row.data_fp == data_fp and row.payload is not None
+        and row.snapshot_at is not None and row.checked_at is not None
+        and row.snapshot_at <= row.checked_at <= row.now
+    )
+    if not usable:
+        _stats["misses"] += 1
+        return None
+
+    def decode(raw: bytes) -> dict:
+        report = ledger_codec.decode_json(raw)
+        if validate is not None:
+            validate(report)
+        return report
+
+    try:
+        report = await compute.run(decode, bytes(row.payload))
+    except Exception:
+        _stats["misses"] += 1  # (the caller counts the error)
+        raise
+    _stats["hits_exact"] += 1
+    return report
