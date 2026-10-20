@@ -18,8 +18,9 @@ once when the configuration fingerprint changed. A row that is no longer a targe
 `month-check` (the report of Billing's Check month) for the same months, last in the list: the window is the one the endpoint asks
 for (an open month up to the last complete hour, so its key moves with the hour; a month that has not begun has none), and its data
 fingerprint is the one of the rows that report reads (`billing_check.check_data_fingerprint`). A look at one reads a month-wide
-fingerprint on the database the api shares, so an OPEN one has a cadence of its own: it is looked at when its key is new, when the
-configuration changed, or when its last look is older than `CHECK_EVERY` (five minutes); it does not count in `oldest_open_age`
+fingerprint on the database the api shares, so an OPEN one has a cadence of its own: it is looked at when its key is new, in every
+cycle for the first two intervals after that (a reading flushed just after the hour boundary is then picked up by the next cycle),
+when the configuration changed, or when its last look is older than `CHECK_EVERY` (five minutes); it does not count in `oldest_open_age`
 (no reader applies the 60 second rule to it); a settled one keeps `SETTLED_EVERY`. Once per local day, at the first
 cycle at or after 03:00 site time, a nightly self-check compares every stored row with what the live code computes from the same
 data (`rebuild.check_rows`); a row that differs is deleted (only while it is still the very row that was judged) and written to
@@ -88,7 +89,8 @@ INTERVAL_DEFAULT = 30.0  # seconds between two cycles (`DCDASH_FIGURES_INTERVAL`
 MIN_INTERVAL = 5.0  # a smaller setting means this
 MONTHS_DEFAULT = 6  # local months kept ready, the current one included (`DCDASH_FIGURES_MONTHS`, 1 to 24)
 SETTLED_EVERY = 600.0  # seconds between two looks at a settled target
-CHECK_EVERY = 300.0  # seconds between two looks at an OPEN month-check target (a look reads a month-wide fingerprint)
+CHECK_EVERY = 300.0  # seconds between two looks at an OPEN month-check target (a look reads a month-wide fingerprint) ...
+CHECK_YOUNG_INTERVALS = 2  # ... but a key first looked at less than this many intervals ago is looked at in EVERY cycle (see `due`)
 NIGHTLY_ATTEMPTS = 3  # a nightly check that fails as a whole is tried this many times per local day, then given up for the day
 # The deadline of the WHOLE stop, measured from the signal: the wait for the current target and the closing of the connections share
 # it, and `main` ends the process when a compute thread is still busy after it. It is the number the stop is held to, not a promise
@@ -128,8 +130,10 @@ _SNAPSHOT = text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
 # payload is not written, so no new copy of it is made). `ledger.touch` cannot do this: it matches only a row that already has the
 # new engine and fingerprints, and here at least one of them differs (the engine id changes with every code change, and a reading
 # that moves the data fingerprint need not move the figure). The guard is the one of `ledger.write`: a row is replaced only by a
-# newer snapshot, or when it is dated in the future. The payload is NOT sent a second time to be compared (`write` sends it once, when
-# the relabel finds nothing): the stored bytes are compared by their size and their SHA-256, which the database computes itself.
+# newer snapshot, or when it is dated in the future (judged by `clock_timestamp()` here too, as `ledger.write` does: `now()` is the
+# start of the transaction and would take a row another writer committed meanwhile for one from the future). The payload is NOT
+# sent a second time to be compared (`write` sends it once, when the relabel finds nothing): the stored bytes are compared by
+# their size and their SHA-256, which the database computes itself.
 _RELABEL = text(
     """
     /* figure_ledger relabel */
@@ -137,7 +141,7 @@ _RELABEL = text(
         snapshot_at = :snapshot_at, checked_at = :snapshot_at
     WHERE kind = :k AND start_ts = :s AND end_ts = :e AND params = :p
       AND size_bytes = :size AND sha256(payload) = :digest
-      AND (snapshot_at < :snapshot_at OR snapshot_at > now())
+      AND (snapshot_at < :snapshot_at OR snapshot_at > clock_timestamp())
     """
 )
 
@@ -410,6 +414,7 @@ class WorkerState:
     def __init__(self, heartbeat_path: str | None = None) -> None:
         self.config_fp_seen: str | None = None
         self.looked: dict[tuple, float] = {}
+        self.first_looked: dict[tuple, float] = {}  # when each target was FIRST looked at (the age of a new Check month key)
         self.not_before: dict[tuple, float] = {}
         self.failures: dict[tuple, int] = {}
         self.summary = Summary()
@@ -438,7 +443,7 @@ class WorkerState:
 
     def keep_only(self, keys: set[tuple]) -> None:
         """Forget the targets that are no longer in the plan (the next hour's keys come and go: nothing may pile up)."""
-        for book in (self.looked, self.not_before, self.failures):
+        for book in (self.looked, self.first_looked, self.not_before, self.failures):
             for key in [key for key in book if key not in keys]:
                 del book[key]
 
@@ -624,8 +629,9 @@ async def run_once(
     start (the database is down) is raised.
 
     Which targets are looked at: an OPEN one every cycle, a SETTLED one when its last look is older than `SETTLED_EVERY` or the
-    configuration changed since the last complete cycle (an OPEN Check month one: when its key is new, the configuration changed
-    or its last look is older than `CHECK_EVERY`); but never one that is resting. A target that failed is retried at the next
+    configuration changed since the last complete cycle (an OPEN Check month one: when its key is new, in every cycle while its
+    first look is less than two intervals old, when the configuration changed or when its last look is older than `CHECK_EVERY`);
+    but never one that is resting. A target that failed is retried at the next
     cycle once; if it fails again it rests `RETRY_UNIT * 2**n` seconds (`n` failures in a row, at most `SETTLED_EVERY`), and a
     success forgets the failures. A value the codec refused rests `SETTLED_EVERY` (open or not): it would be refused again, and
     building it is the worker's whole cost. A configuration change ends every rest (everything is due once).
@@ -690,11 +696,12 @@ async def run_once(
             state.not_before[target.key] = clock + wait
             report.errors += 1
             _log_throttled(
-                f"target:{target.kind}:{type(exc).__name__}", "figures worker: a %s figure failed (%s: %s)",
-                target.kind, type(exc).__name__, str(exc)[:200],
+                f"target:{target.kind}:{type(exc).__name__}", "figures worker: a %s figure failed (%s)",
+                target.kind, ledger.error_label(exc),
             )
         else:
             state.looked[target.key] = clock
+            state.first_looked.setdefault(target.key, clock)
             refreshed.add(target.key)
             state.failures.pop(target.key, None)
             state.not_before.pop(target.key, None)
@@ -712,7 +719,13 @@ async def run_once(
         if target.kind == ledger.CHECK_KIND and not target.settled:
             # its own cadence: a look reads a month-wide fingerprint, only to say "seen current" for a row no reader gives the
             # 60 second rule. A new key (the hour moved, or the worker just started) and a new configuration are looked at at once.
-            return last is None or config_changed or clock - last >= CHECK_EVERY
+            # A key is also looked at in every cycle for its first two intervals: the first cycle after an hour boundary may build
+            # the row a second after it, and a reading of the hour just ended that the collector flushes a few seconds later would
+            # leave the row with a stale data fingerprint for the whole `CHECK_EVERY` (every Check month request would pay for
+            # the fingerprint and then the whole live path). The next cycle picks that reading up.
+            first = state.first_looked.get(target.key)
+            young = first is not None and clock - first < CHECK_YOUNG_INTERVALS * every
+            return last is None or config_changed or young or clock - last >= CHECK_EVERY
         return not (target.settled and not config_changed and clock - (-math.inf if last is None else last) < SETTLED_EVERY)
 
     passed: list[Target] = []  # the targets this cycle has already dealt with, in order
@@ -766,7 +779,7 @@ async def run_once(
         await _clean_up(session_factory, keep, report)
     except Exception as exc:
         report.errors += 1
-        _log_throttled(f"clean:{type(exc).__name__}", "figures worker: cleaning up the ledger failed (%s: %s)", type(exc).__name__, str(exc)[:200])
+        _log_throttled(f"clean:{type(exc).__name__}", "figures worker: cleaning up the ledger failed (%s)", ledger.error_label(exc))
     state.keep_only(keep)
     state.config_fp_seen = config_fp if read <= {config_fp} else None
     return finish()
@@ -1013,8 +1026,8 @@ async def _nightly_step(
             state.nightly_done = local.date()  # done for today, as far as this process goes; the next local day starts afresh
             state.nightly_not_before = -math.inf
             log.warning(
-                "figures worker: the nightly check failed %d times today (last: %s: %s); giving it up until tomorrow",
-                state.nightly_failures, type(exc).__name__, str(exc)[:200],
+                "figures worker: the nightly check failed %d times today (last: %s); giving it up until tomorrow",
+                state.nightly_failures, ledger.error_label(exc),
             )
             try:
                 await events.record(
@@ -1028,8 +1041,8 @@ async def _nightly_step(
         wait = 0.0 if state.nightly_failures == 1 else min(RETRY_UNIT * 2 ** min(state.nightly_failures, 30), SETTLED_EVERY)
         state.nightly_not_before = clock + wait
         _log_throttled(
-            f"nightly:{type(exc).__name__}", "figures worker: the nightly check failed (%s: %s); trying again at the next cycle",
-            type(exc).__name__, str(exc)[:200],
+            f"nightly:{type(exc).__name__}", "figures worker: the nightly check failed (%s); trying again at the next cycle",
+            ledger.error_label(exc),
         )
         return
     state.nightly_done = local.date()
@@ -1203,7 +1216,7 @@ async def amain(state: WorkerState | None = None, *, clock: Callable[[], datetim
                 pass
             except Exception as exc:
                 _log_throttled(
-                    f"cycle:{type(exc).__name__}", "figures worker: the cycle failed (%s: %s); retrying", type(exc).__name__, str(exc)[:200]
+                    f"cycle:{type(exc).__name__}", "figures worker: the cycle failed (%s); retrying", ledger.error_label(exc)
                 )
                 backoff = min(backoff * 2, max(BACKOFF_MAX, interval)) if backoff else max(interval, BACKOFF_FIRST)
                 delay = backoff

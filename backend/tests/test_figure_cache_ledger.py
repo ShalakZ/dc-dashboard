@@ -537,8 +537,9 @@ async def test_require_fresh_never_takes_a_young_row_when_the_data_moved(db, eng
 
 @pytest.mark.parametrize("settled", [True, False])
 async def test_require_fresh_never_consults_the_ledger_even_for_a_row_whose_data_is_provably_unchanged(db, engine_calls, settled):
-    # Review M6: a Billing close freezes the money of record, so it computes (or takes a verified cache entry) as in w26 and never
-    # depends on what the worker wrote. The value is the same here only because nothing moved.
+    # Review M6: a Billing close freezes the money of record, so it computes as in w26 and never depends on what the worker wrote
+    # (nor does it trust a cache entry that a row made: see the tests of 9b below). The value is the same here only because nothing
+    # moved.
     case = await window_case(db, settled=settled)
     published = await case.publish()
     engine_calls.clear()

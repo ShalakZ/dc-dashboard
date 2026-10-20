@@ -17,6 +17,13 @@ line reports), so the `repeat` of Billing's month is a second computation, not a
 computation still runs on the cache's pool, and the run closes that pool and the compute thread when it ends, so nothing is left
 open. A stalled database ends every other stage at the statement timeout but Billing's, which waits for the database.
 
+With the cache off the figure ledger (w26b, `figure_ledger`, read only through the cache) is not consulted either, so every stage
+still shows its true cost. The last line says what the ledger is on the installation: `figure ledger: <on|off>, <N> rows, newest
+checked <S> s ago, engine id matches: <yes|no>` (the switch DCDASH_FIGURE_LEDGER, the rows, how long ago the worker last saw a row
+current, and whether any row was made by the code that is running), so a pasted report shows a worker that is down or on another
+build. It is one read-only statement on this session, in a savepoint of its own; where the table is missing or the statement fails
+the line says `figure ledger: not available (<Class>)` and nothing else changes.
+
 It calls only the public functions the handlers call (`hourly_energy`, `cost_by_hour`, `month_costs`, `month_check`,
 `storage_stats`, `rows_per_day_range`) plus the engine's row statement, so a faster engine behind those names shows here.
 """
@@ -33,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api import billing, billing_check
 from dcdash.api.settings import current_timezone
-from dcdash.core import compute, cost, energy, figure_cache, storage
+from dcdash.core import compute, cost, energy, figure_cache, ledger, storage
 from dcdash.core.build import build_info
 from dcdash.core.db import dispose_engine, get_sessionmaker
 from dcdash.core.timeutil import month_bounds, validate_whole_hour_zone
@@ -47,6 +54,10 @@ _installed_switch: str | None = None  # the installation's own setting, kept by 
 _COUNT = {"assets": text("SELECT count(*) FROM assets"), "points": text("SELECT count(*) FROM points")}
 _COUNT_HOURLY = text("SELECT count(*) FROM readings_1h WHERE bucket >= :start AND bucket < :end")
 _DATABASE_SIZE = text("SELECT pg_database_size(current_database())")
+# The age is read against `clock_timestamp()`, not `now()`: this session's transaction began when the run did, minutes ago.
+_LEDGER = text(
+    "SELECT count(*), extract(epoch FROM clock_timestamp() - max(checked_at)), bool_or(engine = :engine) FROM figure_ledger"
+)
 
 
 def _now() -> datetime:
@@ -133,6 +144,22 @@ def _figure_cache() -> str:
     except ValueError:
         line = "on, 30 s (DCDASH_FIGURE_CACHE_TTL is not a number)"
     return line if _installed_switch is None else f"{line} (switched off for this check, so each stage shows its true cost)"
+
+
+async def _figure_ledger(db: AsyncSession) -> str:
+    """The text of the `figure ledger` line: the switch, the rows, the age of the newest check and whether a row is of this build.
+    Never raises: a missing table or any failure of the statement is `not available (<Class>)` (the class of the root cause)."""
+    try:
+        async with db.begin_nested():  # a failed statement must not leave the transaction aborted
+            rows, age, matches = (await db.execute(_LEDGER, {"engine": ledger.engine_id()})).one()
+        state = "on" if ledger.enabled() else "off"
+        if not rows:
+            return f"{state}, 0 rows"
+        seconds = 0 if age is None else max(float(age), 0.0)
+        same_build = bool(matches) and ledger.engine_id() != ledger.UNAVAILABLE
+        return f"{state}, {rows} rows, newest checked {seconds:.0f} s ago, engine id matches: {'yes' if same_build else 'no'}"
+    except Exception as exc:  # noqa: BLE001 - whatever it raises is the finding
+        return f"not available ({_cause(exc)})"
 
 
 # -- the counts ---------------------------------------------------------------------------------------------------------------
@@ -291,6 +318,7 @@ async def _report(db: AsyncSession) -> bool:
 
     await _storage_stages(db)
     _line("figure cache", _figure_cache())
+    _line("figure ledger", await _figure_ledger(db))
     return True
 
 

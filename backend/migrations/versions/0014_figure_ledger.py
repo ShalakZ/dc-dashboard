@@ -13,7 +13,7 @@ application; the table only stores).
 One row per value. The key is `(kind, start_ts, end_ts, params)`: `kind` names the computation, `start_ts` and `end_ts` are the
 window it covers, `params` is its other arguments as text (text, not jsonb: jsonb would normalise the text and so hide a
 difference between two keys). `engine` says which version of the code made the value, `config_fp` is a fingerprint of the
-configuration the value depends on (the asset tree, the mappings, the tariffs, the time zone), and `data_fp` is a fingerprint
+configuration the value depends on (the asset tree, the mappings, the tariffs; the time zone is in `params`), and `data_fp` is a fingerprint
 of the readings it was made from. `snapshot_at` is when (database clock) the snapshot the value was made in was taken, and `checked_at` is the
 last snapshot in which the data fingerprint was seen equal to `data_fp`, so `snapshot_at <= checked_at`. `payload` is the value,
 already compressed by the application (so it is stored with STORAGE EXTERNAL: PostgreSQL does not try to compress it again) and

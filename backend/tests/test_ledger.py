@@ -216,6 +216,35 @@ def test_an_error_is_logged_once_per_exception_type_and_never_with_its_message(c
     assert "secret" not in caplog.text and "ValueError" in caplog.text and "KeyError" in caplog.text
 
 
+def test_error_label_is_the_type_and_the_sqlstate_when_there_is_one_never_the_message():
+    # (whole-wave review M9: the worker's and the rebuild command's lines go into the reports people paste)
+    assert ledger.error_label(ValueError("asset ZetaHall has no meter")) == "ValueError"
+    with_code = SimpleNamespace(sqlstate="57014")  # an asyncpg error carries `sqlstate`, SQLAlchemy's adapter also `pgcode`
+    wrapped = DBAPIError("SELECT secret_name FROM x", {}, with_code)  # `orig` is what the driver raised
+    assert ledger.error_label(wrapped) == "DBAPIError, SQLSTATE 57014"
+    assert "secret_name" not in ledger.error_label(wrapped)
+    driver = RuntimeError("quotes the row ('ZetaHall')")
+    driver.pgcode = "40001"
+    assert ledger.error_label(driver) == "RuntimeError, SQLSTATE 40001"
+    try:  # the code is also found on what the exception was raised from
+        try:
+            raise driver
+        except RuntimeError as inner:
+            raise OSError("no route to ZetaHall") from inner
+    except OSError as outer:
+        assert ledger.error_label(outer) == "OSError, SQLSTATE 40001"
+    for odd in ("", "5701", "570145", "57é14", "5701 ", None, 57014):  # only the shape of a SQLSTATE is shown
+        thing = ValueError("x")
+        thing.sqlstate = odd
+        assert ledger.error_label(thing) == "ValueError", odd
+
+
+def test_error_label_survives_a_cycle_in_the_chain():
+    first, second = RuntimeError("a"), RuntimeError("b")
+    first.__cause__, second.__cause__ = second, first
+    assert ledger.error_label(first) == "RuntimeError"
+
+
 # ---- the engine id ------------------------------------------------------------------------------------------------------------
 
 

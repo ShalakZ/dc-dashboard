@@ -9,7 +9,7 @@ from sqlalchemy import event, text
 
 from billing_helpers import add_counter, add_power, add_tariff, at, set_zone
 from conftest import TABLES
-from dcdash.core import storage
+from dcdash.core import ledger, storage
 from dcdash.core.db import get_engine
 from dcdash.diagnostics import speed
 from helpers import make_asset, make_source, settle_rollups
@@ -26,6 +26,7 @@ def clocks(monkeypatch):
     monkeypatch.setattr(speed, "_now", lambda: NOW)
     monkeypatch.delenv("DCDASH_FIGURE_CACHE", raising=False)
     monkeypatch.delenv("DCDASH_FIGURE_CACHE_TTL", raising=False)
+    monkeypatch.delenv("DCDASH_FIGURE_LEDGER", raising=False)
 
 
 async def seed(db) -> None:
@@ -78,6 +79,7 @@ async def test_it_prints_the_header_the_counts_and_one_line_per_stage(db, capsys
     for stage in ("storage stats", "rows per day, last 7 days", "rows per day, last 30 days"):
         assert re.search(rf"^{stage}: {TIMES}$", out, re.M), stage
     assert "figure cache: on, 30 s" in lines
+    assert lines[-2] == "figure ledger: on, 0 rows"  # (w26b) the line after the figure cache's, an empty table
     assert re.fullmatch(r"done in \d+\.\d{3} s", lines[-1])
 
 
@@ -141,7 +143,73 @@ async def test_an_empty_database_prints_without_failing(db, capsys):
     assert not any(line.startswith("check month") for line in lines)
     assert re.search(rf"^storage stats: {TIMES}$", out, re.M)  # the storage page does not need meters
     assert "figure cache: on, 30 s" in lines
+    assert "figure ledger: on, 0 rows" in lines
     assert lines[-1].startswith("done in ")
+
+
+# ---- the figure ledger line (w26b review M8) -----------------------------------------------------------------------------------
+# These tests seed no readings (a refresh of the rollups costs over a minute): the line reads one table and nothing else.
+
+_PLANT = (
+    "INSERT INTO figure_ledger (kind, start_ts, end_ts, params, engine, config_fp, data_fp, snapshot_at, checked_at, size_bytes, payload) "
+    "VALUES ($1, '2026-03-01 00:00:00+00', '2026-04-01 00:00:00+00', '[\"UTC\"]', $2, 'c', 'd', now() - make_interval(secs => $3), "
+    "now() - make_interval(secs => $3), 1, '\\x00')"
+)
+
+
+def ledger_line(out: str) -> str:
+    [line] = [line for line in out.splitlines() if line.startswith("figure ledger")]
+    return line
+
+
+async def test_the_figure_ledger_line_follows_the_figure_cache_line_and_changes_no_other_line(db, capsys):
+    code, out = await run(capsys)
+    lines = out.splitlines()
+    assert code == 0 and "failed" not in out
+    assert lines.index("figure ledger: on, 0 rows") == lines.index("figure cache: on, 30 s") + 1 == len(lines) - 2
+    assert sum(line.startswith("figure ledger") for line in lines) == 1
+
+
+async def test_the_figure_ledger_line_counts_the_rows_names_the_age_of_the_newest_check_and_the_build(db, capsys):
+    await db.execute(_PLANT, "month-days", ledger.engine_id(), 40.0)
+    await db.execute(_PLANT.replace("'[\"UTC\"]'", "'[\"Europe/Paris\"]'"), "month-days", "an-older-build", 400.0)
+    code, out = await run(capsys)
+    assert code == 0 and "failed" not in out
+    match = re.fullmatch(r"figure ledger: on, 2 rows, newest checked (\d+) s ago, engine id matches: yes", ledger_line(out))
+    assert match and 40 <= int(match.group(1)) < 160  # (the newest is the one made 40 seconds before the run began)
+    assert "Europe" not in out and "UTC\"]" not in out  # counts and seconds only
+
+
+async def test_the_figure_ledger_line_says_no_when_no_row_is_of_this_build_and_off_when_the_switch_is_off(db, capsys, monkeypatch):
+    await db.execute(_PLANT, "month-days", "an-older-build", 5.0)
+    _, out = await run(capsys)
+    assert re.fullmatch(r"figure ledger: on, 1 rows, newest checked \d+ s ago, engine id matches: no", ledger_line(out))
+    monkeypatch.setenv("DCDASH_FIGURE_LEDGER", "off")
+    _, out = await run(capsys)
+    assert re.fullmatch(r"figure ledger: off, 1 rows, newest checked \d+ s ago, engine id matches: no", ledger_line(out))
+
+
+async def test_the_figure_ledger_line_is_not_available_when_the_table_is_missing_and_the_run_still_ends_well(db, capsys):
+    await db.execute("ALTER TABLE figure_ledger RENAME TO figure_ledger_hidden")
+    try:
+        code, out = await run(capsys)
+    finally:
+        await db.execute("ALTER TABLE figure_ledger_hidden RENAME TO figure_ledger")
+    assert code == 0
+    assert ledger_line(out) == "figure ledger: not available (UndefinedTableError)"
+    assert "stage " not in out and out.splitlines()[-1].startswith("done in ")
+    assert "InFailedSQLTransaction" not in out
+
+
+async def test_a_ledger_statement_that_fails_leaves_the_session_usable_and_prints_only_the_class(db, capsys, monkeypatch):
+    monkeypatch.setattr(speed, "_LEDGER", text("SELECT 1/0 FROM figure_ledger_secret_name"))
+    code, out = await run(capsys)
+    assert code == 0 and ledger_line(out) == "figure ledger: not available (UndefinedTableError)"
+    assert "secret_name" not in out
+    monkeypatch.setattr(speed, "_LEDGER", text("SELECT 1/0, CAST(:engine AS text), true"))
+    _, out = await run(capsys)
+    assert ledger_line(out) == "figure ledger: not available (DivisionByZeroError)"
+    assert out.splitlines()[-1].startswith("done in ")
 
 
 async def test_a_stage_that_fails_is_named_and_the_run_goes_on(db, capsys, monkeypatch):

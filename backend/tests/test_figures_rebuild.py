@@ -21,6 +21,7 @@ from collections import Counter
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import asyncpg
 import pytest
 
 from dcdash.api import billing_check
@@ -673,6 +674,32 @@ async def test_a_nightly_check_that_keeps_failing_rests_gives_up_after_three_att
         await pool.close()
 
 
+async def test_a_failing_nightly_check_logs_the_type_and_the_sqlstate_and_never_the_message(db, clock, monkeypatch, caplog):
+    # whole-wave review M9: a database error may quote a row, and these lines go into the reports people paste
+    _, state = await publish(db)
+    pool = worker.JournalPool(os.environ["DCDASH_DATABASE_URL"])
+    worker.prime_nightly(state, local("UTC", 2026, 4, 8, 2, 0))
+
+    async def fails(*args, **kwargs):
+        raise asyncpg.exceptions.QueryCanceledError("canceling the statement that read asset QuxSecretHall")
+
+    monkeypatch.setattr(rebuild, "check_rows", fails)
+    caplog.set_level("WARNING", logger=worker.log.name)
+    at = datetime(2026, 4, 9, 3, 0, tzinfo=UTC)
+    try:
+        await worker._nightly_step(state, at, "UTC", get_sessionmaker(), pool)  # the first failure: tried again at the next cycle
+        await worker._nightly_step(state, at + timedelta(seconds=30), "UTC", get_sessionmaker(), pool)
+        clock.now += 241
+        await worker._nightly_step(state, at + timedelta(minutes=5), "UTC", get_sessionmaker(), pool)  # the third gives the day up
+    finally:
+        await pool.close()
+    assert [r.getMessage() for r in caplog.records if r.name == worker.log.name] == [
+        "figures worker: the nightly check failed (QueryCanceledError, SQLSTATE 57014); trying again at the next cycle",
+        "figures worker: the nightly check failed 3 times today (last: QueryCanceledError, SQLSTATE 57014); giving it up until tomorrow",
+    ]
+    assert "QuxSecretHall" not in caplog.text and all("QuxSecretHall" not in str(e["message"]) for e in await events(db))
+
+
 async def test_the_first_cycle_primes_the_nightly_state_and_the_loop_runs_the_check_when_03_00_comes(db, fast_loop):
     ids, _ = await publish(db, exact=False)
     april = plan_of(2)[0]
@@ -777,9 +804,11 @@ async def test_a_cycle_writes_the_check_rows_and_the_open_one_is_touched_on_its_
         assert key in stored and stored[key]["size_bytes"] > 0 and stored[key]["data_fp"] == await _fp(target)
         assert ledger_codec.canonical(target.spec.decode(await payload_of(db, key))) == ledger_codec.canonical(await _live_report(target))
     second = await cycle(state)
-    assert (second.touched, second.written, second.skipped) == (3, 0, 7)  # the open figures touched; not the Check rows (M5)
+    # the open figures touched, and the open Check row (a new key is looked at in each of its first two cycles); not the settled ones
+    assert (second.touched, second.written, second.skipped) == (4, 0, 6)
     open_check = next(k for k, t in checks.items() if not t.settled)
-    assert {key: row for key, row in (await by_key(db)).items() if key in checks} == {key: stored[key] for key in checks}
+    settled_checks = [key for key in checks if key != open_check]
+    assert {key: row for key, row in (await by_key(db)).items() if key in settled_checks} == {key: stored[key] for key in settled_checks}
     clock.now += worker.CHECK_EVERY + 1  # its own cadence: five minutes later it is touched (the settled ones wait for ten)
     third = await cycle(state)
     assert (third.touched, third.written, third.skipped) == (4, 0, 6)
@@ -888,6 +917,18 @@ async def test_a_check_that_cannot_read_the_ledger_exits_3_not_1(db, monkeypatch
     assert await rebuild.amain(["--check"]) == 3
     captured = capsys.readouterr()
     assert captured.out == "" and "the check could not be completed: ConnectionError" in captured.err
+
+
+async def test_a_check_that_cannot_be_completed_prints_the_type_and_the_sqlstate_never_the_message(db, monkeypatch, capsys):
+    await publish(db)
+
+    async def down(session):
+        raise asyncpg.exceptions.QueryCanceledError("statement timeout while reading the figures of asset QuxSecretHall")
+
+    monkeypatch.setattr(ledger, "list_rows", down)
+    assert await rebuild.amain(["--check"]) == 3
+    captured = capsys.readouterr()
+    assert captured.err == "the check could not be completed: QueryCanceledError, SQLSTATE 57014\n" and captured.out == ""
 
 
 async def test_help_says_what_the_exit_codes_mean(db, capsys):

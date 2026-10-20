@@ -15,24 +15,25 @@ future, for instance restored from a machine whose clock was ahead, or a negativ
 
 - `open`: the window is still OPEN (it ends later than 7 days and an hour ago: a month in progress, a rolling preset, the month
   before in its first week), the row was checked at most `OPEN_MAX_AGE - BORN_ALIVE_SECONDS` (55 seconds) ago, the request is not
-  under `require_fresh` (`figure_cache._run` does not even consult the ledger then: a Billing close always computes), the row is
+  under `require_fresh` (`figure_cache._run` does not even consult the ledger then: a Billing close always computes, and it does
+  not trust a cache entry made from a row either: see `figure_cache.get_or_compute`), the row is
   not older than the cache entry it would replace, and it is not the very value that entry already holds (the entry was found
   stale, so taking the same row again would only extend its life). The row is used WITHOUT reading the data fingerprint (that
   read is the cost the ledger exists to avoid). The cache back-dates the entry such a row makes by the row's age, but keeps at
   least `BORN_ALIVE_SECONDS` of life, so the figure an entry shows is never trusted past `max(TTL, 60 seconds)` after the moment
   the row's data was checked. The cache's own revalidation compares fingerprints then.
 - `check`: the caller reads the data fingerprint, as w26 does, and only an EXACT match uses the row. This is the only rule for a
-  settled window (its readings change only through the seeder, a restore, a migration or a hand-run refresh), and under
-  `require_fresh`.
+  settled window (its readings change only through the seeder, a restore, a migration or a hand-run refresh). (A request under
+  `require_fresh` does not get here: it consults the ledger under neither rule, see above.)
 
 Cost of a miss: four statements (SAVEPOINT, `SET LOCAL lock_timeout`, the header, ROLLBACK TO SAVEPOINT) on the snapshot the
 engine runs in anyway. The decode (zlib and JSON) runs on the compute thread, never on the event loop.
 
 Locks. Every read of the ledger runs under `SET LOCAL lock_timeout = '200ms'` inside its own savepoint, which is ALWAYS rolled
 back (a read needs no release, and the rollback also undoes the SET LOCAL): a lock on `figure_ledger` makes the read an ordinary
-miss after 200 ms and never stalls a request. Even so NOTHING may take an ACCESS EXCLUSIVE lock on `figure_ledger` (VACUUM FULL,
-TRUNCATE, REINDEX, ALTER TABLE) while the api runs: every cold figure request would pay 200 ms and the ledger would stop helping.
-(The restore scripts TRUNCATE only with the api and the worker stopped.)
+miss after 200 ms and never stalls a request. Nothing takes ACCESS EXCLUSIVE on `figure_ledger` while the api runs: a TRUNCATE is
+correct (a missing row only means the engine runs), but while it waits for its lock every cold page waits at most
+200 ms more, and VACUUM FULL, REINDEX or ALTER TABLE would do the same.
 
 Times. `snapshot_at`, `checked_at` and the `data_at` the cache keeps are DATABASE times, taken from `now()`, which is the start of
 the transaction: they are exact only to within the gap between BEGIN and the transaction's first snapshot-taking statement (a few
@@ -106,6 +107,29 @@ def record_error(where: str, exc: Exception) -> None:
     if name not in _warned:
         _warned.add(name)
         log.warning("figure ledger: %s failed (%s); the live computation runs instead", where, name)
+
+
+def error_label(exc: BaseException) -> str:
+    """What a log line or a printed report may say about a failure: the exception TYPE and, when the database gave one, its
+    SQLSTATE (`OperationalError, SQLSTATE 57014`); never the message. A database error may quote a row, and a builder's error may
+    quote an asset or a point name; these lines end up in the reports people paste. Used by the figures worker and the rebuild
+    command, as `record_error` does for the readers (its style: the type only). The SQLSTATE is looked for on the exception, on the
+    driver error SQLAlchemy wraps (`orig`) and on what that was raised from, as `worker.lost_a_race` does; only a value that has
+    the shape of one (five letters or digits) is shown."""
+    code = None
+    seen: set[int] = set()
+    pending: list[BaseException | None] = [exc]
+    while pending and code is None:
+        item = pending.pop()
+        if item is None or id(item) in seen:
+            continue
+        seen.add(id(item))
+        found = getattr(item, "sqlstate", None) or getattr(item, "pgcode", None)
+        if isinstance(found, str) and len(found) == 5 and found.isascii() and found.isalnum():
+            code = found
+        pending.extend((getattr(item, "orig", None), getattr(item, "__cause__", None)))
+    name = type(exc).__name__
+    return name if code is None else f"{name}, SQLSTATE {code}"
 
 
 # ---- the engine id ---------------------------------------------------------------------------------------------------------------

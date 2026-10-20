@@ -360,7 +360,7 @@ async def _check(sessions: async_sessionmaker[AsyncSession]) -> int:
     try:
         lines = await check_rows(sessions)
     except Exception as exc:
-        print(f"the check could not be completed: {type(exc).__name__}: {str(exc)[:200]}", file=sys.stderr)
+        print(f"the check could not be completed: {ledger.error_label(exc)}", file=sys.stderr)
         return EXIT_UNPROVEN
     for line in lines:
         print(line.text())
