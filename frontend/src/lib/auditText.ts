@@ -487,6 +487,46 @@ function aDisplay(c: Context): string {
   return what === "display" ? "a display" : what;
 }
 
+/** One item of a playlist's `items_before` / `items_after`: names and seconds, as the backend stores them (never an id). Anything that is not an object is a blank item. */
+interface ItemSnap { dashboard: string | null; focus: string | null; seconds: number | null }
+
+function itemSnap(value: unknown): ItemSnap {
+  const item = isObject(value) ? value : {};
+  const seconds = get(item, "seconds");
+  return { dashboard: text(get(item, "dashboard")), focus: text(get(item, "focus")), seconds: typeof seconds === "number" ? seconds : null };
+}
+
+const MAX_NAMED_DASHBOARDS = 5;
+
+/** "Ops, Power", "none" for an empty list, a dashboard with no stored name as "a deleted dashboard"; five names, the rest counted. */
+function dashboardNames(items: readonly ItemSnap[]): string {
+  if (items.length === 0) return "none";
+  const names = items.map((item) => (item.dashboard === null ? "a deleted dashboard" : shortName(item.dashboard)));
+  if (names.length <= MAX_NAMED_DASHBOARDS) return names.join(", ");
+  return `${names.slice(0, MAX_NAMED_DASHBOARDS).join(", ")} and ${names.length - MAX_NAMED_DASHBOARDS} more`;
+}
+
+/**
+ * What a playlist save changed on the screen, from `items_before` and `items_after` (each a list of {dashboard, focus, seconds}; one may be absent, which reads as
+ * an empty list): "dashboards Ops, Power -> Ops, Billing" when the dashboards (or their order) changed; when they did not, "seconds" and/or "focus" for what did
+ * (positions line up only then). null when neither key is a list or nothing differs, so an entry without them reads as before.
+ */
+function playlistItemsChange(d: Detail): string | null {
+  const lists = [d.items_before, d.items_after].map((value) => (Array.isArray(value) ? value.map(itemSnap) : null));
+  if (lists[0] === null && lists[1] === null) return null;
+  const [was, now] = [lists[0] ?? [], lists[1] ?? []];
+  const column = (items: readonly ItemSnap[], key: keyof ItemSnap) => stable(items.map((item) => item[key]));
+  if (column(was, "dashboard") !== column(now, "dashboard")) return `dashboards ${dashboardNames(was)} -> ${dashboardNames(now)}`;
+  const changed = (["seconds", "focus"] as const).filter((key) => column(was, key) !== column(now, key));
+  return changed.length > 0 ? changed.join(", ") : null;
+}
+
+/** "Changed playlist Wall A: name, dashboards Ops -> Ops, Billing": the changed fields of the name and sides, then what the items did. */
+function playlistUpdate(c: Context): string {
+  const parts = [c.fields, playlistItemsChange(c.d)].filter((part): part is string => part !== null && part !== "");
+  return withFields(`Changed ${playlistThing(c)}`, parts.join(", "));
+}
+
 /** " (3 dashboards)" from the number of items a playlist holds; "" when the entry has no count. */
 function dashboardCount(value: unknown): string {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) return "";
@@ -671,7 +711,7 @@ const RULES: Record<string, Rule> = {
 
   "playlist.created": { summary: (c) => `Created ${playlistThing(c)}${dashboardCount(c.d.items)}`, link: displaysPage },
   "playlist.deleted": { summary: (c) => `Deleted ${thing(c, "playlist", "playlist_id", undefined, shortName)}`, link: displaysPage },
-  "playlist.updated": { summary: (c) => withFields(`Changed ${playlistThing(c)}`, c.fields), link: displaysPage },
+  "playlist.updated": { summary: playlistUpdate, link: displaysPage },
 
   "role.created": {
     summary: (c) => {
