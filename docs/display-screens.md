@@ -85,9 +85,14 @@ save. A playlist with a skipped item can still be renamed and reordered; choose 
 ## Wrong links and the rate limit
 
 Ten wrong links from one address within 15 minutes block that address from opening any link for 15 minutes, and the Audit log gets one
-entry ("Too many wrong display links from ..."). Only opening a link counts, so a screen that is already connected keeps working. The
-address is the one the server sees; screens behind one shared address share the block, and restarting the `api` service clears it.
-A connection is also an Audit log entry (a screen that reloads in a loop adds only a few).
+entry ("Too many wrong display links from ..."). Only opening a link counts, so a screen that is already connected keeps working, and
+the link of a display you have revoked is answered like any wrong link but is not counted (a revoked screen that keeps reloading cannot
+block its own address). The address is the one the server sees; screens behind one shared address share the block, and restarting the
+`api` service clears it.
+A connection is also an Audit log entry. A screen that reloads in a loop adds a few entries per 5 minutes (the next entry says how many
+were left out), and a connection from an address the display has not used before is always written. A screen may also have at most 6
+requests running at once (12 for all screens together) and 300 figure requests a minute; beyond that the server answers "busy" and the
+screen asks again a moment later.
 
 ## After a restore
 
