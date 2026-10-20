@@ -16,7 +16,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w27 (2026-10-20, MERGE)
+## w27 (2026-10-20, 66276b1)
 
 The dashboard experience. No migration, no new permission, no changed figure (the answers of `POST /api/widget-data` and its CSV are byte for byte w26b's). Dashboard figures read at a glance: "275.43 MWh", "33,051.63", thousands separators; the exact value stays in the hover title, Details, tables and chart tooltips; Billing and the asset page keep their own formats. Stat and gauge figures grow with their card; a comparison sets the two months side by side on a wide card. New dashboard is a two-step template gallery (Power, Cost, Energy by area, Last 24 hours, Blank; the ones that fit the site are marked Recommended), with two new routes (`GET /api/dashboard-templates`, `POST /api/dashboards/{id}/copy`) and `recipe` widened. A first-run guide, help tips, "Updated HH:MM" with Refresh, Make a copy. Details: [Dashboard figures and templates](docs/dashboard-figures-and-templates.md). To go back use `44fa27f`.
 
