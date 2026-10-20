@@ -5,6 +5,7 @@ import { liveOrFetched } from "../../../lib/live";
 import { hasNoReading, NO_DATA, unitSuffix } from "../../../lib/widgetFormat";
 import { Age } from "../Age";
 import { useLiveValue } from "../LiveValuesContext";
+import { figureFit } from "./figureFit";
 
 /** The half circle, left end to right end, in the 100 x 52 box of the svg (radius 44, centre at the bottom middle). */
 const ARC = "M 6 50 A 44 44 0 0 1 94 50";
@@ -98,7 +99,7 @@ export function GaugeWidget({ data, config, live }: { data: WidgetData; config: 
         </svg>
         <div className="gauge-scale"><span>{scaleText(min, scale.divisor)}</span><span>{scaleText(max, scale.divisor)}{unitSuffix(scale.unit)}</span></div>
       </div>
-      <div className={figureClasses.join(" ")} title={title}>
+      <div className={figureClasses.join(" ")} title={title} style={figureFit(num, unit)}>
         <span className="stat-num">{num}</span>{unit && <small className="stat-unit">{unit}</small>}
       </div>
       <div className="gauge-name" title={name || undefined}>

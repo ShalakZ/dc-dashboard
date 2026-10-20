@@ -311,6 +311,29 @@ describe("barAxisLayout", () => {
     expect(most).toBeGreaterThan(1);
   });
 
+  it("turns the axis instead of cutting a word in two: 'Electrical' in a 48 px line was drawn 'Electrica' over 'l' (w27 R5)", () => {
+    const names = ["Hall 1", "Hall 2 ~", "Electrical"];
+    const slot = 56; // a 3x3 card at 1440: the chart is about 248 px, three slots of 56 px, lines of 48 px
+    expect(textPx("Electrical")).toBeGreaterThan(slot - SLOT_GAP_PX);
+    const tight = barAxisLayout(names, GRID_SIDES_PX + slot * 3);
+    expect(tight.mode).toBe("rotate");
+    expect(tight.labels.get("Electrical")).toBe("Electrical"); // the turned label is the whole word (AXIS_CHARS is 18)
+    // the same names in wider slots keep their wrapped, whole-word labels
+    expect(barAxisLayout(names, GRID_SIDES_PX + 80 * 3).mode).toBe("wrap");
+  });
+
+  it("still breaks a long name after a hyphen, underscore or slash, and between words, when every piece fits its line", () => {
+    const names = ["MV2-R2-LV-PANEL-02", "Hall 1 / Feed A"];
+    const layout = barAxisLayout(names, GRID_SIDES_PX + 80 * 2);
+    expect(layout.mode).toBe("wrap");
+    for (const name of names) for (const row of lines(layout.labels.get(name)!)) expect(textPx(row)).toBeLessThanOrEqual(80 - SLOT_GAP_PX);
+  });
+
+  it("a word wider than its line turns the axis, whatever else the name holds; the suffix never counts as a word", () => {
+    expect(barAxisLayout(["Distribution panel 1", "Hall 2"], GRID_SIDES_PX + 56 * 2).mode).toBe("rotate"); // "Distribution" is wider than 48 px
+    expect(barAxisLayout(["Hall 1 ~", "Hall 2 *"], GRID_SIDES_PX + 56 * 2).mode).toBe("wrap");
+  });
+
   it("an empty list and a width of 0 do not crash", () => {
     expect(barAxisLayout([], DEFAULT_CHART_WIDTH).labels.size).toBe(0);
     expect(barAxisLayout(["A"], 0).mode).toBe("rotate");

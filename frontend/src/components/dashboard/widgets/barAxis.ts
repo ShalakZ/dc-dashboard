@@ -178,6 +178,16 @@ export function wrapLabel(label: string, linePx: number, maxLines: number): stri
   return [...head(room - 2), middlePx(restFrom(room - 2), linePx), suffix];
 }
 
+/**
+ * The width at 12 px of the widest piece of `label` that cannot be broken any further: a word, or the part of one between hyphens, underscores and slashes
+ * (the places `wrapBody` may break at). The identifying suffix is left out, as it always has a line of its own.
+ */
+function widestPiece(label: string): number {
+  let widest = 0;
+  for (const word of splitSuffix(label).body.split(/\s+/)) for (const piece of word.match(PIECES) ?? []) widest = Math.max(widest, textPx(piece));
+  return widest;
+}
+
 export interface AxisLayout {
   mode: "wrap" | "rotate";
   /** Width of one category's slot, in px. */
@@ -211,8 +221,8 @@ function rotatedLeft(first: string, slot: number, chartWidth: number): number {
 
 /**
  * How the category labels of a chart `chartWidth` px wide are drawn. `wrap`: each name in lines of its slot's width. Two names that wrap to the
- * same text keep their whole text, over up to LABEL_LINES + 1 lines; if they are still equal, or the slot is narrower than MIN_SLOT_PX, the
- * axis is `rotate`d, with `shortLabels` (which never makes two names equal).
+ * same text keep their whole text, over up to LABEL_LINES + 1 lines; if they are still equal, or the slot is narrower than MIN_SLOT_PX, or a word of
+ * a name is wider than the line (it would be cut inside the word), the axis is `rotate`d, with `shortLabels` (which never makes two names equal).
  */
 export function barAxisLayout(labels: readonly string[], chartWidth: number): AxisLayout {
   const slot = (chartWidth - GRID_SIDES_PX) / Math.max(labels.length, 1);
@@ -223,6 +233,7 @@ export function barAxisLayout(labels: readonly string[], chartWidth: number): Ax
   if (!(slot >= MIN_SLOT_PX)) return rotated();
   const linePx = slot - SLOT_GAP_PX;
   const names = [...new Set(labels)];
+  if (names.some((name) => widestPiece(name) > linePx)) return rotated(); // a word wider than its slot would be cut in two ("Electrica" over "l"): the axis turns instead (w27 R5)
   const wrapped = new Map(names.map((name) => [name, wrapLabel(name, linePx, LABEL_LINES)] as const));
   const owners = new Map<string, number>();
   for (const lines of wrapped.values()) owners.set(lines.join("\n"), (owners.get(lines.join("\n")) ?? 0) + 1);

@@ -9,6 +9,7 @@ import { cardFigureOrNoData, NO_DATA, unitSuffix } from "../../../lib/widgetForm
 import { Age } from "../Age";
 import { Icon } from "../../Icon";
 import { useLiveValue } from "../LiveValuesContext";
+import { figureFit } from "./figureFit";
 
 /**
  * The rows a comparison adds under the headline: the window, last month's same days and their change, and ONE reserved line for the notes. The figures are on the
@@ -62,11 +63,12 @@ export function StatWidget({ data, live }: { data: WidgetData; live: boolean }) 
   const words = text === NO_DATA;
   const measured = reading.value !== null && Number.isFinite(reading.value); // a missing figure is a dash with no unit and no scaling
   const unit = words || !measured ? "" : unitSuffix(scale.unit);
-  const classes = ["big", ...(reading.stale || reading.noData ? ["muted"] : []), ...(words ? ["none"] : [])];
+  // `none` is the class of a reading that recorded nothing (the words, or the dash of a cost): the stylesheet draws it small and grey. It is set here, never read off the title.
+  const classes = ["big", ...(reading.stale || reading.noData ? ["muted"] : []), ...(words || reading.noData ? ["none"] : [])];
   // The card shows the figure compactly; its title is the exact value with its marks and unit (a figure that recorded nothing says "no data").
   const title = reading.noData ? NO_DATA : measured ? exactText(reading.value, data.unit, row) : undefined;
   return (
-    <div className={compared ? "stat stat-compare" : "stat"}>
+    <div className={compared ? "stat stat-compare" : "stat"} style={figureFit(text, unit)}>
       <div className={classes.join(" ")} title={title}>
         <span className="stat-num">{text}</span>{unit && <small className="stat-unit">{unit}</small>}
       </div>

@@ -287,6 +287,26 @@ describe("the gauge when there is no figure", () => {
   });
 });
 
+describe("the figure's size (w27 R5) and its look as a measured figure", () => {
+  it("never styles a measured figure as no data, though it carries its exact value as a title", () => {
+    const { container } = gaugeOf();
+    expect(figure(container)).toHaveAttribute("title", "10.50 kW");
+    expect(figure(container)).not.toHaveClass("none");
+  });
+
+  it("passes the character count of the figure and its unit to the stylesheet, which sizes the figure from them and the card's width", () => {
+    const { container } = gaugeOf();
+    expect(figure(container).style.getPropertyValue("--fig-chars")).toBe("5"); // "10.50"
+    expect(figure(container).style.getPropertyValue("--fig-unit")).toBe("2"); // "kW"
+  });
+
+  it("counts at least one character for a figure with none, and none for the unit of a dash", () => {
+    const { container } = gaugeOf(valuesData({ type: "gauge", values: [valueRow({ value: null })] }));
+    expect(figure(container).style.getPropertyValue("--fig-chars")).toBe("1"); // "—"
+    expect(figure(container).style.getPropertyValue("--fig-unit")).toBe("0");
+  });
+});
+
 describe("the figure and the name", () => {
   it("shows a measured figure in the normal colour, its unit apart, and the asset name below it", () => {
     const { container } = gaugeOf();

@@ -159,6 +159,10 @@ describe("the shared option parts", () => {
     expect(valueAxisParts(dark, valueAxisFor({ unit: null, source: "metric" }, [3])).name).toBeUndefined();
   });
 
+  it("drops the value ticks that would be drawn over each other, so a chart at its minimum height never crams its axis (w27 R5)", () => {
+    expect(valueAxisParts(dark, valueAxisFor({ unit: "kWh", source: "energy" }, [4_000])).axisLabel.hideOverlap).toBe(true);
+  });
+
   it("draws the legend at the bottom, scrolling, in 12px axis ink: a 12x3 line for lines, a 10x10 square for bars", () => {
     const line = legendParts(dark, "line");
     expect(line).toMatchObject({ bottom: 0, type: "scroll", textStyle: { color: "#a3adbd", fontSize: 12 }, inactiveColor: "#2b313b", icon: "rect", itemWidth: 12, itemHeight: 3, tooltip: { show: true } });

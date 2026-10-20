@@ -841,6 +841,28 @@ describe("WidgetSkeleton, the variants of a comparing stat and a breakdown by ki
     expect(container.querySelectorAll(".sk-line")).toHaveLength(0); // blocks of a set height, so each row is the loaded row's height
   });
 
+  it("names each row of a comparing stat's skeleton for the stylesheet, in the loaded card's order, so the two months sit side by side from 360px exactly as the real card (w27)", () => {
+    render(<WidgetSkeleton type="stat" shape="compare-stat" label="Loading Power" />);
+    const rows = rowsOf(screen.getByRole("status"));
+    expect(rows.map((row) => row.className)).toEqual([
+      "sk sk-block sk-fig", "sk sk-block sk-name", "sk sk-block sk-win", "sk-compare-last", "sk sk-block sk-lastwin", "sk sk-block sk-change", "sk sk-block sk-note",
+    ]);
+    const loaded = render(<StatWidget data={compareStatData()} live={false} />).container.querySelector(".stat")!;
+    expect(rowsOf(loaded).map((row) => row.className.split(" ").find((c) => /^(big|stat-name|stat-window|stat-last|stat-change|stat-note)$/.test(c)))).toEqual([
+      "big", "stat-name", "stat-window", "stat-last", "stat-window", "stat-change", "stat-note",
+    ]);
+  });
+
+  it("sets the figure row of a stat and a gauge skeleton from the real figure's clamp (--fig-size), not from a fixed 28px", () => {
+    const heightOf = (el: Element | null) => (el as HTMLElement).getAttribute("style") ?? "";
+    const stat = render(<WidgetSkeleton type="stat" label="Loading Energy" />).container;
+    expect(heightOf(stat.querySelector(".sk-block"))).toContain("--fig-size");
+    const gauge = render(<WidgetSkeleton type="gauge" label="Loading Gauge" />).container;
+    expect(heightOf(gauge.querySelector(".sk-line"))).toContain("--fig-size");
+    const compare = render(<WidgetSkeleton type="stat" shape="compare-stat" label="Loading Cost" />).container;
+    expect(heightOf(compare.querySelector(".sk-fig"))).toContain("--fig-size");
+  });
+
   it("draws the chart, the reserved line and the Split by row for a breakdown by kind", () => {
     render(<WidgetSkeleton type="bar" shape="kind-bars" label="Loading Racks" />);
     const region = screen.getByRole("status");

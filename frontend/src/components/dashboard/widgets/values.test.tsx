@@ -100,6 +100,36 @@ describe("stat", () => {
     expect(screen.queryByText("—")).not.toBeInTheDocument();
   });
 
+  it("never styles a measured figure as no data: it carries its exact value as a title and no `none` class (the stylesheet reads the class; w27 regression, every titled figure drew small and grey)", () => {
+    const { container, rerender } = render(<StatWidget data={valuesData()} live={false} />);
+    const big = container.querySelector(".big")!;
+    expect(big).toHaveAttribute("title", "10.50 kW");
+    expect(big).not.toHaveClass("none");
+    rerender(<StatWidget data={valuesData({ source: "cost", metric: null, unit: "QAR", values: [valueRow({ value: 275430.26, partial: true, point_id: null })] })} live={false} />);
+    expect(container.querySelector(".big")).toHaveAttribute("title", "275,430.26* QAR");
+    expect(container.querySelector(".big")).not.toHaveClass("none");
+    rerender(<StatWidget data={valuesData({ values: [valueRow({ ts: minutesAgo(12), stale: true })] })} live={false} />);
+    expect(container.querySelector(".big")).not.toHaveClass("none");
+  });
+
+  it("marks a reading that recorded nothing with `none`, the words and a cost's dash alike (they kept their small grey look when the title stopped deciding it)", () => {
+    const words = render(<StatWidget data={valuesData({ values: [valueRow({ value: null, no_data: true, point_id: null })] })} live={false} />);
+    expect(words.container.querySelector(".big")).toHaveClass("none");
+    words.unmount();
+    const dash = render(<StatWidget data={valuesData({ source: "cost", metric: null, unit: "QAR", values: [valueRow({ value: null, no_data: true, point_id: null })] })} live={false} />);
+    expect(dash.container.querySelector(".big")).toHaveClass("none");
+    expect(dash.container.querySelector(".big")).toHaveTextContent("—");
+  });
+
+  it("tells the stylesheet how long the figure and its unit are (--fig-chars, --fig-unit): a count, never a measured width", () => {
+    const row = valueRow({ value: 275430.2575, estimated: true, point_id: null });
+    const { container } = render(<StatWidget data={valuesData({ source: "energy", metric: null, unit: "kWh", values: [row] })} live={false} />);
+    const stat = container.querySelector(".stat") as HTMLElement;
+    expect(stat.style.getPropertyValue("--fig-chars")).toBe("7"); // "~275.43"
+    expect(stat.style.getPropertyValue("--fig-unit")).toBe("3"); // "MWh"
+    expect(stat.style.getPropertyValue("--fig-chars")).not.toMatch(/px/);
+  });
+
   it("keeps the muted dash for a cost without a rate that also recorded nothing, as Billing does, and titles it", () => {
     render(<StatWidget data={valuesData({ source: "cost", metric: null, unit: "QAR", values: [valueRow({ value: null, no_data: true, point_id: null })] })} live={false} />);
     const big = screen.getByTitle("no data");

@@ -146,7 +146,8 @@ export function axisParts(theme: ChartTheme) {
  */
 export function valueAxisParts(theme: ChartTheme, axis: ValueAxis, extra: Record<string, unknown> = {}) {
   const parts = axisParts(theme);
-  return { type: "value" as const, ...parts, ...extra, name: axis.name, axisLabel: { ...parts.axisLabel, formatter: axis.format } };
+  // hideOverlap (w27 R5): a chart at its minimum height has a plot a few pixels high, and five ticks would be drawn over each other ("1,000" over "2,000"); the ones that would run together are dropped.
+  return { type: "value" as const, ...parts, ...extra, name: axis.name, axisLabel: { ...parts.axisLabel, hideOverlap: true, formatter: axis.format } };
 }
 
 /** The legend, at the bottom, scrolling when it is long: a 12x3 line for a line chart, a 10x10 square for bars. The caller adds `show`, `data` and `formatter`. */
