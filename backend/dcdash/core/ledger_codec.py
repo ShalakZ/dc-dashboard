@@ -4,8 +4,9 @@ The ledger (`figure_ledger`) holds the very values w26's cache holds (`figures.M
 month report. An answer served from a stored row must equal, digit for digit, the answer the live path gives on the same data, so
 the codec keeps everything an equality test or a JSON response could see:
 
-- a float stays a float and an int stays an int (`1` is not `1.0`), `bool` is not `int`; `-0.0`, `nan` and `inf` come back as they
-  went (Python's `json` writes `repr(float)`, which round-trips exactly);
+- a float stays a float and an int stays an int (`1` is not `1.0`), `bool` is not `int`; `-0.0` and `inf` come back as they went
+  (Python's `json` writes `repr(float)`, which round-trips exactly) and a `nan` comes back a `nan` (its sign is not kept: no
+  reachable output shows it, the collector drops non-finite readings and `format()` and JSON write `nan` for both signs);
 - a tuple comes back a tuple (`WindowValues.values`, `MonthDays.days`) and a list a list;
 - a dict keeps its key order (the day entries read `kwh, cost, estimated, partial, no_data`; a different order is a different
   value) and a dict with int keys (`entries`, `own_from`, `values`) is stored as a list of `[key, value]` pairs, in order;
@@ -25,6 +26,15 @@ and infinities allowed. A value is an object whose first member is a type tag (`
 not misread. The members of a dataclass are listed in the field order; a decoder refuses any other member list. `encode` is the
 zlib stream (level 6) of `canonical`, and the only thing stored. No `pickle`: a row is data, never code.
 
+A string is refused when UTF-8 cannot hold it (a lone surrogate): `"\\ud83d\\ude00"` written as two lone surrogates would give the
+same bytes as the one astral character `"\\U0001F600"`, so `canonical` would not be injective. And every `decode_*` is a STRICT
+inverse: the value it built must give back, through `canonical`, exactly the text it was read from, so a row that is not in the form
+`encode` writes (another escape, spaces, an unsorted tree) is refused and never depends on its callers' comparison alone.
+
+The nested shapes are encoded BY POSITION (an `AssetNode` as `[id, parent id, name, sort order]`, a `TariffRow` as `[asset id,
+rate, effective from]`, an `AssetTree` by its nodes alone): a field added to one of them is not carried, and every check here
+would be blind to it, so `tests/test_ledger_codec.py` pins their field lists. Extend this module and bump `LEDGER_FORMAT` first.
+
 `figures.py` imports this module (the ledger hook), so `MonthDays` and `WindowValues` are imported lazily, inside the functions
 that need them.
 """
@@ -43,6 +53,7 @@ if TYPE_CHECKING:  # the real import is lazy: `figures` imports this module
 
 LEDGER_FORMAT = 1  # bump it with ANY change of the bytes `canonical` writes: an old row is then refused, never misread
 
+MAX_BYTES = 64 * 1024 * 1024  # the most a row may inflate to (a 2,000-asset month is about 6.4 MB canonical): a bomb is refused
 _ZLIB_LEVEL = 6
 _MONTH_DAYS = "MonthDays"
 _WINDOW_VALUES = "WindowValues"
@@ -63,6 +74,10 @@ _UTC = "u"  # the tzinfo tag of `timezone.utc`; a ZoneInfo is "z:" + its key
 def _str(value: Any) -> str:
     if type(value) is not str:
         raise ValueError(f"expected a str, found {type(value).__name__}")
+    try:
+        value.encode("utf-8")  # a lone surrogate cannot be written in UTF-8 (PostgreSQL text cannot hold one either)
+    except UnicodeEncodeError as exc:
+        raise ValueError("a string with a lone surrogate cannot be stored exactly") from exc
     return value
 
 
@@ -78,6 +93,8 @@ def _opt_int(value: Any) -> int | None:
 
 def _scalar(value: Any) -> Any:
     """None, bool, int, float or str, of exactly that type; anything else would not come back as it went."""
+    if type(value) is str:
+        return _str(value)
     if value is None or type(value) in _SCALARS:
         return value
     raise ValueError(f"cannot store a {type(value).__name__}")
@@ -93,6 +110,8 @@ def _plain(value: Any) -> Any:
     """A plain JSON-able value (the Check month report): None, bool, int, float, str, list and dict with str keys, nothing else.
     A tuple, a dict with a non-str key or any other type is refused: JSON would turn it into something else."""
     kind = type(value)
+    if kind is str:
+        return _str(value)
     if value is None or kind in _SCALARS:
         return value
     if kind is list:
@@ -340,13 +359,15 @@ def encode(value: "MonthDays | WindowValues | dict") -> bytes:
     return zlib.compress(canonical(value), _ZLIB_LEVEL)
 
 
-def _load(raw: bytes, tag: str, fields: tuple[str, ...]) -> dict:
+def _load(raw: bytes, tag: str, fields: tuple[str, ...]) -> tuple[dict, bytes]:
     """Inflate and parse `raw`, and check it is a complete zlib stream holding the object of this tag, this format number and
-    exactly these members. ValueError, or zlib.error for bytes that are not zlib at all."""
+    exactly these members. Returns the object and the text it was parsed from. ValueError, or zlib.error for bytes that are not
+    zlib at all. The inflated size is capped (`MAX_BYTES`): the bytes come from our own database, but a bomb would be an
+    out-of-memory kill of the api, not an exception the ledger hook catches."""
     inflater = zlib.decompressobj()
-    text = inflater.decompress(raw)  # zlib.error on garbage
-    if not inflater.eof or inflater.unused_data:
-        raise ValueError("not exactly one complete zlib stream")
+    text = inflater.decompress(raw, MAX_BYTES)  # zlib.error on garbage; stops at MAX_BYTES with the rest in unconsumed_tail
+    if not inflater.eof or inflater.unconsumed_tail or inflater.unused_data:
+        raise ValueError(f"not exactly one complete zlib stream of at most {MAX_BYTES} bytes")
     try:
         obj = json.loads(text.decode("ascii"))  # JSONDecodeError and UnicodeDecodeError are ValueErrors
     except RecursionError as exc:
@@ -359,15 +380,22 @@ def _load(raw: bytes, tag: str, fields: tuple[str, ...]) -> dict:
         raise ValueError(f"ledger format {obj['f']!r}, this build reads {LEDGER_FORMAT}")
     if list(obj)[2:] != list(fields):
         raise ValueError("the members of the value are not the ones of this format")
-    return obj
+    return obj, text
 
 
-def _build(make: Callable[[dict], Any], obj: dict) -> Any:
-    """`make(obj)`, with every way a malformed member can fail raised as ValueError (the caller catches ValueError, zlib.error)."""
+def _build(make: Callable[[dict], Any], loaded: tuple[dict, bytes]) -> Any:
+    """`make(obj)`, with every way a malformed member can fail raised as ValueError (the caller catches ValueError, zlib.error),
+    then the STRICT INVERSE check: the value must give back, through `canonical`, exactly the text it was read from. It refuses
+    a row that is not in the form `encode` writes (another escape or spacing, an unsorted tree, a duplicate key), so no caller
+    has to rely on its own comparison alone. It costs one `canonical` of the value (about 15 ms at 370 assets, 80 ms at 2,000)."""
+    obj, text = loaded
     try:
-        return make(obj)
+        value = make(obj)
     except (KeyError, TypeError, IndexError, AttributeError, OverflowError, OSError) as exc:
         raise ValueError(f"unusable ledger value: {exc!r}") from exc
+    if canonical(value) != text:  # ValueError if the value cannot even be written again
+        raise ValueError("not the canonical form of the value it holds")
+    return value
 
 
 def decode_month_days(raw: bytes) -> "MonthDays":
@@ -407,6 +435,6 @@ def decode_json(raw: bytes) -> dict:
     def make(obj: dict) -> dict:
         if type(obj["v"]) is not dict:
             raise ValueError("not a dict")
-        return obj["v"]
+        return obj["v"]  # JSON parsed it, so it holds only plain values; `_build` writes it again and compares
 
     return _build(make, _load(raw, _JSON, _JSON_FIELDS))
