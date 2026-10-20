@@ -1,4 +1,5 @@
 import type { CompareAsset, CompareSide, DataWidgetType, WidgetConfig, WidgetData } from "../api/types";
+import { exactText } from "./figures";
 import { formatSiteTick } from "./siteTime";
 
 export interface Flags { estimated: boolean; partial: boolean }
@@ -6,10 +7,9 @@ export interface Flags { estimated: boolean; partial: boolean }
 /** Two decimals, the precision the asset page shows. */
 export const formatValue = (value: number | null | undefined): string => (value == null ? "—" : value.toFixed(2));
 
-/** "12.30", with "~" in front when estimated and "*" behind when partial; a dash (no markers) when there is no figure. */
+/** The EXACT face (w27, `lib/figures.ts`): "12.30" or "1,234.50", with "~" in front when estimated and "*" behind when partial; a dash (no markers) when there is no figure. */
 export function figureText(value: number | null | undefined, flags: Flags): string {
-  if (value == null) return "—";
-  return `${flags.estimated ? "~" : ""}${value.toFixed(2)}${flags.partial ? "*" : ""}`;
+  return exactText(value, null, flags);
 }
 
 /** The title and wording of a figure that recorded nothing. */
