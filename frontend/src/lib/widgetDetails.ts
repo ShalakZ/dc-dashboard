@@ -1,7 +1,7 @@
 import type { RangePreset, SeriesTier, WidgetAggregation, WidgetConfig, WidgetData, WidgetPoint, WidgetSeries, DataWidgetType } from "../api/types";
 import { RANGE_LABELS, isRolling } from "./ranges";
 import { formatSiteClock, formatSiteDateTime, formatSiteTick, siteDay } from "./siteTime";
-import { flagsOf, hasNoReading, uniqueLabels } from "./widgetFormat";
+import { flagsOf, hasNoReading, uniqueLabels, type ParentNames } from "./widgetFormat";
 
 /*
  * Pure helpers for the Details panel and the chart's text alternative (w13). Every function says only what the response
@@ -148,10 +148,10 @@ export function markerMeanings(data: WidgetData): string[] {
 
 export interface AssetRow { assetId: number; name: string; states: string[] }
 
-/** The assets of a response with their states in words: estimated, partial, no rate, no data, stale. */
-export function assetRows(data: WidgetData): AssetRow[] {
+/** The assets of a response with their states in words: estimated, partial, no rate, no data, stale. `parents` (w27 R6) is the asset list's parent names, for the card's labels. */
+export function assetRows(data: WidgetData, parents?: ParentNames): AssetRow[] {
   if (data.mode === "series") {
-    const names = uniqueLabels(data.series);
+    const names = uniqueLabels(data.series, parents);
     return data.series.map((s, i) => {
       const states: string[] = [];
       if (s.estimated) states.push("estimated");
@@ -161,7 +161,7 @@ export function assetRows(data: WidgetData): AssetRow[] {
       return { assetId: s.asset_id, name: names[i], states };
     });
   }
-  const names = uniqueLabels(data.values);
+  const names = uniqueLabels(data.values, parents);
   return data.values.map((v, i) => {
     const states: string[] = [];
     if (v.estimated) states.push("estimated");
@@ -251,7 +251,7 @@ function summariseSeries(series: WidgetSeries, name: string, source: WidgetData[
  * response is a series. There is no average over buckets: they hold different numbers of samples, so it would not be exact.
  * The last column is named by what the figure is: "average" for a metric time series, else the aggregation in lower case.
  */
-export function seriesSummary(data: WidgetData, config: AggregationConfig): SeriesSummary | null {
+export function seriesSummary(data: WidgetData, config: AggregationConfig, parents?: ParentNames): SeriesSummary | null {
   if (data.mode !== "series") return null;
   const metric = data.source === "metric";
   const lastWords = metric && data.type === "timeseries" ? "average" : lowerFirst(aggregationWords(data.type, data, config));
@@ -261,7 +261,7 @@ export function seriesSummary(data: WidgetData, config: AggregationConfig): Seri
     { key: "last", heading: `Last bucket (${lastWords})` },
     ...(metric ? [] : [{ key: "total" as const, heading: "Total of the buckets shown" }]),
   ];
-  const names = uniqueLabels(data.series);
+  const names = uniqueLabels(data.series, parents);
   return { columns, rows: data.series.map((s, i) => summariseSeries(s, names[i], data.source)) };
 }
 
@@ -279,12 +279,12 @@ export function bucketStartText(iso: string, timezone: string, data: Pick<Widget
  * The accessible name of a chart (the canvas is a picture): type, assets, metric and unit, window. A gauge is a `meter`
  * and a stat or table is text, so they get "". The preset words need no time zone.
  */
-export function chartDescription(type: DataWidgetType, data: WidgetData): string {
+export function chartDescription(type: DataWidgetType, data: WidgetData, parents?: ParentNames): string {
   if (type !== "timeseries" && type !== "bar") return "";
   const kind = type === "timeseries" ? "Line chart" : "Bar chart";
   const rows = data.mode === "series" ? data.series : data.values;
   if (rows.length === 0) return `${kind} with no data. Open Details for the figures.`;
-  const names = uniqueLabels(rows);
+  const names = uniqueLabels(rows, parents);
   const shown = names.slice(0, 3).join(", ");
   const rest = names.length > 3 ? ` and ${names.length - 3} more` : "";
   const name = data.source === "energy" ? "Energy" : data.source === "cost" ? "Cost" : (data.metric ?? "Metric");

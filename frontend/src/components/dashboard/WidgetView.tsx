@@ -4,6 +4,7 @@ import type { RangePreset, WidgetConfig, DataWidgetType } from "../../api/types"
 import { hasNoBars } from "../../lib/breakdown";
 import { withoutEnergyStars } from "../../lib/compare";
 import { childrenNote, chooseText, isFollowing, leafText, NO_ASSETS_TEXT, ownAssetsNote } from "../../lib/focus";
+import { useParentNames } from "../../hooks/useParentNames";
 import { isLiveWidget, pointIdsOf } from "../../lib/live";
 import { isRolling } from "../../lib/ranges";
 import { flagsOf, markerHint, sinceText, skeletonShape } from "../../lib/widgetFormat";
@@ -52,6 +53,9 @@ export function WidgetView({ widgetKey, type, title, config, dashboardRange, tim
   // A comparison of energy draws no `*` (a cost mark), whatever flag its answer carries: cleared once here, for the card, the footer and the Details panel alike.
   const answer = query.data;
   const data = useMemo(() => (answer ? withoutEnergyStars(answer) : undefined), [answer]);
+  // w27 R6: the parent names that tell two assets of one name apart, one lookup for the card and its Details panel (so a table never says "Rack 04 (#12)" next to a bar
+  // labelled "Hall 2 / Rack 04"). Only with `assets.view`, only when the answer repeats a name, and from the list the top bar already holds.
+  const parents = useParentNames(data, ctx.allowed);
   // The focus of the last real answer this card drew. A placeholder (the previous answer, kept while the next loads) is dimmed only when it was fetched for another
   // focus: a change of range, or of the breakdown's "Split by", keeps the plain placeholder it always had (R13).
   const drawnFor = useRef<number | null>(null);
@@ -123,11 +127,11 @@ export function WidgetView({ widgetKey, type, title, config, dashboardRange, tim
         actions={actions}
         dragHandle={dragHandle}
       >
-        {sentence !== null ? <p className="widget-empty">{sentence}</p> : data && !bare && !oldSentence ? <WidgetBody type={type} data={data} config={shown} timezone={timezone} live={following} onKind={onKind} splitDisabled={!details} /> : null}
+        {sentence !== null ? <p className="widget-empty">{sentence}</p> : data && !bare && !oldSentence ? <WidgetBody type={type} data={data} config={shown} timezone={timezone} live={following} onKind={onKind} splitDisabled={!details} parents={parents} /> : null}
       </WidgetFrame>
       {open && canOpen && data && !stale && (
         <WidgetDetails
-          title={title} type={type} data={data} config={shown} timezone={timezone} following={following} csv={csvSource}
+          title={title} type={type} data={data} config={shown} timezone={timezone} following={following} csv={csvSource} parentNames={parents}
           onClose={() => setOpen(false)} returnFocus={() => opener.current}
         />
       )}

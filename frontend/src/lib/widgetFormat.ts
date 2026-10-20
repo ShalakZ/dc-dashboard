@@ -1,4 +1,4 @@
-import type { CompareAsset, CompareSide, DataWidgetType, WidgetConfig, WidgetData } from "../api/types";
+import type { Asset, CompareAsset, CompareSide, DataWidgetType, WidgetConfig, WidgetData } from "../api/types";
 import type { Scale } from "./figures";
 import { cardFigure, exactText } from "./figures";
 import { formatSiteTick } from "./siteTime";
@@ -133,16 +133,43 @@ export const escapeHtml = (text: string): string => text.replace(/[&<>"']/g, (c)
 
 interface Labelled { asset_id: number; name: string }
 
-/** Names as shown; a name used by several assets gets "(#id)" so legends and axes stay unambiguous. */
-export function uniqueLabels(rows: readonly Labelled[]): string[] {
+/** The name of each asset's parent, by the asset's id (w27 R6); an asset with no parent in the list has no entry. It comes from the asset list the page already loaded. */
+export type ParentNames = ReadonlyMap<number, string>;
+
+/** `ParentNames` of an asset list: only an asset whose parent is in the list gets an entry. */
+export function parentNamesOf(assets: readonly Pick<Asset, "id" | "parent_id" | "name">[]): ParentNames {
+  const names = new Map(assets.map((asset) => [asset.id, asset.name] as const));
+  return new Map(assets.flatMap((asset) => {
+    const parent = asset.parent_id === null ? undefined : names.get(asset.parent_id);
+    return parent === undefined ? [] : [[asset.id, parent] as const];
+  }));
+}
+
+/** Does a response use one name for several assets? Only then does a label need more than the name (so only then is the asset list asked for). */
+export function hasRepeatedNames(rows: readonly { name: string }[]): boolean {
+  return new Set(rows.map((row) => row.name)).size < rows.length;
+}
+
+/**
+ * Names as shown, in ONE place for every bar, legend, table and Details row of a card (w27 R6). A name used by several assets of the response gains its parent's name
+ * ("Hall 2 / Rack 04") when `parents` knows it; whatever is still ambiguous after that (two racks of one hall, a parent that is not known) gets "(#id)", as it always did,
+ * after the parent form when it has one. A unique name is left alone. Without `parents` (no `assets.view`, the list not yet here) the text is exactly "Rack 04 (#12)".
+ */
+export function uniqueLabels(rows: readonly Labelled[], parents?: ParentNames): string[] {
   const count = new Map<string, number>();
   for (const row of rows) count.set(row.name, (count.get(row.name) ?? 0) + 1);
-  return rows.map((row) => ((count.get(row.name) ?? 0) > 1 ? `${row.name} (#${row.asset_id})` : row.name));
+  const named = rows.map((row) => {
+    const parent = (count.get(row.name) ?? 0) > 1 ? parents?.get(row.asset_id) : undefined;
+    return parent === undefined ? row.name : `${parent} / ${row.name}`;
+  });
+  const left = new Map<string, number>();
+  for (const label of named) left.set(label, (left.get(label) ?? 0) + 1);
+  return rows.map((row, i) => ((left.get(named[i]) ?? 0) > 1 ? `${named[i]} (#${row.asset_id})` : named[i]));
 }
 
 /** `uniqueLabels` plus a trailing " ~" (estimated) and " *" (partial), for chart legends and axes. */
-export function chartLabels(rows: readonly (Labelled & Flags)[]): string[] {
-  return uniqueLabels(rows).map((label, i) => `${label}${rows[i].estimated ? " ~" : ""}${rows[i].partial ? " *" : ""}`);
+export function chartLabels(rows: readonly (Labelled & Flags)[], parents?: ParentNames): string[] {
+  return uniqueLabels(rows, parents).map((label, i) => `${label}${rows[i].estimated ? " ~" : ""}${rows[i].partial ? " *" : ""}`);
 }
 
 /** The identifying tail `uniqueLabels` and `chartLabels` append: " (#12)", then " ~", then " *". */

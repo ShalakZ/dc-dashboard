@@ -6,7 +6,7 @@ import { compareChartDescription, compareLineNames, dayOfMonthLabel, measureOf, 
 import { chartDescription } from "../../../lib/widgetDetails";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
 import { valueAxisFor } from "../../../lib/chartScale";
-import { chartLabels, figureText, labelBucket, lastCostGone, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
+import { chartLabels, figureText, labelBucket, lastCostGone, shortLabel, shortLabels, unitSuffix, type ParentNames } from "../../../lib/widgetFormat";
 import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, valueAxisParts, type ChartTheme } from "./chartTheme";
 import { useLegendSelection } from "./legendSelection";
 
@@ -143,8 +143,8 @@ export function timeAxisBounds(data: WidgetData): { min: number; max: number } |
  * hidden band first would give an invisible icon), and the two band series that follow carry the line's name and colour, so one click on the
  * legend switches the line and its band together. The line has the higher z, so it stays on top of its band.
  */
-export function timeSeriesOption(data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART): EChartsOption {
-  const labels = chartLabels(data.series);
+export function timeSeriesOption(data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART, parents?: ParentNames): EChartsOption {
+  const labels = chartLabels(data.series, parents);
   const legendShort = shortLabels(labels, LEGEND_CHARS);
   const bucket = labelBucket(data);
   const band = data.source === "metric";
@@ -275,7 +275,7 @@ export function compareOption(data: WidgetData, timezone: string, theme: ChartTh
  * stream batch re-renders every widget of the dashboard, and a new option object (its formatters are new closures)
  * makes echarts-for-react call setOption with notMerge, which resets the legend and closes an open tooltip.
  */
-export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone }: { data: WidgetData; timezone: string }) {
+export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone, parents }: { data: WidgetData; timezone: string; parents?: ParentNames }) {
   const legend = useLegendSelection();
   const theme = useChartTheme();
   const compare = data.compare;
@@ -293,9 +293,9 @@ export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone 
   if (data.series.every((s) => s.points.every((p) => p.no_data))) return <p className="widget-empty">No data in this range.</p>;
   // The canvas is a picture: the box around it is the chart's text alternative (the figures themselves are in the Details panel).
   return (
-    <div className="widget-chart" role="img" aria-label={chartDescription("timeseries", data)}>
+    <div className="widget-chart" role="img" aria-label={chartDescription("timeseries", data, parents)}>
       <ReactECharts
-        option={legend.apply(timeSeriesOption(data, timezone, theme), data.series.map((s) => s.asset_id))} onEvents={legend.onEvents}
+        option={legend.apply(timeSeriesOption(data, timezone, theme, parents), data.series.map((s) => s.asset_id))} onEvents={legend.onEvents}
         style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge
       />
     </div>

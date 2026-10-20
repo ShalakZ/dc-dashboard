@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router";
 import { keys } from "../../../api/queries";
 import type { Asset, WidgetData } from "../../../api/types";
-import { chartLabels } from "../../../lib/widgetFormat";
+import { chartLabels, type ParentNames } from "../../../lib/widgetFormat";
 import { breakdownBlock, breakdownData, valueRow } from "../../../test/dashboardFixtures";
 import { FocusContext, type FocusState } from "../FocusContext";
 import { BarWidget, barOption, clickedBar } from "./BarWidget";
@@ -46,14 +47,16 @@ function Where() {
   return <p data-testid="where">{useLocation().pathname}</p>;
 }
 /** The widget in the providers the dashboard gives it. The asset list is in the cache and never stale, so no request is made. */
-function drawBars(data: WidgetData, { focus = state(), cached = ASSETS, splitDisabled = false }: { focus?: FocusState; cached?: Asset[] | null; splitDisabled?: boolean } = {}) {
+function drawBars(
+  data: WidgetData, { focus = state(), cached = ASSETS, splitDisabled = false, parents }: { focus?: FocusState; cached?: Asset[] | null; splitDisabled?: boolean; parents?: ParentNames } = {},
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   if (cached) client.setQueryData(keys.assets, cached);
   const wrap = (next: WidgetData) => (
     <QueryClientProvider client={client}>
       <MemoryRouter>
         <FocusContext.Provider value={focus}>
-          <BarWidget data={next} timezone={TZ} splitDisabled={splitDisabled} />
+          <BarWidget data={next} timezone={TZ} splitDisabled={splitDisabled} parents={parents} />
         </FocusContext.Provider>
         <Where />
       </MemoryRouter>
@@ -116,6 +119,28 @@ describe("a breakdown chart where a click does something", () => {
     expect(drawn().option.xAxis.data).toEqual(["Rack (#10)", "Rack (#11)"]);
     click({ componentType: "xAxis", value: "Rack (#11)" });
     expect(view.getByTestId("where")).toHaveTextContent("/assets/11");
+  });
+
+  it("maps a click on a name that carries the parent's name (w27 R6), by the same labels the axis was given, and the tooltip says the same name", () => {
+    const twins = bars([10, "Rack", 100], [11, "Rack", 90]);
+    const view = drawBars(twins, { parents: new Map([[10, "Hall 1"], [11, "Hall 2"]]) });
+    expect(drawn().option.xAxis.data).toEqual(["Hall 1 / Rack", "Hall 2 / Rack"]);
+    click({ componentType: "xAxis", value: "Hall 2 / Rack" });
+    expect(view.getByTestId("where")).toHaveTextContent("/assets/11");
+    click({ componentType: "xAxis", value: "Hall 1 / Rack" });
+    expect(setFocus).toHaveBeenCalledTimes(1);
+    expect(setFocus).toHaveBeenCalledWith(10);
+    click({ componentType: "xAxis", value: "Rack (#10)" }); // the old text is no category of this axis
+    expect(setFocus).toHaveBeenCalledTimes(1);
+    expect(tipOf(0)).toContain("Click to narrow the dashboard to Hall 1 / Rack");
+  });
+
+  it("still maps by the id the label carries when the parent's name leaves two the same (w27 R6)", () => {
+    const triplets = bars([10, "Rack", 100], [11, "Rack", 90], [12, "Rack", 80]);
+    const view = drawBars(triplets, { parents: new Map([[10, "Hall 1"], [11, "Hall 2"], [12, "Hall 2"]]) });
+    expect(drawn().option.xAxis.data).toEqual(["Hall 1 / Rack", "Hall 2 / Rack (#11)", "Hall 2 / Rack (#12)"]);
+    click({ componentType: "xAxis", value: "Hall 2 / Rack (#12)" });
+    expect(view.getByTestId("where")).toHaveTextContent("/assets/12");
   });
 
   it("makes the name of a bar with no data clickable too (it has no shape to click)", () => {
@@ -251,4 +276,38 @@ describe("the click and the option", () => {
     expect(drill.series[0].cursor).toBe("pointer");
   });
 
+});
+
+describe("the tip beside Split by (w27 R11)", () => {
+  const row = (view: ReturnType<typeof drawBars>) => view.container.querySelector(".bars-split") as HTMLElement;
+
+  it("sits between the label and the select: Tab reaches the tip, then the select, and the select keeps its focus when the answer changes", async () => {
+    const user = userEvent.setup();
+    const view = drawBars(THREE);
+    const tip = within(row(view)).getByRole("button", { name: "What does this mean?" });
+    const select = within(row(view)).getByRole("combobox", { name: "Split by" });
+    expect(tip.compareDocumentPosition(select) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.tab();
+    expect(tip).toHaveFocus();
+    await user.tab();
+    expect(select).toHaveFocus();
+    view.again(bars([10, "Rack 05", 100], [11, "Rack 06", 90]));
+    expect(within(row(view)).getByRole("combobox", { name: "Split by" })).toBe(select);
+    expect(select).toHaveFocus();
+  });
+
+  it("says in one sentence what the select does, and closes with Escape", async () => {
+    const user = userEvent.setup();
+    const view = drawBars(THREE);
+    await user.click(within(row(view)).getByRole("button", { name: "What does this mean?" }));
+    expect(screen.getByRole("note")).toHaveTextContent(/^Draws one bar for each asset of the chosen kind\.$/);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
+  it("is not in the editor's grid and preview, where the select is inert (the dialog has a tip of its own to find)", () => {
+    const view = drawBars(THREE, { splitDisabled: true });
+    expect(within(row(view)).getByRole("combobox", { name: "Split by" })).toBeDisabled();
+    expect(within(row(view)).queryByRole("button")).not.toBeInTheDocument();
+  });
 });

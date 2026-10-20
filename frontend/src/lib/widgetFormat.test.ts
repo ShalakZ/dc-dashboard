@@ -4,7 +4,7 @@ import {
 import { familyOf, pickScale } from "./figures";
 import {
   ageText, cardFigureOrNoData, chartLabels, escapeHtml, figureOrNoData, figureText, flagsOf, formatValue, labelBucket, markerHint, noMetricText, removedText, shortLabel,
-  shortLabels, sinceText, skeletonShape, uniqueLabels, unitSuffix,
+  hasRepeatedNames, parentNamesOf, shortLabels, sinceText, skeletonShape, uniqueLabels, unitSuffix,
 } from "./widgetFormat";
 
 const none = { estimated: false, partial: false };
@@ -100,6 +100,52 @@ describe("markers and labels", () => {
     ];
     expect(uniqueLabels(rows)).toEqual(["Panel (#1)", "Panel (#2)", "Main"]);
     expect(chartLabels(rows)).toEqual(["Panel (#1)", "Panel (#2) ~", "Main *"]);
+  });
+  it("gives a repeated name its parent's name when the parents are known, and leaves a unique name alone (w27 R6)", () => {
+    const rows = [
+      { asset_id: 12, name: "Rack 04", estimated: false, partial: false },
+      { asset_id: 13, name: "Rack 04", estimated: true, partial: false },
+      { asset_id: 20, name: "Main", estimated: false, partial: true },
+    ];
+    const parents = new Map([[12, "Hall 2"], [13, "Hall 3"], [20, "Site"]]);
+    expect(uniqueLabels(rows, parents)).toEqual(["Hall 2 / Rack 04", "Hall 3 / Rack 04", "Main"]);
+    expect(chartLabels(rows, parents)).toEqual(["Hall 2 / Rack 04", "Hall 3 / Rack 04 ~", "Main *"]);
+  });
+  it("falls back to (#id) for the assets that are still ambiguous after the parent's name: three assets, one name, two share a parent", () => {
+    const rows = [12, 13, 14].map((asset_id) => ({ asset_id, name: "Rack 04", estimated: false, partial: false }));
+    const parents = new Map([[12, "Hall 2"], [13, "Hall 3"], [14, "Hall 3"]]);
+    expect(uniqueLabels(rows, parents)).toEqual(["Hall 2 / Rack 04", "Hall 3 / Rack 04 (#13)", "Hall 3 / Rack 04 (#14)"]);
+    expect(chartLabels(rows.map((r, i) => ({ ...r, estimated: i === 2 })), parents)).toEqual(["Hall 2 / Rack 04", "Hall 3 / Rack 04 (#13)", "Hall 3 / Rack 04 (#14) ~"]);
+  });
+  it("is today's text without the parents, with an empty list, and for an asset whose parent is not known", () => {
+    const rows = [12, 13].map((asset_id) => ({ asset_id, name: "Rack 04" }));
+    const today = ["Rack 04 (#12)", "Rack 04 (#13)"];
+    expect(uniqueLabels(rows)).toEqual(today);
+    expect(uniqueLabels(rows, undefined)).toEqual(today);
+    expect(uniqueLabels(rows, new Map())).toEqual(today);
+    expect(uniqueLabels(rows, new Map([[99, "Elsewhere"]]))).toEqual(today);
+    // one known parent and one top-level asset: the bare name and the parent form already differ
+    expect(uniqueLabels(rows, new Map([[13, "Hall 3"]]))).toEqual(["Rack 04", "Hall 3 / Rack 04"]);
+  });
+  it("never lets the parent form collide with another label", () => {
+    const rows = [{ asset_id: 1, name: "Rack 04" }, { asset_id: 2, name: "Rack 04" }, { asset_id: 3, name: "Hall 2 / Rack 04" }];
+    expect(uniqueLabels(rows, new Map([[1, "Hall 2"], [2, "Hall 3"]]))).toEqual(["Hall 2 / Rack 04 (#1)", "Hall 3 / Rack 04", "Hall 2 / Rack 04 (#3)"]);
+  });
+  it("reads the parent names from the asset list: only an asset whose parent is in the list gets one", () => {
+    const asset = (id: number, parent_id: number | null, name: string) => ({ id, parent_id, name, kind: "rack", sort_order: id });
+    const parents = parentNamesOf([asset(1, null, "Site"), asset(2, 1, "Hall 2"), asset(12, 2, "Rack 04"), asset(13, 99, "Orphan")]);
+    expect([...parents]).toEqual([[2, "Site"], [12, "Hall 2"]]);
+  });
+  it("says whether a response repeats a name (only then does a label need a parent)", () => {
+    expect(hasRepeatedNames([{ name: "A" }, { name: "B" }])).toBe(false);
+    expect(hasRepeatedNames([{ name: "A" }, { name: "A" }])).toBe(true);
+    expect(hasRepeatedNames([])).toBe(false);
+  });
+  it("keeps the (#id) of a parent label whole when it is cut for an axis or a legend", () => {
+    const a = shortLabel("Hall 3 / Main-Switchboard-Feeder-Room (#13) ~", 24);
+    const b = shortLabel("Hall 3 / Main-Switchboard-Feeder-Room (#14) ~", 24);
+    expect(a).not.toBe(b);
+    expect(a.endsWith(" (#13) ~")).toBe(true);
   });
   it("escapes HTML, because asset names are typed by users and ECharts renders tooltip text as HTML", () => {
     expect(escapeHtml(`<b>"x" & 'y'</b>`)).toBe("&lt;b&gt;&quot;x&quot; &amp; &#39;y&#39;&lt;/b&gt;");
