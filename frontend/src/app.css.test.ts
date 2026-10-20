@@ -730,7 +730,7 @@ describe("the page style files (src/styles/*.css)", () => {
     );
   });
 
-  it.each(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css", "feedback-save.css", "feedback-toasts.css", "feedback-confirm.css", "role-prompt.css", "drawer.css", "icon-picker.css", "kinds-dialogs.css", "tree-move.css", "asset-move.css", "scans-drawer.css", "discovery-tidy.css", "bulk-assets.css", "scans-polish.css", "graph-nodes.css", "graph-tools.css", "graph-keys.css", "graph-source-card.css", "graph-value-tip.css", "widgets.css", "widgets-details.css", "month-check.css", "asset-picker.css", "focus-follow.css", "focus-header.css", "focus-drill.css", "templates.css", "dashboard-guide.css", "displays.css", "display-screen.css"])(
+  it.each(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css", "feedback-save.css", "feedback-toasts.css", "feedback-confirm.css", "role-prompt.css", "drawer.css", "icon-picker.css", "kinds-dialogs.css", "tree-move.css", "asset-move.css", "scans-drawer.css", "discovery-tidy.css", "bulk-assets.css", "scans-polish.css", "graph-nodes.css", "graph-tools.css", "graph-keys.css", "graph-source-card.css", "graph-value-tip.css", "widgets.css", "widgets-details.css", "month-check.css", "asset-picker.css", "focus-follow.css", "focus-header.css", "focus-drill.css", "templates.css", "dashboard-guide.css", "displays.css", "display-screen.css", "display-wall.css"])(
     "%s is one @layer w6 block with nothing outside it, no raw colour and no accent in a sidebar rule",
     (file) => {
       expect(existsSync(`${STYLES}/${file}`), `${STYLES}/${file} exists`).toBe(true);
@@ -804,7 +804,15 @@ describe("the page style files (src/styles/*.css)", () => {
     expect(parsed.length).toBeGreaterThanOrEqual(5);
     // The one deliberate cross-file rule (W7l, review C2): while a drawer is open, drawer.css lifts the toast stack above the drawer's footer
     // (`body:has(.drawer) .toast-stack`). The stack is feedback-toasts.css's; the lift can only be written where the drawer's footer height is.
-    const SANCTIONED = new Set([".toast-stack: bare in feedback-toasts.css, named in drawer.css"]);
+    // And w29 (display wall): display-wall.css raises the type of four card lines (the stat's comparison figure and its note lines) to what reads from across a room, only inside
+    // `.wall-canvas`, which exists on the wall alone. They are widgets.css's bare classes; the wall page cannot be styled anywhere else.
+    const SANCTIONED = new Set([
+      ".toast-stack: bare in feedback-toasts.css, named in drawer.css",
+      ".stat-last-fig: bare in widgets.css, named in display-wall.css",
+      ".stat-window: bare in widgets.css, named in display-wall.css",
+      ".stat-note: bare in widgets.css, named in display-wall.css",
+      ".bars-note: bare in widgets.css, named in display-wall.css",
+    ]);
     const clashes: string[] = [];
     for (const a of parsed) {
       for (const cls of bareClasses(a.rules)) {

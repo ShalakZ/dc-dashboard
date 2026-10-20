@@ -1,0 +1,120 @@
+@layer w6 {
+  /* w29: the wall (src/display/WallScreen.tsx), the screen a connected display shows: a header strip over the dashboard's own grid, scaled as one box to fit the
+     window. The page runs without the app shell and is dark in every theme (DisplayApp puts data-mode="dark" on <html>). The view sets two unitless numbers on
+     .wall: --wall-s, the scale of the dashboard, and --wall-unit, the window's height over 1080 rows; every size below comes from those two, never from a
+     media query (a width threshold belongs in CSS, and a screen's size is arithmetic). Every class starts with wall, and the rules that reach into the cards
+     (the type floors) hang on .wall-canvas, so none of them can touch the app. The grid is the wall's own (.wall-grid, .wall-cell): the app's .dash-grid turns
+     into a block under 700px with !important placement that nothing here could undo. */
+  .wall {
+    --wall-bg: var(--bg);
+    --wall-ink: var(--text);
+    --wall-quiet: var(--text-2);
+    --wall-size: calc(var(--wall-unit) * 32px);
+    --wall-pad: calc(var(--wall-unit) * 24px);
+    color-scheme: dark;
+    position: fixed;
+    inset: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    background: var(--wall-bg);
+    color: var(--wall-ink);
+    font-family: var(--font);
+    user-select: none;
+  }
+  .wall-cursor-hidden, .wall-cursor-hidden * { cursor: none; } /* a chart sets its own cursor on its canvas, so the children are named too */
+
+  /* ===== The header: one strip, 4.5% of the window's height. Title left, place centred, the legend, "Updated" and the clock right. The clock and "Updated" have
+     boxes of their own width (tabular figures), so a minute that changes never moves a neighbour. The right part gets the wider column (1.6fr against the title's 1fr)
+     so the marks' key, the one text that must not be lost (A11), is the last to be cut. The strip is the container of the narrow-window rules at the end of this
+     block: below about 31 of its own font sizes (1000px at 1080 rows) "Updated" goes, below about 22 (700px) the place goes, so nothing ever draws over a neighbour. ===== */
+  .wall-head {
+    box-sizing: border-box;
+    container-type: inline-size;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.6fr);
+    align-items: center;
+    column-gap: var(--wall-pad);
+    height: 4.5vh;
+    padding: 0 1.5vh; /* the dashboard's own side gutter (fit.ts): the title lines up with the cards */
+    font-size: var(--wall-size);
+    line-height: 1;
+  }
+  .wall-title, .wall-position, .wall-legend, .wall-updated, .wall-clock {
+    margin: 0;
+    font-size: var(--wall-size);
+    font-weight: 400;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  /* The three columns are named, so a part that is hidden below never lets the next one slide into its column. */
+  .wall-title { grid-column: 1; min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; }
+  .wall-position { grid-column: 2; text-align: center; }
+  .wall-meta { grid-column: 3; display: flex; align-items: center; justify-content: flex-end; gap: var(--wall-pad); min-width: 0; }
+  /* The legend keeps the two spaces between its marks (pre) and is the one part of the meta column that gives way, with an ellipsis. */
+  .wall-legend { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--wall-quiet); text-overflow: ellipsis; white-space: pre; }
+  .wall-updated { flex: none; min-width: 7.5em; color: var(--wall-quiet); text-align: right; }
+  .wall-clock { flex: none; min-width: 2.6em; text-align: right; }
+  @container (max-width: 31em) { .wall-updated { display: none; } }
+  @container (max-width: 22em) { .wall-position { display: none; } }
+
+  /* ===== The stage: the scaled box. The view gives it the top and the height in window pixels; the canvas inside is laid out at its logical width and scaled from
+     its top left corner. The fade between two dashboards is the canvas's opacity (the swap itself runs on a timer; app.css removes transitions for reduced motion);
+     a band dims the stage, which is a different box, so the two never fight over one property. ===== */
+  .wall-stage { position: absolute; left: 0; width: 100%; }
+  .wall[data-dim="true"] .wall-stage { opacity: 0.55; }
+  .wall-canvas { position: absolute; top: 0; left: 0; transition: opacity var(--motion); }
+  .wall-canvas[data-phase="out"] { opacity: 0; }
+  .wall-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); }
+  .wall-cell { min-width: 0; min-height: 0; }
+
+  /* ===== Type that reads from across a room (R6): inside the scaled box the three small sizes of the cards grow to 24px per 1080 rows of the window once scaled
+     (24 x unit / s here, because the whole box is scaled by s), never under their own value and never over 1.6 times it, so a card keeps its layout. The card title
+     aims at 32. The figures keep their own sizes (they are larger already); the charts' axis labels follow the scale only. ===== */
+  .wall-canvas {
+    --fs-xs: clamp(12px, calc(24px * var(--wall-unit) / var(--wall-s)), 19.2px);
+    --fs-sm: clamp(13px, calc(24px * var(--wall-unit) / var(--wall-s)), 20.8px);
+    --fs-base: clamp(14px, calc(24px * var(--wall-unit) / var(--wall-s)), 22.4px);
+    --fs-md: clamp(16px, calc(24px * var(--wall-unit) / var(--wall-s)), 25.6px);
+    --fs-lg: clamp(18px, calc(24px * var(--wall-unit) / var(--wall-s)), 28.8px); /* a text widget's heading */
+    --widget-unit-fs: clamp(13px, calc(24px * var(--wall-unit) / var(--wall-s)), 20.8px); /* the unit beside a figure */
+  }
+  .wall .wall-canvas .widget-title { font-size: clamp(13px, calc(32px * var(--wall-unit) / var(--wall-s)), 26px); }
+  /* The figures of a table and the comparison figure of a stat aim at 32px per 1080 rows too, held at 24 logical px so a table row (32px) still holds them; the line is
+     1.2 so the figure's line is never taller than its neighbour's (the name beside it), and the row does not grow. */
+  /* The stat's classes below are widgets.css's bare classes: the wall restyles them on purpose, and only inside .wall-canvas, which exists on the wall alone
+     (app.css.test.ts sanctions each of the four by name). */
+  .wall-canvas td.num, .wall-canvas .stat-last-fig { font-size: clamp(var(--fs-base), calc(32px * var(--wall-unit) / var(--wall-s)), 24px); line-height: 1.2; }
+  /* The three note lines of a card keep a 16px line in the app. Raised to the wall's size they would cut a descender (the g of "No readings last month."): their line follows the
+     text, and the box no longer clips (Segoe UI, the first font of the stack, has so little room below the baseline at 1.25 that a clipping box could still shave a g). */
+  .wall-canvas .stat-window, .wall-canvas .stat-note, .wall-canvas .bars-note { overflow: visible; line-height: 1.25; }
+  /* The breakdown's "Split by" row (a label and a select that does nothing here) has no place on a wall; it is the only box in a card with a select as its child. */
+  .wall-canvas :has(> select) { display: none; }
+  /* No scroll bars anywhere: a card whose content is longer than the card is cut, never scrolled. */
+  .wall-canvas * { scrollbar-width: none; }
+  .wall-canvas *::-webkit-scrollbar { display: none; }
+
+  /* ===== The cards: a card that stopped updating is dimmed and says since when, in its head; a quiet note about the focus is a chip there too ===== */
+  .wall-card { height: 100%; }
+  .wall-card-stale { height: 100%; opacity: 0.55; }
+  .wall-card-tag { flex: none; color: var(--wall-quiet); font-size: var(--fs-xs); white-space: nowrap; }
+  .wall .wall-card-note { height: auto; min-height: var(--chip-h); min-width: 0; max-width: 100%; }
+  .wall-card-note-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ===== The bands: one calm strip over the bottom 6% of the window (amber, dark ink, no motion), so the grid never moves. The ink is the page's own dark ===== */
+  .wall-band {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 6vh;
+    padding: 0 var(--wall-pad);
+    background: var(--warn);
+    color: var(--bg);
+  }
+  .wall-band-text { margin: 0; min-width: 0; overflow: hidden; font-size: var(--wall-size); font-weight: 600; line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
+}

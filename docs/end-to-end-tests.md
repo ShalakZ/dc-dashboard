@@ -448,21 +448,45 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   ("(copy)", "(copy 2)", the widgets equal the source's); and a role with only `dashboards.view` (no gallery, no row menu, no request for
   the templates, 403 from the server). Every other spec that opens a dashboard calls `markGuideSeen` (`e2e/shell.ts`) so the guide panel
   does not move its cards.
-- `w28.spec.ts` (its own project, last in the list, after `w27`) checks display screens: playlists and the secret links that show them
+- `w28.spec.ts` (its own project, after `w27`; `w29` follows it) checks display screens: playlists and the secret links that show them
   without signing in. It makes its own data through the API (an asset, two dashboards with one stat each, and the playlists and displays
   of each case, all named `W28 <run> ...`) and deletes it in `afterAll`, displays first, also after a failed case; it needs no scratch
   stack. Cases: an administrator makes a playlist of two dashboards and a display in the dialogs, sees the link once in the **Display
   link** field, copies it and presses **Done** (the page, its storage and a reload then hold no trace of the secret); a new browser
   context opens the link and ends on exactly `/display` with the cookie `dcdash_display` (httpOnly, SameSite=Strict, path
-  `/api/display`) and the sentence "Connected as ...", that cookie gets 401 on `/api/me`, `/api/widget-data`, `/api/dashboards` and
+  `/api/display`) and shows the wall (the first dashboard's name and "1 of 2"; there is no "Connected as ..." sentence any more), that
+  cookie gets 401 on `/api/me`, `/api/widget-data`, `/api/dashboards` and
   `/api/assets` (also when sent by hand), the three display routes answer and the figures equal the administrator's `/api/widget-data`
   for the same stored widget; revoking shows "revoked or is not valid" on the page within a minute (`page.clock`) and **Revoked** on the
-  Screens card; deleting a dashboard of a playlist in use shows "1 item is skipped" on the Displays page and "(1 skipped)" on the
-  screen; the keyboard-only pass (Tab and Enter, **Move up**, **Move down**, **Remove**, the row menu and **Revoke**, focus returning to
-  the opener, no sideways scroll) at 1440 x 900 and 1024 x 640, light and dark. The last case sends ten wrong claims (401, one body) and an
-  eleventh (429 with `Retry-After`): it blocks the stack's client address for 15 minutes, so it is the last case of the last project and
-  `W28_SKIP_BLOCK=1` skips it. Every secret the spec used is appended to the file named by `W28_SECRET_FILE` (default
-  `/tmp/w28-secret.txt`) so a log check can look for it.
+  Screens card; deleting a dashboard of a playlist in use shows "1 item is skipped" on the Displays page, and the wall, after a reload,
+  shows the other dashboard alone ("1 of 1"); the keyboard-only pass (Tab and Enter, **Move up**, **Move down**, **Remove**, the row menu
+  and **Revoke**, focus returning to the opener, no sideways scroll) at 1440 x 900 and 1024 x 640, light and dark. The last case sends ten
+  wrong claims (401, one body) and an eleventh (429 with `Retry-After`): it blocks the stack's client address for 15 minutes for WRONG
+  secrets (a right secret from that address still connects, and the case checks it), so no later project may make a wrong claim (`w29`
+  makes right ones only) and `W28_SKIP_BLOCK=1` skips the case. Every secret the spec used is appended to the file named by
+  `W28_SECRET_FILE` (default `/tmp/w28-secret.txt`) so a log check can look for it.
+- `w29.spec.ts` (its own project, last in the list, after `w28`, `dependencies: ["w28"]`) checks the wall, the rotating screen a connected
+  display shows. It makes its own data through the API (an asset, two dashboards, a playlist of them with a focus asset on the second and
+  a display, plus dashboards, playlists and displays of their own for the cases that change or delete a dashboard, all named
+  `W29 <run> ...`), deletes it in `afterAll` (displays first, also after a failed case), needs no scratch stack of its own and no running
+  collector (the playlist's `status` is replaced in the page where a case depends on it), and **makes right claims only**: it runs after
+  w28's blocking case, which refuses wrong secrets from the stack's address but lets a right one through. Cases: (1) a new browser
+  opens the link at 1920 x 1080 and the wall names the first dashboard with "1 of 2", the figure on its card equals the administrator's
+  `/api/widget-data` for the stored widget (through `lib/figures.ts`), nothing scrolls, the cursor is hidden after 3 s without a move and
+  shown on the next, and within 20 s the second dashboard comes with its focus asset in the heading and "2 of 2"; (2) deleting a
+  dashboard of the playlist leaves "1 of 1" within 80 s of clock time and never a full-screen sentence; (3) saving a dashboard with a new
+  widget title (so its widget id changes) brings the new card within 80 s, with no page navigation and no band; (4) band 1: with the
+  playlist's `status` replaced, "Readings stopped arriving at HH:MM." appears after the next poll over dimmed figures while the grid does
+  not move, and goes with a healthy status; (5) band 2: with every `/api/display/*` request failing for 130 s, no band shows for the
+  first 100 s and no full-screen sentence ever, then "This screen has not been updated since HH:MM. Trying again..." shows over dimmed
+  figures, and it clears within 100 s of clock time after the requests return (a card that failed five times waits up to 78 s); (6) a
+  display on an empty playlist says "Nothing to show. Every dashboard in playlist ... is skipped or the playlist is empty. ..."; (7) the
+  header is 4.5 % of the height, within 0.2 %, at 1920 x 1080 and at 3840 x 2160, and the grid fits and lies under it at both; (8) every
+  `/api` URL the page of case 1 asked for is under `/api/display/` (the claim, the playlist, widget-data), none a user route. Cases 2 to 5
+  move the page's clock with `page.clock.runFor` in steps of 10 s, never `fastForward` (a jump of over 15 s is read as a sleep and a
+  wake); case 1 runs in real time, because `runFor` pushes the page's clock ahead of the server's and the wall corrects its own clock from
+  the `Date` header of every answer, which would move a turn later by the amount pushed. Every secret the spec used is appended to the
+  file named by `W29_SECRET_FILE` (default `/tmp/w29-secret.txt`) so a log check can look for it.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

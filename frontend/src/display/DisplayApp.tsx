@@ -1,24 +1,25 @@
-import { Component, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import { Component, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import "../styles/display-screen.css";
-import { BACKOFF_CAP_MS, BACKOFF_START_MS, realTimers, startDisplay, type DisplayState, type Timers } from "./displayLoop";
+import { installChunkReload, reloadIfServerAnswers } from "../lib/chunkReload";
+import { widgetData } from "./displayApi";
+import { BACKOFF_CAP_MS, BACKOFF_START_MS, realTimers, startDisplay, type DisplayLoop, type DisplayState, type Timers } from "./displayLoop";
 import type { SecretHandle } from "./secretHandle";
+import { installWakeEvents } from "./wakeEvents";
+import { useWakeLock } from "./wakeLock";
+import { createWall } from "./wallController";
+import { WallScreen } from "./WallScreen";
 
-// The display screen (w28's minimal page; w29 puts the rotating dashboards in its place). It runs OUTSIDE the app: no AuthProvider, no
-// query client, no router, no shell and no /api/me. main.tsx has already taken the secret from the address (takeFragment) and hands
-// in a handle on it (never the string: the claim releases it at the first definite answer); the page's one job is to say, in large
-// type, whether this screen is connected.
+// The display screen. It runs OUTSIDE the app: no AuthProvider, no query client, no router, no shell and no /api/me. main.tsx has already
+// taken the secret from the address (takeFragment) and hands in a handle on it (never the string: the claim releases it at the first definite
+// answer). While the screen is not connected it says so, in large type; once connected it shows the wall (the rotating dashboards), which is
+// fed every playlist the loop reads and makes no request of its own but `/api/display/*` (displayApi).
 
 const OFFLINE = "Cannot reach the server. Trying again...";
 
-function sentence(state: DisplayState): string {
+function sentence(state: Exclude<DisplayState, { kind: "connected" }>): string {
   switch (state.kind) {
     case "connecting":
       return "Connecting...";
-    case "connected": {
-      const dashboards = `${state.dashboards} ${state.dashboards === 1 ? "dashboard" : "dashboards"}`;
-      const skipped = state.skipped > 0 ? ` (${state.skipped} skipped)` : "";
-      return `Connected as ${state.displayName}. Playlist ${state.playlistName}: ${dashboards}${skipped}. The rotating screen arrives in the next update.`;
-    }
     case "notConnected":
       return "This screen is not connected. Open its display link once.";
     case "revoked":
@@ -44,13 +45,53 @@ function Message({ text, quiet = false }: { text: string; quiet?: boolean }) {
 interface Props {
   /** A handle on the secret main.tsx took from the address, or null (no link was opened: the cookie may already be there). The claim releases it. */
   handle: SecretHandle | null;
-  /** The clock; tests move it by hand. */
+  /** The clock of the claim and the playlist poll; tests move it by hand. */
   timers?: Timers;
+  /** The wall's own clock (rotation, widget requests, wake heartbeat, cursor); real timers by default, tests move it by hand. */
+  wallTimers?: Timers;
 }
 
-function DisplayScreen({ handle, timers }: Props) {
+function DisplayScreen({ handle, timers, wallTimers }: Props) {
   const [state, setState] = useState<DisplayState>({ kind: "connecting" });
-  useEffect(() => startDisplay(handle, setState, { timers }), [handle, timers]);
+  const wallClock = wallTimers ?? realTimers;
+  // The loop's stop function, with its refresh(): the wall asks for a playlist read through it (it does nothing unless the loop is connected).
+  const stopRef = useRef<DisplayLoop | null>(null);
+  // One wall for the life of this screen: the loop feeds it, the view draws it.
+  const [wall] = useState(() =>
+    createWall({
+      timers: wallClock,
+      fetchWidget: widgetData,
+      refreshPlaylist: () => stopRef.current?.refresh(),
+      reload: () => void reloadIfServerAnswers(),
+      reduceMotion: () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
+      isHidden: () => document.hidden,
+    }),
+  );
+  // The wall runs only while the page shows it: behind the "revoked" sentence it makes no request (a stopped wall keeps its state and starts again with the next good read).
+  const showing = state.kind === "connected";
+  useEffect(() => {
+    if (!showing) return;
+    wall.start();
+    return () => wall.stop();
+  }, [wall, showing]);
+  useEffect(() => {
+    const stop = startDisplay(handle, setState, { timers });
+    stopRef.current = stop;
+    return () => {
+      stopRef.current = null;
+      stop();
+    };
+  }, [handle, timers]);
+  // Every good read is a new connected state: the wall takes the playlist, the time it arrived and the server's clock.
+  useEffect(() => {
+    if (state.kind === "connected") wall.feed(state.reply, state.receivedAt, state.serverDate);
+  }, [state, wall]);
+  useEffect(() => installWakeEvents({ timers: wallClock, now: Date.now, onWake: () => wall.wake() }), [wall, wallClock]);
+  // The chunk reload lives here, not in main.tsx's display branch: a wall left open across an update would fail on a lazy chart chunk. The cleanup
+  // removes the listener, so StrictMode's double effect leaves one.
+  useEffect(() => installChunkReload(), []);
+  useWakeLock();
+  if (state.kind === "connected") return <WallScreen wall={wall} timers={wallClock} />;
   return <Message text={sentence(state)} quiet={state.kind === "connecting"} />;
 }
 
@@ -87,7 +128,7 @@ export class DisplayBoundary extends Component<{ children: ReactNode; timers?: T
   }
 }
 
-export function DisplayApp({ handle, timers }: Props) {
+export function DisplayApp({ handle, timers, wallTimers }: Props) {
   // Here, outside the boundary, so that even the fallback sentence is on a dark screen: this page has no AppearanceProvider and is dark in
   // every theme. A layout effect runs before the first paint, so the screen is never light for a frame.
   useLayoutEffect(() => {
@@ -96,7 +137,7 @@ export function DisplayApp({ handle, timers }: Props) {
   }, []);
   return (
     <DisplayBoundary timers={timers}>
-      <DisplayScreen handle={handle} timers={timers} />
+      <DisplayScreen handle={handle} timers={timers} wallTimers={wallTimers} />
     </DisplayBoundary>
   );
 }

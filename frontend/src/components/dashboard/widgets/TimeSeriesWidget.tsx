@@ -8,6 +8,7 @@ import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
 import { valueAxisFor } from "../../../lib/chartScale";
 import { chartLabels, figureText, labelBucket, lastCostGone, shortLabel, shortLabels, unitSuffix, type ParentNames } from "../../../lib/widgetFormat";
 import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, valueAxisParts, type ChartTheme } from "./chartTheme";
+import { useChartOpts } from "./chartPixelRatio";
 import { useLegendSelection } from "./legendSelection";
 
 type Point = WidgetData["series"][number]["points"][number];
@@ -278,6 +279,7 @@ export function compareOption(data: WidgetData, timezone: string, theme: ChartTh
 export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone, parents }: { data: WidgetData; timezone: string; parents?: ParentNames }) {
   const legend = useLegendSelection();
   const theme = useChartTheme();
+  const chartOpts = useChartOpts();
   const compare = data.compare;
   if (compare?.state === "nothing_yet") return <p className="widget-empty">{NOTHING_YET}</p>;
   if (compare && compare.assets.length > 0) {
@@ -286,7 +288,7 @@ export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone,
     return (
       <div className="widget-chart" role="img" aria-label={compareChartDescription(data, compare)}>
         {/* Two lines, one legend entry each: the viewer's choice is kept by the entry's place (0 this month, 1 last month), not by an asset. */}
-        <ReactECharts option={legend.apply(compareOption(data, timezone, theme), [0, 1])} onEvents={legend.onEvents} style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge />
+        <ReactECharts option={legend.apply(compareOption(data, timezone, theme), [0, 1])} onEvents={legend.onEvents} opts={chartOpts} style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge />
       </div>
     );
   }
@@ -295,7 +297,7 @@ export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone,
   return (
     <div className="widget-chart" role="img" aria-label={chartDescription("timeseries", data, parents)}>
       <ReactECharts
-        option={legend.apply(timeSeriesOption(data, timezone, theme, parents), data.series.map((s) => s.asset_id))} onEvents={legend.onEvents}
+        option={legend.apply(timeSeriesOption(data, timezone, theme, parents), data.series.map((s) => s.asset_id))} onEvents={legend.onEvents} opts={chartOpts}
         style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge
       />
     </div>

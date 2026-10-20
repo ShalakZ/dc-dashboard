@@ -14,16 +14,18 @@ import { navLink, rowAction } from "./shell";
 //   1   THE LINK IS SHOWN ONCE. Administer > Displays through the sidebar; a playlist with two dashboards and a display made in the dialogs; the "Display link" field holds `<origin>/display#<secret>`;
 //       Copy link says Copied (or the fallback sentence); after Done neither the page, nor its storage, nor a reload holds the secret.
 //   2   A NEW BROWSER OPENS THE LINK. The address becomes exactly /display (no fragment) and the page loads again after the claim, so its navigation entry has no fragment either, the cookie `dcdash_display` is httpOnly, SameSite=Strict, Path=/api/display and not readable by the page, the
-//       page says "Connected as ... 2 dashboards."; that cookie (also sent by hand) gets 401 on /api/me, /api/widget-data, /api/dashboards and /api/assets; the display routes answer 200, the figures equal the
+//       wall shows the first dashboard and "1 of 2" (w29's page; no sentence about a connection is left); that cookie (also sent by hand) gets 401 on /api/me, /api/widget-data, /api/dashboards and /api/assets; the display routes answer 200, the figures equal the
 //       admin's /api/widget-data for the stored widget, and an administrator's own session means nothing on them.
-//   2b  THE LINK OPENED IN THE OPEN TAB. /display says "not connected"; the same page then goes to /display#<secret> (a fragment-only change, no page load): the page loads itself again, ends on /display with no fragment and says "Connected as".
+//   2b  THE LINK OPENED IN THE OPEN TAB. /display says "not connected"; the same page then goes to /display#<secret> (a fragment-only change, no page load): the page loads itself again, ends on /display with no fragment and shows the wall ("1 of 2").
 //   3   REVOKE. A display page under page.clock; the administrator revokes it (Actions > Revoke > Revoke); one minute later the page says "revoked or is not valid" and the Screens card says Revoked.
-//   4   A DELETED DASHBOARD. Deleting one dashboard of a playlist in use: the Displays page says "The dashboard ... was deleted" and "1 item is skipped", the display page "(1 skipped)".
+//   4   A DELETED DASHBOARD. Deleting one dashboard of a playlist in use: the Displays page says "The dashboard ... was deleted" and "1 item is skipped", and the wall (after a reload) shows the other dashboard
+//       alone ("1 of 1" and its name in the heading; the skipped item is not shown).
 //   5   KEYBOARD ONLY, 1440 x 900 and 1024 x 640, light and dark. Tab and Enter reach New playlist and New display; the playlist is made with Move up, Move down and Remove; the row menu and Revoke work
 //       from the keyboard; focus returns to the opener when each dialog closes; the page never scrolls sideways and the dialogs' buttons stay inside the window.
-//   6   LAST: the claim's block. Ten wrong secrets answer 401 with one body, the eleventh 429 with Retry-After, and a claim with a RIGHT secret from the same address still answers 204 (the block
-//       refuses wrong secrets only). It blocks the stack's client address for 15 minutes for wrong secrets, which is why it is the last case of the last project; W28_SKIP_BLOCK skips it (single-spec
-//       loops on a stack that already ran it; run it again only after the api container of the scratch project was restarted, never `dcdash`). No earlier case makes a wrong claim, so the limiter is empty when this one starts.
+//   6   LAST of this project: the claim's block. Ten wrong secrets answer 401 with one body, the eleventh 429 with Retry-After, and a claim with a RIGHT secret from the same address still answers 204 (the block
+//       refuses wrong secrets only, api/display.py:295-301). It blocks the stack's client address for 15 minutes for wrong secrets, so no later project may make a wrong claim: w29 runs after this one and makes
+//       RIGHT claims only, which a block lets through. W28_SKIP_BLOCK skips it (single-spec loops on a stack that already ran it; run it again only after the api container of the scratch project was restarted,
+//       never `dcdash`). No earlier case makes a wrong claim, so the limiter is empty when this one starts.
 // Names are matched by SUBSTRING, so every lookup is `exact: true`. Assertions that depend on timing or on the browser, which nobody could check while writing this, are listed in the commit's status block.
 
 const ADMIN = { username: "admin", password: "correct-horse" };
@@ -203,10 +205,16 @@ test.describe("W28: display screens", () => {
   const dialogOf = (page: Page, label: string) => page.getByRole("dialog", { name: label, exact: true });
   /** The row of the Screens or the Playlists table that holds the `Actions for <name>` button of that name (a playlist's name is also written in its screens' rows). */
   const rowOf = (page: Page, thing: string) => page.getByRole("row").filter({ has: page.getByRole("button", { name: `Actions for ${thing}`, exact: true }) });
-  /** The display page's one sentence. */
+  /** The display page's one sentence (the five states that are not the wall: not connected, revoked, blocked, cannot reach the server, connecting). */
   const screenText = (page: Page) => page.locator(".display-screen-text");
-  const connected = (display: string, playlist: string, dashboards: number, skipped = 0): string =>
-    `Connected as ${display}. Playlist ${playlist}: ${dashboards} ${dashboards === 1 ? "dashboard" : "dashboards"}${skipped > 0 ? ` (${skipped} skipped)` : ""}. The rotating screen arrives in the next update.`;
+  /**
+   * A connected display shows the wall (w29): its header names the dashboard on screen (`h1`, exactly) and its place among the shown dashboards, e.g. "1 of 2". The dashboards of this spec each hold
+   * one energy stat, so each is shown; the wall's first frame is the playlist's first shown item and it stays 10 s.
+   */
+  const wallShows = async (page: Page, dashboard: string, position: string): Promise<void> => {
+    await expect(page.locator("h1.wall-title"), `the wall shows ${dashboard}`).toHaveText(dashboard);
+    await expect(page.locator(".wall-position"), `the wall says ${position}`).toHaveText(position);
+  };
 
   /** The Displays page, loaded: its heading is there and no skeleton is left. */
   async function openDisplays(page: Page): Promise<void> {
@@ -373,7 +381,7 @@ test.describe("W28: display screens", () => {
     try {
       await screen.goto(link.url);
       await expectBareDisplayAddress(screen);
-      await expect(screenText(screen)).toHaveText(connected(SCREEN, LIST, 2));
+      await wallShows(screen, DASH_A, "1 of 2");
 
       // After the claim was accepted the page loads /display again as a fresh document (review M1): replaceState clears the address bar but the
       // browser keeps the first address, fragment included, in the navigation entry of the old document for its whole life, where any script of the page could read it.
@@ -381,7 +389,7 @@ test.describe("W28: display screens", () => {
       await expectReloadedWithoutFragment(screen);
       await expectBareDisplayAddress(screen);
       expect(screen.url().endsWith("/display"), "the address ends with /display").toBe(true);
-      await expect(screenText(screen)).toHaveText(connected(SCREEN, LIST, 2));
+      await wallShows(screen, DASH_A, "1 of 2");
 
       const cookie = (await context.cookies()).find((c) => c.name === COOKIE);
       expect(cookie, `the cookie ${COOKIE} is set`).toBeTruthy();
@@ -455,7 +463,7 @@ test.describe("W28: display screens", () => {
       // take the secret out of the address and claim. Booleans only: a failure never prints the secret.
       await screen.goto(shown.url);
       await expectBareDisplayAddress(screen);
-      await expect(screenText(screen)).toHaveText(connected(sameScreen, sameList, 2));
+      await wallShows(screen, DASH_A, "1 of 2");
       await expectReloadedWithoutFragment(screen);
       expect((await context.cookies()).some((c) => c.name === COOKIE), `the cookie ${COOKIE} is set`).toBe(true);
     } finally {
@@ -478,7 +486,7 @@ test.describe("W28: display screens", () => {
       let loads = 0;
       screen.on("load", () => { loads += 1; });
       await screen.goto(shown.url);
-      await expect(screenText(screen)).toHaveText(connected(revScreen, revList, 2));
+      await wallShows(screen, DASH_A, "1 of 2");
       // The page loads again after the claim; the minute below is moved on the new document. (Not the navigation entry here: the fake clock replaces
       // `performance.getEntriesByType` with an empty list, so case 2 checks that entry and this case counts document loads.)
       await expect.poll(() => loads, { message: "the page loaded again after the claim" }).toBeGreaterThanOrEqual(2);
@@ -520,7 +528,7 @@ test.describe("W28: display screens", () => {
       const claim = await context.request.post("/api/display/claim", { data: { secret: shown.secret } });
       expect(claim.status(), "the claim of the right secret answers 204").toBe(204);
       await screen.goto("/display");
-      await expect(screenText(screen)).toHaveText(connected(delScreen, delList, 2));
+      await wallShows(screen, dashC, "1 of 2");
 
       const gone = await page.request.delete(`/api/dashboards/${d.id}`);
       expect(gone.status(), `deleting ${dashD}: ${gone.status()}`).toBe(204);
@@ -531,7 +539,7 @@ test.describe("W28: display screens", () => {
       await expect(row).toContainText(`The dashboard ${dashD} was deleted`);
 
       await screen.reload();
-      await expect(screenText(screen)).toHaveText(connected(delScreen, delList, 2, 1));
+      await wallShows(screen, dashC, "1 of 1"); // the deleted dashboard is skipped: the wall shows the other one alone
     } finally {
       await context.close();
     }
