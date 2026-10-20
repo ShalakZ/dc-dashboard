@@ -1360,13 +1360,14 @@ async def test_the_cap_turns_a_right_claim_away_with_503_but_never_a_wrong_one_a
     over = await claim(client, secret)  # a claim holds a connection like any request: at twelve it waits its turn (the screen retries)
     assert over.status_code == 503 and over.json() == {"detail": "busy, try again"} and over.headers["retry-after"] == "1"
     assert "set-cookie" not in over.headers and display.in_flight.total == 12 and display.in_flight.claims == 0
-    assert (await claim(client, "w" * 43)).status_code == 401  # a wrong secret takes no slot: it is answered, uncounted by the cap
+    assert (await claim(client, "w" * 43)).status_code == 503  # at twelve every claim is shed before it is looked at, so a stranger learns nothing either
     assert (await client.get(PLAYLIST, headers=cookie(secret))).json() == {"detail": "busy, try again"}
     assert (await client.get(PLAYLIST, headers=cookie("w" * 43))).json() == INVALID  # busy says nothing to a stranger
     client.cookies.clear()
     assert (await client.get(PLAYLIST)).json() == NOT_CONNECTED
     display.reset_display_state()
     assert display.in_flight.total == 0 and display.in_flight.by_display == {}
+    assert (await claim(client, "w" * 43)).status_code == 401 and display.in_flight.total == 0  # below the cap a wrong secret takes no slot: it is answered
     display.in_flight.total = 11  # eleven held by others: a display with nothing in flight still gets its claim in
     assert (await claim(client, secret)).status_code == 204 and display.in_flight.total == 11 and display.in_flight.claims == 0
     client.cookies.clear()  # (the claim put the cookie in the client's jar)
@@ -1543,3 +1544,20 @@ async def test_no_audit_row_answer_or_log_line_holds_the_secret_or_its_hash(clie
     for needle in (secret, old_secret, *guesses, *hashes):
         assert needle not in stored and needle not in caplog.text
     assert len(await audit_rows(db, "display.claim_blocked")) == 1 and len(await audit_rows(db, "display.connected")) == 2
+
+
+async def test_at_twelve_held_a_claim_is_shed_before_any_lookup_even_for_a_display_with_nothing_in_flight(client, db, monkeypatch):
+    """The scoped re-review's M2: at twelve held no claim can get a slot, so it must not first hash and look the secret up (one more
+    pooled connection outside the twelve)."""
+    row, secret = await make_display(db)
+    looked_up = []
+    real = display.hash_secret
+    monkeypatch.setattr(display, "hash_secret", lambda text: looked_up.append(1) or real(text))
+    display.in_flight.total = 12  # twelve held by other displays; this one holds nothing
+    over = await claim(client, secret)
+    assert over.status_code == 503 and over.json() == {"detail": "busy, try again"} and over.headers["retry-after"] == "1"
+    assert "set-cookie" not in over.headers and looked_up == []
+    assert display.in_flight.total == 12 and display.in_flight.claims == 0
+    display.in_flight.total = 11  # one slot free: the same claim now goes through the lookup and gets in
+    assert (await claim(client, secret)).status_code == 204 and looked_up
+    assert display.in_flight.total == 11 and display.in_flight.claims == 0

@@ -59,7 +59,8 @@ LAST_SEEN_EVERY_SECONDS = 50  # the playlist answer writes last_seen_at at most 
 # is 5 + 10 = 15 connections and each of these holds one until its answer is out, so a hard cap of 12 leaves 3 for the people using the
 # dashboard; the total never passes it. RESERVE slots INSIDE the cap are kept for displays with nothing in flight: a display that
 # already holds one is let in only while fewer than 12 - 3 = 9 are held, so two abused links cannot take the last 3 and stall every
-# other screen, which is let in (its first request, or its claim) while fewer than 12 are held.
+# other screen, which is let in (its first request, or its claim) while fewer than 12 are held. (Five links asking at once can still fill the 12: a hard cap
+# is a cap; the remedy for an abused link is to revoke it.)
 PER_DISPLAY_IN_FLIGHT = 6
 ALL_DISPLAYS_IN_FLIGHT = 12
 RESERVE = 3
@@ -306,7 +307,7 @@ async def claim(request: Request, db: AsyncSession = Depends(get_db)) -> Respons
     except HTTPException:
         _refuse_a_blocked_address(client)  # a blocked address is told 429 whatever its claim lacks: it is no right secret
         raise
-    if in_flight.claims_full():  # shed before any lookup: a claim that is turned away here holds no connection
+    if in_flight.claims_full() or in_flight.total >= ALL_DISPLAYS_IN_FLIGHT:  # shed before any lookup: a claim that is turned away here holds no connection (at 12 held no claim can get a slot)
         raise _claims_busy()
 
     row = None
