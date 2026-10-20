@@ -1,6 +1,8 @@
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
-import { userBlock } from "./shell";
+import { markGuideSeen, userBlock } from "./shell";
 import { answer, defs, H, type ShowcaseWidget, type WidgetRequest } from "./w13Showcase";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // W13 (the dashboard widgets follow the theme, look like cards of the app, and give an engineer the details one step away): the card on its own ground in the light and the
 // dark look, the five widget types drawn with their markers, no overflow, the 2-row gauge, a chart repainting after a Mode switch with no reload, the Details drawer, and the editor

@@ -1,7 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type Download, type Locator, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
-import { navLink, signOut, userBlock } from "./shell";
+import { markGuideSeen, navLink, signOut, userBlock } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // Phase 3 on the state the journey and discovery projects leave behind: admin `admin` / `correct-horse`; assets Site
 // (root) > Panel 01, LVP02 ... LVP10, plus MV2; the collector has been polling for some minutes. The database is young,

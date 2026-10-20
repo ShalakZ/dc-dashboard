@@ -269,6 +269,38 @@ describe("WidgetView: Details", () => {
     expect(screen.queryByRole("button", { name: /Details/ })).not.toBeInTheDocument();
   });
 
+  describe("a failed card (w27 R11)", () => {
+    it("says it could not be loaded and when it tries again, from its own interval, with the server's text in the title", async () => {
+      mockFetch({ "POST /api/widget-data": { status: 500, body: { detail: "broken" } } });
+      const plain = show({ type: "stat" });
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(/^This card could not be loaded\. It tries again in 30 seconds\.$/);
+      expect(alert).toHaveAttribute("title", "broken");
+      plain.unmount();
+      client.clear();
+      const comparing = config({ source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" });
+      show({ type: "stat", config: comparing, dashboardRange: "this_month" });
+      expect(await screen.findByRole("alert")).toHaveTextContent(/^This card could not be loaded\. It tries again in 5 minutes\.$/);
+    });
+
+    it("says it could not be refreshed when the figures of an earlier answer are still drawn", async () => {
+      let reads = 0;
+      mockFetch({ "POST /api/widget-data": () => (reads++ === 0 ? { body: valuesData({ type: "stat", values: [valueRow({ value: 10.5 })] }) } : { status: 500, body: { detail: "broken" } }) });
+      show({ type: "stat" });
+      await screen.findByText("10.50");
+      await client.invalidateQueries();
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(/^This card could not be refreshed\. It tries again in 30 seconds\.$/);
+      expect(screen.getByText("10.50")).toBeInTheDocument();
+    });
+
+    it("prints the server's text as well in the editor's preview (no Details button there), so a refusal is not lost", async () => {
+      mockFetch({ "POST /api/widget-data": { status: 422, body: { detail: "max must be above min" } } });
+      show({ type: "gauge", details: false, csv: false });
+      expect(await screen.findByRole("alert")).toHaveTextContent("This card could not be loaded. It tries again in 30 seconds. max must be above min");
+    });
+  });
+
   it("links the asset names to their pages for a role that may open them, and writes plain names for one that may not", async () => {
     mockFetch({ "POST /api/widget-data": { body: stat() } });
     const first = show({ type: "stat" });

@@ -591,6 +591,22 @@ describe("AssetPicker contract", () => {
     expect(screen.getByRole("group", { name: "Racks to add" })).toBeInTheDocument();
   });
 
+  it("puts a tip beside the legend when given one, and the group keeps the legend's words alone as its name (w27)", async () => {
+    render(<AssetPicker assets={smallHall} selected={[]} onChange={() => {}} single max={1} label="Focus asset" tip="Some help." />);
+    const group = screen.getByRole("group", { name: "Focus asset" });
+    expect(group).toHaveAccessibleName("Focus asset");
+    const tip = within(group).getByRole("button", { name: "What does this mean?" });
+    expect(tip.closest("legend")).not.toBeNull();
+    await userEvent.click(tip);
+    expect(screen.getByRole("note")).toHaveTextContent("Some help.");
+  });
+
+  it("has no tip button and a plain legend without one", () => {
+    render(<AssetPicker assets={smallHall} selected={[]} onChange={() => {}} single max={1} label="Focus asset" />);
+    expect(screen.queryByRole("button", { name: "What does this mean?" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Focus asset" })).not.toHaveAttribute("aria-labelledby");
+  });
+
   it("uses Asset and Assets as the default legends", () => {
     const { unmount } = render(<Harness assets={tree} />);
     expect(screen.getByRole("group", { name: "Assets" })).toBeInTheDocument();

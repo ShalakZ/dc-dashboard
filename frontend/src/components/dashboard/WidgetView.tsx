@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useWidgetData } from "../../api/queries";
+import { useWidgetData, widgetRefetchMs } from "../../api/queries";
 import type { RangePreset, WidgetConfig, DataWidgetType } from "../../api/types";
 import { hasNoBars } from "../../lib/breakdown";
 import { withoutEnergyStars } from "../../lib/compare";
@@ -115,6 +115,9 @@ export function WidgetView({ widgetKey, type, title, config, dashboardRange, tim
         footKeep={footKeep}
         loading={query.isLoading}
         error={query.error}
+        retryMs={widgetRefetchMs(shown)}
+        drawn={data !== undefined}
+        showReason={!details}
         missing={gone ? 0 : (data?.missing.length ?? 0)}
         noMetric={data?.no_metric.length ?? 0}
         // The footer explains the markers for every type: a chart's legend may be off, and a figure carries only its mark.

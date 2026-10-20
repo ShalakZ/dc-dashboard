@@ -36,6 +36,7 @@ import "./styles/focus-follow.css";
 import "./styles/focus-header.css";
 import "./styles/focus-drill.css";
 import "./styles/templates.css";
+import "./styles/dashboard-guide.css";
 import { App } from "./App";
 import { AppearanceProvider } from "./auth/AppearanceProvider";
 import { AuthProvider } from "./auth/AuthProvider";

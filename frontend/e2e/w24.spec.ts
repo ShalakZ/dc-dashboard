@@ -1,5 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
+import { markGuideSeen } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // W24 (the power dashboard, part 3a): a stat and a daily chart that set this month so far against the same days of last month, and a bar chart with one bar per asset of a kind ("Split by" on the
 // card). Admin `admin` / `correct-horse`, as in the earlier projects. The contract is the plan docs/superpowers/plans/2026-10-19-w24-power-compare-and-breakdown.md ("API contract" and the last section).
@@ -1207,14 +1210,14 @@ test("5. by keyboard: Tab runs through the comparison box and its tip, Space tic
   await fieldOf(dialog, "Source").selectOption("energy");
   await settled(page);
 
-  // Tab from Title through the fields to the comparison box, its tip, the scope radios (one stop: the checked one) and the picker.
+  // Tab from Title through the fields to the comparison box, its tip, the tip of the Show group (w27), the scope radios (one stop: the checked one) and the picker.
   await fieldOf(dialog, "Title").focus();
   const seen: string[] = [];
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 8; i++) {
     await page.keyboard.press("Tab");
     seen.push(await focusedName(page));
   }
-  expect(seen, "the Tab order").toEqual(["Source", "Aggregation", "Widget range", COMPARE_LABEL, "What does this mean?", "Assets chosen here", "Search assets"]);
+  expect(seen, "the Tab order").toEqual(["Source", "Aggregation", "Widget range", COMPARE_LABEL, "What does this mean?", "What does this mean?", "Assets chosen here", "Search assets"]);
 
   // Space on the box ticks it; the focus stays on the box; unticking by Space restores the range.
   await compareBox(dialog).focus();
@@ -1335,7 +1338,7 @@ for (const size of SIZES) {
       await expectBoxBesideWords(dialog, `${where}: the stat dialog`);
       await expectApart([
         ["Widget range", fieldOf(dialog, "Widget range")], ["its sentence", dialog.locator("p.field-help")], ["the comparison box and its words", dialog.locator("label.inline"), true],
-        ["its tip", dialog.getByRole("button", { name: "What does this mean?", exact: true })], ["the picker", pickerOf(dialog, "Asset")],
+        ["its tip", dialog.locator(".compare-field").getByRole("button", { name: "What does this mean?", exact: true })], ["the picker", pickerOf(dialog, "Asset")],
       ], `${where}: the stat dialog`);
       await expectDialogFits(dialog, where);
       await fieldOf(dialog, "Type").selectOption("bar");

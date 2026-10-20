@@ -1,4 +1,7 @@
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
+import { markGuideSeen } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // W22 (the Text widget): a sixth widget type with no data, a heading, a paragraph or a divider that explains a dashboard. Admin `admin` / `correct-horse`, as in the earlier projects.
 //

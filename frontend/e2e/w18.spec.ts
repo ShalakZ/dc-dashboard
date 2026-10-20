@@ -1,5 +1,8 @@
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
 import { costsFor, type ApiCosts } from "./billingModel";
+import { markGuideSeen } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // W18 (one control-height scale, limits on the note box, plain words about removing assets): a guard that MEASURES the real pages, so a later patch that makes one control 4 px taller than the
 // one beside it fails here. Admin `admin` / `correct-horse`, the account the earlier projects use.

@@ -1,6 +1,8 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
-import { expectNoRowAction, navLink, rowAction, signOut, userBlock } from "./shell";
+import { expectNoRowAction, markGuideSeen, navLink, rowAction, signOut, userBlock } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // W7c (the default dashboard and the Billing year/month picker) on the state the earlier projects leave behind: admin `admin` /
 // `correct-horse` and the metered assets the collector has been polling. The spec makes its own two dashboards (with a run suffix, so a
@@ -54,6 +56,7 @@ async function asUser(browser: Browser, who: Account, use: (page: Page) => Promi
   const context = await browser.newContext({ baseURL: BASE_URL, viewport: { width: 1600, height: 1000 } });
   try {
     const page = await context.newPage();
+    await markGuideSeen(page); // not the `page` fixture: the beforeEach above did not reach it
     await signIn(page, who);
     await use(page);
   } finally {

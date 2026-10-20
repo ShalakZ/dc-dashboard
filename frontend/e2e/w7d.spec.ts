@@ -1,6 +1,8 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
-import { signOut, userBlock } from "./shell";
+import { markGuideSeen, signOut, userBlock } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // W7d (the Appearance choice in the profile panel: Mode and Theme colour, stored on the account, mirrored in the browser) on the state
 // the earlier projects leave behind: admin `admin` / `correct-horse` and the asset MV2. The spec makes a viewer and one dashboard with a

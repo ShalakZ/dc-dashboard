@@ -1,0 +1,9 @@
+@layer w6 {
+  /* w27: the first-run guide above a dashboard's cards (components/dashboard/DashboardGuide.tsx, shown by DashboardViewer.tsx). Tokens only; every selector
+     names a class this piece owns (.dash-head and .row are app.css's). */
+
+  .dash-guide { display: grid; gap: 8px; margin: 0 0 12px; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+  .dash-guide h2 { margin: 0; font-size: var(--fs-md); font-weight: 600; }
+  .dash-guide ul { display: grid; gap: 4px; margin: 0; padding: 0 0 0 18px; font-size: var(--fs-sm); }
+  .dash-guide-foot { display: flex; justify-content: flex-end; }
+}

@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { downloadCsv } from "../../lib/download";
 import { config } from "../../test/dashboardFixtures";
-import { WidgetFrame } from "./WidgetFrame";
+import { waitText, WidgetFrame } from "./WidgetFrame";
 
 vi.mock("../../lib/download", () => ({ downloadCsv: vi.fn() }));
 
@@ -73,11 +73,49 @@ describe("WidgetFrame", () => {
   it("shows an error as an alert with the alert icon, and keeps the title and the CSV button", () => {
     frame({ error: new Error("query failed"), csv });
     const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent("query failed");
+    expect(alert).toHaveTextContent("This card could not be loaded.");
     expect(alert).toHaveClass("widget-error");
     expect(alert.querySelector("svg.i")).not.toBeNull();
     expect(screen.getByRole("heading", { name: "Hall power" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Download CSV for Hall power" })).toBeInTheDocument();
+  });
+
+  describe("a failed card (w27 R11)", () => {
+    it("says when it tries again, from the card's own interval, and keeps the server's text in the title and out of the card", () => {
+      const { unmount } = frame({ error: new Error("query failed"), retryMs: 30_000 });
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent(/^This card could not be loaded\. It tries again in 30 seconds\.$/);
+      expect(alert).toHaveAttribute("title", "query failed");
+      unmount();
+      frame({ error: new Error("query failed"), retryMs: 300_000 });
+      expect(screen.getByRole("alert")).toHaveTextContent(/^This card could not be loaded\. It tries again in 5 minutes\.$/);
+    });
+
+    it("says nothing about trying again when it is not told the interval", () => {
+      frame({ error: new Error("query failed") });
+      expect(screen.getByRole("alert")).toHaveTextContent(/^This card could not be loaded\.$/);
+    });
+
+    it("says it could not be refreshed when older figures are still drawn under it", () => {
+      frame({ error: new Error("gone"), retryMs: 30_000, drawn: true });
+      expect(screen.getByRole("alert")).toHaveTextContent(/^This card could not be refreshed\. It tries again in 30 seconds\.$/);
+      expect(screen.getByText("body")).toBeInTheDocument();
+    });
+
+    it("prints the server's text as well where there is no Details button to look it up (the editor's preview), and still puts it in the title", () => {
+      frame({ error: new Error("max must be above min"), retryMs: 30_000, showReason: true });
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("This card could not be loaded. It tries again in 30 seconds. max must be above min");
+      expect(alert).toHaveAttribute("title", "max must be above min");
+    });
+
+    it("writes the wait in words", () => {
+      expect(waitText(30_000)).toBe("30 seconds");
+      expect(waitText(1_000)).toBe("1 second");
+      expect(waitText(60_000)).toBe("1 minute");
+      expect(waitText(300_000)).toBe("5 minutes");
+      expect(waitText(0)).toBe("1 second");
+    });
   });
 
   it("warns when assets were removed, and still shows the body (Review Focus 5, UI side)", () => {

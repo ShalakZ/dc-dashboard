@@ -552,6 +552,33 @@ describe("useWidgetData refetching (w24)", () => {
     await advance(60_000); // 5 min 1 s
     expect(asked(calls)).toBe(2);
   });
+
+  // w27 R13.4. React Query 5 asks again on its interval only while the page is visible (focusManager, refetchIntervalInBackground is off): a dashboard left in a
+  // hidden tab sends no request for its figures and catches up when the tab is seen again. This pins what the app relies on; nothing in the app sets it.
+  describe("a hidden tab", () => {
+    const setVisibility = (state: "visible" | "hidden") => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+      act(() => { document.dispatchEvent(new Event("visibilitychange", { bubbles: true })); });
+    };
+    afterEach(() => { delete (document as unknown as Record<string, unknown>).visibilityState; });
+
+    it("pauses the refetch of a widget's figures, a plain one and a comparing one, and reads again when the tab is visible", async () => {
+      vi.useFakeTimers();
+      const calls = mockFetch({ "POST /api/widget-data": { body: answer } });
+      renderHook(() => ({
+        plain: useWidgetData("stat", base, "this_month"),
+        comparing: useWidgetData("table", { ...base, compare: "same_days_last_month" }, "this_month"),
+      }), { wrapper: stableWrapper() });
+      await advance(1_000);
+      expect(asked(calls)).toBe(2);
+      setVisibility("hidden");
+      await advance(10 * 60_000); // twenty intervals of the plain widget and two of the comparing one
+      expect(asked(calls), "nothing was asked for while the tab was hidden").toBe(2);
+      setVisibility("visible");
+      await advance(1_000);
+      expect(asked(calls), "back in view, both read again").toBeGreaterThan(2);
+    });
+  });
 });
 
 describe("useSeries refetching", () => {

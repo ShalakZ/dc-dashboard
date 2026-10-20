@@ -1044,7 +1044,9 @@ describe("what the widget follows (w25)", () => {
       expect(scopeNames(), type).toEqual(names);
     }
     await choose("Source", "energy"); // a time series on energy: the comparison box appears
-    expect(screen.getAllByRole("button", { name: "What does this mean?" }), "the group adds no tip of its own: the comparison has the only one").toHaveLength(1);
+    // w27 R11: the Show group has a tip of its own in its legend (it does not rename the group), and the comparison keeps its tip.
+    expect(within(scopeGroup()).getAllByRole("button", { name: "What does this mean?" }), "one tip in the Show group").toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "What does this mean?" }), "and the comparison's").toHaveLength(2);
     await userEvent.click(screen.getByRole("checkbox", { name: COMPARE }));
     expect(scopeNames()).toEqual([HERE, FOCUS]);
     await userEvent.click(screen.getByRole("checkbox", { name: COMPARE }));
@@ -1197,9 +1199,11 @@ describe("what the widget follows (w25)", () => {
     expect(pickerGroup()).toBeInTheDocument();
   });
 
-  it("is one Tab stop between the fields before it and the picker after it", async () => {
+  it("is one Tab stop between the fields before it and the picker after it (its tip comes first, w27)", async () => {
     open();
     screen.getByLabelText("Widget range").focus();
+    await userEvent.tab();
+    expect(within(scopeGroup()).getByRole("button", { name: "What does this mean?" })).toHaveFocus();
     await userEvent.tab();
     expect(scopeRadio(HERE)).toHaveFocus(); // the checked one is the stop; the others are reached by the arrows
     await userEvent.tab();
@@ -1216,6 +1220,15 @@ describe("what the widget follows (w25)", () => {
     expect(screen.queryAllByLabelText(/look under|one bar for each|bars to show/i)).toHaveLength(0); // none of the kind fields is here
     expect(screen.getAllByRole("group", { name: "Assets" })).toHaveLength(1); // exactly one picker
     expect(scopeRadio(HERE).closest("label"), "label.inline is the comparison box's alone (an e2e lookup finds it by that)").not.toHaveClass("inline");
+  });
+
+  it("has a tip in the Show legend that does not rename the group: it is still called Show (w27 R11)", async () => {
+    open();
+    const tip = within(scopeGroup()).getByRole("button", { name: "What does this mean?" });
+    expect(tip.closest("legend")).not.toBeNull();
+    expect(scopeGroup()).toHaveAccessibleName("Show");
+    await userEvent.click(tip);
+    expect(screen.getByRole("note")).toHaveTextContent("Choose the assets this card shows here, or let it follow the dashboard's Focus.");
   });
 
   it("ties the sentence of a scope that follows to the group, and has none for the chosen assets", async () => {

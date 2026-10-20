@@ -5,6 +5,7 @@ import type { PermissionId } from "../lib/permissions";
 import { assetList, authed, dashboard } from "../test/dashboardFixtures";
 import { FakeEventSource } from "../test/fakeEventSource";
 import { mockFetch, type Routes } from "../test/fetchMock";
+import { markGuideSeen } from "../test/guideSeen";
 import { renderWithDataRouter } from "../test/render";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
@@ -24,6 +25,7 @@ vi.mock("react-grid-layout", async (importOriginal) => {
 beforeEach(() => {
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
+  markGuideSeen(); // w27: a dashboard with a following card shows the guide on its first visit; these tests are not about it
 });
 
 type Call = { method: string; path: string; body: unknown };

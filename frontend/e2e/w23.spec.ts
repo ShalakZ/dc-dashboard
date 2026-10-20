@@ -1,4 +1,7 @@
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
+import { markGuideSeen } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // W23 (the asset picker of the widget editor): a search box and a kind filter over a folded tree of checkboxes (radios for a stat and a gauge), the picks as removable chips, "Pick all under" a
 // row. Admin `admin` / `correct-horse`, as in the earlier projects.

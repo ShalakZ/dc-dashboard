@@ -57,3 +57,18 @@ export async function expectNoRowAction(page: Page, row: Locator, item: string |
   await page.keyboard.press("Escape");
   await expect(menu).toBeHidden();
 }
+
+/**
+ * Marks the dashboard's first-run guide (w27) as already seen, for every account: `localStorage.getItem` answers "1" for any key starting
+ * `dcdash.guide.dashboard.v1:` (lib/guideMemory.ts), whatever the user id in it. Call it from `test.beforeEach(({ page }) => markGuideSeen(page))` in
+ * every spec that opens a dashboard, so the panel does not push the cards down or take a Tab stop; only w27.spec.ts looks at the guide itself. A page
+ * made with `browser.newPage()` or `newContext()` is not the `page` fixture: call it on that page too, before its first `goto`.
+ */
+export async function markGuideSeen(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const read = Storage.prototype.getItem;
+    Storage.prototype.getItem = function getItem(this: Storage, key: string): string | null {
+      return typeof key === "string" && key.startsWith("dcdash.guide.dashboard.v1:") ? "1" : read.call(this, key);
+    };
+  });
+}

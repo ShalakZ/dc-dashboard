@@ -214,14 +214,36 @@ describe("FocusDialog: leaving without a change", () => {
   });
 });
 
+describe("FocusDialog: the tip beside the picker's label (w27)", () => {
+  it("is a What does this mean? button in the legend of Focus asset; the group is still named Focus asset, and the Show button has no tip", async () => {
+    open();
+    const dialog = await openPicker();
+    const group = within(dialog).getByRole("group", { name: "Focus asset" });
+    const tip = within(group).getByRole("button", { name: "What does this mean?" });
+    expect(tip.closest("legend")).not.toBeNull();
+    expect(within(dialog).getAllByRole("button", { name: "What does this mean?" })).toHaveLength(1);
+    await userEvent.click(tip);
+    expect(screen.getByRole("note")).toHaveTextContent("The cards that follow the focus show this asset. Whole site clears it.");
+    expect(dialog).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}"); // the innermost layer only: the tip
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Choose a focus" })).toBeInTheDocument();
+  });
+});
+
 describe("FocusDialog: the keyboard", () => {
-  it("Tab from Show wraps to the first control and Shift+Tab from the first wraps to Show", async () => {
+  it("Tab from Show wraps to the first control (the picker's tip, w27) and Shift+Tab from the first wraps to Show", async () => {
     open();
     const dialog = await openPicker();
     const search = within(dialog).getByRole("searchbox", { name: "Search assets" });
+    const tip = within(dialog).getByRole("button", { name: "What does this mean?" });
     expect(search).toHaveFocus();
     await userEvent.tab({ shift: true });
+    expect(tip).toHaveFocus();
+    await userEvent.tab({ shift: true });
     expect(within(dialog).getByRole("button", { name: "Show" })).toHaveFocus();
+    await userEvent.tab();
+    expect(tip).toHaveFocus();
     await userEvent.tab();
     expect(search).toHaveFocus();
   });
