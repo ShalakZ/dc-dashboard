@@ -1560,7 +1560,9 @@ async def test_an_open_check_month_target_has_its_own_cadence_and_is_looked_at_a
     assert looked.count(march_check.key) == 2 and looked.count(new_check.key) == 2  # and both rest again
 
 
-async def test_a_worker_whose_engine_id_is_unavailable_writes_nothing_counts_every_target_as_refused_and_says_so_once(db, monkeypatch, caplog):
+async def test_a_worker_whose_engine_id_is_unavailable_writes_nothing_counts_every_target_as_refused_and_says_so_once(
+    db, clock, monkeypatch, caplog
+):
     await build(db)
     readable = ledger.engine_id()
     monkeypatch.setattr(ledger, "_engine_id", ledger.UNAVAILABLE)  # (what `engine_id()` says when the sources could not be read)
@@ -1571,10 +1573,19 @@ async def test_a_worker_whose_engine_id_is_unavailable_writes_nothing_counts_eve
     first = await cycle(state)
     assert counts(first) == (10, 0, 0, 0, 0, 0, 0, 10)  # every target refused: nothing touched, written, skipped or deleted
     assert set(await by_key(db)) == {elsewhere}
+    clock.now += worker.LOG_EVERY + 1
     second = await cycle(state)
     assert counts(second) == (10, 0, 0, 0, 0, 0, 0, 10) and set(await by_key(db)) == {elsewhere}
+    assert first.unavailable and second.unavailable
     lines = [r.getMessage() for r in caplog.records if "engine id could not be computed" in r.getMessage()]
     assert len(lines) == 1  # once per process, not once per cycle
+    # and the loop's own report of the cycle (`_log_report`, which the throttled "values were not stored" warning and the nightly
+    # line's refused count come from) says nothing more about it, minute after minute: that line is about the codec
+    for report in (first, second):
+        worker._log_report(report, state)
+        clock.now += worker.LOG_EVERY + 1
+    assert not [r for r in caplog.records if "were not stored" in r.getMessage()] and state.refused_since == 0
+    assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
     monkeypatch.setattr(ledger, "_engine_id", readable)  # (the id is readable again: the next cycle writes)
     third = await cycle(state)
     assert third.written == 10 and third.refused == 0

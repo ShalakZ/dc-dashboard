@@ -357,6 +357,7 @@ class Report:
     oldest_open_age: float | None = None
     lost_lock: bool = False
     lost_race: int = 0
+    unavailable: bool = False  # the engine id is unavailable: every target was refused for that one reason (see `run_once`)
 
 
 @dataclass
@@ -653,7 +654,7 @@ async def run_once(
     every = interval_seconds()
     upcoming = upcoming_targets(now, tz_name, months, plan, every)
     report = Report(targets=len(plan))
-    unavailable = ledger.engine_id() == ledger.UNAVAILABLE  # no reader would take a row labelled with it: write none
+    unavailable = report.unavailable = ledger.engine_id() == ledger.UNAVAILABLE  # no reader takes a row labelled with it: write none
     async with session_factory() as session:
         config_fp = await figure_cache.config_fingerprint(session)
     config_changed = config_fp != state.config_fp_seen  # a new configuration makes every target due, settled ones included
@@ -1119,14 +1120,12 @@ def _log_report(report: Report, state: WorkerState) -> None:
             "report:errors", "figures worker: %d of %d targets failed in this cycle (%d written, %d touched)",
             report.errors, report.targets, report.written, report.touched,
         )
-    if report.refused:
+    if report.refused and not report.unavailable:  # (an unavailable engine id has its own line, once per process: see `run_once`)
         _log_throttled(
-            "report:refused",
-            "figures worker: %d values were not stored in this cycle (the codec refused them, or the engine id is unavailable); "
-            "readers compute them",
+            "report:refused", "figures worker: %d values were not stored in this cycle (the codec refused them); readers compute them",
             report.refused,
         )
-    state.refused_since += report.refused
+        state.refused_since += report.refused  # (what the nightly line reports as refused by the codec)
     state.summary.add(report)
     if state.summary.due():
         log.info(state.summary.line())
