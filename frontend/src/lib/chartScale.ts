@@ -17,9 +17,6 @@ export function largestAbs(values: Iterable<number | null | undefined>): number 
 /** What a chart's value axis is given: the scale, the axis name (undefined where the unit has none) and the label formatter. */
 export interface ValueAxis { scale: Scale; name: string | undefined; format: (value: number) => string }
 
-/** Below this the tick face's two decimals would print real ticks as "0" (0.001 on a 0.004 axis), so such an axis prints the value itself. */
-const FINE_BELOW = 0.1;
-
 /**
  * The axis for a chart that draws `values` (every bar and series point, both months of a comparison, a metric's min and max): the scale comes from the
  * LARGEST magnitude only, so a small point never pulls the axis back to a smaller unit. The unit and the family come from the response, as for a card.
@@ -27,10 +24,9 @@ const FINE_BELOW = 0.1;
 export function valueAxisFor(data: Pick<WidgetData, "unit" | "source">, values: Iterable<number | null | undefined>): ValueAxis {
   const top = largestAbs(values);
   const scale = pickScale(familyOf(data.unit, data.source), data.unit, [top]);
-  const fine = top > 0 && top < FINE_BELOW;
   return {
     scale,
     name: scale.axisName ?? undefined,
-    format: fine ? (value) => String(Number(value.toPrecision(6))) : (value) => tickText(value, scale.divisor),
+    format: (value) => tickText(value, scale.divisor), // a tick keeps the decimals of its own value (up to six)
   };
 }

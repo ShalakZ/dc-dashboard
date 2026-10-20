@@ -143,7 +143,7 @@ describe("the tick face", () => {
   it.each<[number, number | undefined, string]>([
     [18_000, undefined, "18,000"], [0, undefined, "0"], [-0, undefined, "0"], [0.5, undefined, "0.5"], [250_000, 1000, "250"], [300_000, 1000, "300"],
     [1500, undefined, "1,500"], [-1500, undefined, "-1,500"], [1234.5, undefined, "1,234.5"], [20, undefined, "20"], [100, undefined, "100"], [0.25, undefined, "0.25"],
-    [0.001, undefined, "0"], [-0.001, undefined, "0"], [2_500_000, 1_000_000, "2.5"], [12_345_678, 1000, "12,345.68"], [5, 1000, "0.01"],
+    [0.001, undefined, "0.001"], [-0.001, undefined, "-0.001"], [0.0000004, undefined, "0"], [-0.0000004, undefined, "0"], [0.951, undefined, "0.951"], [0.957, undefined, "0.957"], [49.991, undefined, "49.991"], [150_005, 1000, "150.005"], [12_345, 1000, "12.345"], [2_500_000, 1_000_000, "2.5"], [12_345_678, 1000, "12,345.678"], [5, 1000, "0.005"], [1e21, undefined, "—"], [-1e21, 1000, "—"],
   ])("tickText(%d, %s) is %s", (value, divisor, text) => {
     expect(tickText(value, divisor)).toBe(text);
   });
@@ -387,5 +387,25 @@ describe("no locale API anywhere (D1)", () => {
   it("the module does not name a locale API in its source", () => {
     const source = readFileSync("src/lib/figures.ts", "utf8"); // vitest runs from the frontend directory
     expect(source).not.toMatch(/Intl|toLocale|localeCompare|navigator|\.language/);
+  });
+});
+
+describe("a tick keeps the decimals of its own value (w27 review 1: a narrow axis must not collapse its labels)", () => {
+  it("prints the ticks of a power factor band 0.951 to 0.969 as seven different labels", () => {
+    const ticks = [0.951, 0.954, 0.957, 0.96, 0.963, 0.966, 0.969].map((v) => tickText(v));
+    expect(ticks).toEqual(["0.951", "0.954", "0.957", "0.96", "0.963", "0.966", "0.969"]);
+    expect(new Set(ticks).size).toBe(7);
+  });
+  it("prints the ticks 5, 10, 15, 20 and 25 kWh on an axis that stays in MWh without rounding them to 0.01 ... 0.03", () => {
+    expect([5, 10, 15, 20, 25].map((kwh) => tickText(kwh, 1000))).toEqual(["0.005", "0.01", "0.015", "0.02", "0.025"]);
+  });
+  it("keeps whole thousands whole and groups them", () => {
+    expect([18_000, 250_000, 1_234_567.5].map((v) => tickText(v))).toEqual(["18,000", "250,000", "1,234,567.5"]);
+  });
+  it("prints a value too big for toFixed as a dash, never as 1e+21", () => {
+    expect(tickText(1e21)).toBe("—");
+    expect(exactText(1e21, "kWh", { estimated: false, partial: false })).toBe("—");
+    expect(percentDigits(1e21)).toBe("—");
+    expect(cardText(1e27, pickScale("energy", "kWh", [1e27]), { estimated: false, partial: false })).toBe("—");
   });
 });

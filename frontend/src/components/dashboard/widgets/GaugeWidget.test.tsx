@@ -57,12 +57,12 @@ describe("gaugeFillPath: the filled part of the arc, a path of its own (a dash w
 });
 
 describe("scaleText: the ends of the scale are settings, written as the config states them", () => {
-  it("drops the decimals of a whole number and keeps at most two of any other", () => {
+  it("drops the decimals of a whole number and keeps the decimals of any other", () => {
     expect(scaleText(0)).toBe("0");
     expect(scaleText(200)).toBe("200");
     expect(scaleText(49)).toBe("49");
     expect(scaleText(0.5)).toBe("0.5");
-    expect(scaleText(0.125)).toBe("0.13");
+    expect(scaleText(0.125)).toBe("0.125"); // a scale end keeps the decimals of its own value (w27 review 2)
     expect(scaleText(-10)).toBe("-10");
     expect(scaleText(-0)).toBe("0");
   });
@@ -137,6 +137,12 @@ describe("the gauge is a meter", () => {
     expect(meter).toHaveAttribute("aria-valuenow", "150");
     expect(meter).toHaveAttribute("aria-valuetext", "150.00 MW");
     expect(figure(container)).toHaveAttribute("title", "150,000.00 kW"); // the exact value, in the base unit
+  });
+
+  it("prints a scale end that is not round with its own decimals, the same number the aria values carry (w27 review 2: 12,345 kW as 12.345 MW, never 12.35)", () => {
+    const { container } = gaugeOf(valuesData({ type: "gauge", values: [valueRow({ value: 150000 })] }), config({ aggregation: "last", min: 12345, max: 200000 }));
+    expect([...container.querySelectorAll(".gauge-scale > *")].map((e) => e.textContent)).toEqual(["12.345", "200 MW"]);
+    expect(screen.getByRole("meter")).toHaveAttribute("aria-valuemin", "12.345");
   });
 
   it("lets a max that is bigger than the figure decide the unit: 10.50 kW on a 0 to 200,000 kW dial reads 0.01 MW (one unit for all three numbers)", () => {

@@ -28,6 +28,8 @@ export interface Amount { digits: string; zero: boolean; negative: boolean }
 type Source = "metric" | "energy" | "cost";
 
 const DASH = "—";
+/** From here `toFixed` switches to exponent notation ("1e+21"): such a value has no sensible figure and prints as a dash. */
+const TOO_BIG = 1e21;
 
 /** The energy-family units and the names they step through, by 1,000 each. kVA and kvar stop at M. */
 const ENERGY_CHAINS: ReadonlyMap<string, readonly string[]> = new Map([
@@ -52,7 +54,7 @@ const COST_K_FROM = 100_000;
 /** Cost card face: from this many thousands (after rounding) M. */
 const COST_M_FROM = 1_000;
 
-const isFigure = (value: number | null | undefined): value is number => typeof value === "number" && Number.isFinite(value);
+const isFigure = (value: number | null | undefined): value is number => typeof value === "number" && Number.isFinite(value) && Math.abs(value) < TOO_BIG;
 
 const unitTail = (unit: string | null): string => (unit ? ` ${unit}` : "");
 
@@ -170,15 +172,17 @@ export function exactText(value: number | null | undefined, unit: string | null,
 }
 
 /**
- * The tick face: the value in the axis unit (divided by `divisor`), grouped, with only the decimals it needs (at most two): "18,000", "0", "0.5". A tick that
+ * The tick face: the value in the axis unit (divided by `divisor`), grouped, with the decimals of its own value (up to six, trailing zeros dropped): "18,000", "0", "0.5", "0.955". A tick that
  * rounds to zero is "0" with no minus.
  */
 export function tickText(value: number, divisor = 1): string {
   if (!isFigure(value) || !(divisor > 0)) return DASH;
-  const fixed = (Math.abs(value) / divisor).toFixed(2);
+  const x = Math.abs(value) / divisor;
+  if (x >= TOO_BIG) return DASH; // `toFixed` would print "1e+21"
+  const fixed = x.toFixed(6); // a tick keeps the decimals of its OWN value: a power factor axis ticks 0.951, 0.954 ... and must not collapse to "0.95"
   if (Number(fixed) === 0) return "0";
   return `${value < 0 ? "-" : ""}${groupDigits(fixed.replace(/\.?0+$/, ""))}`;
 }
 
 /** A percentage as the change line prints it: one decimal, grouped, without sign (the words up and down carry the direction): "0.2", "1,234.6". */
-export const percentDigits = (value: number): string => groupDigits(Math.abs(value).toFixed(1));
+export const percentDigits = (value: number): string => (isFigure(value) ? groupDigits(Math.abs(value).toFixed(1)) : DASH);
