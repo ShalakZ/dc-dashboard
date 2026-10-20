@@ -6,11 +6,13 @@ wrong secrets and what does and does not count toward it, an immediate effect of
 name, and the secret never appearing in an audit row, an answer or a log line. Seeds are written here, not imported from other
 test files (their autouse fixtures would come along).
 """
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
 
 import pytest
+from auth_probe import silent_client
 from billing_helpers import add_counter, at, set_currency, set_zone
 from helpers import login_as, make_asset, make_display, make_playlist, settle_rollups
 
@@ -21,6 +23,7 @@ from dcdash.core.build import build_info
 from dcdash.core.displays import DISPLAY_WIDGET_BUDGET_PER_MINUTE, hash_secret
 
 UTC = timezone.utc
+WAIT = 15  # seconds: every wait on a burst of requests is bounded (there is no test timeout, a stuck request would hang the run)
 NOW = datetime(2026, 4, 8, 10, 0, tzinfo=UTC)
 START = at(2026, 4, 1)
 HOURS = 48
@@ -273,6 +276,26 @@ async def test_an_origin_that_is_the_host_passes(client, db, host, origin, extra
     assert response.status_code == 204, (host, origin)
 
 
+@pytest.mark.parametrize(
+    ("host", "origin", "extra"),
+    [
+        ("test", "https://test", {}),  # a TLS origin against a plain http request: another scheme is another origin
+        ("test", "https://test:443", {}),
+        ("test", "http://test", {"X-Forwarded-Proto": "https"}),  # an http origin against a request that came in over TLS
+        ("test:80", "http://test", {"X-Forwarded-Proto": "https"}),
+        ("test", "http://test:80", {"X-Forwarded-Proto": "https"}),
+        ("test:443", "http://test:443", {"X-Forwarded-Proto": "https"}),  # same port number, other scheme
+        ("test:8443", "http://test:8443", {"X-Forwarded-Proto": "https"}),
+        ("[::1]:8000", "https://[::1]:8000", {}),
+    ],
+)
+async def test_an_origin_with_the_wrong_scheme_is_refused(client, db, host, origin, extra):
+    _row, secret = await make_display(db)
+    response = await claim(client, secret, Host=host, Origin=origin, **extra)
+    assert response.status_code == 403, (host, origin, extra)
+    assert "set-cookie" not in response.headers
+
+
 async def test_a_refusal_for_another_origin_comes_before_the_lookup(client, db, monkeypatch):
     _row, secret = await make_display(db)
 
@@ -333,12 +356,62 @@ async def test_failures_older_than_the_window_do_not_add_up(client, db, limiter_
     assert (await claim(client, secret, **address("10.0.0.1"))).status_code == 204
 
 
-async def test_a_revoked_or_deleted_secret_counts_as_a_failure(client, db, limiter_clock):
+async def test_a_revoked_link_that_keeps_being_opened_never_blocks_its_own_address(client, db, limiter_clock):
+    # A kiosk started on a revoked link claims again at every reload (its idle reset, a reboot that drops the cookie): that must
+    # not lock out its address, which other screens behind the same proxy share.
     _row, revoked_secret = await make_display(db, "Revoked", revoked=True)
     _row, secret = await make_display(db, "Live")
-    for _ in range(10):
+    answers = [await claim(client, revoked_secret, **address("10.0.0.3")) for _ in range(15)]
+    assert [a.status_code for a in answers] == [401] * 15
+    assert all(a.json() == INVALID for a in answers) and all("set-cookie" not in a.headers for a in answers)
+    assert (await claim(client, secret, **address("10.0.0.3"))).status_code == 204  # the address is open
+    assert await audit_rows(db, "display.claim_blocked") == []
+
+
+async def test_a_revoked_link_still_gets_the_one_401_text_and_the_wrong_ones_still_add_up(client, db, limiter_clock):
+    _row, revoked_secret = await make_display(db, "Revoked", revoked=True)
+    _row, secret = await make_display(db, "Live")
+    unknown = await claim(client, "u" * 43, **address("10.0.0.3"))
+    revoked = await claim(client, revoked_secret, **address("10.0.0.3"))
+    assert (revoked.status_code, revoked.content) == (unknown.status_code, unknown.content)  # nothing tells them apart
+    for _ in range(8):  # eight more unknown ones, interleaved with revoked ones that add nothing: 9 failures so far, then the 10th
+        assert (await claim(client, "u" * 43, **address("10.0.0.3"))).status_code == 401
         assert (await claim(client, revoked_secret, **address("10.0.0.3"))).status_code == 401
+    assert (await claim(client, secret, **address("10.0.0.4"))).status_code == 204  # (another address: untouched)
+    assert (await claim(client, "u" * 43, **address("10.0.0.3"))).status_code == 401  # the 10th unknown one blocks
     assert (await claim(client, secret, **address("10.0.0.3"))).status_code == 429
+
+
+async def test_ten_claims_of_a_deleted_secret_block_the_address_like_unknown_ones(client, db, limiter_clock):
+    deleted, deleted_secret = await make_display(db, "Deleted")
+    _row, secret = await make_display(db, "Live")
+    await db.execute("DELETE FROM displays WHERE id = $1", deleted.id)
+    for _ in range(10):
+        assert (await claim(client, deleted_secret, **address("10.0.0.3"))).status_code == 401
+    assert (await claim(client, secret, **address("10.0.0.3"))).status_code == 429
+
+
+async def test_ten_unknown_secrets_still_block_an_address_when_a_revoked_link_is_around(client, db, limiter_clock):
+    _row, revoked_secret = await make_display(db, "Revoked", revoked=True)
+    _row, secret = await make_display(db, "Live")
+    assert (await claim(client, revoked_secret, **address("10.0.0.3"))).status_code == 401
+    for number in range(10):
+        assert (await claim(client, f"unknown-{number}".ljust(43, "x"), **address("10.0.0.3"))).status_code == 401
+    assert (await claim(client, secret, **address("10.0.0.3"))).status_code == 429
+
+
+async def test_a_burst_of_wrong_claims_from_one_address_is_stopped_at_ten(client, db):
+    _row, secret = await make_display(db)
+    answers = await asyncio.wait_for(
+        asyncio.gather(*[claim(client, f"burst-{number}".ljust(43, "x"), **address("10.0.0.5")) for number in range(30)]), WAIT
+    )
+    statuses = sorted(a.status_code for a in answers)
+    assert statuses == [401] * 10 + [429] * 20  # not 30 x 401: every request already in flight meets the block before it is counted
+    assert all(1 <= int(a.headers["retry-after"]) <= 900 for a in answers if a.status_code == 429)
+    assert all(a.json() == INVALID for a in answers if a.status_code == 401)
+    assert len(await audit_rows(db, "display.claim_blocked")) == 1
+    assert (await claim(client, secret, **address("10.0.0.5"))).status_code == 429  # and the address is blocked afterwards
+    assert (await claim(client, secret, **address("10.0.0.6"))).status_code == 204
 
 
 async def test_one_block_writes_one_claim_blocked_row_with_only_the_client(client, db, limiter_clock):
@@ -359,6 +432,20 @@ async def test_a_second_address_blocked_inside_the_row_budget_is_not_written(cli
             await claim(client, "w" * 43, **address(ip))
     assert (await claim(client, "w" * 43, **address("10.0.0.2"))).status_code == 429  # blocked all the same
     assert [row["detail"] for row in await audit_rows(db, "display.claim_blocked")] == [{"client": "10.0.0.1"}]
+
+
+async def test_the_next_claim_blocked_row_says_how_many_were_left_out(client, db, limiter_clock, monkeypatch):
+    now = [5000.0]
+    monkeypatch.setattr(display, "blocked_budget", RowBudget(1, 300, clock=lambda: now[0]))
+    for ip in ("10.0.0.1", "10.0.0.2", "10.0.0.3"):  # three blocks inside the window: one row, two left out
+        for _ in range(10):
+            await claim(client, "w" * 43, **address(ip))
+    now[0] += 301
+    for _ in range(10):
+        await claim(client, "w" * 43, **address("10.0.0.4"))
+    assert [row["detail"] for row in await audit_rows(db, "display.claim_blocked")] == [
+        {"client": "10.0.0.1"}, {"client": "10.0.0.4", "suppressed_before": 2},
+    ]
 
 
 async def test_a_failing_audit_write_does_not_change_the_answer_and_logs_no_secret(client, db, limiter_clock, monkeypatch, caplog):
@@ -400,11 +487,72 @@ async def test_a_claim_writes_one_connected_row_with_ids_and_no_secret(client, d
     assert secret not in json.dumps(rows[0]["detail"]) and hash_secret(secret) not in json.dumps(rows[0]["detail"])
 
 
-async def test_connected_rows_are_throttled_but_every_claim_still_works(client, db, monkeypatch):
-    monkeypatch.setattr(display, "connected_budget", RowBudget(3, 300))
-    _row, secret = await make_display(db)
+async def test_connected_rows_are_throttled_but_every_claim_still_works(client, db):
+    row, secret = await make_display(db)
+    display.connected_budgets[row.id] = display.ConnectedBudget(3, 300)
     assert [(await claim(client, secret)).status_code for _ in range(6)] == [204] * 6
     assert len(await audit_rows(db, "display.connected")) == 3
+
+
+async def test_twelve_quick_claims_write_ten_rows_and_the_next_row_says_what_was_left_out(client, db):
+    now = [5000.0]
+    row, secret = await make_display(db, "Hall TV")
+    display.connected_budgets[row.id] = display.ConnectedBudget(10, 300, clock=lambda: now[0])
+    assert [(await claim(client, secret, **address("10.0.0.1"))).status_code for _ in range(12)] == [204] * 12
+    rows = await audit_rows(db, "display.connected")
+    assert len(rows) == 10 and all("suppressed_before" not in r["detail"] for r in rows)
+    now[0] += 301
+    assert (await claim(client, secret, **address("10.0.0.1"))).status_code == 204
+    rows = await audit_rows(db, "display.connected")
+    assert len(rows) == 11
+    assert rows[-1]["detail"] == {"display_id": row.id, "name": "Hall TV", "client": "10.0.0.1", "suppressed_before": 2}
+    assert [(await claim(client, secret, **address("10.0.0.1"))).status_code for _ in range(2)] == [204, 204]
+    later = (await audit_rows(db, "display.connected"))[11:]
+    assert len(later) == 2 and all("suppressed_before" not in r["detail"] for r in later)  # the count restarts from zero
+
+
+async def test_a_claim_from_a_new_address_is_written_even_when_the_budget_is_spent(client, db):
+    row, secret = await make_display(db, "Hall TV")
+    display.connected_budgets[row.id] = display.ConnectedBudget(2, 300, clock=lambda: 5000.0)
+    assert [(await claim(client, secret, **address("10.0.0.1"))).status_code for _ in range(4)] == [204] * 4
+    assert len(await audit_rows(db, "display.connected")) == 2  # the budget is spent: two refused
+    assert (await claim(client, secret, **address("10.0.0.2"))).status_code == 204  # from somewhere else: always written
+    rows = await audit_rows(db, "display.connected")
+    assert len(rows) == 3
+    assert rows[-1]["detail"] == {"display_id": row.id, "name": "Hall TV", "client": "10.0.0.2", "suppressed_before": 2}
+    assert (await claim(client, secret, **address("10.0.0.2"))).status_code == 204  # the same address again: the budget decides
+    assert len(await audit_rows(db, "display.connected")) == 3
+    assert (await claim(client, secret, **address("10.0.0.1"))).status_code == 204  # and back to the first one: new again
+    rows = await audit_rows(db, "display.connected")
+    assert [r["detail"]["client"] for r in rows] == ["10.0.0.1", "10.0.0.1", "10.0.0.2", "10.0.0.1"]
+    assert rows[-1]["detail"]["suppressed_before"] == 1  # the one claim of 10.0.0.2 that was left out
+
+
+async def test_a_claim_notes_where_the_display_connected_from(client, db):
+    row, secret = await make_display(db)
+    assert tuple(await db.fetchrow("SELECT last_seen_at, last_client FROM displays WHERE id = $1", row.id)) == (None, None)
+    assert (await claim(client, secret, **address("10.4.4.4"))).status_code == 204
+    noted = await db.fetchrow("SELECT last_seen_at, last_client FROM displays WHERE id = $1", row.id)
+    assert noted["last_client"] == "10.4.4.4" and noted["last_seen_at"] is not None
+
+
+async def test_a_claim_from_the_address_the_display_was_last_seen_at_is_not_a_new_address(client, db):
+    row, secret = await make_display(db)
+    assert (await client.get(PLAYLIST, headers={**cookie(secret), **address("10.1.2.3")})).status_code == 200  # the poll notes it
+    display.connected_budgets[row.id] = display.ConnectedBudget(1, 300, clock=lambda: 5000.0)
+    assert [(await claim(client, secret, **address("10.1.2.3"))).status_code for _ in range(3)] == [204] * 3
+    assert len(await audit_rows(db, "display.connected")) == 1  # the budget alone decides: the address is not new
+
+
+async def test_one_display_cannot_use_up_the_trail_of_another(client, db):
+    one, one_secret = await make_display(db, "One")
+    other, other_secret = await make_display(db, "Other")
+    await db.execute("UPDATE displays SET last_client = '10.0.0.1' WHERE id = ANY($1)", [one.id, other.id])  # known address: no forced row
+    display.connected_budgets[one.id] = display.ConnectedBudget(1, 300, clock=lambda: 5000.0)
+    for _ in range(3):
+        assert (await claim(client, one_secret, **address("10.0.0.1"))).status_code == 204
+    assert (await claim(client, other_secret, **address("10.0.0.1"))).status_code == 204
+    assert [r["detail"]["name"] for r in await audit_rows(db, "display.connected")] == ["One", "Other"]
 
 
 async def test_a_wrong_or_refused_claim_writes_no_connected_row(client, db):
@@ -839,14 +987,184 @@ async def test_only_an_accepted_display_gets_a_budget_and_the_dict_stays_bounded
     for headers in ({}, cookie("w" * 43)):
         await client.post(WIDGET_DATA, json={"item": 1, "widget": 1}, headers=headers)
         await client.get(PLAYLIST, headers=headers)
-    assert display.widget_budgets == {} and display.playlist_budgets == {}
+    for secret in ("w" * 43, "x"):  # a wrong claim gets no entry either
+        await claim(client, secret)
+    assert display.widget_budgets == {} and display.playlist_budgets == {} and display.connected_budgets == {}
     for number in range(100):  # displays that were deleted long ago
         display.widget_budgets[10_000 + number] = RowBudget(300, 60)
         display.playlist_budgets[10_000 + number] = RowBudget(30, 60)
+        display.connected_budgets[10_000 + number] = display.ConnectedBudget(10, 300)
     asked = {"item": ids["mine_item"], "widget": ids["mine_widget"]}
     assert (await client.post(WIDGET_DATA, json=asked, headers=cookie(ids["secret"]))).status_code == 200
     assert (await client.get(PLAYLIST, headers=cookie(ids["secret"]))).status_code == 200
-    assert len(display.widget_budgets) == 1 and len(display.playlist_budgets) == 1
+    assert (await claim(client, ids["secret"])).status_code == 204
+    assert len(display.widget_budgets) == 1 and len(display.playlist_budgets) == 1 and len(display.connected_budgets) == 1
+
+
+# --- requests in flight: a cap on how many a display (and all displays together) may hold at once ----------------------------------
+
+
+class SlowFigures:
+    """`compute_checked` replaced by a stand-in that holds every request until `release` is set, counting how many are in it."""
+
+    def __init__(self) -> None:
+        self.running = 0
+        self.peak = 0
+        self.release = asyncio.Event()
+
+
+@pytest.fixture
+def slow_figures(monkeypatch):
+    gate = SlowFigures()
+    real = display.compute_checked
+
+    async def slow(request, session):
+        gate.running += 1
+        gate.peak = max(gate.peak, gate.running)
+        try:
+            await gate.release.wait()
+            return await real(request, session)
+        finally:
+            gate.running -= 1
+
+    monkeypatch.setattr(display, "compute_checked", slow)
+    return gate
+
+
+async def until(condition, what: str) -> None:
+    """Wait, bounded, until `condition()` holds."""
+    clock = asyncio.get_running_loop().time
+    deadline = clock() + WAIT
+    while not condition():
+        assert clock() < deadline, what
+        await asyncio.sleep(0.01)
+
+
+def ask_for_figures(client, ids: dict, secret: str) -> asyncio.Task:
+    return asyncio.create_task(
+        client.post(WIDGET_DATA, json={"item": ids["mine_item"], "widget": ids["mine_widget"]}, headers=cookie(secret))
+    )
+
+
+async def let_go(gate: SlowFigures, tasks: list[asyncio.Task]) -> list:
+    """Release every held request and collect the answers, bounded; whatever is still pending is cancelled so nothing outlives the test."""
+    gate.release.set()
+    try:
+        return await asyncio.wait_for(asyncio.gather(*tasks), WAIT)
+    finally:
+        for task in tasks:
+            task.cancel()
+
+
+async def test_at_most_six_requests_of_one_display_run_at_once_and_the_rest_are_told_to_retry(client, db, slow_figures):
+    ids = await world_for_404s(db)
+    display_id = await db.fetchval("SELECT id FROM displays")
+    display.widget_budgets[display_id] = RowBudget(14, 60)  # room for exactly the fourteen: a refused one that was counted would show
+    tasks = [ask_for_figures(client, ids, ids["secret"]) for _ in range(14)]
+    try:
+        await until(lambda: slow_figures.running == 6 and sum(task.done() for task in tasks) == 8, "6 running, 8 refused")
+        assert display.in_flight.total == 6 and display.in_flight.by_display == {display_id: 6}
+    finally:
+        answers = await let_go(slow_figures, tasks)
+    assert sorted(a.status_code for a in answers) == [200] * 6 + [429] * 8
+    refused = [a for a in answers if a.status_code == 429]
+    assert all(a.json() == {"detail": "busy, try again"} and a.headers["retry-after"] == "1" for a in refused)
+    assert slow_figures.peak == 6
+    assert display.in_flight.total == 0 and display.in_flight.by_display == {}  # everything given back
+    # The refused eight were counted by no limiter (fourteen was the whole budget: eight more would have used it up) ...
+    assert (await ask_for_figures(client, ids, ids["secret"])).status_code == 200
+    # ... and wrote no audit row.
+    assert await db.fetchval("SELECT count(*) FROM audit_log") == 0
+
+
+async def test_the_playlist_is_capped_the_same_way(client, db, monkeypatch):
+    ids = await world_for_404s(db)
+    release, running, peak = asyncio.Event(), [0], [0]
+    real = display.resolve_items
+
+    async def slow_items(db_, playlist_id):
+        running[0] += 1
+        peak[0] = max(peak[0], running[0])
+        try:
+            await release.wait()
+            return await real(db_, playlist_id)
+        finally:
+            running[0] -= 1
+
+    monkeypatch.setattr(display, "resolve_items", slow_items)
+    tasks = [asyncio.create_task(client.get(PLAYLIST, headers=cookie(ids["secret"]))) for _ in range(9)]
+    try:
+        await until(lambda: running[0] == 6 and sum(task.done() for task in tasks) == 3, "6 running, 3 refused")
+    finally:
+        release.set()
+        answers = await asyncio.wait_for(asyncio.gather(*tasks), WAIT)
+    assert sorted(a.status_code for a in answers) == [200] * 6 + [429] * 3
+    assert all(a.json() == {"detail": "busy, try again"} and a.headers["retry-after"] == "1" for a in answers if a.status_code == 429)
+    assert peak[0] == 6 and display.in_flight.total == 0
+
+
+async def test_all_displays_together_never_hold_more_than_twelve(client, db, slow_figures):
+    ids = await world_for_404s(db)
+    secrets = {"Hall TV": ids["secret"]}
+    for name in ("Second", "Third"):  # (they share the playlist the first one shows)
+        secrets[name] = (await make_display(db, name))[1]
+    tasks = {name: [ask_for_figures(client, ids, secret) for _ in range(8)] for name, secret in secrets.items()}
+    everything = [task for group in tasks.values() for task in group]
+    try:
+        await until(lambda: slow_figures.running == 12 and sum(task.done() for task in everything) == 12, "12 running, 12 refused")
+        assert display.in_flight.total == 12 and max(display.in_flight.by_display.values()) <= 6
+    finally:
+        await let_go(slow_figures, everything)
+    assert slow_figures.peak == 12
+    statuses = {name: sorted(task.result().status_code for task in group) for name, group in tasks.items()}
+    assert sum(codes.count(200) for codes in statuses.values()) == 12 and all(codes.count(200) <= 6 for codes in statuses.values())
+    assert all(set(codes) <= {200, 429} for codes in statuses.values())
+    assert display.in_flight.total == 0 and display.in_flight.by_display == {}
+
+
+async def test_the_slot_is_given_back_after_an_error_a_refusal_and_a_cancelled_request(db, app, monkeypatch, slow_figures):
+    ids = await world_for_404s(db)
+    display_id = await db.fetchval("SELECT id FROM displays")
+    asked = {"item": ids["mine_item"], "widget": ids["mine_widget"]}
+
+    async def explode(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    async with silent_client(app) as client:
+        with monkeypatch.context() as patch:  # an unexpected error inside the route
+            patch.setattr(display, "resolve_items", explode)
+            assert (await client.get(PLAYLIST, headers=cookie(ids["secret"]))).status_code == 500
+            assert (await client.post(WIDGET_DATA, json=asked, headers=cookie(ids["secret"]))).status_code == 500
+        assert display.in_flight.total == 0
+        # an error the route raises itself (404, 422), and the request budget's refusal
+        assert (await client.post(WIDGET_DATA, json={"item": 999_999, "widget": 1}, headers=cookie(ids["secret"]))).status_code == 404
+        assert (await client.post(WIDGET_DATA, json={"item": "x"}, headers=cookie(ids["secret"]))).status_code == 422
+        display.playlist_budgets[display_id] = RowBudget(1, 60)
+        assert [(await client.get(PLAYLIST, headers=cookie(ids["secret"]))).status_code for _ in range(2)] == [200, 429]
+        assert display.in_flight.total == 0 and display.in_flight.by_display == {}
+        # a request that is cancelled while it holds its slot
+        task = ask_for_figures(client, ids, ids["secret"])
+        await until(lambda: slow_figures.running == 1, "one request holding its slot")
+        assert display.in_flight.total == 1
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await until(lambda: display.in_flight.total == 0 and slow_figures.running == 0, "the slot given back")
+    assert display.in_flight.by_display == {}
+
+
+async def test_the_caps_do_not_reach_the_claim_or_hide_a_bad_cookie(client, db):
+    row, secret = await make_display(db)
+    display.in_flight.total = 12
+    display.in_flight.by_display[row.id] = 6
+    assert (await claim(client, secret)).status_code == 204  # a screen must always be able to connect
+    assert (await client.get(PLAYLIST, headers=cookie(secret))).json() == {"detail": "busy, try again"}
+    assert (await client.get(PLAYLIST, headers=cookie("w" * 43))).json() == NOT_CONNECTED  # busy says nothing to a stranger
+    client.cookies.clear()  # (the claim put the cookie in the client's jar)
+    assert (await client.get(PLAYLIST)).json() == NOT_CONNECTED
+    display.reset_display_state()
+    assert display.in_flight.total == 0 and display.in_flight.by_display == {}
+    assert (await client.get(PLAYLIST, headers=cookie(secret))).status_code == 200
 
 
 # --- the secret in no place it must not be -------------------------------------------------------------------------------------
