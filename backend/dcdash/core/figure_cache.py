@@ -11,7 +11,9 @@ What a stored value depends on, and how the cache sees each part:
 - the CONFIGURATION: the asset tree (ids, parents, sort order, names: they set the addition order of every sum), the two
   energy metrics' mappings (point, scale, interval) and the tariffs. One cheap statement on the REQUEST's session
   (`_config_fingerprint`, about 2.5 ms) hashes the text of those rows; the hash is part of the key, so a changed
-  configuration is a different key and is seen at once.
+  configuration is a different key and is seen at once. A caller that already holds a request connection and must not take
+  a second (the second month of a comparison) passes `db=None`: the cache then runs its fingerprint statements, one at a
+  time, each on a short-lived session of its OWN engine (see below).
 - the READINGS of the window: `_data_fingerprint` hashes exactly the rows `core/energy.py` `_ROWS` reads for the window (the
   rows of [start, end), the baseline row of each counter, the first bucket of each meter), each row whole. A stored value is
   trusted without any check for `ttl_seconds()` after its last check, then the fingerprint is compared again: equal renews
@@ -44,6 +46,13 @@ next request then finds a value that was checked a few seconds ago. It stops by 
 `KEEP_WARM_SECONDS` is left to expire, and a background recompute does not count as a use. Nothing is served past the TTL (a
 request still compares the age of the last check with it); a failure in the background is logged once and leaves the entry to
 expire; at TTL 0 or with the cache off nothing is scheduled.
+
+A request must never hold two connections of the request pool (each would wait for a second one that the others hold: the
+pool deadlocks until its timeout). So `get_or_compute(None, ...)` reads its fingerprints on the cache's own pool, as a LEAF:
+a session is opened for one statement and closed again before anything else is awaited, so no cycle can form (a computation
+holds one of the cache's connections while it runs but waits for nothing that needs a fingerprint). A fingerprint may wait a
+little for a free connection (the pool has one more than the two computations can hold); `POOL_TIMEOUT_SECONDS` makes a stall
+an error, not a hang.
 
 Stored values are READ-ONLY BY CONTRACT: the very same object is handed to every reader, so nobody may mutate it.
 
@@ -78,6 +87,7 @@ MAX_ENTRIES = 16
 DEFAULT_TTL_SECONDS = 30.0
 MAX_ATTEMPTS = 3  # the third never coalesces and stores nothing unless its snapshot matches the request's
 CONCURRENT_COMPUTATIONS = 2  # also the cache's pool size; the pool allows one more connection than this
+POOL_TIMEOUT_SECONDS = 20  # how long a statement waits for a connection of the cache's pool before it fails
 WARM_FRACTION = 0.6  # of the TTL: how long after a check the background revalidation runs
 KEEP_WARM_SECONDS = 600.0  # a key nobody used for this long is no longer kept warm
 
@@ -187,7 +197,8 @@ def _bind_loop() -> asyncio.AbstractEventLoop:
 
 def _get_engine() -> AsyncEngine:
     """The cache's own engine, created on first use: a small pool nothing else draws on (the request pool is held by the
-    requests that wait for the very computation that would need it)."""
+    requests that wait for the very computation that would need it). The fingerprints of a `db=None` request also draw on it,
+    one statement at a time (see the module text)."""
     global _engine
     _bind_loop()
     if _engine is None:
@@ -195,6 +206,7 @@ def _get_engine() -> AsyncEngine:
             get_settings().sqlalchemy_url,
             pool_size=CONCURRENT_COMPUTATIONS,
             max_overflow=1,
+            pool_timeout=POOL_TIMEOUT_SECONDS,
             pool_pre_ping=True,
         )
     return _engine
@@ -321,6 +333,23 @@ async def config_fingerprint(session: AsyncSession) -> str:
 
 async def _data_fingerprint(session: AsyncSession, start: datetime, end: datetime) -> str:
     return (await session.execute(_DATA, {**_METRICS, "start": start, "end": end})).scalar_one()
+
+
+async def _config_for(db: AsyncSession | None) -> str:
+    """The configuration fingerprint on `db`, or with no session on a short-lived one of the cache's own engine (a leaf: it
+    ends before the caller awaits anything else, and it takes no semaphore)."""
+    if db is not None:
+        return await _config_fingerprint(db)
+    async with _sessions()() as session:
+        return await _config_fingerprint(session)
+
+
+async def _data_for(db: AsyncSession | None, start: datetime, end: datetime) -> str:
+    """`_config_for` for the data fingerprint of the window [start, end)."""
+    if db is not None:
+        return await _data_fingerprint(db, start, end)
+    async with _sessions()() as session:
+        return await _data_fingerprint(session, start, end)
 
 
 # ---- the store -------------------------------------------------------------------------------------------------------------
@@ -491,12 +520,12 @@ def _check_done(key: tuple, finished: asyncio.Future) -> None:
         finished.exception()  # retrieved: a failure that nobody waited for is not logged as "never retrieved"
 
 
-async def _checked(db: AsyncSession, key: tuple) -> tuple[str, float]:
+async def _checked(db: AsyncSession | None, key: tuple) -> tuple[str, float]:
     """The data fingerprint of the key's window and the `_monotonic()` taken before it was read, from ONE check per key at a
-    time: the first request that finds the key expired reads it on its own session (the request pool, as before) and every
-    other request for the key awaits that read. A failure raises in all of them and is kept by none. The read is not a task
-    of its own (it would hold the first request's session after that request ended); if its request is cancelled, its waiters
-    start over and one of them reads."""
+    time: the first request that finds the key expired reads it on its own session (the request pool, as before; the cache's
+    own engine when it has none) and every other request for the key awaits that read. A failure raises in all of them and is
+    kept by none. The read is not a task of its own (it would hold the first request's session after that request ended); if
+    its request is cancelled, its waiters start over and one of them reads."""
     while True:
         running = _checks.get(key)
         if running is None or running.done():
@@ -511,7 +540,7 @@ async def _checked(db: AsyncSession, key: tuple) -> tuple[str, float]:
     _stats["revalidations"] += 1
     asked = _monotonic()
     try:
-        fingerprint = await _data_fingerprint(db, key[1], key[2])
+        fingerprint = await _data_for(db, key[1], key[2])
     except Exception as exc:
         mine.set_exception(exc)
         raise
@@ -584,7 +613,7 @@ async def _warm(key: tuple, entry: _Entry, generation: int) -> None:
 
 
 async def get_or_compute(
-    db: AsyncSession,
+    db: AsyncSession | None,
     kind: str,
     start: datetime,
     end: datetime,
@@ -593,8 +622,10 @@ async def get_or_compute(
 ) -> T:
     """The value of `compute` for the `readings_1h` window [start, end), from the store when nothing it depends on changed.
 
-    `db` is the request's session and is used only for the two cheap fingerprint statements. `compute(session)` receives the
-    cache's own session (a repeatable-read snapshot) and must return a compact, read-only value.
+    `db` is the request's session and is used only for the two cheap fingerprint statements. `None` (a request that already
+    holds a connection of the request pool through another call and must not ask for a second) reads them instead on a
+    short-lived session of the cache's own engine, one statement at a time; nothing else differs. `compute(session)` receives
+    the cache's own session (a repeatable-read snapshot) and must return a compact, read-only value.
     """
     _bind_loop()  # first: a new event loop forgets the old one's state now, never between a task's registration and its start
     if not enabled():
@@ -602,7 +633,7 @@ async def get_or_compute(
     fresh = _fresh.get()
     missed = False
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        key = (kind, start, end, params, await _config_fingerprint(db))
+        key = (kind, start, end, params, await _config_for(db))
         entry = _store.get(key)
         if entry is not None:
             if not fresh and _monotonic() - entry.checked_at < ttl_seconds():
@@ -613,7 +644,7 @@ async def get_or_compute(
             if fresh:  # on the spot and alone: it must not rely on a check that began before it asked
                 _stats["revalidations"] += 1
                 asked = _monotonic()
-                fingerprint = await _data_fingerprint(db, start, end)
+                fingerprint = await _data_for(db, start, end)
             else:
                 fingerprint, asked = await _checked(db, key)
             if fingerprint == entry.data_fp:

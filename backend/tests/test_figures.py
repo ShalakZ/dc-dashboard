@@ -18,13 +18,15 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 import reference_engine as ref
 from billing_helpers import add_counter, add_power, add_tariff, at, set_currency, set_zone
 from dcdash.api import billing
 from dcdash.core import cost, energy, figure_cache, figures
+from dcdash.core import db as db_module
 from dcdash.core import widgets as widgets_module
+from dcdash.core.config import get_settings
 from dcdash.core.db import get_sessionmaker
 from dcdash.core.energy import hourly_energy
 from dcdash.core.timeutil import local_days, month_bounds, resolve_range
@@ -723,3 +725,48 @@ async def test_a_cold_comparison_starts_both_months_before_either_has_finished_a
     (first_began, first_ended), (second_began, _) = sorted(spans)
     assert second_began < first_ended, "the second month was not started until the first had finished"
     assert second_began - first_began < 0.2
+
+
+# ---- a comparison never holds two connections of the request pool (review C1) ----------------------------------------------------
+
+
+async def test_more_concurrent_comparisons_than_the_request_pool_holds_all_answer_without_waiting_for_the_pool(
+    client, db, monkeypatch
+):
+    ids = await build(db)
+    await login_as(client, db, "admin")
+    config = {"assets": [ids["Pump"]], "source": "cost", "aggregation": "sum", **COMPARE}
+    body = {"type": "stat", "config": config, "range": "this_month"}
+    size, timeout = 4, 5
+    tiny = create_async_engine(
+        get_settings().sqlalchemy_url, pool_size=size, max_overflow=0, pool_timeout=timeout, pool_pre_ping=True
+    )
+    monkeypatch.setattr(db_module, "_engine", tiny)  # every request session now draws on a pool of exactly `size` connections
+    loop = asyncio.get_running_loop()
+    answers = []
+
+    async def burst(phase: str) -> None:
+        began = loop.time()
+        # Each request holds its connection from its first statement on. Were a second one asked for while it waited, `size`
+        # requests would hold one each and wait for one more: `timeout` seconds of nothing, then an error (the test client
+        # raises what the app raised). The `size + 5` requests beyond that wait their turn for a connection.
+        responses = await asyncio.wait_for(
+            asyncio.gather(*(client.post("/api/widget-data", json=body) for _ in range(size + 5))), timeout * 4
+        )
+        elapsed = loop.time() - began
+        assert [r.status_code for r in responses] == [200] * (size + 5), phase
+        assert elapsed < timeout - 1, f"{phase}: {elapsed:.1f} s"  # nobody waited for the pool to time out
+        answers.extend(r.json() for r in responses)
+
+    try:
+        await burst("cold")  # one computation per month, shared by all
+        assert figure_cache.stats()["computes"] == 2
+        await burst("warm, the data compared on every request (the tests' TTL is 0)")
+        monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "1000")
+        await burst("warm, inside the TTL")
+        await figure_cache.aclear()
+        await burst("cold again")
+    finally:
+        await tiny.dispose()
+    assert all(answer == answers[0] for answer in answers)  # the same card every time
+    assert answers[0]["compare"]["state"] == "ok" and answers[0]["compare"]["assets"][0]["this"] is not None

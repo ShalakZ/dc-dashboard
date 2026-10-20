@@ -31,7 +31,6 @@ from dcdash.core.compare import (
     Side, change, contributing_meters, rate_change, side_from_entries, snapshot_entries, snapshot_status, windows,
 )
 from dcdash.core.cost import HourCost, cost_by_hour, load_tariffs, summarize
-from dcdash.core.db import get_sessionmaker
 from dcdash.core.energy import HourEnergy, hourly_energy
 from dcdash.core.figures import entries_at, month_days, window_values
 from dcdash.core.metrics import Metric, unit_for
@@ -48,7 +47,7 @@ from dcdash.core.tree import AssetTree
 
 log = logging.getLogger(__name__)
 
-WIDGET_TYPES =("timeseries", "bar", "stat", "gauge", "table", "text")
+WIDGET_TYPES = ("timeseries", "bar", "stat", "gauge", "table", "text")
 DATA_WIDGET_TYPES = tuple(widget_type for widget_type in WIDGET_TYPES if widget_type != "text")  # the ones that draw figures
 TEXT_STYLES = ("heading", "paragraph", "divider")
 TEXT_LIMITS = {"heading": 200, "paragraph": 2000}  # in Unicode code points; a divider holds no text
@@ -695,20 +694,21 @@ async def _fill_compare(
     # then go on, and say so once in the log: the card then prices last month with its tariffs and takes the rest from this month).
     # The two months are asked for side by side: on a cold cache the cache runs both computations at once (their reads overlap,
     # their pure parts take turns on the one compute thread), where one after the other took the sum. An AsyncSession serves one
-    # task at a time, so the second month asks through a session of its own.
-    async with get_sessionmaker()() as other:
-        for _ in range(3):
-            md_last, md_this = await _together(
-                month_days(db, tz_name, *month_bounds(win.last_month, tz_name)),
-                month_days(other, tz_name, *month_bounds(win.this_month, tz_name)),
-            )
-            if md_last.config_fp == md_this.config_fp:
-                break
-        else:
-            log.warning(
-                "the comparison went on with two configurations: last month %s, this month %s (three tries)",
-                md_last.config_fp[:8], md_this.config_fp[:8],
-            )
+    # task at a time, so the second month is given no session at all: the cache reads its fingerprint statements on its own
+    # engine. A request must never hold two connections of the request pool (a few dozen such requests at once would each
+    # hold one and wait for another: the pool deadlocks until its timeout and the whole API stalls).
+    for _ in range(3):
+        md_last, md_this = await _together(
+            month_days(db, tz_name, *month_bounds(win.last_month, tz_name)),
+            month_days(None, tz_name, *month_bounds(win.this_month, tz_name)),
+        )
+        if md_last.config_fp == md_this.config_fp:
+            break
+    else:
+        log.warning(
+            "the comparison went on with two configurations: last month %s, this month %s (three tries)",
+            md_last.config_fp[:8], md_this.config_fp[:8],
+        )
 
     # The windows' days are prefixes of the months' local days (core/compare.py `windows`): same entries, by position.
     this_entries = entries_at(md_this, asset_id, now)[: len(win.this_days)]

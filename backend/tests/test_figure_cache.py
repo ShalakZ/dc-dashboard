@@ -291,6 +291,88 @@ async def test_the_computation_runs_in_a_repeatable_read_snapshot_on_the_caches_
     assert seen["isolation"] == "repeatable read"
 
 
+async def asked_without_a_session(compute=None):
+    """`get_or_compute` for a caller that holds no request session (review C1): its fingerprints run on the cache's engine."""
+    return await figure_cache.get_or_compute(None, "energy", START, END, ("UTC",), compute or payload())
+
+
+async def a_run_of_five_requests(monkeypatch, with_session: bool):
+    """Five requests in the five situations of a figure (cold, expired at TTL 0, inside the TTL, fresh, cache off); the values,
+    the counters and the statements each engine saw."""
+    figure_cache.clear()
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "0")
+    monkeypatch.delenv("DCDASH_FIGURE_CACHE", raising=False)
+    one = ask if with_session else asked_without_a_session
+    values = []
+    with watch() as (request_side, cache_side):
+        values.append(await one())  # cold: computes
+        values.append(await one())  # TTL 0: the data is compared, the entry renewed
+        monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "1000")
+        values.append(await one())  # inside the TTL: the configuration only
+        with figure_cache.require_fresh():
+            values.append(await one())  # on the spot: the data is compared again
+        counters = figure_cache.stats()
+        monkeypatch.setenv("DCDASH_FIGURE_CACHE", "0")
+        values.append(await one())  # the cache is off: computed inline, no fingerprint at all
+    return values, counters, request_side, cache_side
+
+
+async def test_a_request_without_a_session_gets_the_same_values_and_never_touches_the_request_engine(db, monkeypatch):
+    await World(db).build()
+    expected = await cold()
+    with_values, with_counters, with_request, with_cache = await a_run_of_five_requests(monkeypatch, with_session=True)
+    none_values, none_counters, none_request, none_cache = await a_run_of_five_requests(monkeypatch, with_session=False)
+
+    assert with_values == none_values == [expected] * 5
+    assert none_values[1] is none_values[0] and none_values[2] is none_values[0] and none_values[3] is none_values[0]
+    assert none_counters == with_counters == {
+        "hits": 3, "misses": 1, "computes": 1, "revalidations": 2, "replaced": 0, "evicted": 0, "retries": 0,
+        "warm_checks": 0, "warm_recomputes": 0,
+    }
+    assert none_request == []  # not one statement on the request engine
+    assert any("figure_cache" in statement for statement in with_request)  # (the reference run did use it)
+    # exactly the fingerprint statements the reference run sent to the request engine went to the cache's engine instead
+    for label in ("figure_cache config", "figure_cache data"):
+        moved = sum(label in statement for statement in with_request)
+        assert moved > 0
+        assert sum(label in statement for statement in none_cache) - sum(label in statement for statement in with_cache) == moved
+
+
+async def test_a_request_without_a_session_shares_one_data_check_and_a_failed_check_is_not_kept(db, monkeypatch):
+    await World(db).build()
+    first = await asked_without_a_session()  # the test TTL is 0: the entry is expired for every later request
+    with slowed_data_check(monkeypatch) as calls, watch() as (request_side, cache_side):
+        results = await asyncio.gather(*(asked_without_a_session() for _ in range(4)))
+    assert all(result is first for result in results)
+    assert len(calls) == 1 and request_side == []
+    assert figure_cache.stats()["hits"] == 4 and figure_cache.stats()["revalidations"] == 1
+    assert not figure_cache._checks
+
+    with slowed_data_check(monkeypatch, 0.05, fail=True) as calls:
+        failed = await asyncio.gather(*(asked_without_a_session() for _ in range(3)), return_exceptions=True)
+    assert len(calls) == 1 and all(isinstance(result, ConnectionError) for result in failed)
+    await asyncio.sleep(0)
+    assert not figure_cache._checks
+
+    # the cache's own pool may time out while the check waits for a connection: that settles the check as well, and the
+    # request that follows is not left waiting for a check that never ends
+    real, opened = figure_cache._sessions, []
+
+    def flaky():
+        opened.append(1)
+        if len(opened) == 2:  # the first is the configuration statement, the second the data check
+            raise TimeoutError("QueuePool limit of size 2 overflow 1 reached, connection timed out")
+        return real()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(figure_cache, "_sessions", flaky)
+        with pytest.raises(TimeoutError):
+            await asked_without_a_session()
+    await asyncio.sleep(0)
+    assert not figure_cache._checks
+    assert await asyncio.wait_for(asked_without_a_session(), 10) is first
+
+
 # ---- one test per write path: the NEW value is served -------------------------------------------------------------------------
 
 

@@ -118,8 +118,10 @@ def _build_window_values(
 # ---- the cached entry points ---------------------------------------------------------------------------------------------------
 
 
-async def month_days(db: AsyncSession, tz_name: str, start: datetime, end: datetime) -> MonthDays:
-    """The day entries of the local month [`start`, `end`) (`timeutil.month_bounds`, aware), from the figure cache."""
+async def month_days(db: AsyncSession | None, tz_name: str, start: datetime, end: datetime) -> MonthDays:
+    """The day entries of the local month [`start`, `end`) (`timeutil.month_bounds`, aware), from the figure cache. `db` is the
+    request's session for the cache's fingerprint statements, or None to have them read on the cache's own engine (see
+    `figure_cache.get_or_compute`)."""
     start_utc, end_utc = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
 
     async def make(session: AsyncSession) -> MonthDays:
@@ -144,7 +146,7 @@ def entries_at(md: MonthDays, asset_id: int, now: datetime) -> list[dict | None]
 
 
 async def window_values(
-    db: AsyncSession, first: datetime, last: datetime, end: datetime, tz_name: str, cost: bool
+    db: AsyncSession | None, first: datetime, last: datetime, end: datetime, tz_name: str, cost: bool
 ) -> WindowValues:
     """The value of every asset for the whole UTC hours [`first`, `last`) (`widgets._hour_window`), as `_fill_billing`'s plain
     value mode computes it. `end` is where the period ends: the figures depend on it only through the local day it falls on, so
