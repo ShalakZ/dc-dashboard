@@ -671,7 +671,8 @@ when it is provably current:
 - The configuration (tree, meters, tariffs, zone) and the code must be the same as when it was made.
 - For a month that ended more than a week ago the readings must be exactly the same too.
 - For the current month and the first week of the next, a figure may be up to 60 seconds behind the readings in all (the cache's own
-  30 seconds included, not on top of them).
+  30 seconds included, not on top of them). A history seed (`python -m dcdash.seed.history`) and its undo clear the stored figures
+  at once; a hand-run refresh of the rollups does not, and shows within about a minute.
 
 Closing a month and Check month always check on the spot: a close never uses a stored figure, and never trusts a cache entry that came
 from one: it computes from the readings. Check month uses its stored report only when the readings and the configuration it reads are
