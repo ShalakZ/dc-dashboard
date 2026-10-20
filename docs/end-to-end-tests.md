@@ -9,7 +9,7 @@ spec guards, and the two scratch-stack self-tests. The unit tests are on [Develo
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Forty-seven specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Forty-nine specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`E2E_BASE_URL` changes it). `frontend/e2e/playwright.config.ts` makes each spec its own project and runs them one at a time in the
 order below, each depending on the one before; all but `journey` use a 1600×1000 window unless a spec sets its own sizes. Its
 `global-setup.ts` waits up to 120 s for the stack and refuses a database that already has users.
@@ -448,6 +448,21 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   ("(copy)", "(copy 2)", the widgets equal the source's); and a role with only `dashboards.view` (no gallery, no row menu, no request for
   the templates, 403 from the server). Every other spec that opens a dashboard calls `markGuideSeen` (`e2e/shell.ts`) so the guide panel
   does not move its cards.
+- `w28.spec.ts` (its own project, last in the list, after `w27`) checks display screens: playlists and the secret links that show them
+  without signing in. It makes its own data through the API (an asset, two dashboards with one stat each, and the playlists and displays
+  of each case, all named `W28 <run> ...`) and deletes it in `afterAll`, displays first, also after a failed case; it needs no scratch
+  stack. Cases: an administrator makes a playlist of two dashboards and a display in the dialogs, sees the link once in the **Display
+  link** field, copies it and presses **Done** (the page, its storage and a reload then hold no trace of the secret); a new browser
+  context opens the link and ends on exactly `/display` with the cookie `dcdash_display` (httpOnly, SameSite=Strict, path
+  `/api/display`) and the sentence "Connected as ...", that cookie gets 401 on `/api/me`, `/api/widget-data`, `/api/dashboards` and
+  `/api/assets` (also when sent by hand), the three display routes answer and the figures equal the administrator's `/api/widget-data`
+  for the same stored widget; revoking shows "revoked or is not valid" on the page within a minute (`page.clock`) and **Revoked** on the
+  Screens card; deleting a dashboard of a playlist in use shows "1 item is skipped" on the Displays page and "(1 skipped)" on the
+  screen; the keyboard-only pass (Tab and Enter, **Move up**, **Move down**, **Remove**, the row menu and **Revoke**, focus returning to
+  the opener, no sideways scroll) at 1440 x 900 and 1024 x 640, light and dark. The last case sends ten wrong claims (401, one body) and an
+  eleventh (429 with `Retry-After`): it blocks the stack's client address for 15 minutes, so it is the last case of the last project and
+  `W28_SKIP_BLOCK=1` skips it. Every secret the spec used is appended to the file named by `W28_SECRET_FILE` (default
+  `/tmp/w28-secret.txt`) so a log check can look for it.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
