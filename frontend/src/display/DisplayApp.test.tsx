@@ -1,8 +1,9 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
-import { StrictMode } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { manualTimers } from "../test/manualTimers";
 import { DisplayApp, DisplayBoundary } from "./DisplayApp";
-import { resetClaimMemo } from "./displayLoop";
+import { claimMemoSnapshot, resetClaimMemo, startDisplay, type DisplayState } from "./displayLoop";
+import { holdSecret } from "./secretHandle";
 import { takeFragment } from "./takeFragment";
 
 // Lets one test make the screen's effect fail, to prove the boundary's fallback is still a dark, titled screen.
@@ -119,8 +120,8 @@ describe("the claim flow", () => {
     });
     stubFetch({ [CLAIM]: [204], [PLAYLIST]: [three] });
     const c = clock();
-    const secret = takeFragment(); // what main.tsx does first
-    render(<DisplayApp secret={secret} timers={c.timers} />);
+    const handle = holdSecret(takeFragment()); // what main.tsx does first
+    render(<DisplayApp handle={handle} timers={c.timers} />);
     expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
 
     expect(events).toEqual(["replaceState", CLAIM, PLAYLIST]);
@@ -151,7 +152,7 @@ describe("the claim flow", () => {
     const c = clock();
     render(
       <StrictMode>
-        <DisplayApp secret={SECRET} timers={c.timers} />
+        <DisplayApp handle={holdSecret(SECRET)} timers={c.timers} />
       </StrictMode>,
     );
     expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
@@ -160,7 +161,7 @@ describe("the claim flow", () => {
 
   it("without a secret it only reads the playlist (the cookie may already be there)", async () => {
     stubFetch({ [PLAYLIST]: [three] });
-    render(<DisplayApp secret={null} timers={clock().timers} />);
+    render(<DisplayApp handle={null} timers={clock().timers} />);
     expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
     expect(count(CLAIM)).toBe(0);
   });
@@ -168,7 +169,7 @@ describe("the claim flow", () => {
   it("retries the claim, not the playlist, when the network or the server fails it (the secret is gone from the address)", async () => {
     stubFetch({ [CLAIM]: ["network", 503, 204], [PLAYLIST]: [three] });
     const c = clock();
-    render(<DisplayApp secret={SECRET} timers={c.timers} />);
+    render(<DisplayApp handle={holdSecret(SECRET)} timers={c.timers} />);
     expect(await screen.findByText(OFFLINE)).toBeInTheDocument();
     expect(count(PLAYLIST)).toBe(0);
     await advance(c, 5_000);
@@ -183,7 +184,7 @@ describe("the claim flow", () => {
 describe("the states", () => {
   it("says it is connecting while the first answer is pending, in the same box", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
-    render(<DisplayApp secret={null} timers={clock().timers} />);
+    render(<DisplayApp handle={null} timers={clock().timers} />);
     expect(text()).toBe("Connecting...");
     const box = document.querySelector("[aria-live]");
     expect(document.querySelectorAll("[aria-live]")).toHaveLength(1);
@@ -199,7 +200,7 @@ describe("the states", () => {
     ["no dashboard", [], connected("0 dashboards")],
   ])("connected, %s", async (_name, items, expected) => {
     stubFetch({ [PLAYLIST]: [playlist(items)] });
-    render(<DisplayApp secret={null} timers={clock().timers} />);
+    render(<DisplayApp handle={null} timers={clock().timers} />);
     expect(await screen.findByText(expected)).toBeInTheDocument();
     expect(document.querySelectorAll("[aria-live]")).toHaveLength(1);
     expect(document.querySelector("[aria-live]")).toHaveTextContent(expected);
@@ -207,20 +208,20 @@ describe("the states", () => {
 
   it("names the display and the playlist from the answer", async () => {
     stubFetch({ [PLAYLIST]: [playlist([null, null], "Wall B", "Hall <b>1</b>")] });
-    render(<DisplayApp secret={null} timers={clock().timers} />);
+    render(<DisplayApp handle={null} timers={clock().timers} />);
     expect(await screen.findByText("Connected as Wall B. Playlist Hall <b>1</b>: 2 dashboards. The rotating screen arrives in the next update.")).toBeInTheDocument();
     expect(document.querySelector("b")).toBeNull(); // a name is text, never markup
   });
 
   it("a 401 with no link tried says the screen is not connected", async () => {
     stubFetch({ [PLAYLIST]: [401] });
-    render(<DisplayApp secret={null} timers={clock().timers} />);
+    render(<DisplayApp handle={null} timers={clock().timers} />);
     expect(await screen.findByText(NOT_CONNECTED)).toBeInTheDocument();
   });
 
   it.each([401, 403, 422])("a claim answered %i says the link was revoked or is not valid", async (status) => {
     stubFetch({ [CLAIM]: [status], [PLAYLIST]: [401] });
-    render(<DisplayApp secret={SECRET} timers={clock().timers} />);
+    render(<DisplayApp handle={holdSecret(SECRET)} timers={clock().timers} />);
     expect(await screen.findByText(REVOKED)).toBeInTheDocument();
     expect(document.body.innerHTML.includes(SECRET)).toBe(false);
   });
@@ -228,7 +229,7 @@ describe("the states", () => {
   it("a 401 after the screen was connected says the link was revoked", async () => {
     stubFetch({ [PLAYLIST]: [three, 401] });
     const c = clock();
-    render(<DisplayApp secret={null} timers={c.timers} />);
+    render(<DisplayApp handle={null} timers={c.timers} />);
     expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
     await advance(c, 60_000);
     expect(await screen.findByText(REVOKED)).toBeInTheDocument();
@@ -236,20 +237,20 @@ describe("the states", () => {
 
   it("a 401 on the playlist right after a good claim is a revoked link too (a link was tried)", async () => {
     stubFetch({ [CLAIM]: [204], [PLAYLIST]: [401] });
-    render(<DisplayApp secret={SECRET} timers={clock().timers} />);
+    render(<DisplayApp handle={holdSecret(SECRET)} timers={clock().timers} />);
     expect(await screen.findByText(REVOKED)).toBeInTheDocument();
   });
 
   it("a 429 says to try again in about 15 minutes", async () => {
     stubFetch({ [CLAIM]: [429], [PLAYLIST]: [401] });
-    render(<DisplayApp secret={SECRET} timers={clock().timers} />);
+    render(<DisplayApp handle={holdSecret(SECRET)} timers={clock().timers} />);
     expect(await screen.findByText(BLOCKED)).toBeInTheDocument();
   });
 
   it("a 429 on the playlist says it too, and asks again in a minute (its own limit lifts within one)", async () => {
     stubFetch({ [PLAYLIST]: [429, three] });
     const c = clock();
-    render(<DisplayApp secret={null} timers={c.timers} />);
+    render(<DisplayApp handle={null} timers={c.timers} />);
     expect(await screen.findByText(BLOCKED)).toBeInTheDocument();
     expect(c.delays).toEqual([60_000]);
     await advance(c, 60_000);
@@ -259,7 +260,7 @@ describe("the states", () => {
   it("a network error, then success, clears the message", async () => {
     stubFetch({ [PLAYLIST]: ["network", three] });
     const c = clock();
-    render(<DisplayApp secret={null} timers={c.timers} />);
+    render(<DisplayApp handle={null} timers={c.timers} />);
     expect(await screen.findByText(OFFLINE)).toBeInTheDocument();
     await advance(c, 5_000);
     expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
@@ -269,7 +270,7 @@ describe("the states", () => {
   it("a 5xx says the server cannot be reached, and a 200 that is not a playlist does the same", async () => {
     stubFetch({ [PLAYLIST]: [500, 502, { status: 200, body: { oops: true } }] });
     const c = clock();
-    render(<DisplayApp secret={null} timers={c.timers} />);
+    render(<DisplayApp handle={null} timers={c.timers} />);
     expect(await screen.findByText(OFFLINE)).toBeInTheDocument();
     await advance(c, 5_000);
     await waitFor(() => expect(count(PLAYLIST)).toBe(2));
@@ -282,7 +283,7 @@ describe("the states", () => {
 
   it("sets the title, a dark look on <html>, and keeps the secret out of the page for every state", async () => {
     stubFetch({ [CLAIM]: [204], [PLAYLIST]: [three] });
-    render(<DisplayApp secret={SECRET} timers={clock().timers} />);
+    render(<DisplayApp handle={holdSecret(SECRET)} timers={clock().timers} />);
     await screen.findByText(connected("3 dashboards"));
     expect(document.title).toBe("Display");
     expect(document.documentElement.getAttribute("data-mode")).toBe("dark");
@@ -295,7 +296,7 @@ describe("polling", () => {
   it("reads the playlist again every 60 seconds and shows the new answer", async () => {
     stubFetch({ [PLAYLIST]: [three, playlist([null, null, null, null])] });
     const c = clock();
-    render(<DisplayApp secret={null} timers={c.timers} />);
+    render(<DisplayApp handle={null} timers={c.timers} />);
     expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
     await advance(c, 59_999);
     await settle();
@@ -309,7 +310,7 @@ describe("polling", () => {
   it("a screen with no link polls the playlist every 60 seconds too", async () => {
     stubFetch({ [PLAYLIST]: [401, three] });
     const c = clock();
-    render(<DisplayApp secret={null} timers={c.timers} />);
+    render(<DisplayApp handle={null} timers={c.timers} />);
     expect(await screen.findByText(NOT_CONNECTED)).toBeInTheDocument();
     expect(c.delays).toEqual([60_000]);
     await advance(c, 60_000);
@@ -319,7 +320,7 @@ describe("polling", () => {
   it("a revoked screen asks again after 5 minutes, not before, and goes back to connected when the answer is good", async () => {
     stubFetch({ [CLAIM]: [401], [PLAYLIST]: [three] });
     const c = clock();
-    render(<DisplayApp secret={SECRET} timers={c.timers} />);
+    render(<DisplayApp handle={holdSecret(SECRET)} timers={c.timers} />);
     expect(await screen.findByText(REVOKED)).toBeInTheDocument();
     expect(c.delays).toEqual([FIVE_MINUTES]);
     await advance(c, FIVE_MINUTES - 1);
@@ -334,7 +335,7 @@ describe("polling", () => {
   it("a screen revoked later checks every 5 minutes and stays on the text while the answer is 401", async () => {
     stubFetch({ [PLAYLIST]: [three, 401] });
     const c = clock();
-    render(<DisplayApp secret={null} timers={c.timers} />);
+    render(<DisplayApp handle={null} timers={c.timers} />);
     await screen.findByText(connected("3 dashboards"));
     await advance(c, 60_000);
     await screen.findByText(REVOKED);
@@ -349,7 +350,7 @@ describe("polling", () => {
   it("backs off 5, 10, 20, 40, 60, 60 seconds while the server cannot be reached, then starts again from 5", async () => {
     stubFetch({ [PLAYLIST]: ["network", "network", "network", "network", "network", "network", three, "network"] });
     const c = clock();
-    render(<DisplayApp secret={null} timers={c.timers} />);
+    render(<DisplayApp handle={null} timers={c.timers} />);
     const expected = [5_000, 10_000, 20_000, 40_000, 60_000, 60_000];
     for (let i = 0; i < expected.length; i += 1) {
       await waitFor(() => expect(c.delays).toHaveLength(i + 1));
@@ -366,7 +367,7 @@ describe("polling", () => {
   it("after a 429 on the claim it claims again in 15 minutes", async () => {
     stubFetch({ [CLAIM]: [429, 204], [PLAYLIST]: [three] });
     const c = clock();
-    render(<DisplayApp secret={SECRET} timers={c.timers} />);
+    render(<DisplayApp handle={holdSecret(SECRET)} timers={c.timers} />);
     expect(await screen.findByText(BLOCKED)).toBeInTheDocument();
     expect(c.delays).toEqual([900_000]);
     await advance(c, 900_000);
@@ -377,7 +378,7 @@ describe("polling", () => {
   it("unmounting stops every timer and ignores a late answer", async () => {
     stubFetch({ [PLAYLIST]: [three] });
     const c = clock();
-    const view = render(<DisplayApp secret={null} timers={c.timers} />);
+    const view = render(<DisplayApp handle={null} timers={c.timers} />);
     await screen.findByText(connected("3 dashboards"));
     expect(c.hand.count).toBe(1);
     view.unmount();
@@ -413,7 +414,7 @@ describe("the error boundary", () => {
     failure.on = true;
     vi.spyOn(console, "error").mockImplementation(() => {});
     const c = clock();
-    render(<DisplayApp secret={null} timers={c.timers} />);
+    render(<DisplayApp handle={null} timers={c.timers} />);
     expect(await screen.findByText(OFFLINE)).toBeInTheDocument();
     expect(document.documentElement.getAttribute("data-mode")).toBe("dark");
     expect(document.title).toBe("Display");
@@ -423,5 +424,139 @@ describe("the error boundary", () => {
     stubFetch({ [PLAYLIST]: [three] });
     await advance(c, 5_000); // and the retry mounts the real screen
     expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+  });
+});
+
+describe("the secret is released after the first definite answer", () => {
+  // The secret is a test value. The checks compare, never print it.
+  const carries = (call: Call) => JSON.stringify(call.init).includes(SECRET);
+
+  it.each([
+    [204, "ok"],
+    [401, "refused"],
+    [403, "refused"],
+    [422, "refused"],
+  ])("a claim answered %i releases the secret once, and nothing sent later (poll, recheck, a second mount) carries it", async (status, outcome) => {
+    stubFetch({ [CLAIM]: [status], [PLAYLIST]: [three] });
+    const c = clock();
+    const handle = holdSecret(SECRET)!;
+    const release = vi.spyOn(handle, "release");
+    const view = render(<DisplayApp handle={handle} timers={c.timers} />);
+    await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(handle.secret()).toBeNull();
+    await expect(claimMemoSnapshot()?.outcome).resolves.toBe(outcome);
+
+    // the screen mounts again (an error boundary's retry) and the clock runs on: the playlist is read, the claim is not made again
+    view.unmount();
+    render(<DisplayApp handle={handle} timers={c.timers} />);
+    await settle();
+    await advance(c, 300_000);
+    await settle();
+    await advance(c, 300_000);
+    await settle();
+    expect(count(CLAIM)).toBe(1);
+    expect(count(PLAYLIST)).toBeGreaterThan(0);
+    expect(calls.slice(1).some(carries)).toBe(false);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(handle.secret()).toBeNull();
+  });
+
+  it.each([
+    ["a 429", 429, 900_000],
+    ["a network error", "network", 5_000],
+    ["a 503", 503, 5_000],
+  ] as const)("%s is not a definite answer: the secret is kept and the retry sends it again", async (_name, reply, wait) => {
+    stubFetch({ [CLAIM]: [reply, 204], [PLAYLIST]: [three] });
+    const c = clock();
+    const handle = holdSecret(SECRET)!;
+    const release = vi.spyOn(handle, "release");
+    render(<DisplayApp handle={handle} timers={c.timers} />);
+    await waitFor(() => expect(count(CLAIM)).toBe(1));
+    await settle();
+    expect(release).not.toHaveBeenCalled();
+    expect(handle.secret() === SECRET).toBe(true);
+    expect(claimMemoSnapshot(), "a claim with no answer is forgotten, so the next try can be made").toBeNull();
+
+    await advance(c, wait);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    expect(count(CLAIM)).toBe(2);
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({ secret: SECRET });
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(handle.secret()).toBeNull();
+  });
+
+  it("the memo of the claim holds the answer, never the secret: not while the claim is on its way, not after", async () => {
+    let reply!: (response: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) =>
+        String(input) === "/api/display/claim" ? new Promise<Response>((resolve) => { reply = resolve; }) : Promise.resolve(answer(three)),
+      ),
+    );
+    const handle = holdSecret(SECRET)!;
+    render(<DisplayApp handle={handle} timers={clock().timers} />);
+    await waitFor(() => expect(claimMemoSnapshot()).not.toBeNull());
+    const scan = () => {
+      const memo = claimMemoSnapshot()!;
+      expect(JSON.stringify(memo).includes(SECRET)).toBe(false);
+      expect(Object.values(memo as Record<string, unknown>).some((value) => typeof value === "string" && value.includes(SECRET))).toBe(false);
+      expect(Object.keys(memo)).toEqual(["outcome"]);
+    };
+    scan();
+    expect(handle.secret() === SECRET).toBe(true);
+    await act(async () => {
+      reply(answer(204));
+      await claimMemoSnapshot()!.outcome;
+    });
+    await expect(claimMemoSnapshot()!.outcome).resolves.toBe("ok");
+    scan();
+    await settle();
+    expect(handle.secret()).toBeNull();
+    expect(JSON.stringify(handle).includes(SECRET)).toBe(false);
+  });
+
+  it("StrictMode's double effect shares one claim and releases the secret once", async () => {
+    stubFetch({ [CLAIM]: [204], [PLAYLIST]: [three] });
+    const handle = holdSecret(SECRET)!;
+    const release = vi.spyOn(handle, "release");
+    render(
+      <StrictMode>
+        <DisplayApp handle={handle} timers={clock().timers} />
+      </StrictMode>,
+    );
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    expect(count(CLAIM)).toBe(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(handle.secret()).toBeNull();
+  });
+
+  it("an error boundary that mounts the screen again after the answer does not claim again", async () => {
+    stubFetch({ [CLAIM]: [204], [PLAYLIST]: [three] });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const c = clock();
+    const handle = holdSecret(SECRET);
+    const boom = { on: true };
+    function Probe() {
+      const [state, setState] = useState<DisplayState | null>(null);
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- the probe mounts once per boundary try, like the real screen
+      useEffect(() => startDisplay(handle, setState, { timers: c.timers }), []);
+      if (boom.on && state?.kind === "connected") throw new Error("render failed");
+      return <p aria-live="polite">{state?.kind ?? "starting"}</p>;
+    }
+    render(
+      <DisplayBoundary timers={c.timers}>
+        <Probe />
+      </DisplayBoundary>,
+    );
+    expect(await screen.findByText(OFFLINE)).toBeInTheDocument();
+    expect(count(CLAIM)).toBe(1);
+    expect(handle?.secret()).toBeNull();
+
+    boom.on = false;
+    await advance(c, 5_000);
+    expect(await screen.findByText("connected")).toBeInTheDocument();
+    expect(count(CLAIM)).toBe(1);
+    expect(calls.slice(1).some(carries)).toBe(false);
   });
 });

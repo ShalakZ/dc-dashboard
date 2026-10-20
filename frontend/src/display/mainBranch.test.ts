@@ -10,12 +10,19 @@ const mountApp = main.slice(main.indexOf("function mountApp()"), branchStart);
 describe("main.tsx: the /display branch", () => {
   it("takes the secret out of the address first, before it renders anything", () => {
     expect(branchStart).toBeGreaterThan(-1);
-    expect(branch).toMatch(/isDisplayPath\(window\.location\.pathname\)\) \{\s*const secret = takeFragment\(\);/);
+    expect(branch).toMatch(/isDisplayPath\(window\.location\.pathname\)\) \{\s*const handle = holdSecret\(takeFragment\(\)\);/);
     expect(branch.indexOf("takeFragment()")).toBeLessThan(branch.indexOf("render("));
   });
 
+  it("hands the screen a handle, never the secret: no variable of main.tsx holds the string (the claim releases it at the first definite answer)", () => {
+    expect(branch).not.toMatch(/\b(?:const|let|var)\s+secret\b/);
+    expect(branch).not.toMatch(/secret=\{/);
+    expect(branch).toContain("<DisplayApp handle={handle} />");
+    expect(main).toMatch(/^import \{ holdSecret \} from "\.\/display\/secretHandle";$/m);
+  });
+
   it("renders only the DisplayApp: no query client, no sign-in, no appearance, no toasts, no router, no chunk reload", () => {
-    expect(branch).toContain("<DisplayApp secret={secret} />");
+    expect(branch).toContain("<DisplayApp handle={handle} />");
     for (const name of ["QueryClient", "AuthProvider", "AppearanceProvider", "ToastProvider", "RouterProvider", "createBrowserRouter", "installChunkReload", "App />"]) {
       expect(branch, name).not.toContain(name);
     }

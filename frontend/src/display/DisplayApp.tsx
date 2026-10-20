@@ -1,10 +1,12 @@
 import { Component, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import "../styles/display-screen.css";
 import { BACKOFF_CAP_MS, BACKOFF_START_MS, realTimers, startDisplay, type DisplayState, type Timers } from "./displayLoop";
+import type { SecretHandle } from "./secretHandle";
 
 // The display screen (w28's minimal page; w29 puts the rotating dashboards in its place). It runs OUTSIDE the app: no AuthProvider, no
 // query client, no router, no shell and no /api/me. main.tsx has already taken the secret from the address (takeFragment) and hands
-// it in; the page's one job is to say, in large type, whether this screen is connected.
+// in a handle on it (never the string: the claim releases it at the first definite answer); the page's one job is to say, in large
+// type, whether this screen is connected.
 
 const OFFLINE = "Cannot reach the server. Trying again...";
 
@@ -40,15 +42,15 @@ function Message({ text, quiet = false }: { text: string; quiet?: boolean }) {
 }
 
 interface Props {
-  /** The secret main.tsx took from the address, or null (no link was opened: the cookie may already be there). */
-  secret: string | null;
+  /** A handle on the secret main.tsx took from the address, or null (no link was opened: the cookie may already be there). The claim releases it. */
+  handle: SecretHandle | null;
   /** The clock; tests move it by hand. */
   timers?: Timers;
 }
 
-function DisplayScreen({ secret, timers }: Props) {
+function DisplayScreen({ handle, timers }: Props) {
   const [state, setState] = useState<DisplayState>({ kind: "connecting" });
-  useEffect(() => startDisplay(secret, setState, { timers }), [secret, timers]);
+  useEffect(() => startDisplay(handle, setState, { timers }), [handle, timers]);
   return <Message text={sentence(state)} quiet={state.kind === "connecting"} />;
 }
 
@@ -85,7 +87,7 @@ export class DisplayBoundary extends Component<{ children: ReactNode; timers?: T
   }
 }
 
-export function DisplayApp({ secret, timers }: Props) {
+export function DisplayApp({ handle, timers }: Props) {
   // Here, outside the boundary, so that even the fallback sentence is on a dark screen: this page has no AppearanceProvider and is dark in
   // every theme. A layout effect runs before the first paint, so the screen is never light for a frame.
   useLayoutEffect(() => {
@@ -94,7 +96,7 @@ export function DisplayApp({ secret, timers }: Props) {
   }, []);
   return (
     <DisplayBoundary timers={timers}>
-      <DisplayScreen secret={secret} timers={timers} />
+      <DisplayScreen handle={handle} timers={timers} />
     </DisplayBoundary>
   );
 }

@@ -1,4 +1,5 @@
 import { claim, getPlaylist, type PlaylistReply } from "./displayApi";
+import type { SecretHandle } from "./secretHandle";
 
 // What the display screen does after the page loaded: trade the link's secret for the cookie (once), read the playlist, read it again
 // every minute, and say in one sentence how it is doing. No React in here, so the clock and the requests can be stood in for.
@@ -31,24 +32,27 @@ export type DisplayState =
   | { kind: "blocked" }
   | { kind: "offline" };
 
-type ClaimOutcome = "ok" | "refused" | "blocked" | "unreachable";
+export type ClaimOutcome = "ok" | "refused" | "blocked" | "unreachable";
 
 /**
- * The one claim of this page load. The address was cleared before anything ran, so the secret exists only in the page's memory: a second
- * claim for the same secret (StrictMode runs an effect twice; an error boundary mounts the screen again) must share the first one, and a
- * claim that failed for lack of an answer (no network, a 5xx, a block) is forgotten so the next try can be made. A definite answer
- * (accepted, or refused as wrong, revoked or malformed) is kept: asking again would only be a wrong secret to count.
+ * The one claim of this page load. The address was cleared before anything ran, so the secret exists only in the page's memory, and only
+ * until the claim has had a definite answer. A second start of the screen (StrictMode runs an effect twice; an error boundary mounts the
+ * screen again) shares the first claim, and a claim that had no answer (no network, a 5xx, a block) is forgotten so the next try can be
+ * made, with the secret still in the handle. A definite answer (accepted, or refused as wrong, revoked or malformed) is kept as the
+ * answer and the secret is released at that moment: asking again would only be a wrong secret to count. The memo holds the answer, never
+ * the secret and never the handle.
  */
-let claimed: { secret: string; outcome: Promise<ClaimOutcome> } | null = null;
+let claimed: { outcome: Promise<ClaimOutcome> } | null = null;
 
-function claimOnce(secret: string): Promise<ClaimOutcome> {
-  if (claimed?.secret === secret) return claimed.outcome;
+function claimOnce(handle: SecretHandle): Promise<ClaimOutcome> {
+  if (claimed !== null) return claimed.outcome;
+  const secret = handle.secret();
+  if (secret === null) return Promise.resolve("refused"); // already released with no answer kept: only a reset memo (a test) gets here
   const entry = {
-    secret,
     outcome: claim(secret).then(
       (status): ClaimOutcome => {
-        if (status >= 200 && status < 300) return "ok";
-        if (status === 401 || status === 403 || status === 422) return "refused";
+        if (status >= 200 && status < 300) return answered(handle, "ok");
+        if (status === 401 || status === 403 || status === 422) return answered(handle, "refused");
         return status === 429 ? "blocked" : "unreachable";
       },
       (): ClaimOutcome => "unreachable",
@@ -61,9 +65,20 @@ function claimOnce(secret: string): Promise<ClaimOutcome> {
   return entry.outcome;
 }
 
+/** A definite answer: the secret has done its one job, so the handle lets go of it, whether or not the screen that asked is still mounted. */
+function answered(handle: SecretHandle, outcome: ClaimOutcome): ClaimOutcome {
+  handle.release();
+  return outcome;
+}
+
 /** For tests: forgets the claim of the page load, so the next test starts clean. */
 export function resetClaimMemo(): void {
   claimed = null;
+}
+
+/** For tests: the memo itself (null while no claim is remembered), to prove it holds the answer and not the secret. */
+export function claimMemoSnapshot(): { outcome: Promise<ClaimOutcome> } | null {
+  return claimed;
 }
 
 export interface DisplayDeps {
@@ -71,16 +86,17 @@ export interface DisplayDeps {
 }
 
 /**
- * Starts the screen. `secret` is the link's secret when the page was opened with one, else null (the cookie may already be there).
+ * Starts the screen. `link` is the handle on the link's secret when the page was opened with one, else null (the cookie may already be
+ * there); the claim reads the secret from it and releases it at the first definite answer, and this function never keeps the string.
  * `onState` hears every change of state, never after `stop()`. Returns `stop()`, which clears the timer and ignores any answer still on its way.
  */
-export function startDisplay(secret: string | null, onState: (state: DisplayState) => void, deps: DisplayDeps = {}): () => void {
+export function startDisplay(link: SecretHandle | null, onState: (state: DisplayState) => void, deps: DisplayDeps = {}): () => void {
   const timers = deps.timers ?? realTimers;
   let stopped = false;
   let handle: unknown = null;
   let backoff = BACKOFF_START_MS;
   // A 401 on the playlist reads "not connected" only on a screen that never had a link and never was connected.
-  const linkTried = secret !== null;
+  const linkTried = link !== null;
   let wasConnected = false;
 
   const emit = (state: DisplayState) => {
@@ -135,8 +151,8 @@ export function startDisplay(secret: string | null, onState: (state: DisplayStat
   }
 
   async function makeClaim(): Promise<void> {
-    if (secret === null) return;
-    const outcome = await claimOnce(secret);
+    if (link === null) return;
+    const outcome = await claimOnce(link);
     if (stopped) return;
     if (outcome === "ok") {
       backoff = BACKOFF_START_MS;
@@ -154,7 +170,7 @@ export function startDisplay(secret: string | null, onState: (state: DisplayStat
     }
   }
 
-  void (secret === null ? checkPlaylist() : makeClaim());
+  void (link === null ? checkPlaylist() : makeClaim());
 
   return () => {
     stopped = true;

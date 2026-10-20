@@ -45,6 +45,7 @@ import { RouteError } from "./components/RouteError";
 import { ToastProvider } from "./components/Toasts";
 import { DisplayApp } from "./display/DisplayApp";
 import { isDisplayPath } from "./display/isDisplayPath";
+import { holdSecret } from "./display/secretHandle";
 import { takeFragment } from "./display/takeFragment";
 import { installChunkReload } from "./lib/chunkReload";
 
@@ -75,12 +76,13 @@ function mountApp() {
 
 // A display screen (w28) is not the app: no sign-in, no providers, no router and no chunk reload ever exist on its page. The secret of its
 // link is taken out of the address first, synchronously, before anything is mounted or requested; it must be a full page load
-// (nothing in the app links here with a router Link, which would skip this branch).
+// (nothing in the app links here with a router Link, which would skip this branch). The screen gets a handle, never the string: the claim
+// releases the secret at its first definite answer, and no variable here holds it.
 if (isDisplayPath(window.location.pathname)) {
-  const secret = takeFragment();
+  const handle = holdSecret(takeFragment());
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
-      <DisplayApp secret={secret} />
+      <DisplayApp handle={handle} />
     </StrictMode>,
   );
 } else {
