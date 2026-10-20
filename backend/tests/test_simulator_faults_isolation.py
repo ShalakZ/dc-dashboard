@@ -15,6 +15,8 @@ import yaml
 
 from dcdash.simulator import main as simulator_main
 from dcdash.simulator.faults import KNOWN, Faults
+from dcdash.simulator.historian import KNOWN as HISTORIAN_KNOWN
+from dcdash.simulator.historian import HistorianConfig
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "backend" / "dcdash"
@@ -170,3 +172,89 @@ def test_auth_required_without_a_password_is_a_startup_error_with_a_plain_messag
     with pytest.raises(SystemExit) as empty:
         simulator_main.main({"SIM_FAULT_AUTH": "required", "SIM_OPCUA_PASSWORD": ""})
     assert "SIM_OPCUA_PASSWORD" in str(empty.value)
+
+
+# ---- the stand-in Historian's SIM_HISTORIAN_* settings (w30) have the same three walls ------------------------------------------
+# They are the stand-in's switches: its size and three faults (a 503 now and then, a 429 above a rate, a slow answer). Not SIM_FAULT_
+# names, because those are pinned to the OPC UA simulator; a sibling set of walls keeps these just as far from production.
+
+def test_no_module_outside_the_simulator_folder_names_a_historian_variable():
+    offenders = [str(path.relative_to(ROOT)) for path in outside_the_simulator() if "SIM_HISTORIAN_" in path.read_text(encoding="utf-8")]
+    assert offenders == []  # the client talks HTTP to the stand-in and never reads, or even knows, how it is switched
+
+
+def test_every_historian_variable_is_passed_to_the_dev_profile_simulator_as_an_empty_by_default_pass_through():
+    simulator = compose_services()["simulator"]
+    assert simulator["profiles"] == ["dev"]
+    switches = {key: value for key, value in environment_of(simulator).items() if key.startswith("SIM_HISTORIAN_")}
+    assert set(switches) == set(HISTORIAN_KNOWN)  # a name compose does not pass never reaches the container: historian.py and compose agree
+    assert all(value == f"${{{key}:-}}" for key, value in switches.items())  # unset in the shell means empty means the default
+
+
+def test_no_other_service_or_top_level_key_mentions_a_historian_variable():
+    document = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    for name, service in document["services"].items():
+        if name != "simulator":
+            assert "SIM_HISTORIAN_" not in json.dumps(service), name
+    assert "SIM_HISTORIAN_" not in json.dumps({key: value for key, value in document.items() if key != "services"})
+
+
+def test_only_the_simulator_service_publishes_the_historian_port_and_only_on_loopback():
+    services = compose_services()
+    assert "127.0.0.1:9100:9100" in services["simulator"]["ports"]
+    for name, service in services.items():
+        if name != "simulator":
+            assert not any(str(port).endswith(":9100") or str(port) == "9100" for port in service.get("ports", [])), name
+
+
+def test_the_historian_warning_line_is_logged_only_when_a_fault_is_on(caplog):
+    with caplog.at_level(logging.WARNING, logger="dcdash.simulator"):
+        simulator_main.announce_historian_faults(HistorianConfig.from_env({"SIM_HISTORIAN_METERS": "2000", "SIM_HISTORIAN_ZONE": "Europe/London"}))
+        assert caplog.records == []  # a bigger stand-in is not a fault
+        simulator_main.announce_historian_faults(HistorianConfig.from_env({"SIM_HISTORIAN_FAIL_EVERY": "5", "SIM_HISTORIAN_SLOW": "1.5"}))
+    assert len(caplog.records) == 1 and caplog.records[0].levelno == logging.WARNING and caplog.records[0].name == "dcdash.simulator"
+    line = caplog.records[0].getMessage()
+    assert line.startswith("FAULT INJECTION ACTIVE: ") and "\n" not in line
+    assert "SIM_HISTORIAN_FAIL_EVERY=5" in line and "SIM_HISTORIAN_SLOW=1.5" in line and "SIM_HISTORIAN_RATE" not in line
+
+
+def test_a_typo_in_a_historian_name_stops_the_simulator_before_anything_starts(monkeypatch):
+    async def serve_must_not_run(**kwargs):
+        raise AssertionError("serve() started with a mistyped historian setting")
+
+    monkeypatch.setattr(simulator_main, "serve", serve_must_not_run)
+    with pytest.raises(SystemExit) as stopped:
+        simulator_main.main({"SIM_HISTORIAN_RATEE": "1"})
+    assert "SIM_HISTORIAN_RATEE" in str(stopped.value) and str(stopped.value).startswith("simulator: ")
+
+
+@pytest.mark.parametrize("name, value, sentence", [
+    ("SIM_HISTORIAN_METERS", "many", "SIM_HISTORIAN_METERS must be a whole number"),
+    ("SIM_HISTORIAN_ZONE", "Mars/Olympus", "SIM_HISTORIAN_ZONE must be a time zone name"),
+    ("SIM_HISTORIAN_SLOW", "inf", "SIM_HISTORIAN_SLOW must be between 0 and"),
+])
+def test_a_bad_historian_value_stops_the_simulator_with_the_plain_sentence(monkeypatch, name, value, sentence):
+    async def serve_must_not_run(**kwargs):
+        raise AssertionError("serve() started with a bad historian value")
+
+    monkeypatch.setattr(simulator_main, "serve", serve_must_not_run)
+    with pytest.raises(SystemExit) as stopped:
+        simulator_main.main({name: value})
+    assert sentence in str(stopped.value)
+
+
+def test_main_reads_the_historian_settings_once_and_hands_serve_the_port_and_the_config(monkeypatch):
+    seen: list[dict] = []
+
+    async def fake_serve(**kwargs):
+        seen.append(kwargs)
+
+    monkeypatch.setattr(simulator_main, "serve", fake_serve)
+    reads = []
+    original = HistorianConfig.from_env.__func__
+    monkeypatch.setattr(HistorianConfig, "from_env", classmethod(lambda cls, environ: reads.append(1) or original(cls, environ)))
+    simulator_main.main({})
+    simulator_main.main({"SIM_HISTORIAN_PORT": "9123", "SIM_HISTORIAN_METERS": "7", "SIM_HISTORIAN_RATE": "3"})
+    assert len(reads) == 2  # once per start, not once per request
+    assert seen[0]["historian_port"] == 9100 and seen[0]["historian"] == HistorianConfig()
+    assert seen[1]["historian_port"] == 9123 and seen[1]["historian"] == HistorianConfig(port=9123, meters=7, rate=3)

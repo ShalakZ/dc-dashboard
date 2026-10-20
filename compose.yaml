@@ -141,10 +141,22 @@ services:
       SIM_FAULT_BAD: ${SIM_FAULT_BAD:-}
       SIM_FAULT_SKEW: ${SIM_FAULT_SKEW:-}
       SIM_FAULT_CERT_HOSTS: ${SIM_FAULT_CERT_HOSTS:-}
+      # The stand-in Historian (w30): a second HTTP server of this simulator, port 9100, that answers history so the backfill can be
+      # rehearsed without a real Historian. These are its switches (how many meters, and three faults); empty means the default. Dev
+      # profile only, like the line above; backend/dcdash/simulator/historian.py is the only reader and refuses a name it does not know.
+      SIM_HISTORIAN_PORT: ${SIM_HISTORIAN_PORT:-}
+      SIM_HISTORIAN_METERS: ${SIM_HISTORIAN_METERS:-}
+      SIM_HISTORIAN_MAX_ROWS: ${SIM_HISTORIAN_MAX_ROWS:-}
+      SIM_HISTORIAN_LATE_MINUTES: ${SIM_HISTORIAN_LATE_MINUTES:-}
+      SIM_HISTORIAN_ZONE: ${SIM_HISTORIAN_ZONE:-}
+      SIM_HISTORIAN_FAIL_EVERY: ${SIM_HISTORIAN_FAIL_EVERY:-}
+      SIM_HISTORIAN_RATE: ${SIM_HISTORIAN_RATE:-}
+      SIM_HISTORIAN_SLOW: ${SIM_HISTORIAN_SLOW:-}
     ports:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:4840:4840"
       - "127.0.0.1:5020:5020"
+      - "127.0.0.1:9100:9100"
 
 volumes:
   dbdata: {}
