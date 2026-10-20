@@ -15,6 +15,7 @@ import { InfoTip } from "../../InfoTip";
 import { useFocus } from "../FocusContext";
 import { AXIS_CHARS, barAxisLayout, DEFAULT_CHART_HEIGHT, DEFAULT_CHART_WIDTH, LABEL_LINE_PX, steppedHeight, steppedWidth, tickPxOf } from "./barAxis";
 import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, valueAxisParts, type ChartTheme } from "./chartTheme";
+import { useChartOpts } from "./chartPixelRatio";
 import { useLegendSelection } from "./legendSelection";
 
 const DASH = "—";
@@ -216,7 +217,8 @@ const BREAKDOWN_CHART_STYLE = { height: "100%", width: "100%", minHeight: 120 };
  * would make echarts-for-react set it again (see TimeSeriesWidget).
  */
 const PlainBars = memo(function PlainBars({ data, timezone, theme, chartWidth, chartHeight, parents }: BarsProps) {
-  return <ReactECharts option={barOption(data, timezone, theme, chartWidth, undefined, parents, chartHeight)} style={BREAKDOWN_CHART_STYLE} notMerge />;
+  const chartOpts = useChartOpts();
+  return <ReactECharts option={barOption(data, timezone, theme, chartWidth, undefined, parents, chartHeight)} opts={chartOpts} style={BREAKDOWN_CHART_STYLE} notMerge />;
 });
 
 /** What ECharts hands a click handler: the part that was clicked and, for a bar, its index, for an axis name, the category as it was given (not as it is drawn). */
@@ -242,6 +244,7 @@ const DrillBars = memo(function DrillBars({ data, timezone, theme, chartWidth, c
   const assets = useAssets().data;
   const { setFocus, anyFollowing } = useFocus();
   const navigate = useNavigate();
+  const chartOpts = useChartOpts();
   const actions = useMemo(() => {
     if (!assets) return undefined;
     const parents = parentIds(assets);
@@ -258,7 +261,7 @@ const DrillBars = memo(function DrillBars({ data, timezone, theme, chartWidth, c
     else navigate(`/assets/${bar.asset_id}`);
   };
   const onEvents = useMemo(() => ({ click: (params: ClickParams) => click.current(params) }), []);
-  return <ReactECharts option={option} onEvents={actions ? onEvents : undefined} style={BREAKDOWN_CHART_STYLE} notMerge />;
+  return <ReactECharts option={option} onEvents={actions ? onEvents : undefined} opts={chartOpts} style={BREAKDOWN_CHART_STYLE} notMerge />;
 });
 
 /** The breakdown's chart: one that drills where the viewer can open assets and the card is a live one, else the plain one. */
@@ -283,6 +286,7 @@ interface BarWidgetProps {
 export const BarWidget = memo(function BarWidget({ data, timezone, kind, onKind, splitDisabled = false, parents }: BarWidgetProps) {
   const legend = useLegendSelection();
   const theme = useChartTheme();
+  const chartOpts = useChartOpts();
   // The width of the chart's box, in steps of 8 px, and its height, in steps of 4 px, for the axis layout. The box is held in state (a callback ref) so that
   // the observer follows it when the data arrives after an empty first render. A box with no size (jsdom, a server render) or no ResizeObserver leaves the
   // defaults (480 x 280 px).
@@ -332,7 +336,7 @@ export const BarWidget = memo(function BarWidget({ data, timezone, kind, onKind,
     <div ref={setBox} className="widget-chart" role="img" aria-label={chartDescription("bar", data, parents)}>
       <ReactECharts
         option={legend.apply(barOption(data, timezone, theme, chartWidth, undefined, parents, chartHeight), data.mode === "series" ? data.series.map((s) => s.asset_id) : [])} onEvents={legend.onEvents}
-        style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge
+        opts={chartOpts} style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge
       />
     </div>
   );
