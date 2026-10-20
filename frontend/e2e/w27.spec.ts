@@ -8,13 +8,16 @@ import { markGuideSeen, navLink, rowAction } from "./shell";
 // docs/superpowers/plans/2026-10-20-w27-dashboard-experience.md (D1 to D9, Review Focus 3 to 6) and the rulings R5, R9, R10, R12 and R13 of .waves/w27.md.
 //
 // IT NEEDS THE SCRATCH STACK: it runs only when COMPOSE_PROJECT_NAME starts with `dcdash_e2e_` (like w11, w21 and w24 case R) and is skipped with its message otherwise. beforeAll raises
-// the raw retention to 90 days (the old value goes back in afterAll), seeds the pilot hall INSIDE the stack (`docker compose exec ... --layout pilot-hall`), makes a site-wide rate when there is
-// none, and makes the starter dashboards `w27 <run> power` and `w27 <run> <60 characters>` through POST /api/dashboards with `recipe: "power"`. Nothing is mocked except where a case says so
-// (an answer held back, a list answered empty); the expected figures come from POST /api/widget-data with the SAME body the page sent, through lib/figures.ts, never from fixed numbers.
+// the raw retention to 90 days (the old value goes back in afterAll), seeds the pilot hall INSIDE the stack (`docker compose exec ... --layout pilot-hall --days 12 --interval-minutes 15`: the
+// last 12 days, so the seeder never reaches back to the stale rollup minutes that earlier specs leave), makes a site-wide rate when there is none, and makes the starter dashboards
+// `w27 <run> power` and `w27 <run> <60 characters>` through POST /api/dashboards with `recipe: "power"`. That seed holds NO readings for most (or all) of last month, so every case works
+// when the comparison's last month side is a dash. Nothing is mocked except where a case says so (an answer held back, a list answered empty); the expected figures come from
+// POST /api/widget-data with the SAME body the page sent, through lib/figures.ts, never from fixed numbers.
 // afterAll puts the stack back: every dashboard `w27 <run> ...`, the role and the account, the rate, the seeded subtree and its source, the retention and the account's own look.
 // Every case that opens a dashboard calls markGuideSeen (e2e/shell.ts) except the guide cases (5), which use contexts of their own. Names are matched by SUBSTRING, so every lookup is `exact: true`.
-//   1   FIGURES, real data (1920 light, 1440 dark, 1024 light). The Energy and Cost cards show the card face (cardText) of the API's figure, with the exact face (exactText) as the title; both
-//       sides of the comparison share one unit and one scale letter; at 1920 the two months sit SIDE BY SIDE (the figures share a row), at 1024 STACKED.
+//   1   FIGURES, real data (1920 light, 1440 dark, 1024 light). The Energy and Cost cards show the card face (cardText) of the API's figure, with the exact face (exactText) as the title; when both
+//       sides of the comparison have a figure they share one unit and one scale letter (a side with no readings is a dash with no unit); at 1920 the two months sit SIDE BY SIDE (the headline and last
+//       month's block share a row), at 1024 STACKED, whatever last month says.
 //   2   NO CLIPPING, NO SHIFT (1920, 1440, 1024; light and dark). No card body scrolls, no figure is split over two lines or sticks out of its card, and the Energy and Cost cards (and the grid)
 //       keep their size when their answer lands (the answers are held back, then released).
 //   3   THE GALLERY BY MOUSE (1440 x 900). "Choose a template", "Recommended for this site" (as the server says; the pilot hall alone: Power, Cost, Energy by area) and "More templates" (Last 24
@@ -150,7 +153,10 @@ async function removeAccounts(request: APIRequestContext): Promise<void> {
  */
 function seedPilotHall(): void {
   try {
-    execFileSync("docker", ["compose", "exec", "-T", "-e", "DCDASH_ALLOW_SEED_HISTORY=1", "api", "python", "-m", "dcdash.seed.history", "--layout", "pilot-hall", "--yes"], {
+    // The last 12 days, a sample every 15 minutes: the range then starts after the minutes that earlier specs (w24 case R) leave in readings_1m once the raw-retention job has dropped their raw
+    // rows, which the seeder refuses to refresh over ("Refused, nothing written: the 1-minute rollup holds minutes ... whose raw readings are gone"). It also means that from the 12th of the month on
+    // last month has NO readings at all (before the 12th the seed reaches into its last days), so every case reads the answer instead of expecting a figure on both sides.
+    execFileSync("docker", ["compose", "exec", "-T", "-e", "DCDASH_ALLOW_SEED_HISTORY=1", "api", "python", "-m", "dcdash.seed.history", "--layout", "pilot-hall", "--days", "12", "--interval-minutes", "15", "--yes"], {
       env: process.env, encoding: "utf8", stdio: "pipe", timeout: 900_000, maxBuffer: 16 * 1024 * 1024,
     });
   } catch (e) {
@@ -205,9 +211,9 @@ const dialogNew = (page: Page) => page.getByRole("dialog", { name: "New dashboar
 const openLink = (page: Page, name: string) => page.getByRole("link", { name: `Open ${name} page`, exact: true });
 const dashboardTitle = (page: Page, name: string) => page.getByRole("heading", { level: 1, name, exact: true });
 
-/** The rows of a comparing stat (and its headline). */
+/** The parts of a comparing stat: the headline (grid area `fig`), last month's block (area `last`) and its figure, and the one sentence of "nothing to compare yet". */
 const statOf = (card: Locator) => ({
-  big: card.locator(".stat .big"), num: card.locator(".stat .stat-num"), lastFig: card.locator(".stat-last-fig"), nothing: card.locator(".stat-nothing"),
+  big: card.locator(".stat .big"), last: card.locator(".stat-last"), lastFig: card.locator(".stat-last-fig"), nothing: card.locator(".stat-nothing"),
 });
 
 async function boxOf(target: Locator, what: string): Promise<Box> {
@@ -311,7 +317,12 @@ async function widgetAnswer(request: APIRequestContext, body: WidgetRequest): Pr
 
 interface StatWant { headline: string; headTitle: string | null; last: string; lastTitle: string }
 
-/** The stat card of a comparison, worked out from the answer by the same rules as the page (lib/compare.ts `compareScale`, `sideCardFigure`, StatWidget): one scale over both sides and the headline. */
+/**
+ * The stat card of a comparison, worked out from the answer by the same rules as the page (lib/compare.ts `compareScale`, `sideCardFigure`, StatWidget): one scale over both sides
+ * and the headline. A side with no figure (every day without readings, or a cost without a rate) is a dash with no unit and is left out of the scale. The headline's title follows
+ * StatWidget: "no data" whenever the row recorded nothing (also for a cost, whose headline is then a dash), else the exact value, else none; the headline's words "no data" are an
+ * energy figure's only (`hasNoReading`). An energy card draws no `*` (`withoutEnergyStars`), so the row's `partial` counts for a cost only.
+ */
 function expectedStat(answer: WidgetAnswer): StatWant {
   const compare = answer.compare!;
   const asset = compare.assets[0];
@@ -321,12 +332,12 @@ function expectedStat(answer: WidgetAnswer): StatWant {
   const sideOf = (side: Side | null): number | null => (!side || (compare.days > 0 && side.no_data_days >= compare.days) ? null : cost ? side.cost : side.kwh);
   const marksOf = (side: Side | null): Marks => ({ estimated: side?.estimated ?? false, partial: cost && (side?.partial ?? false) });
   const scale = pickScale(familyOf(unit, cost ? "cost" : "energy"), unit, [sideOf(asset.this), sideOf(asset.last), row.value]);
-  const rowMarks: Marks = { estimated: row.estimated, partial: row.partial };
+  const rowMarks: Marks = { estimated: row.estimated, partial: cost && row.partial };
   const measured = row.value !== null && Number.isFinite(row.value);
   const noReading = row.value === null && row.no_data && !cost;
   return {
     headline: noReading ? "no data" : cardText(row.value, scale, rowMarks),
-    headTitle: noReading ? "no data" : measured ? exactText(row.value, answer.unit, rowMarks) : null,
+    headTitle: row.no_data ? "no data" : measured ? exactText(row.value, answer.unit, rowMarks) : null,
     last: cardText(sideOf(asset.last), scale, marksOf(asset.last)),
     lastTitle: exactText(sideOf(asset.last), unit, marksOf(asset.last)),
   };
@@ -334,7 +345,7 @@ function expectedStat(answer: WidgetAnswer): StatWant {
 /** The scale letter behind a figure's digits: "275.43k*" and "~275.99k" are k, "275.43" has none. */
 const letterOf = (figure: string): string => /([kM])\*?$/.exec(figure)?.[1] ?? "";
 
-/** The card says what the answer says: the card face as text, the exact face as the title, one unit on both sides; and, for a layout, the months side by side or stacked. */
+/** The card says what the answer says: the card face as text, the exact face as the title, one unit and one scale letter on both sides when both have a figure; and, for a layout, the months side by side or stacked. */
 async function expectStatCard(card: Locator, answer: WidgetAnswer, where: string, layout: "side" | "stacked" | null): Promise<void> {
   const stat = statOf(card);
   expect(answer.compare, `${where}: the answer carries a comparison`).toBeTruthy();
@@ -359,15 +370,16 @@ async function expectStatCard(card: Locator, answer: WidgetAnswer, where: string
     expect(letterOf(figure), `${where}: and with one scale letter`).toBe(letterOf(head.num));
   }
   if (layout === null) return;
-  const [big, num, lastFig] = [await boxOf(stat.big, `${where}: the headline`), await boxOf(stat.num, `${where}: the figure`), await boxOf(stat.lastFig, `${where}: last month's figure`)];
+  // The layout is the grid areas of the compare stat (`fig` and `last`, widgets.css .stat-compare): the headline and last month's block, whatever either says (a dash and "no data" have boxes too).
+  const [big, lastBlock] = [await boxOf(stat.big, `${where}: the headline`), await boxOf(stat.last, `${where}: last month's block`)];
   const cardBox = await boxOf(card, `${where}: the card`);
-  const sharesRow = Math.min(num.y + num.height, lastFig.y + lastFig.height) - Math.max(num.y, lastFig.y) > 1;
+  const sharesRow = Math.min(big.y + big.height, lastBlock.y + lastBlock.height) - Math.max(big.y, lastBlock.y) > 1;
   if (layout === "side") {
-    expect(sharesRow, `${where}: the two figures share a row (card ${Math.round(cardBox.width)} px wide)`).toBe(true);
-    expect(lastFig.x, `${where}: last month's figure is to the right of the headline`).toBeGreaterThanOrEqual(big.x + big.width - 1);
+    expect(sharesRow, `${where}: the two months share a row (card ${Math.round(cardBox.width)} px wide)`).toBe(true);
+    expect(lastBlock.x, `${where}: last month's block is to the right of the headline`).toBeGreaterThanOrEqual(big.x + big.width - 1);
   } else {
-    expect(sharesRow, `${where}: the two figures do not share a row (card ${Math.round(cardBox.width)} px wide)`).toBe(false);
-    expect(lastFig.y, `${where}: last month's figure is under the headline`).toBeGreaterThanOrEqual(num.y + num.height - 1);
+    expect(sharesRow, `${where}: the two months do not share a row (card ${Math.round(cardBox.width)} px wide)`).toBe(false);
+    expect(lastBlock.y, `${where}: last month's block is under the headline`).toBeGreaterThanOrEqual(big.y + big.height - 1);
   }
 }
 
@@ -398,7 +410,7 @@ test.describe("W27: the dashboard experience on the seeded pilot hall", () => {
       await removeAccounts(request);
       await removeSeed(request); // an earlier seed has no readings after the day it ran
 
-      // Raw retention 90 days BEFORE the seed, so the whole of last month is kept (the seeder starts at the previous month); the old values go back in afterAll.
+      // Raw retention 90 days BEFORE the seed, so the retention job cannot drop a seeded day while the suite runs; the old values go back in afterAll.
       const stored = await json<StorageSettings>(request, "/api/settings/storage");
       real.oldStorage = {
         raw_retention_days: stored.raw_retention_days, compress_after_days: stored.compress_after_days, rollup_1m_retention_days: stored.rollup_1m_retention_days,
@@ -742,28 +754,29 @@ test.describe("W27: the dashboard experience on the seeded pilot hall", () => {
     test.setTimeout(240_000);
     const { context, page } = await freshContext(browser, false);
     try {
-      // Written before the page exists: at the moment the first card is in the document, is the panel in it already?
-      await context.addInitScript(() => {
-        const w = window as unknown as { __guide: { atFirstCard: boolean | null; firstCardTop: number | null } };
-        w.__guide = { atFirstCard: null, firstCardTop: null };
+      // Written before the page exists: at the moment the first card is in the document, is the panel in it already? And where is the Energy card then? (The first `.widget-frame` of the Power
+      // starter is its heading text, at grid row 0; the Energy card is the first data card, one row lower, so its top is recorded on its own, found by its title.)
+      await page.addInitScript((energyTitle: string) => {
+        const w = window as unknown as { __guide: { atFirstCard: boolean | null; energyTop: number | null } };
+        w.__guide = { atFirstCard: null, energyTop: null };
         new MutationObserver(() => {
-          if (w.__guide.atFirstCard !== null) return;
-          const card = document.querySelector(".widget-frame");
-          if (!card) return;
-          w.__guide.atFirstCard = document.querySelector(".dash-guide") !== null;
-          w.__guide.firstCardTop = card.getBoundingClientRect().top;
+          if (w.__guide.atFirstCard === null && document.querySelector(".widget-frame")) w.__guide.atFirstCard = document.querySelector(".dash-guide") !== null;
+          if (w.__guide.energyTop !== null) return;
+          const energy = Array.from(document.querySelectorAll(".widget-frame")).find((el) => el.getAttribute("aria-label") === energyTitle);
+          if (energy) w.__guide.energyTop = energy.getBoundingClientRect().top;
         }).observe(document, { childList: true, subtree: true });
-      });
+      }, real.titles.energy);
       await page.goto(dashboardUrl(real.powerId));
       await expect(dashboardTitle(page, D_POWER)).toBeVisible();
       await expect(guideHeading(page), "the guide is open on a first visit").toBeVisible();
       await expect(frameOf(page, real.titles.energy)).toBeVisible();
       await expect(page.locator(".sk-region, .widget-sk")).toHaveCount(0);
       await settled(page);
-      const guide = await page.evaluate(() => (window as unknown as { __guide: { atFirstCard: boolean | null; firstCardTop: number | null } }).__guide);
+      const guide = await page.evaluate(() => (window as unknown as { __guide: { atFirstCard: boolean | null; energyTop: number | null } }).__guide);
       expect(guide.atFirstCard, "the panel was already in the page when the first card appeared (it is never inserted late)").toBe(true);
-      const top = await page.evaluate((title) => document.querySelector(`.widget-frame[aria-label="${title}"]`)?.getBoundingClientRect().top ?? -1, real.titles.energy);
-      expect(Math.abs(top - guide.firstCardTop!), "and the first card did not move afterwards").toBeLessThanOrEqual(2);
+      expect(guide.energyTop, "the Energy card was seen when it first appeared").not.toBeNull();
+      const top = await page.evaluate((title) => Array.from(document.querySelectorAll(".widget-frame")).find((el) => el.getAttribute("aria-label") === title)?.getBoundingClientRect().top ?? -1, real.titles.energy);
+      expect(Math.abs(top - guide.energyTop!), "and the Energy card did not move afterwards").toBeLessThanOrEqual(2);
       await expect(page.locator(".dash-guide li"), "the starter has all five lines (a comparison, a focus, a breakdown, the marks, the buttons)").toHaveCount(5);
       await expect(guideButton(page), "the header offers it again").toBeVisible();
 
@@ -799,7 +812,10 @@ test.describe("W27: the dashboard experience on the seeded pilot hall", () => {
       await button(page, "Got it").click();
       await expect(guideHeading(page), "Got it closes it for the session").toHaveCount(0);
       await expect(guideButton(page)).toBeFocused();
-      // Away to the list and back by the page's own links (no reload): the session remembers.
+      // Away to the list and back by the page's own links (no reload): the session remembers. The sidebar's Dashboards item opens the DEFAULT dashboard when one is set (Layout.tsx `target`), and
+      // this case needs the list: w7c's afterAll clears the default, so check that nothing is set (the server, then the link the page drew) instead of relying on it.
+      expect((await json<{ dashboard_id: number | null }>(page.request, "/api/dashboards/default")).dashboard_id, "no default dashboard is set (w7c's afterAll clears it), so the sidebar leads to the list").toBeNull();
+      await expect(navLink(page, "Dashboards"), "the sidebar's Dashboards item leads to the list, not to a default dashboard").toHaveAttribute("href", "/dashboards");
       await navLink(page, "Dashboards").click();
       await expect(page.getByRole("heading", { level: 1, name: "Dashboards", exact: true })).toBeVisible();
       await page.getByRole("link", { name: D_POWER, exact: true }).click();
