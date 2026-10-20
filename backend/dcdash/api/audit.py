@@ -15,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 from dcdash.api.deps import get_db, require_permission
 from dcdash.api.settings import current_timezone
 from dcdash.core.csvout import write_csv
-from dcdash.core.models import Asset, AuditLog, Dashboard, Point, Source, User
+from dcdash.core.models import Asset, AuditLog, Dashboard, Display, Playlist, Point, Source, User
 from dcdash.core.timeutil import local_midnight
 
 router = APIRouter(prefix="/api", tags=["audit"])
@@ -106,11 +106,13 @@ def _entries() -> Select[Any]:
 REF_KEYS = {
     "asset_id": "asset", "parent_id": "asset", "user_id": "user",
     "source_id": "source", "dashboard_id": "dashboard", "point_id": "point",
+    "display_id": "display", "playlist_id": "playlist",
 }
 # For each kind, the id and the ONE column that names it: nothing else of these rows (config, secret, hash) is read.
 REF_COLUMNS = {
     "asset": (Asset.id, Asset.name), "user": (User.id, User.username), "source": (Source.id, Source.name),
     "dashboard": (Dashboard.id, Dashboard.name), "point": (Point.id, Point.name),
+    "display": (Display.id, Display.name), "playlist": (Playlist.id, Playlist.name),  # never secret_hash
 }
 MAX_ID = 2_147_483_647  # the database's integer; a stored detail is arbitrary JSON and must never push a bigger one into an IN
 
