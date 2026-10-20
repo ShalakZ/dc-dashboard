@@ -28,6 +28,28 @@ describe("the viewer's header does not overflow", () => {
     expect(prop(title, "overflow-wrap")).toBe("anywhere");
   });
 
+  it("holds the controls in one right-aligned group that wraps as a unit under the title, and breaks only between its two parts (w27 P1; CSS only, nothing measured)", () => {
+    const group = body(".dash-controls");
+    expect(prop(group, "display")).toBe("flex");
+    expect(prop(group, "flex-wrap")).toBe("wrap");
+    expect(prop(group, "justify-content")).toBe("flex-end");
+    expect(prop(group, "margin-left")).toBe("auto"); // at the right of the row, beside the title or under it
+    expect(prop(group, "flex")).toBe("0 1 auto"); // as wide as its controls, never stretched: the row wraps it before it shrinks it
+    expect(prop(group, "min-width")).toBe("0");
+    expect(prop(group, "max-width")).toBe("100%");
+    const part = body(".dash-info, .dash-view");
+    expect(prop(part, "display")).toBe("flex");
+    expect(prop(part, "flex-wrap")).toBe("nowrap"); // a part never wraps inside itself: no control of it is left alone on a line
+    expect(prop(part, "max-width")).toBe("100%");
+  });
+
+  it("lets only the focus link give way inside the viewer's part (it is cut with an ellipsis), so it cannot push Edit to a line of its own", () => {
+    const link = body(".focus-open", focusHeader);
+    expect(prop(link, "flex")).toBe("0 1 auto");
+    expect(prop(link, "min-width")).toBe("0");
+    expect(prop(link, "overflow")).toBe("hidden");
+  });
+
   it("keeps the focus link to one line of at most 22rem with an ellipsis (focus-header.css), so a long asset name cannot widen the row", () => {
     const link = body(".focus-open", focusHeader);
     expect(prop(link, "max-width")).toBe("min(100%, 22rem)");

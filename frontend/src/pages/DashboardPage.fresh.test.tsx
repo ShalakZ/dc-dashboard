@@ -152,4 +152,29 @@ describe("Updated and Refresh in the dashboard's header", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveClass("dash-title");
     expect(document.querySelector(".dash-head")).toHaveClass("row");
   });
+
+  it("holds every control in one group beside the title, so the row can wrap it as a unit (w27 P1): two parts, the figures' and the viewer's, in the order they had", async () => {
+    open([following, power], { "GET /api/assets": { body: assetList } }, "operator", "/dashboards/3?asset=2");
+    const link = await screen.findByRole("link", { name: /^Open .* page$/ });
+    const head = document.querySelector<HTMLElement>(".dash-head")!;
+    expect([...head.children].map((child) => child.tagName + "." + child.className)).toEqual(["H1.dash-title", "DIV.dash-controls"]); // nothing else is a child of the row: no spacer, no loose control
+    const controls = head.querySelector<HTMLElement>(".dash-controls")!;
+    expect([...controls.children].map((child) => child.className)).toEqual(["dash-info", "dash-view"]);
+    const info = controls.querySelector(".dash-info")!;
+    const view = controls.querySelector(".dash-view")!;
+    expect(info).toContainElement(slot());
+    expect(info).toContainElement(refresh());
+    for (const control of [screen.getByLabelText("Dashboard range"), screen.getByRole("button", { name: "Focus" }), screen.getByRole("button", { name: "What does this mean?" }), link, screen.getByRole("button", { name: "Edit" })]) {
+      expect(view, control.textContent || control.getAttribute("aria-label") || control.id).toContainElement(control as HTMLElement);
+    }
+    expect(view.lastElementChild).toBe(screen.getByRole("button", { name: "Edit" })); // Edit ends the group: it is never the part that is left alone
+  });
+
+  it("has no info part on a dashboard with nothing to read or refresh and no guide to offer, and the viewer's part alone is the group", async () => {
+    open([textWidget(9, "heading", "Hall")]);
+    await screen.findByRole("heading", { name: "Hall", level: 2 });
+    const controls = document.querySelector(".dash-controls")!;
+    expect(controls.querySelector(".dash-info")).toBeNull();
+    expect([...controls.children].map((child) => child.className)).toEqual(["dash-view"]);
+  });
 });

@@ -82,25 +82,35 @@ export function DashboardViewer({ dashboard, timezone, onEdit }: { dashboard: Da
     <>
       <div className="row dash-head">
         <h1 className="dash-title">{dashboard.name}</h1>
-        <span className="spacer" />
-        {connected && <span className="muted">live</span>}
-        {hasData && <Freshness timezone={timezone} />}
-        {offered && <button ref={guideButton} type="button" className="quiet" onClick={reopenGuide}>How to read this</button>}
-        <label htmlFor={rangeId}>Dashboard range</label>
-        <select id={rangeId} value={range} onChange={(e) => setPicked(e.target.value as RangePreset)}>
-          {RANGE_PRESETS.map((p) => <option key={p} value={p}>{RANGE_LABELS[p]}</option>)}
-        </select>
-        {allowed && (
-          <>
-            <button ref={focusButton} type="button" aria-haspopup="dialog" onClick={() => setChoosing(true)}>Focus</button>
-            <InfoTip>{FOCUS_TIP}</InfoTip>
-          </>
-        )}
-        {allowed && focus !== null && (
-          // Until the asset list is here the id stands for the name, so the link is in its place from the first paint.
-          <Link className="focus-open" to={`/assets/${focus}`} title={`Open ${name ?? `Asset #${focus}`} page`}>{`Open ${name ?? `Asset #${focus}`} page`}</Link>
-        )}
-        {onEdit && <button type="button" onClick={onEdit}>Edit</button>}
+        {/* Every control in one right-aligned group (w27 P1): when the title and the controls do not fit one row the GROUP goes under the title, never one control alone (Edit).
+            Inside it two parts, what is known of the figures (live, Updated, Refresh, How to read this) and what the viewer sets (range, Focus, its link, Edit): a group too wide
+            for the row breaks between them. Tab order is the order here. */}
+        <div className="dash-controls">
+          {(connected || hasData || offered) && (
+            <div className="dash-info">
+              {connected && <span className="muted">live</span>}
+              {hasData && <Freshness timezone={timezone} />}
+              {offered && <button ref={guideButton} type="button" className="quiet" onClick={reopenGuide}>How to read this</button>}
+            </div>
+          )}
+          <div className="dash-view">
+            <label htmlFor={rangeId}>Dashboard range</label>
+            <select id={rangeId} value={range} onChange={(e) => setPicked(e.target.value as RangePreset)}>
+              {RANGE_PRESETS.map((p) => <option key={p} value={p}>{RANGE_LABELS[p]}</option>)}
+            </select>
+            {allowed && (
+              <>
+                <button ref={focusButton} type="button" aria-haspopup="dialog" onClick={() => setChoosing(true)}>Focus</button>
+                <InfoTip>{FOCUS_TIP}</InfoTip>
+              </>
+            )}
+            {allowed && focus !== null && (
+              // Until the asset list is here the id stands for the name, so the link is in its place from the first paint.
+              <Link className="focus-open" to={`/assets/${focus}`} title={`Open ${name ?? `Asset #${focus}`} page`}>{`Open ${name ?? `Asset #${focus}`} page`}</Link>
+            )}
+            {onEdit && <button type="button" onClick={onEdit}>Edit</button>}
+          </div>
+        </div>
       </div>
       {choosing && <FocusDialog onClose={() => setChoosing(false)} />}
       {picked !== null && picked !== dashboard.range && (

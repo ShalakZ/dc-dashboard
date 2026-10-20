@@ -13,6 +13,13 @@
   /* The title may be as long as the name allows (100 characters): it wraps inside the row, even a name with no space in it, and never pushes the controls out. */
   .dash-title { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 
+  /* w27 P1: every control of the header is in ONE group at the right of the row. The row (.dash-head, a wrapping flex row) puts the group beside the title when both
+     fit, else under it as a unit, still at the right: no control is ever left alone on a line of its own. The group has two parts, and breaks between them only when
+     it alone is wider than the row (a narrow window with the sidebar open); a part never wraps inside itself, and in the second the focus link (which may be cut with an
+     ellipsis, focus-header.css) gives way, so it does not push Edit to a line of its own. CSS only: nothing measures a width. */
+  .dash-controls { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; max-width: 100%; margin-left: auto; }
+  .dash-info, .dash-view { display: flex; flex: 0 1 auto; flex-wrap: nowrap; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+
   /* The time and Refresh travel together, so the pair wraps as one. The time has its room from the first paint ("Updated 00:00" is 13 characters, the digits are
      tabular), so it appearing, or changing, moves nothing; a new range or focus dims the previous time until its answer lands. */
   .dash-fresh { display: inline-flex; flex: none; align-items: center; gap: 4px; }
