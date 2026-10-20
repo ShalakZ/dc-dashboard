@@ -13,6 +13,8 @@ fingerprint, `now()` and the value, then `ledger.write`.
 import asyncio
 import dataclasses
 import logging
+import sys
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -32,6 +34,17 @@ from helpers import insert_readings, make_asset, settle_rollups
 UTC = timezone.utc
 HOUR = timedelta(hours=1)
 TZ = "UTC"
+
+
+@pytest.fixture(autouse=True)
+def _no_rollup_refresh(monkeypatch):
+    """The worlds are not settled: a refresh of the rollups costs over a minute in a fresh test database, per test. The engine and
+    the fingerprints read the REAL-TIME aggregate of `readings_1h` (the test database keeps its watermark at the beginning of
+    time), which holds the very same hourly rows as a refreshed one (the figures worker's tests rely on the same fact)."""
+    async def nothing(db) -> None:
+        pass
+
+    monkeypatch.setattr(sys.modules[__name__], "settle_rollups", nothing)
 
 
 @pytest.fixture(autouse=True)
@@ -340,16 +353,23 @@ async def test_after_the_ttl_a_newer_row_is_taken_instead_of_the_engine(db, engi
     assert the_entry()[1].data_fp == (await the_row(db))["data_fp"]
 
 
-async def test_a_young_row_that_was_just_found_current_is_taken_again_within_sixty_seconds(db, engine_calls):
-    # The documented churn: the same row may be taken again and again for up to 60 seconds, however often the TTL check finds the
-    # readings moved (the figure is at most 60 s behind, as after any restart). Pinned so a change of the rule is deliberate.
+async def test_the_row_an_entry_was_made_from_is_not_taken_again_once_the_check_found_the_readings_moved(db, engine_calls):
+    # Review M1 (this replaces the pinned churn of the first version, which took the same row again and again for 60 s): the
+    # entry holds this very row's fingerprint, the TTL check found the readings moved, so taking the row again would only extend
+    # the life of a figure just proven behind. The row is judged "check": the data is read, differs, and the engine runs.
     case = await window_case(db, settled=False)
     published = await case.publish()
     await case.move(db)
     engine_calls.clear()
-    for _ in range(3):
-        assert same(await case.ask(), published)
-    assert engine_calls == [] and ledger.stats()["hits_open"] == 3
+    assert same(await case.ask(), published)  # the first request takes the young row: the figure is behind the moved readings
+    assert engine_calls == [] and ledger.stats() == {"hits_open": 1, "hits_exact": 0, "misses": 0, "errors": 0}
+    first = the_entry()[1]
+    assert first.from_row
+    value = await case.ask()  # TTL 0: the entry is expired; the check finds the readings moved; the same row is not taken again
+    assert engine_calls, "the engine must run: the row is the value that was just found behind"
+    assert same(value, await case.off()) and not same(value, published)
+    assert ledger.stats() == {"hits_open": 1, "hits_exact": 0, "misses": 1, "errors": 0}  # (the data fingerprint was read once)
+    assert not the_entry()[1].from_row and the_entry()[1].data_at > first.data_at
 
 
 async def test_an_entry_taken_from_a_young_row_is_back_dated_but_never_born_expired(db, monkeypatch):
@@ -512,15 +532,21 @@ async def test_require_fresh_never_takes_a_young_row_when_the_data_moved(db, eng
     assert ledger.stats()["hits_open"] == 0
 
 
-async def test_require_fresh_takes_a_row_whose_data_is_provably_unchanged(db, engine_calls, data_reads):
-    case = await window_case(db, settled=False)
+@pytest.mark.parametrize("settled", [True, False])
+async def test_require_fresh_never_consults_the_ledger_even_for_a_row_whose_data_is_provably_unchanged(db, engine_calls, settled):
+    # Review M6: a Billing close freezes the money of record, so it computes (or takes a verified cache entry) as in w26 and never
+    # depends on what the worker wrote. The value is the same here only because nothing moved.
+    case = await window_case(db, settled=settled)
     published = await case.publish()
     engine_calls.clear()
-    data_reads.clear()
-    with figure_cache.require_fresh():
-        value = await case.ask()
-    assert same(value, published) and engine_calls == [] and data_reads
-    assert ledger.stats()["hits_exact"] == 1
+    with statements() as seen:
+        with figure_cache.require_fresh():
+            value = await case.ask()
+    assert engine_calls, "a close must compute"
+    assert same(value, published) and same(value, await case.off())
+    assert ledger.stats() == {"hits_exact": 0, "hits_open": 0, "misses": 0, "errors": 0}
+    assert not [s for s in seen if "figure_ledger" in s or "SAVEPOINT" in s.upper()]
+    assert the_entry()[1].data_at is None and not the_entry()[1].from_row  # its entry knows no data time: the ledger was not asked
 
 
 # ---- 10: a row older than the entry it would replace -----------------------------------------------------------------------------------
@@ -560,6 +586,12 @@ async def figure_cache_config_fp():
         return await figure_cache._config_fingerprint(session)
 
 
+def no_row(case: Case) -> ledger.LedgerSpec:
+    """The case's spec for a key that has no row: a run that carries it consults the ledger, misses, and runs the engine, and its
+    entry knows the database time of its snapshot (an engine run under `require_fresh` would know none: it does not consult)."""
+    return dataclasses.replace(case.spec, params="[]")
+
+
 async def test_a_task_that_took_an_older_row_cannot_replace_the_newer_entry_of_a_task_that_began_before_it(db, monkeypatch):
     case, published, row, key = await _two_tasks(db)
     in_engine, release_engine = asyncio.Event(), asyncio.Event()
@@ -578,9 +610,10 @@ async def test_a_task_that_took_an_older_row_cannot_replace_the_newer_entry_of_a
         return await real_read_payload(*args, **kwargs)
 
     monkeypatch.setattr(ledger, "read_payload", parked_payload)
-    # E: the engine, under require_fresh (it must see the moved readings); its snapshot is the FIRST (older stamp) ...
+    # E: the engine (its ledger lookup finds no row, so it runs and its entry carries the database time of its snapshot); its
+    # snapshot is the FIRST (older stamp) ...
     engine_task = figure_cache._spawn(
-        key, case.start, case.end, slow_engine, strict=False, shared=False, ledger=case.spec, fresh=True
+        key, case.start, case.end, slow_engine, strict=False, shared=False, ledger=no_row(case), fresh=False
     )
     await in_engine.wait()
     # ... P: a private run that takes the young row; its snapshot is the LATER one (newer stamp), but the row's data is older
@@ -604,34 +637,134 @@ async def test_the_task_that_took_the_row_first_is_replaced_by_the_later_engine_
     row_value = await figure_cache._spawn(
         key, case.start, case.end, case.build, strict=False, shared=False, ledger=case.spec, fresh=False
     )
-    assert the_entry()[1].data_at == row["checked_at"]
+    assert the_entry()[1].data_at == row["checked_at"] and the_entry()[1].from_row
     engine_value = await figure_cache._spawn(
-        key, case.start, case.end, case.build, strict=False, shared=False, ledger=case.spec, fresh=True
+        key, case.start, case.end, case.build, strict=False, shared=False, ledger=no_row(case), fresh=False
     )
     entry = the_entry()[1]
     assert entry.value is engine_value and entry.data_at > row["checked_at"] and not same(row_value, engine_value)
 
 
-async def test_put_refuses_an_older_data_at_even_when_the_stamp_is_newer():
-    key = ("k", datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC), (), "fp")
-    t1, t2 = datetime(2026, 1, 1, 12, tzinfo=UTC), datetime(2026, 1, 1, 12, 5, tzinfo=UTC)
+async def test_the_engine_that_began_first_and_finished_last_replaces_the_row_that_looked_younger(db):
+    # Review C1, the REVERSE interleaving of the test above and a Billing close's real shape: the engine takes its snapshot FIRST
+    # (older stamp) and computes for a while; meanwhile a request takes a young row (a LATER stamp, but older data) and stores it.
+    # The engine's figure reflects newer data: it must replace the row's entry although its stamp is older, and must not be
+    # replaced by it afterwards.
+    case, published, row, key = await _two_tasks(db)
+    in_engine, release_engine = asyncio.Event(), asyncio.Event()
 
-    def entry(name, stamp, data_at):
-        return figure_cache._Entry(name, "d", 1.0, stamp, None, 1.0, data_at=data_at)
+    async def slow_engine(session):
+        in_engine.set()
+        await release_engine.wait()
+        return await case.build(session)
 
-    figure_cache._put(key, entry("later data", 5, t2))
-    figure_cache._put(key, entry("older data, newer stamp", 9, t1))
-    assert figure_cache._store[key].value == "later data" and figure_cache.stats()["replaced"] == 0
-    figure_cache._put(key, entry("same data time, newer stamp", 10, t2))
-    assert figure_cache._store[key].value == "same data time, newer stamp"
-    figure_cache._put(key, entry("newer data, newer stamp", 11, t2 + timedelta(seconds=1)))
-    assert figure_cache._store[key].value == "newer data, newer stamp"
-    figure_cache._put(key, entry("older stamp", 3, t2 + timedelta(minutes=1)))  # the w26 rule still holds
-    assert figure_cache._store[key].value == "newer data, newer stamp"
-    figure_cache._put(key, entry("unknown time", 12, None))  # nothing to compare: only the stamp counts
-    assert figure_cache._store[key].value == "unknown time"
-    figure_cache._put(key, entry("known time again", 13, t1))
-    assert figure_cache._store[key].value == "known time again"
+    engine_task = figure_cache._spawn(
+        key, case.start, case.end, slow_engine, strict=False, shared=False, ledger=no_row(case), fresh=False
+    )
+    await in_engine.wait()
+    row_value = await figure_cache._spawn(
+        key, case.start, case.end, case.build, strict=False, shared=False, ledger=case.spec, fresh=False
+    )
+    row_entry = figure_cache._store[key]
+    assert row_entry.value is row_value and row_entry.from_row and same(row_value, published)
+    release_engine.set()
+    engine_value = await engine_task
+    entry = figure_cache._store[key]
+    assert entry.value is engine_value and not entry.from_row, "the figure of the newer data lost to the row because of a stamp"
+    assert entry.data_at > row["checked_at"] and entry.stamp < row_entry.stamp  # (the stamp really is the older one)
+    assert not same(engine_value, row_value) and same(engine_value, await case.off())
+    assert figure_cache.stats()["replaced"] == 1
+
+
+async def test_an_engine_figure_of_older_data_does_not_replace_a_row_entry_of_newer_data(db):
+    # The engine took its snapshot first (older stamp) and finishes last, as above, but the row entry now reflects data NEWER than
+    # the engine's snapshot saw: the engine's figure must not replace it. (The row's data time is moved by hand to make it so.)
+    case, published, row, key = await _two_tasks(db)
+    in_engine, release_engine = asyncio.Event(), asyncio.Event()
+
+    async def slow_engine(session):
+        in_engine.set()
+        await release_engine.wait()
+        return await case.build(session)
+
+    engine_task = figure_cache._spawn(
+        key, case.start, case.end, slow_engine, strict=False, shared=False, ledger=no_row(case), fresh=False
+    )
+    await in_engine.wait()
+    row_value = await figure_cache._spawn(
+        key, case.start, case.end, case.build, strict=False, shared=False, ledger=case.spec, fresh=False
+    )
+    row_entry = figure_cache._store[key]
+    row_entry.data_at = row_entry.data_at + timedelta(hours=1)
+    release_engine.set()
+    engine_value = await engine_task
+    assert engine_value is not row_value
+    assert figure_cache._store[key] is row_entry, "an engine figure of older data replaced the row entry of newer data"
+    assert figure_cache.stats()["replaced"] == 0
+
+
+def _entry(name, stamp, data_at, *, from_row=False):
+    return figure_cache._Entry(name, "d", 1.0, stamp, None, 1.0, data_at=data_at, from_row=from_row)
+
+
+KEY = ("k", datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC), (), "fp")
+T1, T2 = datetime(2026, 1, 1, 12, tzinfo=UTC), datetime(2026, 1, 1, 12, 5, tzinfo=UTC)
+
+
+def put_value(entry) -> str:
+    figure_cache._put(KEY, entry)
+    return figure_cache._store[KEY].value
+
+
+async def test_put_orders_engine_and_exact_entries_by_stamp_alone_as_w26_did():
+    assert put_value(_entry("first", 5, T2)) == "first"
+    # an older data time with a newer stamp replaces: the database clock cannot stall the cache (review I1)
+    assert put_value(_entry("older data, newer stamp", 9, T1)) == "older data, newer stamp"
+    assert put_value(_entry("same data time, newer stamp", 10, T1)) == "same data time, newer stamp"
+    assert put_value(_entry("older stamp, newer data", 3, T2 + timedelta(minutes=1))) == "same data time, newer stamp"  # w26's rule
+    assert put_value(_entry("unknown time", 12, None)) == "unknown time"  # nothing to compare: only the stamp counts
+    assert put_value(_entry("known time again", 13, T1)) == "known time again"
+    assert figure_cache.stats()["replaced"] == 4
+
+
+async def test_put_replaces_an_entry_whose_data_time_is_in_the_future_by_a_normal_recompute():
+    # Review I1: the database clock ran ahead, an entry was stored with a data time 5 minutes in the future, and the clock was
+    # corrected. Every later engine entry carries the correct, EARLIER time: it must still replace the entry.
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    assert put_value(_entry("from the future", 5, future)) == "from the future"
+    assert put_value(_entry("recomputed", 6, datetime.now(UTC))) == "recomputed"
+    assert put_value(_entry("recomputed again", 7, datetime.now(UTC))) == "recomputed again"
+
+
+async def test_put_orders_a_row_entry_by_what_it_reflects_not_by_its_stamp():
+    assert put_value(_entry("engine", 5, T2)) == "engine"
+    # a row of older data, however late its snapshot: refused
+    assert put_value(_entry("older row", 9, T1, from_row=True)) == "engine"
+    # a row of the same or newer data replaces
+    assert put_value(_entry("same row time", 10, T2, from_row=True)) == "same row time"
+    assert put_value(_entry("newer row", 11, T2 + timedelta(seconds=1), from_row=True)) == "newer row"
+    # an older row cannot replace a newer row, a newer row replaces an older one even with an older stamp
+    assert put_value(_entry("older row again", 20, T2, from_row=True)) == "newer row"
+    assert put_value(_entry("newer row, older stamp", 4, T2 + timedelta(minutes=1), from_row=True)) == "newer row, older stamp"
+
+
+async def test_put_refuses_a_row_entry_over_an_entry_that_does_not_know_its_data_time():
+    assert put_value(_entry("engine, unknown time", 5, None)) == "engine, unknown time"
+    assert put_value(_entry("row", 9, T2, from_row=True)) == "engine, unknown time"
+    assert figure_cache.stats()["replaced"] == 0
+    assert put_value(_entry("engine again", 10, T1)) == "engine again"  # an engine entry still replaces it, by stamp
+
+
+async def test_put_lets_an_engine_entry_of_newer_data_replace_a_row_entry_even_with_an_older_stamp():
+    assert put_value(_entry("row", 9, T1, from_row=True)) == "row"
+    assert put_value(_entry("engine, newer data, older stamp", 3, T2)) == "engine, newer data, older stamp"
+    # ... but only a row entry gives way to the data time: an engine entry that is already stored is protected by its stamp
+    assert put_value(_entry("engine, newer data, even older stamp", 2, T2 + timedelta(minutes=1))) == "engine, newer data, older stamp"
+    # an engine entry of older (or equal) data than a row entry does not replace it when its stamp is older
+    assert put_value(_entry("row 2", 20, T2 + timedelta(minutes=2), from_row=True)) == "row 2"
+    assert put_value(_entry("engine, older data, older stamp", 5, T2)) == "row 2"
+    assert put_value(_entry("engine, equal data, older stamp", 5, T2 + timedelta(minutes=2))) == "row 2"
+    assert put_value(_entry("engine, unknown data, older stamp", 5, None)) == "row 2"
 
 
 # ---- 11: a deleted asset, a zone change -----------------------------------------------------------------------------------------------
@@ -701,7 +834,9 @@ async def test_a_call_without_a_ledger_spec_runs_no_ledger_statement(db):
 
 
 @pytest.mark.parametrize("settled", [True, False])
-async def test_a_failing_header_read_gives_the_live_answer_and_leaves_the_snapshot_usable(db, engine_calls, monkeypatch, settled):
+async def test_a_raising_header_read_is_a_counted_miss_and_the_answer_is_the_live_one(db, engine_calls, monkeypatch, settled):
+    # (Python raises here, no SQL fails: that the snapshot survives a FAILING STATEMENT is shown by the missing-table tests below
+    # and by test_ledger.py's savepoint tests.)
     case = await window_case(db, settled=settled)
     await case.publish()
     live = await case.off()
@@ -712,7 +847,19 @@ async def test_a_failing_header_read_gives_the_live_answer_and_leaves_the_snapsh
     monkeypatch.setattr(ledger, "read_header", broken)
     engine_calls.clear()
     value = await case.ask()
-    assert same(value, live) and engine_calls  # the compute that followed ran in the very snapshot the failed read left
+    assert same(value, live) and engine_calls
+    assert ledger.stats()["errors"] == 1 and ledger.stats()["misses"] == 1
+
+
+@pytest.mark.parametrize("settled", [True, False])
+async def test_a_header_statement_that_fails_in_sql_leaves_the_snapshot_the_engine_runs_in_usable(db, engine_calls, monkeypatch, settled):
+    case = await window_case(db, settled=settled)
+    await case.publish()
+    live = await case.off()
+    monkeypatch.setattr(ledger, "_HEADER", text("SELECT 1 FROM a_table_that_does_not_exist WHERE :k = :s AND :e = :p"))
+    engine_calls.clear()
+    value = await case.ask()  # the engine then reads in the very transaction whose statement failed
+    assert same(value, live) and engine_calls
     assert ledger.stats()["errors"] == 1 and ledger.stats()["misses"] == 1
 
 
@@ -860,3 +1007,242 @@ async def test_keep_warm_after_a_ledger_entry_rechecks_and_recomputes_through_th
     assert len(consulted) >= 2 and set(consulted) == {"month-days"}, "the recompute must look the key up in the ledger too"
     assert figure_cache.stats()["warm_recomputes"] >= 1 and engine_calls  # a settled row cannot match moved data: the engine ran
     assert the_entry()[1].ledger is not None and the_entry()[1].data_at is not None
+
+
+# ---- the review of Task 3: the clock, the real bound, keep-warm, what the entry knows, the lock, the identity -------------------------
+
+
+async def test_a_database_clock_stepped_back_does_not_stall_the_cache(db, engine_calls):
+    # Review I1: an entry was stored with a data time 5 minutes ahead (the clock ran fast and was corrected). Every later engine
+    # entry carries the right, EARLIER time and must still replace it: engine entries are ordered by stamp, not by the clock.
+    case = await window_case(db, settled=False)
+    first = await case.ask()  # no row: the engine runs; the entry knows the database time of its snapshot
+    _, entry = the_entry()
+    assert entry.data_at is not None
+    entry.data_at = entry.data_at + timedelta(minutes=5)
+    await case.move(db)
+    value = await case.ask()  # TTL 0: expired, the readings moved: the engine runs again
+    _, newer = the_entry()
+    assert newer is not entry and newer.value is value and not same(value, first)
+    assert same(value, await case.off()) and newer.data_at < entry.data_at
+    assert figure_cache.stats()["replaced"] == 1
+
+
+@pytest.fixture
+async def timers(monkeypatch):
+    """The delay of every keep-warm timer the cache sets. The timers themselves are moved an hour away, so none fires on its own."""
+    loop = asyncio.get_running_loop()
+    real = loop.call_later
+    delays: list[float] = []
+
+    def spy(delay, callback, *args, **kwargs):
+        if callback is not figure_cache._fire:
+            return real(delay, callback, *args, **kwargs)
+        delays.append(delay)
+        return real(3600.0, callback, *args, **kwargs)
+
+    monkeypatch.setattr(loop, "call_later", spy)
+    return delays
+
+
+@pytest.mark.parametrize("ttl", ["3", "30", "100"])
+async def test_an_entry_taken_from_a_row_is_never_trusted_past_the_rows_check_plus_the_larger_of_the_ttl_and_sixty_seconds(
+    db, monkeypatch, timers, ttl
+):
+    # Review I2: the real bound. The open rule takes a row of at most 55 s, the entry is back-dated by that age but keeps 5 s of
+    # life (or the whole TTL when that is shorter), so it stops being served without a data check at most max(TTL, 60 s) after the
+    # moment the row's data was checked.
+    case = await window_case(db, settled=False)
+    await case.publish()
+    await age_row(db, 53)  # nearly as old as the open rule accepts (55 s), leaving room for the milliseconds of this test
+    clock = [1000.0]
+    monkeypatch.setattr(figure_cache, "_monotonic", lambda: clock[0])
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", ttl)
+    ages: list[float] = []
+    real = ledger.consult
+
+    async def recording(*args, **kwargs):
+        result = await real(*args, **kwargs)
+        if result[0] is not None:
+            ages.append(result[0].age_seconds)
+        return result
+
+    monkeypatch.setattr(ledger, "consult", recording)
+    await case.ask()
+    (age,) = ages
+    assert 53 <= age < 55
+    _, entry = the_entry()
+    assert entry.from_row
+    trusted_for = entry.checked_at + float(ttl) - clock[0] + age  # seconds after the row's check at which the entry expires
+    assert age < trusted_for <= max(float(ttl), 60.0) + 1e-9, trusted_for  # born alive, and never past the bound
+    # and the cache really behaves so: served without a check up to that moment, checked from there on
+    before = figure_cache.stats()["revalidations"]
+    clock[0] = entry.checked_at + float(ttl) - 0.01
+    assert await case.ask() is entry.value and figure_cache.stats()["revalidations"] == before
+    clock[0] = entry.checked_at + float(ttl) + 0.01
+    await case.ask()
+    assert figure_cache.stats()["revalidations"] == before + 1
+
+
+async def test_arm_sets_the_timer_of_a_back_dated_entry_before_it_expires_and_leaves_a_normal_entry_alone(timers, monkeypatch):
+    # Review I3: an entry the ledger back-dated lives only TTL - back seconds, so the timer cannot wait 0.6 x TTL. The delay is
+    # min(0.6 x TTL, max(1 s, the entry's remaining life - 2 s)).
+    clock = [100.0]
+    monkeypatch.setattr(figure_cache, "_monotonic", lambda: clock[0])
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "30")
+
+    def delay_for(checked_at: float) -> float:
+        entry = figure_cache._Entry("v", "d", checked_at, 1, None, 100.0)
+        figure_cache._store[KEY] = entry
+        timers.clear()
+        figure_cache._arm(KEY, entry)
+        assert entry.timer is not None
+        return timers[0]
+
+    assert delay_for(100.0) == pytest.approx(18.0)  # a normal entry (checked just now): 0.6 x TTL, as in w26
+    assert delay_for(99.0) == pytest.approx(18.0)
+    assert delay_for(75.0) == pytest.approx(3.0)  # back-dated by 25 s, the most a TTL of 30 allows: 5 s of life left, minus 2 s
+    assert delay_for(74.0) == pytest.approx(2.0)
+    assert delay_for(72.0) == pytest.approx(1.0)  # the floor: never sooner than a second from now
+    assert delay_for(60.0) == pytest.approx(1.0)  # (an entry that is already past its expiry: the same)
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "600")
+    assert delay_for(100.0) == pytest.approx(360.0)
+
+
+async def test_keep_warm_on_an_entry_taken_from_a_row_is_timed_by_its_age_and_recomputes_when_the_readings_moved(
+    db, engine_calls, timers, monkeypatch
+):
+    case = await window_case(db, settled=False)
+    await case.publish()
+    clock = [100.0]
+    monkeypatch.setattr(figure_cache, "_monotonic", lambda: clock[0])
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "30")
+    await age_row(db, 20)
+    engine_calls.clear()
+    await case.ask()
+    key, entry = the_entry()
+    assert entry.from_row and engine_calls == []
+    assert entry.checked_at == pytest.approx(80.0, abs=0.5)  # back-dated by the row's age of about 20 s
+    assert timers == [pytest.approx(8.0, abs=0.5)]  # 80 + 30 - 100 - 2: before the entry expires, not 0.6 x 30 = 18 s from now
+    # the readings move; the timer goes off: the background check finds a different fingerprint and recomputes
+    await case.move(db)
+    figure_cache._fire(key, entry, figure_cache._generation)
+    await wait_until(lambda: the_entry()[1] is not entry)
+    renewed = the_entry()[1]
+    assert engine_calls, "the row it was made from is the value just found behind: the engine must run"
+    assert same(renewed.value, await case.off()) and not renewed.from_row
+    assert figure_cache.stats()["warm_recomputes"] == 1 and renewed.ledger is not None
+    assert len(timers) == 2 and timers[1] == pytest.approx(18.0)  # the new entry is normal again
+
+
+async def test_after_a_failed_header_read_a_row_older_than_the_engine_entry_is_not_taken_on_trust(db, engine_calls, monkeypatch):
+    # Review I4: the header could not be read once, so the engine's entry knows no data time. The next recompute must not take a
+    # young row on trust, since it could be older than that entry.
+    case = await window_case(db, settled=False)
+    published = await case.publish()  # the young row: the readings as they are now
+    await case.move(db)  # the readings move on, so the row is already behind them
+    real = ledger.read_header
+
+    async def broken(*args, **kwargs):
+        raise ProgrammingError("SELECT ...", {}, Exception("boom"))
+
+    monkeypatch.setattr(ledger, "read_header", broken)
+    first = await case.ask()  # the engine ran: an entry NEWER than the row, which knows no data time (and not the row's fingerprint)
+    monkeypatch.setattr(ledger, "read_header", real)
+    assert the_entry()[1].data_at is None and not same(first, published)
+    point = await db.fetchval("SELECT id FROM points WHERE address = 'Alpha_kWh'")
+    await insert_readings(db, point, case.first_hour + (case.hours + 1) * HOUR + timedelta(minutes=30), 1, [1000.0 + 2.0 * case.hours + 9.0])
+    ledger.reset_stats()
+    engine_calls.clear()
+    value = await case.ask()  # TTL 0: expired, the readings moved again; the young row is OLDER than the entry, which cannot tell
+    assert engine_calls and same(value, await case.off())
+    assert not same(value, published) and not same(value, first), "an older figure than the entry's was served"
+    assert ledger.stats()["hits_open"] == 0 and ledger.stats()["hits_exact"] == 0
+
+
+async def test_revalidating_an_entry_taken_from_a_row_when_nothing_moved_serves_exactly_the_live_value(db, engine_calls, data_reads):
+    case = await window_case(db, settled=False)
+    await case.publish()
+    engine_calls.clear()
+    data_reads.clear()
+    first = await case.ask()  # the open rule: no data statement at all
+    _, entry = the_entry()
+    assert entry.from_row and engine_calls == [] and data_reads == []
+    value = await case.ask()  # TTL 0: expired; one data fingerprint, equal to the row's: the entry is renewed
+    assert value is first and len(data_reads) == 1 and engine_calls == []
+    assert figure_cache.stats()["revalidations"] == 1 and the_entry()[1] is entry
+    assert same(value, await case.off())
+
+
+@pytest.mark.parametrize("settled", [True, False])
+async def test_the_last_attempt_with_a_snapshot_that_is_not_the_keys_returns_a_row_and_stores_nothing(db, engine_calls, settled):
+    case = await window_case(db, settled=settled)
+    published = await case.publish()
+    key = (case.kind, case.start, case.end, case.cache_params, "a-configuration-this-snapshot-does-not-have")
+    engine_calls.clear()
+    value = await figure_cache._spawn(
+        key, case.start, case.end, case.build, strict=False, shared=False, ledger=case.spec, fresh=False
+    )
+    assert same(value, published) and engine_calls == []  # the row is judged against the SNAPSHOT's configuration, which it matches
+    assert ledger.stats()["hits_exact" if settled else "hits_open"] == 1
+    assert figure_cache._store == {}, "a value of a snapshot that is not the key's was stored under the key"
+
+
+async def test_a_cold_miss_with_an_empty_ledger_costs_four_statements(db, engine_calls):
+    # SAVEPOINT, SET LOCAL lock_timeout, the header, ROLLBACK TO SAVEPOINT. (Three before review M8: SAVEPOINT, the header and a
+    # RELEASE; the lock timeout and the always-rolled-back savepoint add one.) No payload is read for a miss.
+    case = await month_case(db, 2)
+    with statements() as seen:
+        await case.ask()
+    shape = ["read" if "figure_ledger" in s else " ".join(s.split()[:2]) for s in seen]
+    start = next(i for i, s in enumerate(seen) if s.startswith("SAVEPOINT"))
+    assert shape[start : start + 4] == [shape[start], "SET LOCAL", "read", "ROLLBACK TO"], shape
+    assert "lock_timeout = '200ms'" in seen[start + 1] and "figure_ledger header" in seen[start + 2]
+    assert [s for s in seen if s.startswith(("SAVEPOINT", "ROLLBACK TO", "RELEASE"))] == [seen[start], seen[start + 3]]
+    assert sum("figure_ledger" in s for s in seen) == 1 and engine_calls
+    assert ledger.stats() == {"hits_exact": 0, "hits_open": 0, "misses": 1, "errors": 0}
+
+
+async def test_a_lock_on_the_ledger_table_costs_a_cold_request_about_200_ms_not_forever(db, engine_calls):
+    case = await month_case(db, 2)
+    live = await case.off()
+    engine_calls.clear()
+    async with db.acquire() as holder:
+        async with holder.transaction():
+            await holder.execute("LOCK TABLE figure_ledger IN ACCESS EXCLUSIVE MODE")
+            began = time.monotonic()
+            value = await asyncio.wait_for(case.ask(), timeout=60)
+            took = time.monotonic() - began
+    assert same(value, live) and engine_calls  # the live answer
+    assert ledger.stats() == {"hits_exact": 0, "hits_open": 0, "misses": 1, "errors": 1}
+    assert 0.18 <= took < 30, took  # the lock timeout (200 ms) was paid once: not at once, and not for as long as the lock is held
+
+
+@pytest.mark.parametrize("settled", [True, False])
+async def test_a_window_value_that_belongs_to_another_zone_than_its_key_is_not_served(db, engine_calls, settled):
+    case = await window_case(db, settled=settled)
+    await case.publish(transform=lambda value: dataclasses.replace(value, tz_name="Asia/Riyadh"))
+    live = await case.off()
+    engine_calls.clear()
+    value = await case.ask()
+    assert same(value, live) and value.tz_name == TZ and engine_calls
+    assert ledger.stats()["errors"] == 1 and ledger.stats()["hits_exact"] == 0 and ledger.stats()["hits_open"] == 0
+
+
+@pytest.mark.parametrize(
+    "wrong",
+    [
+        lambda value: dataclasses.replace(value, tz_name="Europe/Berlin"),  # another zone
+        lambda value: dataclasses.replace(value, start_utc=value.start_utc - timedelta(days=31)),  # another month
+        lambda value: dataclasses.replace(value, end=value.end + timedelta(days=1)),  # a month that ends a day later
+    ],
+    ids=["another zone", "another start", "another end"],
+)
+async def test_a_month_that_belongs_to_another_zone_or_month_than_its_key_is_not_served(db, engine_calls, wrong):
+    case = await month_case(db, 2)
+    await case.publish(transform=wrong)
+    live = await case.off()
+    engine_calls.clear()
+    value = await case.ask()
+    assert same(value, live) and engine_calls
+    assert ledger.stats()["errors"] == 1 and ledger.stats()["hits_exact"] == 0

@@ -40,7 +40,8 @@ checks on its own.
 
 Keep-warm. A request that finds a value older than the TTL would pay the data check (and, if the data moved, a whole
 recompute) on its own path, and a card that refetches every TTL seconds lands just past the TTL almost every time. So whenever
-an entry is stored or its check is renewed, one timer is set for 0.6 x TTL later; it re-checks the data on the cache's own
+an entry is stored or its check is renewed, one timer is set for 0.6 x TTL later (sooner for an entry the ledger back-dated,
+which expires sooner: see `_arm`); it re-checks the data on the cache's own
 engine and, if the data changed, recomputes with the very `compute` the entry was made with, as an ordinary shared task. The
 next request then finds a value that was checked a few seconds ago. It stops by itself: a key nobody used for
 `KEEP_WARM_SECONDS` is left to expire, and a background recompute does not count as a use. Nothing is served past the TTL (a
@@ -64,8 +65,11 @@ The ledger (w26b) is a second SOURCE for a computation, not another cache: a cal
 then `_run` looks the key up in the table `figure_ledger` (`core/ledger.py`) in the same snapshot, after the configuration
 fingerprint and before the data fingerprint. A row that is provably current replaces the engine run (`compute` does not run and
 `computes` does not count); anything else, including every failure of the ledger, leaves the engine run exactly as it was. The
-entry such a lookup stores remembers the database time of its data (`data_at`) and the spec, so `_put` never replaces an entry
-by an older one and keep-warm recomputes through the ledger too. The ledger has its own counters (`ledger.stats()`).
+entry such a lookup stores remembers the database time of its data (`data_at`), whether it was made from a row taken without a
+data check (`from_row`) and the spec, so `_put` never replaces an entry by an older figure and keep-warm recomputes through the
+ledger too. A row taken without a data check is at most 55 seconds old and its entry is back-dated by that age (keeping at least
+5 s of life), so no figure is trusted past `max(TTL, 60 s)` after the moment its data was checked. A request under
+`require_fresh` (a Billing close) never consults the ledger. The ledger has its own counters (`ledger.stats()`).
 """
 import asyncio
 import itertools
@@ -122,11 +126,16 @@ class _Entry:
     compute: Callable[[AsyncSession], Awaitable[Any]]  # what made it; the background recompute runs it again
     last_used: float  # `_monotonic()` of the last request that was served from this key (see `_warm`)
     timer: asyncio.TimerHandle | None = None  # the pending background revalidation, if any
-    # The two fields below are for the ledger (they are None when it was not consulted). `data_at` is the DATABASE time of the data
-    # the value reflects (the snapshot's `now()` of a computation or an exact row, the row's `checked_at` for one taken on the
-    # 60 second rule), so `_put` can refuse an older figure and `ledger.decide` can refuse a row older than this entry.
+    # The fields below are for the ledger (None / False when it was not consulted). `data_at` is the DATABASE time of the data the
+    # value reflects (the snapshot's `now()` of a computation or an exact row, the row's `checked_at` for one taken without a data
+    # check), so `_put` can refuse an older figure and `ledger.decide` can refuse a row older than this entry. Both `data_at` and
+    # the rows' `checked_at` are database times of a TRANSACTION START: exact only to within the gap between BEGIN and the
+    # snapshot (a few ms), so two of them are comparable to that precision, not better.
     data_at: datetime | None = None
     ledger: LedgerSpec | None = None  # so the keep-warm recompute looks the key up in the ledger again, as the request would
+    # True for a value taken from a row WITHOUT a data check (an open hit): its stamp is the later snapshot's but its data is the
+    # row's, so `_put` orders it by `data_at`, never by stamp (see there).
+    from_row: bool = False
 
 
 _store: OrderedDict[tuple, _Entry] = OrderedDict()  # least recently used first
@@ -389,13 +398,22 @@ def _cancel_timers() -> None:
 def _put(key: tuple, entry: _Entry) -> None:
     old = _store.get(key)
     if old is not None:
-        if old.stamp > entry.stamp:  # a computation that began later is already stored: never roll an entry back
-            return
-        # The same rule on the database clock, for the entries the ledger touched: a value taken from a ledger row reflects the
-        # row's time, which can be older than the snapshot that took it (so its stamp can be newer than the stored entry's
-        # while its data is older). A figure never goes back in time (plan review I1).
-        if old.data_at is not None and entry.data_at is not None and entry.data_at < old.data_at:
-            return
+        if entry.from_row:
+            # A value taken from a ledger row reflects the ROW's time, which is older than the snapshot that took it, so its
+            # stamp says nothing about its data: it is ordered by what it reflects, and replaces nothing whose data it cannot
+            # show to be at least as new (an entry of unknown data time included).
+            if old.data_at is None or entry.data_at is None or entry.data_at < old.data_at:
+                return
+        elif old.stamp > entry.stamp:  # a computation that began later is already stored: never roll an entry back ...
+            # ... unless the stored one is a row's value and this one (an engine run or an exact row) reflects newer data:
+            # the stamp of a row entry is later than its data (a Billing close that began first and finished last must not lose
+            # to a dashboard request that took a younger-looking row). The database clock decides nothing else: an engine or
+            # exact entry is ordered by stamp alone, so a database clock stepped back cannot stall the cache.
+            newer_data = (
+                old.from_row and old.data_at is not None and entry.data_at is not None and entry.data_at > old.data_at
+            )
+            if not newer_data:
+                return
         _stats["replaced"] += 1
         _disarm(old)
     _store[key] = entry
@@ -499,23 +517,31 @@ async def _run(
             stamp = next(_stamps)
             if strict and not matches:
                 raise _StaleSnapshot
-            hit, data_fp, data_at = None, None, None
-            if ledger is not None and ledger_module.enabled():
+            hit, data_fp, data_at, from_row = None, None, None, False
+            # A request under `require_fresh` (a Billing close: the frozen money of record) never consults the ledger: it computes,
+            # as in w26, so a close can never depend on what the worker wrote.
+            if ledger is not None and not fresh and ledger_module.enabled():
                 # The row is judged against the SNAPSHOT's configuration (what the engine below would compute with), and against
-                # the entry it would replace: a row older than that entry is never taken on trust (see `ledger.decide`).
+                # the entry it would replace (whether there is one, when its data is from and what it holds): a row older than
+                # that entry, or the very value it already holds, is never taken on trust (see `ledger.decide`).
                 replaced = _store.get(key)
                 hit, data_fp, data_at = await ledger_module.consult(
                     session, ledger, start, end, config_fp=snapshot_fp, fresh=fresh,
+                    replaced_exists=replaced is not None,
                     replaced_data_at=None if replaced is None else replaced.data_at,
+                    replaced_data_fp=None if replaced is None else replaced.data_fp,
                     read_data_fp=lambda: _data_fingerprint(session, start, end),
                 )
             if hit is not None:
                 value, data_fp, data_at = hit.value, hit.data_fp, hit.data_at
-                # The TTL counts from the check of the data. A row taken on the 60 second rule was checked `age_seconds` ago, so
-                # its entry is back-dated by that, but never so far that it is born expired (it keeps at least 5 s, or none at
-                # all for a TTL of 5 s or less): the cache's own revalidation then compares fingerprints, and the next request
-                # or the keep-warm timer takes a newer row or runs the engine.
-                back = 0.0 if hit.exact else min(hit.age_seconds, max(ttl_seconds() - 5.0, 0.0))
+                from_row = not hit.exact
+                # The TTL counts from the check of the data. A row taken without a data check was checked `age_seconds` ago, so
+                # its entry is back-dated by that, but never so far that it is born expired (it keeps at least
+                # `BORN_ALIVE_SECONDS`, or none at all for a TTL that short): the cache's own revalidation then compares
+                # fingerprints, and the next request or the keep-warm timer takes a newer row or runs the engine. The row is at
+                # most `OPEN_MAX_AGE - BORN_ALIVE_SECONDS` old, so the entry is trusted for no more than `max(TTL, OPEN_MAX_AGE)`
+                # after the check its data comes from.
+                back = 0.0 if hit.exact else min(hit.age_seconds, max(ttl_seconds() - ledger_module.BORN_ALIVE_SECONDS, 0.0))
                 checked_at = started - back
             else:
                 if data_fp is None:  # `consult` read it when it had to (a check that failed); otherwise it is read here, as always
@@ -530,7 +556,7 @@ async def _run(
             key,
             _Entry(
                 value, data_fp, checked_at, stamp, compute, _monotonic() if idle_since is None else idle_since,
-                data_at=data_at, ledger=ledger,
+                data_at=data_at, ledger=ledger, from_row=from_row,
             ),
         )
     return value
@@ -616,11 +642,15 @@ async def _checked(db: AsyncSession | None, key: tuple) -> tuple[str, float]:
 
 def _arm(key: tuple, entry: _Entry) -> None:
     """Set the one timer of a stored entry (replacing a pending one): the background revalidation runs WARM_FRACTION x TTL from
-    now. Nothing at TTL 0, with the cache off, or for an entry that is no longer the stored one."""
+    now, but for an entry back-dated by the ledger (it expires sooner) no later than 2 seconds before it expires and not sooner
+    than 1 second from now (so the burst of requests after a restart is not interrupted by a revalidation at once). An entry made
+    by a computation was checked just now: nothing changes for it. Nothing at TTL 0, with the cache off, or for an entry that is
+    no longer the stored one."""
     _disarm(entry)
     ttl = ttl_seconds()
     if ttl > 0 and enabled() and _store.get(key) is entry:
-        entry.timer = asyncio.get_running_loop().call_later(WARM_FRACTION * ttl, _fire, key, entry, _generation)
+        delay = min(WARM_FRACTION * ttl, max(1.0, entry.checked_at + ttl - _monotonic() - 2.0))
+        entry.timer = asyncio.get_running_loop().call_later(delay, _fire, key, entry, _generation)
 
 
 def _fire(key: tuple, entry: _Entry, generation: int) -> None:
