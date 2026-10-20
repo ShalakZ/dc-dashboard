@@ -261,14 +261,24 @@ test.describe("W28: display screens", () => {
   }
 
   /**
-   * Chooses an option of the select that holds the keyboard focus by typing the whole option name (the browser's own type-ahead). If the browser did not land on it (a difference between browsers,
-   * not something this app does), the option is chosen directly; the assertions that follow look at the app's reaction either way.
+   * Chooses an option of the select that holds the keyboard focus with the arrow keys: down until the option is the chosen one or the list ends, then up the same way (the selected label is read
+   * after every press, so a placeholder option that disappears once something is chosen does not matter). Typing the name would risk a Space opening the browser's popup. If the walk does not land
+   * (a difference between browsers, not something this app does) the option is chosen directly; the assertions that follow look at the app's reaction either way.
    */
   async function chooseFocused(page: Page, select: Locator, label: string): Promise<void> {
     await expect(select).toBeFocused();
-    await page.keyboard.type(label);
-    const chosen = await select.evaluate((el) => (el as HTMLSelectElement).selectedOptions[0]?.textContent ?? "");
-    if (chosen !== label) await select.selectOption({ label });
+    const chosen = () => select.evaluate((el) => (el as HTMLSelectElement).selectedOptions[0]?.textContent ?? "");
+    for (const key of ["ArrowDown", "ArrowUp"]) {
+      let at = await chosen();
+      for (let presses = 0; presses < 80 && at !== label; presses++) {
+        await page.keyboard.press(key);
+        const next = await chosen();
+        if (next === at) break; // the end of the list
+        at = next;
+      }
+      if (at === label) return;
+    }
+    await select.selectOption({ label });
   }
 
   // -------------------------------------------------------------------------------------------------------------------------------
