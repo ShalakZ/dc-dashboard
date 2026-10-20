@@ -312,6 +312,8 @@ Deleting the default dashboard clears the choice (the audit row says so); choosi
 **Make default** works on a dashboard made from a template ([Templates](#dashboards)) like on any other, and the default always opens on the
 whole site, with no focus (the sidebar and the first page after signing in open it without `?asset`).
 
+A playlist of dashboards can also be shown on a wall screen without signing in, from a secret link: see [Display screens](display-screens.md).
+
 ## Billing
 
 Billing shows one month at a time: previous and next month, or the Year and Month selects beside them to jump straight to a month (the

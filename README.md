@@ -113,6 +113,7 @@ name the old README sections; this is where each one is now:
 | Sources and discovery | [docs/sources-and-discovery.md](docs/sources-and-discovery.md) | The protocols (simulator, OPC UA, Modbus TCP) and finding sources on a network |
 | Storage | [docs/storage.md](docs/storage.md) | The storage tiers, retention and the Storage page |
 | Dashboards and billing | [docs/dashboards-and-billing.md](docs/dashboards-and-billing.md) | Dashboards and widgets, tariffs, the billing rules and the cost report |
+| Display screens | [docs/display-screens.md](docs/display-screens.md) | Playlists and secret display links for a wall screen that needs no sign-in, revoking a link |
 | Dashboard figures, templates and the guide | [docs/dashboard-figures-and-templates.md](docs/dashboard-figures-and-templates.md) | How a figure is written on a card and where its exact value is, the New dashboard templates, the first-run guide, Updated and Refresh |
 | Roles and permissions | [docs/roles-and-permissions.md](docs/roles-and-permissions.md) | Every permission, the built-in roles and custom roles |
 | Operating the stack | [docs/operating.md](docs/operating.md) | Logs, restart loops, stopping, health, housekeeping, "If you are blocked from signing in" |

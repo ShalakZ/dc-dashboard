@@ -78,6 +78,10 @@ of the configuration and of the readings it was made from, and the api rejects a
 holds. The restore scripts stop `figures` together with `api` and `collector`, so that it does not compute from a half-restored
 database, and start it again at the end (on an install that has no `figures` container yet, they start `api` and `collector` alone).
 
+The **display links** ([Display screens](display-screens.md)) are database rows too, and a link never expires. Restoring a backup older
+than a revocation brings the revoked link back to life: revoke it again. Displays made after that backup are gone, and their screens
+say the link was revoked or is not valid.
+
 **Retention and a restore.** The dump contains the retention policies, and a restored policy runs the moment the database starts its
 background jobs again, so restoring an old dump used to delete everything older than its retention limits within seconds. Raising the
 retention before the restore does not help: the restore brings the old limits back. `restore.sh` and `restore.ps1` now stop that.

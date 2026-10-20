@@ -140,6 +140,13 @@ What the three roles mean for dashboards, billing and tariffs is summed up in [D
 - **Everything is audited.** `role.created`, `role.updated` and `role.deleted` are in the Audit log with the permissions added and removed,
   and a change of an account's role lists the permissions it adds and removes.
 
+### The display credential
+
+A display link is not an account and not a role. Whoever opens it gets no permission at all: the screen can read only its own playlist
+(the dashboards in it, their figures and the asset names in them) through three routes of its own, and every other route that needs an
+account refuses it. `displays.manage` is what lets someone make playlists and links, and revoke them from **Administer > Displays**; a
+revoked link stops working at once. See [Display screens](display-screens.md).
+
 ## Making a role
 
 Signed in as an administrator, open **Users & Roles**, then the **Roles** tab (it needs `roles.manage`, so only the Administrator role
