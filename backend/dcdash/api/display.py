@@ -8,7 +8,7 @@ row up again (no cache of any kind), so a revoked or deleted display is refused 
 
   POST /api/display/claim        the secret in the body is the credential; WRONG secrets are counted per client address (ten block
                                  that address for fifteen minutes) and a right secret is never refused by that block; the claims of
-                                 one display and the claims in flight are capped
+                                 one display are capped, and a claim shares one cap of 12 with the data requests
   GET  /api/display/playlist     the display's own playlist, its dashboards and widgets, the site timezone, the build, the status
   POST /api/display/widget-data  the figures of one widget of that playlist, by ids; the stored config is used, never a sent one
 
@@ -55,12 +55,15 @@ MAX_ID = 2_147_483_647
 CLAIM_BODY_LIMIT = 1024  # bytes: a claim is {"secret": "<43 characters>"}; anything bigger is refused unread
 PLAYLIST_BUDGET_PER_MINUTE = 30  # a screen asks once a minute; this leaves room for reloads and a few screens behind one proxy
 LAST_SEEN_EVERY_SECONDS = 50  # the playlist answer writes last_seen_at at most this often, so a 60 s poll always writes
-# Requests a display may have in flight at once, and all displays together. The request pool is 5 + 10 connections and every request
-# of a display holds one until its answer is out, so 12 leaves 3 for the people using the dashboard. A display with nothing in flight
-# is always let in (one reserved slot each), so that two abused links cannot stall every other screen.
+# What a display may hold past its lookup, in ONE count: its data requests (the playlist, the figures) and its claims. The request pool
+# is 5 + 10 = 15 connections and each of these holds one until its answer is out, so a hard cap of 12 leaves 3 for the people using the
+# dashboard; the total never passes it. RESERVE slots INSIDE the cap are kept for displays with nothing in flight: a display that
+# already holds one is let in only while fewer than 12 - 3 = 9 are held, so two abused links cannot take the last 3 and stall every
+# other screen, which is let in (its first request, or its claim) while fewer than 12 are held.
 PER_DISPLAY_IN_FLIGHT = 6
 ALL_DISPLAYS_IN_FLIGHT = 12
-CLAIMS_IN_FLIGHT = 8  # claims of a valid link being answered at once (each holds a connection and the display's row lock)
+RESERVE = 3
+CLAIMS_IN_FLIGHT = 3  # claims of a valid link being answered at once, a part of the 12 (each holds a connection and the display's row lock)
 CLAIM_BUDGET_PER_MINUTE = 30  # claims of ONE display in a minute: a kiosk claims once per start, so this is room for a restart loop
 FORCED_ROWS_PER_HOUR = 20  # the "new address" display.connected rows a display may write over its ordinary budget
 BUSY = "busy, try again"
@@ -99,36 +102,47 @@ class ConnectedBudget(RowBudget):
 
 
 class InFlight:
-    """How many data requests (the playlist, the figures) are being answered right now, in total and per display, and how many
-    claims of a valid link are. Plain integers changed only between two awaits, so there is no lock to forget or to deadlock on."""
+    """Everything that holds a database connection past its lookup, in ONE count: the data requests (the playlist, the figures) being
+    answered right now and the claims of a valid link, in total and per display (`claims` is the part of `total` that are claims).
+    Plain integers changed only between two awaits, so there is no lock to forget or to deadlock on."""
 
     def __init__(self) -> None:
         self.total = 0
         self.by_display: dict[int, int] = {}
         self.claims = 0
 
-    def enter(self, display_id: int) -> bool:
-        """Take a slot; False (and nothing changes) when the display or all displays together are at their cap. A display with
-        nothing in flight is always let in: it has one slot of its own that the others cannot use up."""
+    def _take(self, display_id: int) -> bool:
+        """The one rule for a slot of the hard cap: a display with nothing in flight is let in while `total` is under
+        ALL_DISPLAYS_IN_FLIGHT; one that already holds a slot only while it is under ALL_DISPLAYS_IN_FLIGHT - RESERVE and the display
+        is under PER_DISPLAY_IN_FLIGHT. False (and nothing changes) otherwise, so `total` never passes the cap."""
         mine = self.by_display.get(display_id, 0)
-        if mine > 0 and (self.total >= ALL_DISPLAYS_IN_FLIGHT or mine >= PER_DISPLAY_IN_FLIGHT):
-            return False
-        self.total += 1
-        self.by_display[display_id] = mine + 1
-        return True
+        if mine == 0:
+            allowed = self.total < ALL_DISPLAYS_IN_FLIGHT
+        else:
+            allowed = self.total < ALL_DISPLAYS_IN_FLIGHT - RESERVE and mine < PER_DISPLAY_IN_FLIGHT
+        if allowed:
+            self.total += 1
+            self.by_display[display_id] = mine + 1
+        return allowed
+
+    def enter(self, display_id: int) -> bool:
+        """Take a slot for a data request; False when the display or all displays together are at their cap."""
+        return self._take(display_id)
 
     def claims_full(self) -> bool:
         return self.claims >= CLAIMS_IN_FLIGHT
 
-    def enter_claim(self) -> bool:
-        """Take a claim slot; False (and nothing changes) when CLAIMS_IN_FLIGHT claims are already being answered."""
-        if self.claims_full():
+    def enter_claim(self, display_id: int) -> bool:
+        """Take a slot for a claim of that display: the same rule as a data request, and no more than CLAIMS_IN_FLIGHT claims at once
+        (so claims cannot fill the cap). False (and nothing changes) over either."""
+        if self.claims_full() or not self._take(display_id):
             return False
         self.claims += 1
         return True
 
-    def leave_claim(self) -> None:
+    def leave_claim(self, display_id: int) -> None:
         self.claims = max(0, self.claims - 1)
+        self.leave(display_id)
 
     def leave(self, display_id: int) -> None:
         self.total = max(0, self.total - 1)
@@ -172,9 +186,10 @@ async def current_display(request: Request, db: AsyncSession = Depends(get_db)) 
     """The display that holds the cookie, or 401. The row is read again on every request: revoking takes effect at once.
 
     It also holds one of the display's in-flight slots until the answer is out (a yield dependency: FastAPI runs the `finally` after
-    the response, on an error and when the request is cancelled). A display over its cap, or all displays together over theirs, get
-    429 "busy" with `Retry-After: 1` - except a display with nothing in flight, which is always let in - and only a display that is
-    connected learns that: a stranger gets the 401."""
+    the response, on an error and when the request is cancelled). The slot is one of the 12 all displays share with the claims; a
+    display that already holds one is turned away at 9 (the last 3 are for displays with nothing in flight) or at its own 6, and a
+    display with nothing in flight at 12. It gets 429 "busy" with `Retry-After: 1`, and only a display that is connected learns
+    that: a stranger gets the 401."""
     token = request.cookies.get(COOKIE)
     display = None
     if token and _SECRET_SHAPE.fullmatch(token):  # a longer or odd value cannot be a secret: 401 without hashing it
@@ -282,7 +297,7 @@ async def claim(request: Request, db: AsyncSession = Depends(get_db)) -> Respons
     another site (403), not JSON or a malformed body (422; 429 for a blocked address), claims in flight at the cap (503), then the
     lookup (401 for a wrong, a revoked and a deleted secret alike - 429 for a blocked address, uncounted and unwritten; a wrong or
     deleted one counts, a revoked one does not). A secret that is found is let in whatever the block says, within the claim budget
-    of its display (429) and the claim slots (503)."""
+    of its display (429) and a slot of the one cap of 12 that data requests share, at most 3 of them for claims (503)."""
     client = client_address(request)
     if _comes_from_another_site(request):
         raise HTTPException(403, "a display link can only be opened from its own address")
@@ -302,8 +317,9 @@ async def claim(request: Request, db: AsyncSession = Depends(get_db)) -> Respons
     display_id, display_name = row.id, row.name  # (read before anything commits: a committed row is expired)
 
     # Only a claim that FOUND a display takes a slot, so a flood of wrong secrets (which the block limits) can never use the slots up
-    # and keep the real screens out. The check above is the same test made early; this one is the one that counts.
-    if not in_flight.enter_claim():
+    # and keep the real screens out. The check above is the same test made early; this one is the one that counts: the slot is one of
+    # the 12 that data requests share (a claim of a display with nothing in flight needs fewer than 12 held, any other fewer than 9).
+    if not in_flight.enter_claim(display_id):
         raise _claims_busy()
     try:
         budget = await _budget(claim_budgets, display_id, lambda: RowBudget(CLAIM_BUDGET_PER_MINUTE, 60), db)
@@ -330,7 +346,7 @@ async def claim(request: Request, db: AsyncSession = Depends(get_db)) -> Respons
             await db.commit()
         return answer
     finally:
-        in_flight.leave_claim()
+        in_flight.leave_claim(display_id)
 
 
 def _claims_busy() -> HTTPException:

@@ -669,7 +669,7 @@ async def test_the_thirty_first_claim_of_one_display_in_a_minute_is_429_busy_and
     assert (await claim(client, other_secret, **address("10.0.0.2"))).status_code == 204  # another display has its own budget
     now[0] += 61
     assert (await claim(client, secret, **address("10.0.0.1"))).status_code == 204  # and the minute is over
-    assert display.in_flight.claims == 0
+    assert display.in_flight.claims == 0 and display.in_flight.total == 0 and display.in_flight.by_display == {}
 
 
 async def test_a_wrong_or_refused_claim_writes_no_connected_row(client, db):
@@ -1226,33 +1226,100 @@ async def test_the_playlist_is_capped_the_same_way(client, db, monkeypatch):
     assert peak[0] == 6 and display.in_flight.total == 0
 
 
-async def test_all_displays_together_hold_twelve_and_a_display_with_nothing_in_flight_is_still_let_in(client, db, slow_figures):
-    # Two links used to the full (6 each, 12 together) must not stall every other screen: each display has one slot of its own.
+async def test_all_displays_together_hold_at_most_twelve_and_the_last_three_are_for_displays_with_nothing_in_flight(client, db, slow_figures):
+    # Two links used to the full cannot take the last three slots, and nothing takes more than twelve: a display that already has a
+    # request in flight is let in only while fewer than 9 are held, a display with nothing in flight while fewer than 12 are.
     ids = await world_for_404s(db)
     display_a = await db.fetchval("SELECT id FROM displays")
     row_b, secret_b = await make_display(db, "Second")
-    display_b = row_b.id
-    secret_c = (await make_display(db, "Third"))[1]
-    secret_d = (await make_display(db, "Fourth"))[1]
+    secret_c, secret_d, secret_e, secret_f = [(await make_display(db, name))[1] for name in ("Third", "Fourth", "Fifth", "Sixth")]
     tasks = [ask_for_figures(client, ids, secret) for secret in (ids["secret"], secret_b) for _ in range(8)]
     try:
-        await until(lambda: slow_figures.running == 12 and sum(task.done() for task in tasks) == 4, "12 running, 4 refused")
-        assert display.in_flight.total == 12 and display.in_flight.by_display == {display_a: 6, display_b: 6}
+        await until(lambda: slow_figures.running == 9 and sum(task.done() for task in tasks) == 7, "9 running, 7 refused")
+        held = display.in_flight.by_display
+        assert display.in_flight.total == 9 and set(held) == {display_a, row_b.id} and max(held.values()) <= 6
         # A third display, with nothing in flight, still reads its playlist ...
         assert (await client.get(PLAYLIST, headers=cookie(secret_c))).status_code == 200
-        # ... and can hold one request, but then its second is told to retry: the reserve is one slot, not a way past the caps.
-        held = ask_for_figures(client, ids, secret_c)
-        tasks.append(held)
-        await until(lambda: slow_figures.running == 13, "the third display holds its reserved slot")
-        assert display.in_flight.total == 13
+        # ... and can hold one request, but then its second is told to retry: the reserve is for a first request, not a way past the caps.
+        for number, secret in enumerate((secret_c, secret_d, secret_e), start=1):
+            tasks.append(ask_for_figures(client, ids, secret))
+            await until(lambda: slow_figures.running == 9 + number, f"display {number} of the reserve holds its slot")
+            assert display.in_flight.total == 9 + number <= 12
         busy = await client.get(PLAYLIST, headers=cookie(secret_c))
         assert busy.status_code == 429 and busy.json() == {"detail": "busy, try again"} and busy.headers["retry-after"] == "1"
-        assert (await client.get(PLAYLIST, headers=cookie(secret_d))).status_code == 200  # and so is a fourth, on its own slot
-        assert display.in_flight.total == 13
+        # Twelve are held: a sixth display with nothing in flight is told to retry too, and the total stays at twelve.
+        full = await client.get(PLAYLIST, headers=cookie(secret_f))
+        assert full.status_code == 429 and full.json() == {"detail": "busy, try again"} and full.headers["retry-after"] == "1"
+        assert display.in_flight.total == 12
     finally:
         await let_go(slow_figures, tasks)
-    assert slow_figures.peak == 13
+    assert slow_figures.peak == 12
     assert display.in_flight.total == 0 and display.in_flight.by_display == {}
+
+
+async def test_sixty_more_displays_asking_at_once_get_only_the_three_slots_left_inside_the_cap(client, db, slow_figures):
+    ids = await world_for_404s(db)
+    row_b, secret_b = await make_display(db, "Second")
+    secrets = [(await make_display(db, f"Wall {number}"))[1] for number in range(60)]
+    held = [ask_for_figures(client, ids, ids["secret"]) for _ in range(6)]
+    await until(lambda: slow_figures.running == 6, "the first display holds its six")
+    held += [ask_for_figures(client, ids, secret_b) for _ in range(3)]
+    await until(lambda: slow_figures.running == 9, "the second display holds three")
+    tasks = held + [ask_for_figures(client, ids, secret) for secret in secrets]
+    try:
+        await until(lambda: slow_figures.running == 12 and sum(task.done() for task in tasks) == 57, "12 running, 57 refused")
+        assert display.in_flight.total == 12 and slow_figures.peak == 12
+    finally:
+        answers = await let_go(slow_figures, tasks)
+    assert sorted(a.status_code for a in answers) == [200] * 12 + [429] * 57
+    assert all(a.json() == {"detail": "busy, try again"} and a.headers["retry-after"] == "1" for a in answers if a.status_code == 429)
+    assert slow_figures.peak == 12 and display.in_flight.total == 0 and display.in_flight.by_display == {}
+
+
+def test_one_counter_holds_the_data_requests_and_the_claims_and_never_passes_twelve():
+    assert (display.ALL_DISPLAYS_IN_FLIGHT, display.RESERVE, display.PER_DISPLAY_IN_FLIGHT, display.CLAIMS_IN_FLIGHT) == (12, 3, 6, 3)
+    slots = display.InFlight()
+    assert [slots.enter(1) for _ in range(8)] == [True] * 6 + [False] * 2
+    assert [slots.enter(2) for _ in range(8)] == [True] * 3 + [False] * 5  # 6 + 3 = 9: a display already in flight stops there
+    assert slots.total == 9
+    assert [slots.enter(number) for number in range(10, 70)] == [True] * 3 + [False] * 57  # 60 others, one request each
+    assert slots.total == 12 and slots.claims == 0
+    assert slots.enter_claim(100) is False and slots.total == 12 and slots.claims == 0  # a claim is turned away by the same cap
+    slots.leave(10)
+    assert slots.enter_claim(100) is True and slots.total == 12 and slots.claims == 1  # ... and takes a freed slot
+    assert slots.enter(101) is False and slots.total == 12
+    slots.leave_claim(100)
+    for display_id, held in {1: 6, 2: 3, 11: 1, 12: 1}.items():
+        for _ in range(held):
+            slots.leave(display_id)
+    assert slots.total == 0 and slots.claims == 0 and slots.by_display == {}
+
+
+def test_a_claim_needs_a_free_slot_under_the_same_two_rules_as_a_data_request_and_has_a_ceiling_of_three():
+    slots = display.InFlight()
+    for number in range(10, 19):  # nine data requests of nine displays
+        assert slots.enter(number) is True
+    assert slots.total == 9
+    # The 10th, 11th and 12th slots are for displays with nothing in flight; the ceiling of claims alone is three.
+    assert slots.enter_claim(1) is True and slots.total == 10
+    assert slots.enter_claim(1) is False  # a second claim of the same display: the display is in flight now, 10 are held, it needs < 9
+    assert slots.enter_claim(10) is False  # a display with a data request in flight: the same rule
+    assert slots.enter_claim(2) is True and slots.enter_claim(3) is True and slots.total == 12 and slots.claims == 3
+    assert slots.claims_full() is True and slots.enter_claim(4) is False and slots.enter(4) is False and slots.total == 12
+    for display_id in (1, 2, 3):
+        slots.leave_claim(display_id)
+    assert slots.total == 9 and slots.claims == 0 and slots.claims_full() is False
+    for number in range(10, 19):
+        slots.leave(number)
+    assert slots.total == 0 and slots.by_display == {}
+
+
+def test_three_claims_and_nine_data_requests_fill_the_cap_and_a_thirteenth_of_either_is_refused():
+    slots = display.InFlight()
+    assert [slots.enter_claim(number) for number in (1, 2, 3)] == [True] * 3
+    assert [slots.enter(number) for number in range(10, 19)] == [True] * 9  # nine displays, a first request each
+    assert slots.total == 12
+    assert slots.enter(19) is False and slots.enter(10) is False and slots.enter_claim(20) is False and slots.total == 12
 
 
 async def test_the_slot_is_given_back_after_an_error_a_refusal_and_a_cancelled_request(db, app, monkeypatch, slow_figures):
@@ -1286,21 +1353,28 @@ async def test_the_slot_is_given_back_after_an_error_a_refusal_and_a_cancelled_r
     assert display.in_flight.by_display == {}
 
 
-async def test_the_caps_do_not_reach_the_claim_or_hide_a_bad_cookie(client, db):
+async def test_the_cap_turns_a_right_claim_away_with_503_but_never_a_wrong_one_and_hides_nothing_from_a_stranger(client, db):
     row, secret = await make_display(db)
     display.in_flight.total = 12
     display.in_flight.by_display[row.id] = 6
-    assert (await claim(client, secret)).status_code == 204  # a screen must always be able to connect
+    over = await claim(client, secret)  # a claim holds a connection like any request: at twelve it waits its turn (the screen retries)
+    assert over.status_code == 503 and over.json() == {"detail": "busy, try again"} and over.headers["retry-after"] == "1"
+    assert "set-cookie" not in over.headers and display.in_flight.total == 12 and display.in_flight.claims == 0
+    assert (await claim(client, "w" * 43)).status_code == 401  # a wrong secret takes no slot: it is answered, uncounted by the cap
     assert (await client.get(PLAYLIST, headers=cookie(secret))).json() == {"detail": "busy, try again"}
     assert (await client.get(PLAYLIST, headers=cookie("w" * 43))).json() == INVALID  # busy says nothing to a stranger
-    client.cookies.clear()  # (the claim put the cookie in the client's jar)
+    client.cookies.clear()
     assert (await client.get(PLAYLIST)).json() == NOT_CONNECTED
     display.reset_display_state()
     assert display.in_flight.total == 0 and display.in_flight.by_display == {}
+    display.in_flight.total = 11  # eleven held by others: a display with nothing in flight still gets its claim in
+    assert (await claim(client, secret)).status_code == 204 and display.in_flight.total == 11 and display.in_flight.claims == 0
+    client.cookies.clear()  # (the claim put the cookie in the client's jar)
+    display.reset_display_state()
     assert (await client.get(PLAYLIST, headers=cookie(secret))).status_code == 200
 
 
-async def test_at_most_eight_claims_are_past_the_lookup_at_once_and_the_rest_are_told_503(client, db, monkeypatch):
+async def test_at_most_three_claims_are_past_the_lookup_at_once_and_the_rest_are_told_503(client, db, monkeypatch):
     row, secret = await make_display(db)
     release, running, peak = asyncio.Event(), [0], [0]
     real = display._note_where_seen
@@ -1317,17 +1391,17 @@ async def test_at_most_eight_claims_are_past_the_lookup_at_once_and_the_rest_are
     monkeypatch.setattr(display, "_note_where_seen", slow)
     tasks = [asyncio.create_task(claim(client, secret, **address(f"10.0.1.{number}"))) for number in range(40)]
     try:
-        await until(lambda: running[0] == 8 and sum(task.done() for task in tasks) == 32, "8 held, 32 refused")
-        assert display.in_flight.claims == 8
+        await until(lambda: running[0] == 3 and sum(task.done() for task in tasks) == 37, "3 held, 37 refused")
+        assert display.in_flight.claims == 3 and display.in_flight.total == 3 and display.in_flight.by_display == {row.id: 3}  # a claim holds a slot of the one cap
     finally:
         release.set()
         answers = await asyncio.wait_for(asyncio.gather(*tasks), WAIT)
-    assert sorted(a.status_code for a in answers) == [204] * 8 + [503] * 32
+    assert sorted(a.status_code for a in answers) == [204] * 3 + [503] * 37
     refused = [a for a in answers if a.status_code == 503]
     assert all(a.json() == {"detail": "busy, try again"} and a.headers["retry-after"] == "1" for a in refused)
     assert all("set-cookie" not in a.headers for a in refused)
-    assert peak[0] == 8 and display.in_flight.claims == 0 and display.in_flight.total == 0  # given back; not the data requests' slots
-    assert await audit_rows(db, "display.claim_blocked") == [] and len(await audit_rows(db, "display.connected")) <= 8
+    assert peak[0] == 3 and display.in_flight.claims == 0 and display.in_flight.total == 0 and display.in_flight.by_display == {}  # all given back
+    assert await audit_rows(db, "display.claim_blocked") == [] and len(await audit_rows(db, "display.connected")) <= 3
     assert (await claim(client, secret, **address("10.0.1.99"))).status_code == 204
 
 
@@ -1336,7 +1410,7 @@ async def test_a_claim_over_the_claim_cap_is_refused_before_the_lookup_and_a_wro
     hashed = []
     real = display.hash_secret
     monkeypatch.setattr(display, "hash_secret", lambda value: hashed.append(1) or real(value))
-    display.in_flight.claims = display.CLAIMS_IN_FLIGHT  # eight claims are being answered
+    display.in_flight.claims = display.CLAIMS_IN_FLIGHT  # three claims are being answered
     over = await claim(client, secret)
     assert over.status_code == 503 and over.json() == {"detail": "busy, try again"} and over.headers["retry-after"] == "1"
     assert hashed == [] and display.in_flight.claims == display.CLAIMS_IN_FLIGHT  # nothing looked up, nothing taken or given back
@@ -1344,8 +1418,8 @@ async def test_a_claim_over_the_claim_cap_is_refused_before_the_lookup_and_a_wro
     assert display.in_flight.claims == 0
     for secret_tried in ("w" * 43, "not a secret!"):  # a wrong secret holds no slot: it is looked up and refused with the slot count at 0
         assert (await claim(client, secret_tried)).status_code in (401, 422)
-        assert display.in_flight.claims == 0
-    assert (await claim(client, secret)).status_code == 204 and display.in_flight.claims == 0
+        assert display.in_flight.claims == 0 and display.in_flight.total == 0
+    assert (await claim(client, secret)).status_code == 204 and display.in_flight.claims == 0 and display.in_flight.total == 0
 
 
 async def test_the_claim_slot_is_given_back_after_an_error(db, app, monkeypatch):
@@ -1358,8 +1432,76 @@ async def test_the_claim_slot_is_given_back_after_an_error(db, app, monkeypatch)
         with monkeypatch.context() as patch:
             patch.setattr(display, "_note_where_seen", explode)
             assert (await claim(client, secret)).status_code == 500
-        assert display.in_flight.claims == 0
+        assert display.in_flight.claims == 0 and display.in_flight.total == 0 and display.in_flight.by_display == {}
         assert (await claim(client, secret)).status_code == 204
+        assert display.in_flight.claims == 0 and display.in_flight.total == 0 and display.in_flight.by_display == {}
+
+
+async def test_a_cancelled_claim_gives_its_slot_back_and_a_budget_refusal_holds_none(db, app, monkeypatch):
+    row, secret = await make_display(db)
+    release, running = asyncio.Event(), [0]
+    real = display._note_where_seen
+
+    async def slow(db_, display_id, client_address):
+        running[0] += 1
+        try:
+            await release.wait()
+            return await real(db_, display_id, client_address)
+        finally:
+            running[0] -= 1
+
+    async with silent_client(app) as client:
+        with monkeypatch.context() as patch:
+            patch.setattr(display, "_note_where_seen", slow)
+            task = asyncio.create_task(claim(client, secret))
+            await until(lambda: running[0] == 1, "one claim holding its slot")
+            assert display.in_flight.total == 1 and display.in_flight.claims == 1 and display.in_flight.by_display == {row.id: 1}
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            await until(lambda: display.in_flight.total == 0 and running[0] == 0, "the claim's slot given back")
+        assert display.in_flight.claims == 0 and display.in_flight.by_display == {}
+        display.claim_budgets[row.id] = RowBudget(1, 60)  # the claim budget of the display refuses the second claim: 429, no slot kept
+        assert [(await claim(client, secret)).status_code for _ in range(2)] == [204, 429]
+        assert display.in_flight.claims == 0 and display.in_flight.total == 0 and display.in_flight.by_display == {}
+
+
+async def test_claims_and_data_requests_share_the_cap_over_http(client, db, monkeypatch, slow_figures):
+    ids = await world_for_404s(db)
+    row_b, secret_b = await make_display(db, "Second")
+    fresh = [await make_display(db, f"Screen {number}") for number in range(5)]
+    running = [0]
+    gate = asyncio.Event()
+    real = display._note_where_seen
+
+    async def slow_note(db_, display_id, client_address):
+        running[0] += 1
+        try:
+            await gate.wait()
+            return await real(db_, display_id, client_address)
+        finally:
+            running[0] -= 1
+
+    monkeypatch.setattr(display, "_note_where_seen", slow_note)
+    tasks = [ask_for_figures(client, ids, ids["secret"]) for _ in range(6)] + [ask_for_figures(client, ids, secret_b) for _ in range(3)]
+    claims = []
+    try:
+        await until(lambda: slow_figures.running == 9, "nine data requests held by two displays")
+        claims = [asyncio.create_task(claim(client, fresh[number][1], **address(f"10.0.2.{number}"))) for number in range(3)]
+        await until(lambda: running[0] == 3, "three claims past the lookup")
+        assert display.in_flight.total == 12 and display.in_flight.claims == 3  # data requests and claims are one count
+        # a thirteenth request of either kind is told to retry, and the total stays at twelve
+        data = await client.get(PLAYLIST, headers=cookie(fresh[3][1]))
+        assert data.status_code == 429 and data.json() == {"detail": "busy, try again"} and data.headers["retry-after"] == "1"
+        more = await claim(client, fresh[4][1], **address("10.0.2.9"))
+        assert more.status_code == 503 and more.json() == {"detail": "busy, try again"} and more.headers["retry-after"] == "1"
+        assert display.in_flight.total == 12
+    finally:
+        gate.set()
+        answers = await let_go(slow_figures, tasks)
+        claimed = await asyncio.wait_for(asyncio.gather(*claims), WAIT) if claims else []
+    assert [a.status_code for a in claimed] == [204] * 3 and sorted(a.status_code for a in answers) == [200] * 9
+    assert display.in_flight.total == 0 and display.in_flight.claims == 0 and display.in_flight.by_display == {}
 
 
 # --- the secret in no place it must not be -------------------------------------------------------------------------------------
