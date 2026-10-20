@@ -95,9 +95,8 @@ _FRESH = text(
 )
 
 
-@router.get("/status", response_model=LiveStatus, dependencies=[Depends(current_user)])
-async def live_status(db: AsyncSession = Depends(get_db)) -> LiveStatus:
-    """What the top bar's chip shows. Freshness only, no names or values, so every signed-in user may read it."""
+async def read_live_status(db: AsyncSession) -> LiveStatus:
+    """The collector and reading freshness the top bar's chip shows; the display playlist answer carries it too."""
     beat = await _heartbeat_age(db)
     newest = await db.scalar(text("SELECT extract(epoch FROM now() - max(ts)) FROM point_latest"))
     row = (await db.execute(_FRESH, {"k": STALE_AFTER_INTERVALS, "floor": STALE_MINIMUM.total_seconds()})).one()
@@ -106,6 +105,12 @@ async def live_status(db: AsyncSession = Depends(get_db)) -> LiveStatus:
         readings_fresh=None if row.read_points == 0 else bool(row.fresh),
         last_reading_age_seconds=None if newest is None else max(0.0, float(newest)),
     )
+
+
+@router.get("/status", response_model=LiveStatus, dependencies=[Depends(current_user)])
+async def live_status(db: AsyncSession = Depends(get_db)) -> LiveStatus:
+    """What the top bar's chip shows. Freshness only, no names or values, so every signed-in user may read it."""
+    return await read_live_status(db)
 
 
 @router.get(

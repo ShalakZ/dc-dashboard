@@ -131,11 +131,33 @@ describe("theme-init.js", () => {
 describe("theme-init.js: data-shell", () => {
   const withShell = (shell: string) => ({ "data-mode": "light", "data-theme": "navy-gold", "data-shell": shell });
   const defaults = { "data-mode": "light", "data-theme": "navy-gold" };
+  // The display screen is dark in every theme and every saved mode (review M1): its first frame is dark, not the light default.
+  const onDisplay = { "data-mode": "dark", "data-theme": "navy-gold" };
 
   it("is expanded on the app's pages", () => {
-    for (const path of ["/", "/assets", "/assets/3", "/users", "/loginx", "/settings/setup"]) {
+    for (const path of ["/", "/assets", "/assets/3", "/users", "/loginx", "/settings/setup", "/displays", "/display/x", "/displayed", "/x/display"]) {
       expect(run({ path }).attributes, path).toEqual(withShell("expanded"));
     }
+  });
+
+  it("is not set on the display screen (/display and /display/), so the admin shell never paints on a TV; the Displays page /displays keeps it", () => {
+    for (const path of ["/display", "/display/", "/Display", "/DISPLAY/"]) {
+      expect(run({ path, sidebar: "minimized", narrow: true }).attributes, path).toEqual(onDisplay);
+    }
+    expect(run({ path: "/displays" }).attributes).toEqual(withShell("expanded"));
+    const display = run({ path: "/display", matches: false, narrow: true });
+    expect(display.keys, "the path is tested before any storage read but the appearance's").toEqual([MIRROR_KEY]);
+    expect(display.queries).toEqual([]);
+  });
+
+  it("paints the display screen dark whatever the saved look is, and keeps the saved theme; /displays and /display/x keep the saved mode", () => {
+    for (const path of ["/display", "/display/", "/Display", "/DISPLAY/"]) {
+      expect(run({ path, stored: pair("light", "graphite") }).attributes, path).toEqual({ "data-mode": "dark", "data-theme": "graphite" });
+      expect(run({ path, stored: pair("system", "maroon-gold"), matches: false }).attributes, path).toEqual({ "data-mode": "dark", "data-theme": "maroon-gold" });
+    }
+    expect(run({ path: "/displays", stored: pair("light", "graphite") }).attributes).toEqual({ ...withShell("expanded"), "data-theme": "graphite" });
+    expect(run({ path: "/display/x", stored: pair("light", "graphite") }).attributes).toEqual({ ...withShell("expanded"), "data-theme": "graphite" });
+    expect(() => run({ path: "/display", setAttributeThrows: true })).not.toThrow();
   });
 
   it("is not set on the sign-in and setup pages, whatever the case or the trailing path (the router matches case-insensitively)", () => {

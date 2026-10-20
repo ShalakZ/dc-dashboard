@@ -71,7 +71,7 @@ describe("RoleEditor: the grid", () => {
     expect(within(grid).getAllByRole("checkbox")).toHaveLength(21);
     const sensitive = screen.getByRole("group", { name: "Sensitive actions" });
     expect(within(sensitive).getAllByRole("checkbox").map((c) => c.closest("label")?.textContent)).toEqual([
-      "Delete assets", "Manage asset kinds", "Choose the default dashboard", "Export billing as CSV", "Close and reopen billing months", "Run network scans", "Accept scan results", "Change sign-in protection", "Export the audit log",
+      "Delete assets", "Manage asset kinds", "Choose the default dashboard", "Manage display screens", "Export billing as CSV", "Close and reopen billing months", "Run network scans", "Accept scan results", "Change sign-in protection", "Export the audit log",
     ]);
   });
 
@@ -314,7 +314,7 @@ describe("RoleEditor: a built-in role is read-only", () => {
     expect(screen.getByRole("dialog", { name: "Role Operator" })).toBeInTheDocument();
     expect(screen.getByLabelText("Name")).toHaveAttribute("readonly");
     expect(screen.getByLabelText("Description")).toHaveAttribute("readonly");
-    expect(screen.getAllByRole("checkbox")).toHaveLength(30);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(31);
     for (const each of screen.getAllByRole("checkbox")) expect(each).toBeDisabled();
     expect(checked()).toHaveLength(10);
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
@@ -344,8 +344,8 @@ describe("RoleEditor: a built-in role is read-only", () => {
     expect(screen.getByLabelText("Name")).toHaveValue("Administrator");
     expect(box("Manage roles")).toBeChecked();
     expect(box("Manage roles")).toBeDisabled();
-    expect(screen.getAllByRole("checkbox")).toHaveLength(31);
-    expect(checked()).toHaveLength(31);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(32);
+    expect(checked()).toHaveLength(32);
   });
 });
 
@@ -439,12 +439,12 @@ describe("RoleEditor: the keyboard", () => {
       if (at.getAttribute("type") === "checkbox") { reached.add(at); first ??= at; }
       if (at === screen.getByRole("button", { name: "Save" })) break;
     }
-    expect(reached.size).toBe(30);
+    expect(reached.size).toBe(31);
     first!.focus();
     expect(first).not.toBeChecked();
     await userEvent.keyboard(" ");
     expect(first).toBeChecked();
-  }, 20_000); // 31 Tab presses through the whole catalogue: about 1.6 s alone, over 4 s beside a backend suite and a Docker build
+  }, 21_000); // 32 Tab presses through the whole catalogue: about 1.65 s alone, over 4 s beside a backend suite and a Docker build
 });
 
 describe("RoleEditor: offering what a permission needs", () => {

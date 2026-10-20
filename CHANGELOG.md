@@ -4,7 +4,7 @@ What each release (a merged wave) changed, newest first. Each section is headed 
 
 A release that needs an upgrade note carries it as a `###` entry: the schema revision it leads to when there is a migration, what
 changes and what you will notice, the pre-checks to run before it, how to verify it, whether its downgrade is lossless (which decides
-whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 10 releases on this page
+whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 11 releases on this page
 have such an entry (4 of them have no migration) and the archive has 10 more. The other releases need nothing beyond the usual steps of
 [Upgrading and going back](docs/upgrading.md); they have one or two lines here. The releases up to W7j (2026-10-13) are in the
 [changelog archive](docs/changelog-archive.md), with migrations 0004 to 0008; Phase 1A, Phase 1C and Phase 2 brought migrations 0001
@@ -15,6 +15,19 @@ this page; for a version older than W9a, first in the [changelog archive](docs/c
 heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
+
+## w28 (2026-10-20, MERGE)
+
+Display links, playlists and the Displays page (display mode, part 1; the rotating wall screen is w29). Migration `0015`, one new permission (`displays.manage`, Admin only, the 32nd), three new tables, no changed figure. Administer > Displays: make a playlist of dashboards (optional focus asset, seconds on screen), make a display, copy its secret link once, revoke it at once, delete it. A browser that opens the link becomes a connected display with no sign-in: it reads only its own playlist through three routes under `/api/display` (no session, no CSV, no stream), and for now the page only says "Connected as ...". The secret sits in the link's fragment, goes to the server in one JSON body and is stored only as a SHA-256 hash; ten wrong links from one address in 15 minutes make that address's wrong links refused for 15 minutes (a right link is never refused). See [Display screens](docs/display-screens.md).
+
+### Upgrading to w28 (migration 0015)
+
+Schema `0014` to `0015`. Downgrade: **lossless** for everything older (it drops the three new tables; playlists and display links are lost). The code to go back to is `97de399` (the main before w28). Migration `0015` creates `playlists`, `playlist_items` and `displays`, empty, and gives the new permission to nobody but Admin.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4: `docker compose up -d --build`.
+3. **Verify.** `docker compose exec api alembic current` prints `0015 (head)`, and Administer shows Displays for an administrator.
+4. **Going back.** Follow [Upgrading and going back](docs/upgrading.md) with `<previous>` = `0014` and `<old commit>` = `97de399`. A backup older than a revocation brings that link back: revoke it again.
 
 ## w27 (2026-10-20, 66276b1)
 

@@ -18,6 +18,9 @@ export const ICONS = {
   signOut: <><path d="M14 4h5v16h-5" /><path d="M10 8l-4 4 4 4M6 12h10" /></>,
   collapse: <><path d="M4 4v16" /><path d="m15 7-5 5 5 5" /><path d="M10 12h10" /></>,
   caret: <path d="m7 9 5 5 5-5" />,
+  caretUp: <path d="m7 15 5-5 5 5" />, // w28: Move up in a playlist (Move down is `caret`)
+  // w28: the Displays page and its sidebar link: a wall screen on a stand.
+  screen: <><rect x="3" y="4" width="18" height="12" rx="1.5" /><path d="M12 16v4M8 20h8" /></>,
   search: <><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4-4" /></>,
   more: <><circle cx="5" cy="12" r="1.3" /><circle cx="12" cy="12" r="1.3" /><circle cx="19" cy="12" r="1.3" /></>,
   // The lid is its own group so the trash button can lift and tilt it about its left end (app.css, `.trash-btn .lid`).

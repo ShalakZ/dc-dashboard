@@ -24,7 +24,7 @@ from dcdash.core.permissions import ALL_IDS, BUILTIN, NOT_FOR_CUSTOM_ROLES
 
 REFUSED = {"detail": "insufficient permission"}
 GOOD = {"password": "correct-horse"}
-NEARLY_ALL = sorted(ALL_IDS - NOT_FOR_CUSTOM_ROLES)  # everything a custom role can hold: 30, never roles.manage
+NEARLY_ALL = sorted(ALL_IDS - NOT_FOR_CUSTOM_ROLES)  # everything a custom role can hold: 31, never roles.manage
 # Many permissions, users.view and users.edit among them, but not all: it holds Viewer's permissions, not Operator's.
 STAFF = ["users.view", "users.edit", "assets.view", "dashboards.view", "billing.view", "billing.export", "audit.view",
          "settings.view", "storage.view", "sources.view"]
@@ -137,7 +137,7 @@ async def test_a_role_that_can_change_users_cannot_reset_deactivate_demote_or_de
 async def test_a_copy_of_admin_made_through_the_api_is_still_not_admin(app, client, db):
     await login_as(client, db)
     copy = (await client.post("/api/roles/3/duplicate")).json()
-    assert copy["name"] == "Copy of admin" and len(copy["permissions"]) == 30
+    assert copy["name"] == "Copy of admin" and len(copy["permissions"]) == 31
     created = await client.post("/api/users", json={"username": "deputy", "password": "longenough", "role": "Copy of admin"})
     assert created.status_code == 201
     boss = await make_user(db, "boss", "admin")

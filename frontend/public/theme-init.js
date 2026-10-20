@@ -41,7 +41,9 @@
   }
 
   /* The static shell in index.html is shown only under <html data-shell="expanded|minimized">, and only where the app will show the
-     shell: not on the sign-in and setup pages (the router matches paths without regard to case, so the path is lower-cased first).
+     shell: not on the sign-in and setup pages, nor on the display screen /display (w28: main.tsx mounts only the screen there, so the
+     admin shell must never paint on a TV; /displays and /display/x are app pages and keep it). The router matches paths without regard to
+     case, so the path is lower-cased first.
      The state mirrors initialSidebar() in src/lib/sidebarState.ts: a narrow window is minimized, else the remembered state, else
      expanded; theme-init.test.ts keeps the key and the query equal. Only window.location is read, and the path is tested before any
      storage or matchMedia call, so the pages that show no shell cost nothing. */
@@ -49,7 +51,11 @@
   var NARROW_QUERY = "(max-width: 1179.98px)";
   try {
     var path = String(window.location.pathname).toLowerCase();
-    if (!/^\/(login|setup)(\/|$)/.test(path)) {
+    if (/^\/display\/?$/.test(path)) {
+      /* The display screen is dark in every theme (DisplayApp sets the same attribute once it runs): the first frame, before the bundle has
+         loaded, must be dark too, or a TV in a dark room flashes white at every boot and reload. The saved theme is kept. */
+      document.documentElement.setAttribute("data-mode", "dark");
+    } else if (!/^\/(login|setup)(\/|$)/.test(path)) {
       var shell = "expanded";
       try {
         if (typeof window.matchMedia === "function" && window.matchMedia(NARROW_QUERY).matches) shell = "minimized";

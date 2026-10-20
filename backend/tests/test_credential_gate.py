@@ -18,7 +18,8 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute, iter_route_contexts
 
 from dcdash.api.main import create_app
-from helpers import login_as, make_asset, make_mapping, make_point, make_source
+from dcdash.core.displays import hash_secret
+from helpers import login_as, make_asset, make_display, make_mapping, make_point, make_playlist, make_source
 
 PASSWORD = "Zq9-unique-pw"
 URL = f"http://svc:{PASSWORD}@simulator:9000"
@@ -157,10 +158,22 @@ async def test_no_get_route_returns_the_password(client, db, app):
     await login_as(client, db)
     user_id = await db.fetchval("SELECT id FROM users WHERE username = 'admin'")
     ids = {**await seed(db, user_id), **await seed_through_the_api(client, db)}
+    # w28: a display with a secret link. The client claims it, so it holds the display cookie next to the admin's session and
+    # GET /api/display/playlist answers 200 (it is not skipped): no GET answer may hold the link's secret or its stored hash.
+    playlist = await make_playlist(db, "Gate wall", [{"dashboard_id": ids["dashboard_id"]}])
+    _display, link_secret = await make_display(db, "Gate screen", playlist)
+    claimed = await client.post("/api/display/claim", json={"secret": link_secret})
+    assert claimed.status_code == 204
+    assert "GET /api/display/playlist" in get_routes(app) and "GET /api/display/playlist" not in SKIPPED
+    link_hash = hash_secret(link_secret)
+    assert await db.fetchval("SELECT count(*) FROM displays WHERE secret_hash = $1", link_hash) == 1
     # The check below is only as strong as the seed: every password it looks for must really be stored.
     assert await stored_passwords(db) == set(STORED_PASSWORDS)
-    problems = await credential_problems(app, client, ids, QUERIES, SKIPPED, PASSWORDS)
+    problems = await credential_problems(app, client, ids, QUERIES, SKIPPED, (*PASSWORDS, link_secret, link_hash))
     assert problems == [], "\n".join(problems)
+    # and the audit trail the whole session wrote (the claim, the source edits) holds neither the secret nor the hash
+    trail = await db.fetchval("SELECT coalesce(string_agg(action || detail::text, E'\\n'), '') FROM audit_log")
+    assert link_secret not in trail and link_hash not in trail
 
 
 async def test_the_seeded_routes_return_the_scrubbed_text(client, db):

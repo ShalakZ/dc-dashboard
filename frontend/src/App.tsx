@@ -15,6 +15,7 @@ import { AssetsSummary } from "./pages/AssetsSummary";
 import { AuditPage } from "./pages/AuditPage";
 import { BillingPage } from "./pages/BillingPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
+import { DisplaysPage } from "./pages/DisplaysPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { PasswordPage } from "./pages/PasswordPage";
@@ -73,6 +74,7 @@ export function App() {
         <Route path="/settings" element={<RequirePermission need={PAGE_NEED.settings}><SettingsPage /></RequirePermission>} />
         <Route path="/tariffs" element={<RequirePermission need={PAGE_NEED.tariffs}><TariffsPage /></RequirePermission>} />
         <Route path="/storage" element={<RequirePermission need={PAGE_NEED.storage}><StoragePage /></RequirePermission>} />
+        <Route path="/displays" element={<RequirePermission need={PAGE_NEED.displays}><DisplaysPage /></RequirePermission>} />
         <Route path="/audit/:id?" element={<RequirePermission need={PAGE_NEED.audit}><AuditPage /></RequirePermission>} />
         <Route path="/diagnostics" element={<RequirePermission need={PAGE_NEED.diagnostics}><DiagnosticsPage /></RequirePermission>} />
         <Route path="/password" element={<PasswordPage />} />

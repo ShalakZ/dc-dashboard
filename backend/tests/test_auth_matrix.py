@@ -16,7 +16,7 @@ import json
 import os
 from pathlib import Path
 
-from auth_expectations import PUBLIC, ROUTE_PERMISSIONS, SIGNED_IN, satisfies
+from auth_expectations import DISPLAY, PUBLIC, ROUTE_PERMISSIONS, SIGNED_IN, satisfies
 from auth_probe import classify, patch_stream, route_requests, send, silent_client
 from dcdash.api.main import create_app
 from dcdash.core.permissions import BUILTIN
@@ -110,19 +110,27 @@ def test_public_and_signed_in_routes_are_what_the_frozen_matrix_says():
 def test_every_route_added_after_the_freeze_is_in_the_permission_table():
     frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
     later = sorted(set(route_requests(create_app())) - set(frozen))
-    missing = [key for key in later if key not in ROUTE_PERMISSIONS]  # PUBLIC and SIGNED_IN are subsets of the frozen keys
-    assert missing == [], "a route the matrix does not know must declare its permission in ROUTE_PERMISSIONS"
+    # PUBLIC and SIGNED_IN are subsets of the frozen keys; a display route (W28) is neither public nor an account's.
+    missing = [key for key in later if key not in ROUTE_PERMISSIONS and key not in DISPLAY]
+    assert missing == [], "a route the matrix does not know must declare its permission in ROUTE_PERMISSIONS, or be listed in DISPLAY"
+
+
+def test_display_routes_are_not_in_the_frozen_matrix():
+    frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    assert DISPLAY, "the display table is empty"
+    assert sorted(set(DISPLAY) & set(frozen)) == [], "the fixture is never edited: a display route was added after the freeze"
 
 
 def test_every_frozen_route_is_public_open_to_any_account_or_in_the_permission_table():
     # The agreement test below reads the table with the fixture's keys. A key that the table spells differently (Appendix B
     # writes {id} where the router writes {asset_id}) would be skipped there, so the two key sets must be the same set.
-    # The routes added after the freeze (the roles API) are in the table and not in the fixture: they are the app's routes
-    # the fixture lacks. A table key that is not a route of the app stays on the right and fails the comparison.
+    # The routes added after the freeze (the roles API, the display screens) are in the tables and not in the fixture: they
+    # are the app's routes the fixture lacks. A table key that is not a route of the app stays on the right and fails the
+    # comparison.
     frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
     added_after_freeze = set(route_requests(create_app())) - set(frozen)
-    assert added_after_freeze <= set(ROUTE_PERMISSIONS), "a route the fixture does not know must be in ROUTE_PERMISSIONS"
-    assert set(frozen) == (set(ROUTE_PERMISSIONS) | set(PUBLIC) | set(SIGNED_IN)) - added_after_freeze
+    assert added_after_freeze <= set(ROUTE_PERMISSIONS) | set(DISPLAY), "a route the fixture does not know must be in ROUTE_PERMISSIONS or DISPLAY"
+    assert set(frozen) == (set(ROUTE_PERMISSIONS) | set(PUBLIC) | set(SIGNED_IN) | set(DISPLAY)) - added_after_freeze
 
 
 def test_the_permission_table_agrees_with_the_frozen_matrix_for_the_built_in_roles():

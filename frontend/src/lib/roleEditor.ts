@@ -44,6 +44,8 @@ export const PERMISSION_NEEDS: Record<PermissionId, readonly PermissionId[]> = {
   // the widget editor loads the assets and the discovery graph: without them Add widget stays disabled
   "dashboards.edit": ["dashboards.view", "assets.view", "discovery.view"],
   "dashboards.default": ["dashboards.view"],
+  // a playlist names dashboards and an optional focus asset: the page lists dashboards, and a focus is picked from the tree
+  "displays.manage": ["dashboards.view", "assets.view"],
   "billing.view": [],
   "billing.export": ["billing.view"],
   "billing.close": ["billing.view"],

@@ -28,6 +28,7 @@ EXEMPT: dict[str, str] = {
     "DELETE /api/discovery/layout": "clears the node positions of the graph canvas: a picture, not configuration",
     "POST /api/widget-data": "a read sent as POST because the body carries the widget configs",
     "POST /api/widget-data/csv": "a read sent as POST: the CSV export of widget values",
+    "POST /api/display/widget-data": "a read sent as POST: the figures of one widget of a display's playlist",
     "POST /api/assets/move-preview": "a read sent as POST: the body is the planned move",
     "PUT /api/me/preferences": "a personal display setting of the signed-in account (mode and theme), not configuration; "
                                "it changes nothing another user or the system can see",

@@ -47,11 +47,11 @@ const STAFF_USER: Account = { username: "w9a-staffer", password: "w9a-staffer-pa
 // The sidebar in the order it is drawn (components/navItems.ts): three groups.
 const MONITOR = ["Assets Tree", "Dashboards", "Billing"];
 const OPERATE = ["Sources", "Scans", "Discovery"];
-const ADMINISTER = ["Users & Roles", "Settings", "Tariffs", "Storage", "Audit", "Diagnostics"];
+const ADMINISTER = ["Users & Roles", "Settings", "Tariffs", "Storage", "Displays", "Audit", "Diagnostics"];
 const EVERY_LINK = [...MONITOR, ...OPERATE, ...ADMINISTER];
 const PAGE_OF: Record<string, string> = {
   Sources: "/sources", Scans: "/scans", Discovery: "/discovery",
-  "Users & Roles": "/users", Settings: "/settings", Tariffs: "/tariffs", Storage: "/storage", Audit: "/audit", Diagnostics: "/diagnostics",
+  "Users & Roles": "/users", Settings: "/settings", Tariffs: "/tariffs", Storage: "/storage", Displays: "/displays", Audit: "/audit", Diagnostics: "/diagnostics",
 };
 // The one Administer page the built-in Operator opens since W9b (tariffs.view): read-only.
 const OPERATOR_ADMINISTER = ["Tariffs"];
@@ -277,7 +277,7 @@ test.describe("W9a: roles and permissions", () => {
     await asAdmin(browser, async (request) => {
       await removeMine(request);
       catalogue = await json<ApiPermission[]>(request, "/api/permissions");
-      expect(catalogue, "the catalogue has the 31 permissions").toHaveLength(31);
+      expect(catalogue, "the catalogue has the 32 permissions").toHaveLength(32);
       const mostOfThem = catalogue.map((p) => p.id).filter((id) => id !== "roles.manage");
       roleIds[ROLE_ASSETS] = await createRole(request, ROLE_ASSETS, ["assets.view"]);
       roleIds[ROLE_LOOK] = await createRole(request, ROLE_LOOK, ["assets.view", "dashboards.view"]);
@@ -529,7 +529,7 @@ test.describe("W9a: roles and permissions", () => {
     try {
       await as(browser, STAFF_USER, async (api) => {
         const own = await me(api);
-        expect(own.permissions, "30 permissions: all but roles.manage").toHaveLength(30);
+        expect(own.permissions, "31 permissions: all but roles.manage").toHaveLength(31);
         expect(own.permissions).toContain("users.edit");
         expect(own.permissions).not.toContain("roles.manage");
         const ownId = (await json<ApiUser[]>(api, "/api/users")).find((u) => u.username === STAFF_USER.username)!.id;
@@ -629,7 +629,7 @@ test.describe("W9a: roles and permissions", () => {
         expect(roles.slice(0, 3).map((r) => [r.name, r.builtin])).toEqual([["viewer", true], ["operator", true], ["admin", true]]);
         expect([...roles[0].permissions!].sort()).toEqual(VIEWER_PERMISSIONS);
         expect([...roles[1].permissions!].sort()).toEqual(OPERATOR_PERMISSIONS);
-        expect(roles[2].permissions).toHaveLength(31);
+        expect(roles[2].permissions).toHaveLength(32);
         for (const role of roles.slice(0, 3)) {
           const deleted = await api.delete(`/api/roles/${role.id}`);
           expect(deleted.status(), `deleting ${role.name}: ${await deleted.text()}`).toBe(409);
@@ -641,7 +641,7 @@ test.describe("W9a: roles and permissions", () => {
         const copy = await api.post(`/api/roles/${roles[2].id}/duplicate`, { data: { name: "w9a-copy-of-admin" } });
         expect(copy.status(), await copy.text()).toBe(201);
         const copied = (await copy.json()) as ApiRole;
-        expect(copied.permissions, "a copy of Admin holds everything but roles.manage").toHaveLength(30);
+        expect(copied.permissions, "a copy of Admin holds everything but roles.manage").toHaveLength(31);
         expect(copied.permissions).not.toContain("roles.manage");
         expect((await api.delete(`/api/roles/${copied.id}`)).status()).toBe(204);
       });
@@ -672,7 +672,7 @@ test.describe("W9a: roles and permissions", () => {
         expect((await json<ApiRole[]>(api, "/api/roles")).find((r) => r.id === spareId)).toBeUndefined();
       });
 
-      await test.step("the permission list is the 31 permissions, in the catalogue's order, with an area, a label and a description each", async () => {
+      await test.step("the permission list is the 32 permissions, in the catalogue's order, with an area, a label and a description each", async () => {
         const served = await json<ApiPermission[]>(api, "/api/permissions");
         expect(served.map((p) => p.id)).toEqual(catalogue.map((p) => p.id));
         for (const p of served) {

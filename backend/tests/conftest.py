@@ -15,7 +15,7 @@ from helpers import refresh_rollup, restore_builtin_roles  # noqa: E402  (import
 
 BACKEND = Path(__file__).resolve().parents[1]
 TABLES = (
-    "figure_ledger, diag_events, audit_log, widgets, dashboards, tariffs, scan_findings, scans, scan_scopes, graph_layout, jobs, point_latest, "
+    "displays, playlist_items, playlists, figure_ledger, diag_events, audit_log, widgets, dashboards, tariffs, scan_findings, scans, scan_scopes, graph_layout, jobs, point_latest, "
     "readings, mappings, points, assets, sources, sessions, billing_closes, users, settings, asset_kinds"
 )
 
@@ -119,12 +119,13 @@ async def db(pool):
 
 @pytest.fixture
 def app(db):
-    from dcdash.api import auth
+    from dcdash.api import auth, display
     from dcdash.api.main import create_app
     from dcdash.api.security_events import sign_in_events
 
     auth.limiter.clear()
     sign_in_events.clear()
+    display.reset_display_state()  # the claim limiter, the audit budgets and the per-display request budgets (w28)
     return create_app()
 
 

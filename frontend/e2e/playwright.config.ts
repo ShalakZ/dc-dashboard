@@ -389,5 +389,17 @@ export default defineConfig({
       dependencies: ["w25"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // Display screens (playlists and display links). It MAKES ITS OWN DATA through the API in beforeAll (`W28 <run> site` with two dashboards of one stat each; every playlist and display a case makes is
+    // named `W28 <run> ...`) and deletes all of it in afterAll, also after a failed case (displays first), and puts the account's own look back. It talks to the real API (nothing is mocked) and needs no
+    // scratch stack. Case 1 makes a playlist and a display in the dialogs and reads the link once; case 2 opens it in a new browser context (cookie, the three display routes, 401 elsewhere, figures equal the
+    // administrator's); cases 3 and 4 revoke a display and delete a dashboard; case 5 is the keyboard-only pass at 1440 x 900 and 1024 x 640, light and dark. The LAST case (6) makes ten wrong claims
+    // and an eleventh that is refused: it BLOCKS THE STACK'S CLIENT ADDRESS for 15 minutes (a right claim too), so nothing may come after this project that opens a display link, and it is skipped when
+    // W28_SKIP_BLOCK is set. The secrets it used are appended to the file named by W28_SECRET_FILE (default /tmp/w28-secret.txt). The cases are serial.
+    {
+      name: "w28",
+      testMatch: "w28.spec.ts",
+      dependencies: ["w27"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

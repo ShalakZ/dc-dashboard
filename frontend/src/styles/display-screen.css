@@ -1,0 +1,43 @@
+@layer w6 {
+  /* w28: the /display page (src/display/DisplayApp.tsx), a dark screen with one large sentence. It runs without the app shell, so it takes
+     the dark values of the shared tokens (DisplayApp puts data-mode="dark" on <html>, whatever look the browser remembers) and names them
+     once here. Every class starts with display-screen, so no rule of another page can reach it and none of these can reach another page. */
+  .display-screen {
+    --display-bg: var(--bg);
+    --display-ink: var(--text);
+    --display-quiet: var(--text-2);
+    --display-size: clamp(28px, 3.4vw, 72px);
+    --display-pad: clamp(24px, 5vw, 96px);
+    --display-measure: 24em;
+    color-scheme: dark;
+    position: fixed;
+    inset: 0;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--display-pad);
+    overflow: hidden;
+    background: var(--display-bg);
+    color: var(--display-ink);
+    font-family: var(--font);
+    cursor: none;
+    user-select: none;
+  }
+
+  .display-screen-text {
+    margin: 0;
+    max-width: var(--display-measure);
+    font-size: var(--display-size);
+    font-weight: 600;
+    line-height: 1.35;
+    text-align: center;
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+  }
+
+  .display-screen-quiet {
+    color: var(--display-quiet);
+    font-weight: 400;
+  }
+}

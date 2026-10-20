@@ -26,11 +26,11 @@ describe("groupPermissions", () => {
   it("collects the risky ids as the sensitive actions, in catalogue order, and puts roles.manage nowhere", () => {
     const { areas, sensitive } = groupPermissions(catalogue());
     expect(ids(sensitive)).toEqual([
-      "assets.delete", "assets.kinds", "dashboards.default", "billing.export", "billing.close", "discovery.scan", "discovery.accept", "settings.security", "audit.export",
+      "assets.delete", "assets.kinds", "dashboards.default", "displays.manage", "billing.export", "billing.close", "discovery.scan", "discovery.accept", "settings.security", "audit.export",
     ]);
     const everyId = [...areas.flatMap((a) => [...a.see, ...a.change]), ...sensitive].map((r) => r.id);
     expect(everyId).not.toContain("roles.manage");
-    expect(everyId).toHaveLength(30); // 31 in the catalogue, minus the locked one
+    expect(everyId).toHaveLength(31); // 32 in the catalogue, minus the locked one
   });
 
   it("orders areas by the first row of each (a risky row counts) and leaves out an area with only risky rows", () => {
@@ -102,9 +102,10 @@ describe("PERMISSION_NEEDS is a sound table", () => {
   it("makes every action permission need the See of its own area", () => {
     // the area is the id's prefix; "tariffs.edit" needs "tariffs.view" and so on. roles.manage and *.view ids are exempt,
     // and diagnostics.run (works without diagnostics.view: the W9b audit table, row diagnostics.run) is the one real exception.
+    // displays.manage is the other: there is no displays.view (the page's whole need is displays.manage plus dashboards.view, PAGE_NEED.displays).
     for (const id of PERMISSIONS) {
       const [area, action] = id.split(".");
-      if (action === "view" || id === "roles.manage" || id === "diagnostics.run") continue;
+      if (action === "view" || id === "roles.manage" || id === "diagnostics.run" || id === "displays.manage") continue;
       expect(PERMISSION_NEEDS[id], id).toContain(`${area}.view`);
     }
   });
@@ -214,7 +215,7 @@ describe("summarizeRole", () => {
   it("counts roles.manage among the sensitive ones when it is ticked (the built-in Admin)", () => {
     const admin = summarizeRole(list, new Set(BUILTIN_PERMISSIONS.admin));
     expect(admin.sensitive).toContain("Manage roles");
-    expect(admin.sensitive).toHaveLength(10); // the ten risky ids of the catalogue, Manage roles among them
+    expect(admin.sensitive).toHaveLength(11); // the eleven risky ids of the catalogue, Manage roles among them
   });
 
   it("ignores an id this build does not know for the pages, lists it by its server label, and does not throw", () => {

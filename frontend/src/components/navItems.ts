@@ -26,6 +26,7 @@ export const PAGE_NEED = {
   storage: "storage.view",
   audit: "audit.view",
   diagnostics: ["diagnostics.view", "sources.view"],
+  displays: ["displays.manage", "dashboards.view"], // playlists and display links; the playlist dialog lists dashboards
 } as const satisfies Record<string, Need>;
 
 /** `match`: the item is the current page on this path and everything below it (whole segments), not only on `to`. `need`: the permissions to see the link. */
@@ -60,6 +61,7 @@ export const GROUPS: NavGroup[] = [
       { to: "/settings", label: "Settings", icon: "settings", need: PAGE_NEED.settings },
       { to: "/tariffs", label: "Tariffs", icon: "tariffs", need: PAGE_NEED.tariffs },
       { to: "/storage", label: "Storage", icon: "storage", need: PAGE_NEED.storage },
+      { to: "/displays", label: "Displays", icon: "screen", need: PAGE_NEED.displays },
       { to: "/audit", label: "Audit", icon: "audit", need: PAGE_NEED.audit },
       { to: "/diagnostics", label: "Diagnostics", icon: "diagnostics", need: PAGE_NEED.diagnostics },
     ],

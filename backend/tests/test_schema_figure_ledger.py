@@ -1,6 +1,6 @@
 """Migration 0014 (W26b): the table `figure_ledger` (the dashboard's computed figures kept in the database: DERIVED data).
 
-This file pins the head (the newest migration's test does; test_schema_widget_text.py pins only that 0013 follows 0012).
+This file pins only that 0014 follows 0013 (the head is pinned by the newest migration's test, test_schema_displays.py).
 The upgrade writes no row and touches no other table; the downgrade drops the table and touches nothing else (the stored
 figures are lost on purpose: they can always be computed again)."""
 from datetime import datetime, timezone
@@ -32,11 +32,14 @@ SETTINGS = "SELECT key, value FROM settings ORDER BY key"
 SEPT = datetime(2026, 9, 1, tzinfo=timezone.utc)
 OCT = datetime(2026, 10, 1, tzinfo=timezone.utc)
 NOON = datetime(2026, 10, 20, 12, 0, 5, 123456, tzinfo=timezone.utc)
+# Tables of LATER migrations (0015, w28): they exist at head and not below 0015, so a comparison made at head and again below
+# it must not see them. They are left out of `snapshot` and `fingerprints` below.
+LATER_TABLES = ("playlists", "playlist_items", "displays")
 
 
 async def snapshot(db) -> dict:
-    """Columns, indexes, constraints and triggers of every table."""
-    return {
+    """Columns, indexes, constraints and triggers of every table (except the tables of later migrations)."""
+    taken = {
         "columns": [tuple(r) for r in await db.fetch(
             "SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns "
             "WHERE table_schema = 'public' ORDER BY 1, ordinal_position")],
@@ -48,6 +51,7 @@ async def snapshot(db) -> dict:
         "triggers": [tuple(r) for r in await db.fetch(
             "SELECT tgrelid::regclass::text, tgname FROM pg_trigger WHERE NOT tgisinternal ORDER BY 1, 2")],
     }
+    return {kind: [row for row in entries if row[0] not in LATER_TABLES] for kind, entries in taken.items()}
 
 
 def without_the_table(snap: dict) -> dict:
@@ -64,21 +68,14 @@ async def fingerprints(db) -> dict[str, str | None]:
     for name in names:
         if name == "figure_ledger":  # the table under test: its rows are what the downgrade loses, on purpose
             continue
+        if name in LATER_TABLES:  # 0015's tables exist at head and a downgrade through 0014 drops them, on purpose
+            continue
         fingerprint[name] = await db.fetchval(f'SELECT md5(string_agg(t::text, E\'\\n\' ORDER BY t::text)) FROM "{name}" t')
     return fingerprint
 
 
 async def rows(db, query: str) -> list[tuple]:
     return [tuple(r) for r in await db.fetch(query)]
-
-
-def head_revision() -> str:
-    """The one head alembic reports (this file's pin below is the only place that names a revision number as the head)."""
-    heads = run_alembic("heads")
-    assert heads.returncode == 0, heads.stderr
-    revisions = [line.split()[0] for line in heads.stdout.splitlines() if line.strip()]
-    assert len(revisions) == 1, heads.stdout
-    return revisions[0]
 
 
 async def seed_other_tables(db) -> None:
@@ -106,9 +103,8 @@ async def insert_row(db, **columns) -> None:
 
 # ---- the head ---------------------------------------------------------------------------------------------------------------
 
-def test_the_migration_follows_0013_and_is_the_only_head():
-    assert "0013 -> 0014" in run_alembic("history", "-r", "0013:0014").stdout
-    assert head_revision() == "0014"
+def test_the_migration_follows_0013():
+    assert "0013 -> 0014" in run_alembic("history", "-r", "0013:0014").stdout  # the one head is pinned by the newest migration's test
 
 
 # ---- at the head: the table and what it holds -------------------------------------------------------------------------------

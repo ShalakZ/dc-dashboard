@@ -1252,3 +1252,24 @@ Parked on purpose (the rulings; the owner may overrule any):
 - **The Power breakdown names only every second bar below about 600 px of chart** (1440 and 1024 on the 6x3 card: ten names cannot fit under a 60 px plot in a 124 px box by any layout); the other bars carry their full name in the tooltip, and from a 4-row card on every bar is named. Wrapped two-slot names can leave a lone "A" under "Rack 35 / Feed". Idea: a taller minimum for the breakdown, or the recipe's breakdown 4 rows high (the Power recipe was kept as it was).
 - **A breakdown with no `~` or `*` marker has no footer line,** so its card body grows by 22 px when the data lands (its skeleton keeps the footer line's room, as a card with a marker needs).
 - **A chart axis whose largest value is below about 0.0000005 prints every tick as "0"** (`tickText` keeps six decimals); no realistic meter value. Idea: a precision fallback for such axes.
+
+## BM. W28 leftovers (display links, playlists, the Displays page; 2026-10-20)
+
+Parked on purpose (the rulings; the owner may overrule any):
+
+- **The cookie IS the link.** On a plain-http LAN anyone on the network path can read it from the screen's traffic (documented in `docs/display-screens.md`). Idea for w29 or later, under its own security review: the claim returns a per-claim random token (stored hashed, revocable with the display) and sets that as the cookie, so the long-lived secret is used once.
+- **No filtered stream for displays (R6).** A screen polls; `/api/stream` sends every point's value to every subscriber and stays signed-in only. A server-side filtered stream for a display's own widgets is a later wave with its own review.
+- **Pairing codes and link rotation.** A short code typed on the screen instead of a long link, and "rotate this link" that keeps the display and replaces the secret.
+- **A link outlives its maker.** It keeps working when the account that made it is deleted or loses `dashboards.view` or `assets.view`, and a focus added to its playlist later is shown to it (documented). Idea: show `created_by` on the Displays page, or check the creator's permissions on each display request.
+- **A revoked display keeps its name** until it is deleted (the name is unique); the 409 says so. Idea: free the name on revoke.
+- **Same-name assets on a display.** w27's parent-name disambiguation reads `/api/assets`, which a display cannot call; the playlist answer has a `trail` only for the focus. Idea: parent names for the repeated names of a widget answer, under the display review.
+- **A blocked address costs one lookup per wrong claim.** Since a right secret is never refused (the Docker Desktop address is shared by the whole site), wrong claims from a blocked address are still looked up; nothing caps how many run at once (the single worker's CPU fills first). Idea: at most 2 such lookups at once, 503 beyond. The blocked sentence on the screen always says "about 15 minutes" although the block may be nearly over.
+- **The playlist answer loads the asset tree twice** (once for the skip rules, once inside `compute_widget`): pass one tree through.
+- **The pool timeout is not mapped to 503** (`sqlalchemy.exc.TimeoutError` in `api/main.py`): older behaviour. The display in-flight cap (12 over data requests and claims, 3 slots reserved inside it) keeps displays from causing it.
+- **The shared `InfoTip` can open over a dialog's Cancel** in a short window; the dashboard's `FocusDialog` has the same first-focus-on-the-tip bug the asset picker of the playlist dialog had (fixed there only).
+- **The dashboards `Name` type accepts a NUL** (a 500); the playlist and display names refuse it.
+- **A dashboard or asset delete does not warn that a playlist uses it:** the item is skipped (the Displays page says so). Idea: list the playlists in the delete dialog ("2 playlists will skip it").
+- **Per-process state.** The claim limiter, the budgets and the in-flight counters live in the api process (one worker today); with more workers they need a shared store, as the login limiter does.
+- **A kiosk that reloads its start URL claims again** each time (one audit row per display per 5 minutes at most, the next row says how many were left out; a claim from a new address is always written, at most 20 an hour).
+- **One valid link can hold all 3 claim slots** (a claim has no per-display ceiling of its own); the remedy is to revoke the link. Idea: at most one claim in flight per display.
+- **Not seen by anyone on the real site:** the TV, its browser and the kiosk start command are w29's device part. The figures of the screen (rotation, scale, "Last updated", the stopped-data banner) are w29's.

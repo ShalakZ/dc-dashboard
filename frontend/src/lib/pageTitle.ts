@@ -12,6 +12,7 @@ const TITLES: [path: string, title: string][] = [
   ["/settings", "Settings"],
   ["/tariffs", "Tariffs"],
   ["/storage", "Storage"],
+  ["/displays", "Displays"],
   ["/audit", "Audit log"],
   ["/diagnostics", "Diagnostics"],
   ["/password", "Change password"],

@@ -129,6 +129,10 @@ lacks says "No access".
   day it should start: a rate applies to whole local days. How cost is worked out from the rates, and what a move in the tree
   does to it, is in [Dashboards and billing](dashboards-and-billing.md).
 - **Storage** (admin): needs `storage.view`; changes need `storage.edit`. See [Storage](storage.md).
+- **Displays** (admin): needs `displays.manage` and `dashboards.view`. Playlists (an ordered list of dashboards, each with an optional
+  focus asset and 10 to 3600 seconds on screen) and displays, the screens that show one playlist from a secret link, with no sign-in.
+  **New display** shows the link once, with **Copy link**. A screen's row menu has **Rename**, **Change playlist** and **Revoke**
+  (asks first), and the trash button deletes it. Skipped playlist items say why. See [Display screens](display-screens.md).
 - **Audit** (admin): needs `audit.view`. The read-only audit log, newest first, 50 entries per page by default (25, 50, 100 or
   200). Changes to configuration and access are recorded with who did it (the name stays even after the account is deleted),
   when, and for updates the values before and after; sign-in successes, failures and lockouts are recorded too. The toolbar

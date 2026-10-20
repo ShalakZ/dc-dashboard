@@ -25,6 +25,7 @@ LOOKUP = re.compile(r"SELECT (assets|users|sources|dashboards|points)\.id, \1\.\
     [
         ("asset_id", "asset"), ("parent_id", "asset"), ("user_id", "user"),
         ("source_id", "source"), ("dashboard_id", "dashboard"), ("point_id", "point"),
+        ("display_id", "display"), ("playlist_id", "playlist"),
     ],
 )
 def test_each_key_is_read_from_the_detail_and_from_before_and_after(key, kind):

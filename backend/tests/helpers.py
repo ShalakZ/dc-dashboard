@@ -19,6 +19,8 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from dcdash.api.security import hash_password
 from dcdash.connectors.simulator import SimulatorConfig, SimulatorConnector
 from dcdash.core.crypto import encrypt
+from dcdash.core.displays import new_secret
+from dcdash.core.models import Display, Playlist
 from dcdash.core.permissions import BUILTIN, CATALOGUE
 from dcdash.simulator.faults import Faults
 from dcdash.simulator.model import Simulator
@@ -117,6 +119,46 @@ async def make_user(db, username: str, role: str = "viewer", active: bool = True
     )
 
 
+async def make_playlist(db, name: str = "Wall A", items: Iterable[dict] = ()) -> Playlist:
+    """A playlist named `name` with `items`, saved the way a real save writes them. Each item is a dict with the optional keys
+    `dashboard_id`, `focus_asset_id` and `seconds` (default 60); `dashboard_name` and `focus_name` are the stored snapshot names and,
+    when the key is left out, default to the LIVE name of that dashboard or asset right now (pass None to store no snapshot).
+    Positions are 0, 1, 2 ... in the order given. Returns a plain transient `Playlist` object (id, name, created_by, created_at, updated_at): read its fields, never `session.add()` it."""
+    row = await db.fetchrow("INSERT INTO playlists (name) VALUES ($1) RETURNING *", name)
+    for position, item in enumerate(items):
+        dashboard_id, focus_id = item.get("dashboard_id"), item.get("focus_asset_id")
+        if "dashboard_name" in item:
+            dashboard_name = item["dashboard_name"]
+        else:
+            dashboard_name = None if dashboard_id is None else await db.fetchval("SELECT name FROM dashboards WHERE id = $1", dashboard_id)
+        if "focus_name" in item:
+            focus_name = item["focus_name"]
+        else:
+            focus_name = None if focus_id is None else await db.fetchval("SELECT name FROM assets WHERE id = $1", focus_id)
+        await db.execute(
+            'INSERT INTO playlist_items (playlist_id, "position", dashboard_id, dashboard_name, focus_asset_id, focus_name, seconds) '
+            "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            row["id"], position, dashboard_id, dashboard_name, focus_id, focus_name, item.get("seconds", 60),
+        )
+    return Playlist(**dict(row))
+
+
+async def make_display(db, name: str = "Hall TV", playlist: Playlist | None = None, revoked: bool = False) -> tuple[Display, str]:
+    """A display named `name` showing `playlist`, and its secret (only the hash is stored). With no `playlist` it shows the
+    playlist named "Wall A", which is made if it does not exist yet (so two displays made with the defaults share one playlist and
+    a later `make_playlist(db)` is not a second "Wall A"). `revoked=True` stores `revoked_at = now()`. Returns a plain transient `Display` object: read its fields, never `session.add()` it (that would INSERT a second row)."""
+    if playlist is None:
+        found = await db.fetchrow("SELECT * FROM playlists WHERE name = 'Wall A'")
+        playlist = Playlist(**dict(found)) if found is not None else await make_playlist(db)
+    secret, secret_hash = new_secret()
+    row = await db.fetchrow(
+        "INSERT INTO displays (name, playlist_id, secret_hash, revoked_at) "
+        "VALUES ($1, $2, $3, CASE WHEN $4::boolean THEN now() END) RETURNING *",
+        name, playlist.id, secret_hash, revoked,
+    )
+    return Display(**dict(row)), secret
+
+
 async def make_role(db, name: str, permissions: Iterable[str] = (), description: str = "") -> int:
     """A custom role holding `permissions` (stored as given: pass junk to test that it is ignored)."""
     return await db.fetchval(
@@ -129,7 +171,7 @@ async def make_role(db, name: str, permissions: Iterable[str] = (), description:
 # built-in row is that migration's snapshot: never refreshed, no migration for it, and it grants nothing (a built-in role's
 # permissions come from BUILTIN in code). So the Admin row below is the live catalogue MINUS these ids, which is what the
 # 0009 seed wrote; add an id here whenever the catalogue grows, or test_schema_roles.py fails on the seed comparison.
-ADDED_AFTER_0009: frozenset[str] = frozenset({"settings.security", "assets.kinds", "billing.close"})
+ADDED_AFTER_0009: frozenset[str] = frozenset({"settings.security", "assets.kinds", "billing.close", "displays.manage"})
 
 # The three rows migration 0009 seeds, as (id, name, description, permissions). The permissions are the mirror of
 # permissions.BUILTIN in catalogue order as of 0009; test_schema_roles.py checks that the migration seeds exactly these.

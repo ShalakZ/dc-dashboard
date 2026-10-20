@@ -146,7 +146,7 @@ message appeared as described), and lost what came after the dump.
 
 ## Migrations in order
 
-The files are in `backend/migrations/versions/`; each revises the one before it, and `0014` is the head. The release-note entry of a
+The files are in `backend/migrations/versions/`; each revises the one before it, and `0015` is the head. The release-note entry of a
 migration says how to apply it, how to verify it and the commit to go back to.
 
 | Revision | What it does | Downgrade | Release note |
@@ -165,6 +165,7 @@ migration says how to apply it, how to verify it and the commit to go back to.
 | `0012` | close month: the `billing_closes` table (a closed billing month's stored figures) | lossless for everything that existed before; a downgrade drops the closed months (and a restore of an older dump brings back the older set) | [W11](../CHANGELOG.md#upgrading-to-w11-migration-0012) |
 | `0013` | text widget: the widget type CHECK allows `text` | lossless while no text widget exists; refuses while one does: remove them first | [w22](../CHANGELOG.md#upgrading-to-w22-migration-0013) |
 | `0014` | the figure ledger: the table `figure_ledger` (derived data: computed figures kept between requests) | lossless except the stored figures, which are recomputed (the downgrade drops the table) | the w26b entry in the [CHANGELOG](../CHANGELOG.md) |
+| `0015` | display screens: three empty tables, `playlists`, `playlist_items` and `displays` | lossless for everything older; the downgrade drops the three tables and loses the playlists and display links | the w28 entry in the [CHANGELOG](../CHANGELOG.md) |
 
 Waves without a migration also have entries in the CHANGELOG (for example W7p, no migration): read them too, they can name checks.
 

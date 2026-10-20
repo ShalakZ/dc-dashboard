@@ -17,6 +17,8 @@ const ALL_ACTIONS = [
   "source.browsed", "source.checked", "source.created", "source.deleted", "source.test_all", "source.tested", "source.updated",
   "storage.changed", "storage.default_set", "tariff.created", "tariff.updated", "tariff.deleted",
   "user.created", "user.deleted", "user.updated",
+  "playlist.created", "playlist.updated", "playlist.deleted",
+  "display.created", "display.updated", "display.revoked", "display.deleted", "display.connected", "display.claim_blocked",
 ];
 
 describe("humanise", () => {
@@ -882,7 +884,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(53);
+    expect(ALL_ACTIONS).toHaveLength(62);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }
@@ -1282,6 +1284,7 @@ describe("describeAudit: no sentence shows an id", () => {
   // Distinctive ids, so a leaked one is found by its digits: a plain "7" would pass a /#\d+/ check.
   const A = 90001, PARENT = 90002, USER = 90003, SRC = 90004, DASH = 90005, POINT = 90006, MAPPING = 90007, TARIFF = 90008;
   const ROLE = 90009, SCOPE = 90010, JOB = 90011, SCAN = 90012, A2 = 90013, A3 = 90014, DASH2 = 90015, KIND = 90016, CLOSE = 90017;
+  const DISPLAY = 90018, PLAYLIST = 90019; // PLAYLIST + 1 (90020) is the playlist a display was moved to
   const connection = { via: "login", client: "10.0.0.5" };
 
   // The shape each backend writer stores (see the audit calls in backend/dcdash/api).
@@ -1345,18 +1348,37 @@ describe("describeAudit: no sentence shows an id", () => {
     "user.created": { user_id: USER, username: "bob", role: "viewer", active: true },
     "user.updated": { user_id: USER, username: "bob", before: { role: "viewer", active: true }, after: { role: "admin", active: false } },
     "user.deleted": { user_id: USER, username: "bob", role: "viewer", active: true },
+    "playlist.created": { playlist_id: PLAYLIST, name: "Wall A", items: 3, items_after: [{ dashboard: "Ops", focus: null, seconds: 60 }, { dashboard: "Power", focus: "Hall 1", seconds: 30 }, { dashboard: null, focus: null, seconds: 60 }] },
+    // The two lists hold names and seconds only (never an id); the sentence reads them when they differ.
+    "playlist.updated": {
+      playlist_id: PLAYLIST, name: "Wall A", items: 3, before: { name: "Wall" }, after: { name: "Wall A" },
+      items_before: [{ dashboard: "Ops", focus: null, seconds: 60 }, { dashboard: "Power", focus: null, seconds: 60 }],
+      items_after: [{ dashboard: "Ops", focus: null, seconds: 60 }, { dashboard: "Billing", focus: "Hall 1", seconds: 30 }],
+    },
+    "playlist.deleted": { playlist_id: PLAYLIST, name: "Wall A", items: 3 },
+    "display.created": { display_id: DISPLAY, name: "Hall TV", playlist_id: PLAYLIST, playlist: "Wall A" },
+    // The moved-to playlist is kept as an id in the sides: the cell must read its name, never "Playlist id".
+    "display.updated": {
+      display_id: DISPLAY, name: "Lobby", playlist_id: PLAYLIST + 1, playlist: "Wall B",
+      before: { name: "Hall TV", playlist_id: PLAYLIST }, after: { name: "Lobby", playlist_id: PLAYLIST + 1 },
+    },
+    "display.revoked": { display_id: DISPLAY, name: "Hall TV", playlist_id: PLAYLIST, playlist: "Wall A" },
+    "display.deleted": { display_id: DISPLAY, name: "Hall TV", playlist_id: PLAYLIST, playlist: "Wall A" },
+    "display.connected": { display_id: DISPLAY, name: "Hall TV", client: "10.0.0.12" },
+    "display.claim_blocked": { client: "10.0.0.12" },
   };
 
   const present = {
     asset: { [A]: "Panel A", [PARENT]: "Hall 1", [A2]: "Hall 2", [A3]: "Hall 3" },
     user: { [USER]: "robert" }, source: { [SRC]: "Meter 1" }, dashboard: { [DASH]: "Overview", [DASH2]: "Plant" }, point: { [POINT]: "Voltage L1" },
+    display: { [DISPLAY]: "Lobby TV" }, playlist: { [PLAYLIST]: "Wall A", [PLAYLIST + 1]: "Wall B" },
   };
 
   // The same entry with every name it stored taken out: an old entry, or one whose writer did not keep the name.
   const withoutNames = (detail: unknown): unknown => {
     const strip = (value: Record<string, unknown>) => {
       const copy = { ...value };
-      for (const key of ["name", "username", "dashboard", "scope_name", "copied_from", "parent_name"]) delete copy[key];
+      for (const key of ["name", "username", "dashboard", "playlist", "scope_name", "copied_from", "parent_name"]) delete copy[key];
       return copy;
     };
     const copy = strip(detail as Record<string, unknown>);
@@ -1370,7 +1392,7 @@ describe("describeAudit: no sentence shows an id", () => {
     expect(Object.keys(FIXTURES).sort()).toEqual([...ALL_ACTIONS].sort());
   });
 
-  it("shows none of the 17 distinctive ids in a sentence, a link label or a Before/After cell, with every lookup state and with or without stored names", () => {
+  it("shows none of the 20 distinctive ids in a sentence, a link label or a Before/After cell, with every lookup state and with or without stored names", () => {
     for (const action of ALL_ACTIONS) {
       for (const detail of [FIXTURES[action], withoutNames(FIXTURES[action])]) {
         for (const refs of [present, {}, undefined]) {
@@ -1403,5 +1425,174 @@ describe("describeAudit: no sentence shows an id", () => {
     expect(say("user.updated")).toBe("Changed the role of robert from viewer to admin; Deactivated user robert");
     expect(say("source.tested")).toBe("Started a connection test of source Meter 1");
     expect(say("dashboard.default_changed")).toBe("Changed the default dashboard from Overview to Plant");
+  });
+});
+
+describe("describeAudit: playlists and displays", () => {
+  const link = { to: "/displays", label: "Open Displays" };
+  const say = (action: string, detail: Record<string, unknown>, refs?: AuditEntry["refs"]) => describeAudit(entry(action, detail, refs ? { refs } : {}));
+
+  it("writes a created playlist with how many dashboards it shows, singular and plural", () => {
+    expect(say("playlist.created", { playlist_id: 4, name: "Wall A", items: 3 }).summary).toBe("Created playlist Wall A (3 dashboards)");
+    expect(say("playlist.created", { playlist_id: 4, name: "Wall A", items: 1 }).summary).toBe("Created playlist Wall A (1 dashboard)");
+    expect(say("playlist.created", { playlist_id: 4, name: "Wall A", items: 0 }).summary).toBe("Created playlist Wall A (no dashboards)");
+    expect(say("playlist.created", { playlist_id: 4, name: "Wall A" }).summary).toBe("Created playlist Wall A");
+    expect(say("playlist.created", { playlist_id: 4, name: "Wall A", items: "3" }).summary).toBe("Created playlist Wall A");
+    expect(say("playlist.created", { playlist_id: 4, name: "Wall A", items: 3 }).link).toEqual(link);
+  });
+
+  it("names a changed playlist, with the fields of a rename, and a deleted one by its stored name", () => {
+    expect(say("playlist.updated", { playlist_id: 4, name: "Wall A", items: 2 }).summary).toBe("Changed playlist Wall A");
+    const renamed = say("playlist.updated", { playlist_id: 4, name: "Wall B", items: 2, before: { name: "Wall A" }, after: { name: "Wall B" } });
+    expect(renamed.summary).toBe("Changed playlist Wall B: name");
+    expect(renamed.changes).toEqual([{ field: "Name", before: "Wall A", after: "Wall B" }]);
+    expect(renamed.link).toEqual(link);
+    expect(say("playlist.deleted", { playlist_id: 4, name: "Wall A", items: 3 }).summary).toBe("Deleted playlist Wall A");
+    expect(say("playlist.deleted", { playlist_id: 4, name: "Wall A", items: 3 }).link).toEqual(link);
+    expect(say("playlist.deleted", { playlist_id: 4 }, {}).summary).toBe("Deleted playlist");
+  });
+
+  describe("what a playlist save changed on the screen (items_before and items_after, names only)", () => {
+    const item = (dashboard: string | null, over: Record<string, unknown> = {}) => ({ dashboard, focus: null, seconds: 60, ...over });
+    const saved = (before: unknown, after: unknown, extra: Record<string, unknown> = {}) => {
+      const detail: Record<string, unknown> = { playlist_id: 4, name: "Wall A", items: 2, ...extra };
+      if (before !== undefined) detail.items_before = before;
+      if (after !== undefined) detail.items_after = after;
+      return say("playlist.updated", detail).summary;
+    };
+
+    it("lists the dashboards before and after when they changed", () => {
+      expect(saved([item("Ops"), item("Power")], [item("Ops"), item("Billing")])).toBe("Changed playlist Wall A: dashboards Ops, Power -> Ops, Billing");
+    });
+
+    it("counts a different order as a change of dashboards", () => {
+      expect(saved([item("Ops"), item("Power")], [item("Power"), item("Ops")])).toBe("Changed playlist Wall A: dashboards Ops, Power -> Power, Ops");
+    });
+
+    it("says seconds or focus, only when the dashboards stayed as they were", () => {
+      expect(saved([item("Ops"), item("Power")], [item("Ops", { seconds: 30 }), item("Power")])).toBe("Changed playlist Wall A: seconds");
+      expect(saved([item("Ops"), item("Power")], [item("Ops"), item("Power", { focus: "Hall 1" })])).toBe("Changed playlist Wall A: focus");
+      expect(saved([item("Ops")], [item("Ops", { seconds: 30, focus: "Hall 1" })])).toBe("Changed playlist Wall A: seconds, focus");
+      // New dashboards: the lists differ, so the dashboards are named and the seconds of other items are not compared by position.
+      expect(saved([item("Ops")], [item("Billing", { seconds: 30 })])).toBe("Changed playlist Wall A: dashboards Ops -> Billing");
+    });
+
+    it("follows a renamed playlist's field list", () => {
+      const view = say("playlist.updated", {
+        playlist_id: 4, name: "Wall B", items: 2, before: { name: "Wall A" }, after: { name: "Wall B" }, items_before: [item("Ops")], items_after: [item("Ops"), item("Billing")],
+      });
+      expect(view.summary).toBe("Changed playlist Wall B: name, dashboards Ops -> Ops, Billing");
+      expect(view.changes).toEqual([{ field: "Name", before: "Wall A", after: "Wall B" }]); // the lists are in the sentence, not in the Before/After rows
+    });
+
+    it("writes an empty list as none, a dashboard that has no name as a deleted one, and cuts a long list", () => {
+      expect(saved([], [item("Ops")])).toBe("Changed playlist Wall A: dashboards none -> Ops");
+      expect(saved([item("Ops")], [item(null)])).toBe("Changed playlist Wall A: dashboards Ops -> a deleted dashboard");
+      const many = ["A", "B", "C", "D", "E", "F", "G"].map((n) => item(n));
+      expect(saved([item("Ops")], many)).toBe("Changed playlist Wall A: dashboards Ops -> A, B, C, D, E and 2 more");
+    });
+
+    it("reads a list that is present on one side only, as an empty one on the other", () => {
+      expect(saved(undefined, [item("Ops")])).toBe("Changed playlist Wall A: dashboards none -> Ops");
+      expect(saved([item("Ops")], undefined)).toBe("Changed playlist Wall A: dashboards Ops -> none");
+    });
+
+    it("keeps the old sentence when the keys are absent, the lists are the same, or they are not lists", () => {
+      expect(saved(undefined, undefined)).toBe("Changed playlist Wall A");
+      expect(saved([item("Ops")], [item("Ops")])).toBe("Changed playlist Wall A");
+      expect(saved("Ops", { dashboard: "Ops" })).toBe("Changed playlist Wall A");
+      expect(saved([item("Ops")], [item("Ops")], { before: { name: "Wall" }, after: { name: "Wall A" } })).toBe("Changed playlist Wall A: name");
+    });
+
+    it("never prints an id, whatever the entries hold", () => {
+      expect(saved([{ dashboard: "Ops", dashboard_id: 90005, focus: "Hall 1", seconds: 60 }], [{ dashboard: "Billing", dashboard_id: 90006, focus: null, seconds: 60 }])).not.toMatch(/9000\d/);
+    });
+  });
+
+  it("falls back to the lookup for a playlist whose entry kept no name", () => {
+    expect(say("playlist.updated", { playlist_id: 4 }, { playlist: { "4": "Wall A" } }).summary).toBe("Changed playlist Wall A");
+    expect(say("playlist.updated", { playlist_id: 4 }, {}).summary).toBe("Changed a deleted playlist");
+    expect(say("playlist.updated", { playlist_id: 4 }).summary).toBe("Changed playlist");
+  });
+
+  it("writes a created display with its playlist and a deleted or revoked one by its stored name", () => {
+    const detail = { display_id: 9, name: "Hall TV", playlist_id: 4, playlist: "Wall A" };
+    expect(say("display.created", detail).summary).toBe("Created display Hall TV (playlist Wall A)");
+    expect(say("display.created", detail).link).toEqual(link);
+    expect(say("display.revoked", detail).summary).toBe("Revoked display Hall TV: its link no longer works");
+    expect(say("display.revoked", detail).link).toEqual(link);
+    expect(say("display.deleted", detail).summary).toBe("Deleted display Hall TV");
+    expect(say("display.deleted", detail).link).toEqual(link);
+  });
+
+  it("names the playlist of a display from the lookup when the entry kept no name, and says so when it is gone", () => {
+    const bare = { display_id: 9, playlist_id: 4 };
+    expect(say("display.created", bare, { playlist: { "4": "Wall A" }, display: { "9": "Hall TV" } }).summary).toBe("Created display Hall TV (playlist Wall A)");
+    expect(say("display.created", bare, { display: { "9": "Hall TV" } }).summary).toBe("Created display Hall TV (a deleted playlist)");
+    expect(say("display.created", bare).summary).toBe("Created display (a playlist)");
+    expect(say("display.created", { display_id: 9, name: "Hall TV" }).summary).toBe("Created display Hall TV");
+    expect(say("display.revoked", bare, {}).summary).toBe("Revoked a deleted display: its link no longer works");
+  });
+
+  it("reads a display that connected without an actor, and a blocked claim as a sentence about the address", () => {
+    expect(say("display.connected", { display_id: 9, name: "Hall TV", client: "10.0.0.12" }).summary).toBe("Display Hall TV connected from 10.0.0.12");
+    expect(say("display.connected", { display_id: 9, name: "Hall TV", client: "10.0.0.12" }).link).toEqual(link);
+    expect(say("display.connected", { display_id: 9, name: "Hall TV" }).summary).toBe("Display Hall TV connected");
+    expect(say("display.connected", {}).summary).toBe("A display connected");
+    expect(say("display.connected", { display_id: 9, client: "10.0.0.12" }, {}).summary).toBe("A deleted display connected from 10.0.0.12");
+    expect(say("display.claim_blocked", { client: "10.0.0.12" }).summary).toBe(
+      "Too many wrong display links from 10.0.0.12: the address is blocked for 15 minutes",
+    );
+    expect(say("display.claim_blocked", { client: "10.0.0.12" }).link).toEqual(link);
+    expect(say("display.claim_blocked", {}).summary).toBe("Too many wrong display links: the address is blocked for 15 minutes");
+  });
+
+  it("writes a rename, a playlist change and both together, with the playlist as a name in the Before / After table", () => {
+    const renamed = say("display.updated", { display_id: 9, name: "Lobby", before: { name: "Hall TV" }, after: { name: "Lobby" } });
+    expect(renamed.summary).toBe("Renamed display Hall TV to Lobby");
+    expect(renamed.changes).toEqual([{ field: "Name", before: "Hall TV", after: "Lobby" }]);
+    expect(renamed.link).toEqual(link);
+
+    // By id in the sides: the cell reads the names from the lookup, never "Playlist id: 7".
+    const byId = say(
+      "display.updated",
+      { display_id: 9, name: "Hall TV", before: { playlist_id: 7 }, after: { playlist_id: 8 } },
+      { playlist: { "7": "Wall A", "8": "Wall B" } },
+    );
+    expect(byId.summary).toBe("Changed the playlist of display Hall TV to Wall B");
+    expect(byId.changes).toEqual([{ field: "Playlist", before: "Wall A", after: "Wall B" }]);
+    expect(byId.changes.map((c) => c.field).join(" ")).not.toMatch(/id/i);
+
+    // By stored name in the sides: one row, the stored names, even when the ids are there too.
+    const byName = say("display.updated", {
+      display_id: 9, name: "Hall TV", before: { playlist_id: 7, playlist: "Wall A" }, after: { playlist_id: 8, playlist: "Wall B" },
+    });
+    expect(byName.summary).toBe("Changed the playlist of display Hall TV to Wall B");
+    expect(byName.changes).toEqual([{ field: "Playlist", before: "Wall A", after: "Wall B" }]);
+
+    const both = say("display.updated", {
+      display_id: 9, name: "Lobby", before: { name: "Hall TV", playlist: "Wall A" }, after: { name: "Lobby", playlist: "Wall B" },
+    });
+    expect(both.summary).toBe("Renamed display Hall TV to Lobby; changed its playlist to Wall B");
+    expect(both.changes).toHaveLength(2);
+  });
+
+  it("says a moved-to playlist that is gone, and falls back to a plain sentence for an update it cannot read", () => {
+    expect(
+      say("display.updated", { display_id: 9, name: "Hall TV", before: { playlist_id: 7 }, after: { playlist_id: 8 } }, { playlist: {} }).summary,
+    ).toBe("Changed the playlist of display Hall TV to a deleted playlist");
+    expect(say("display.updated", { display_id: 9, name: "Hall TV" }).summary).toBe("Changed display Hall TV");
+    expect(say("display.updated", {}).summary).toBe("Changed display");
+  });
+
+  it("reads every stored value as text and cuts a very long name", () => {
+    expect(say("display.created", { display_id: 9, name: "<b>TV</b>", playlist: "<i>A</i>" }).summary).toBe("Created display <b>TV</b> (playlist <i>A</i>)");
+    const long = "x".repeat(200);
+    expect(say("playlist.deleted", { playlist_id: 4, name: long }).summary).toBe(`Deleted playlist ${"x".repeat(80)}…`);
+  });
+
+  it("never prints the secret, the hash or the link, even if an entry somehow holds them", () => {
+    const view = say("display.created", { display_id: 9, name: "Hall TV", playlist: "Wall A", link_secret: "SECRETVALUE", secret_hash: "HASHVALUE" });
+    expect([view.summary, view.link?.label, ...view.changes.map((c) => `${c.field}${c.before}${c.after}`)].join(" ")).not.toMatch(/SECRETVALUE|HASHVALUE|secret/i);
   });
 });

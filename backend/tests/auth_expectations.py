@@ -1,6 +1,7 @@
 """What each API route asks of the caller, by route key ("GET /api/health": method, then the path as the router spells it).
 
-PUBLIC: no sign-in. SIGNED_IN: any signed-in account, whatever its role. Every other route names a permission:
+PUBLIC: no sign-in. SIGNED_IN: any signed-in account, whatever its role. DISPLAY: a connected display screen (W28), a caller
+that is not an account at all. Every other route names a permission:
 ROUTE_PERMISSIONS, route key -> (mode, ids), where mode "all" means the caller must hold every id and "any" at least one.
 The reason is the dict's value so a reader sees why a route is public or open to any account.
 """
@@ -22,6 +23,16 @@ SIGNED_IN: dict[str, str] = {
     "GET /api/site": "the site name every page header shows",
     "GET /api/version": "the build id every account may see in the profile menu",
     "GET /api/status": "the collector-alive chip in the shell",
+}
+
+# Routes a connected display (a screen holding the cookie `dcdash_display`) may call: a third kind of caller, neither public,
+# nor a signed-in account, nor a permission holder. Each depends on `current_display` (the claim is the one exception: the
+# secret in its body is its credential) and none depends on `current_user` or declares a permission.
+DISPLAY_CLAIM = "POST /api/display/claim"
+DISPLAY: dict[str, str] = {
+    DISPLAY_CLAIM: "starts a display: the secret in the body is the credential; it needs no sign-in",
+    "GET /api/display/playlist": "what a connected screen shows: its own playlist, dashboards and widgets",
+    "POST /api/display/widget-data": "the figures of one widget of the screen's own playlist, by ids; never a config",
 }
 
 
@@ -80,6 +91,11 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     # Added in W27 (Make a copy): after the freeze, like the line above.
     _all("dashboards.edit", "POST /api/dashboards/{dashboard_id}/copy"),
     _all("dashboards.default", "PUT /api/dashboards/default"),
+    # Added in W28 (display screens): after the freeze, so not in auth_matrix_pre_w9a.json; the gate and isolation tests cover them.
+    # The display half of the feature (a screen with its cookie) is in DISPLAY above, not here.
+    _all("displays.manage", "GET /api/displays", "POST /api/playlists", "PUT /api/playlists/{playlist_id}",
+         "DELETE /api/playlists/{playlist_id}", "POST /api/displays", "PUT /api/displays/{display_id}",
+         "POST /api/displays/{display_id}/revoke", "DELETE /api/displays/{display_id}"),
     _all("billing.view", "GET /api/billing/costs", "GET /api/billing/months"),
     _all("billing.export", "GET /api/billing/costs.csv"),
     # Added in W21 (the month check): after the freeze, so not in auth_matrix_pre_w9a.json; the gate and isolation tests cover it.
