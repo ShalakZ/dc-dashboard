@@ -651,7 +651,7 @@ describe("styles/widgets.css, the comparison and the breakdown (w24)", () => {
     const wide = inContainer("min-width: 360px");
     const grid = bodyOf(".stat-compare, .widget-sk-compare", wide);
     expect(prop(grid, "display")).toBe("grid");
-    expect(prop(grid, "grid-template-columns")).toBe("minmax(0, 3fr) minmax(0, 2fr)");
+    expect(prop(grid, "grid-template-columns"), "the right column is never narrower than its label (w27 FA)").toBe("minmax(0, 3fr) minmax(var(--stat-last-min), 2fr)");
     expect(prop(grid, "grid-template-areas")).toBe('"fig last" "name lastwin" "age ." "win ." "change change" "note note"');
     expect(prop(grid, "--fig-share"), "the headline's room is its 3 of the 5 parts left after the gutter").toBe("0.6");
     expect(prop(grid, "--fig-gutter")).toBe(prop(grid, "column-gap"));
@@ -668,6 +668,25 @@ describe("styles/widgets.css, the comparison and the breakdown (w24)", () => {
     expect(prop(bodyOf(".stat-compare > .stat-last, .widget-sk-compare > .sk-compare-last", wide), "flex-direction"), "label over figure in the narrower column").toBe("column");
     // under 360px nothing of this applies: the old stack, the unchanged 2px gap and wrapping row
     expect(rules.filter((r) => /stat-compare|widget-sk-compare/.test(r.selector) && /grid-area|grid-template|display:\s*grid/.test(r.body) && !r.at.some((a) => a.includes("min-width: 360px")))).toEqual([]);
+  });
+
+  // w27 FA (review finding 11): "Same days last month" is 146 px at 13px, and the right column's 2 of 5 parts is 143 px in a 3 wide card at 1920 (and 132 px in a 4 wide one at 1440), so the label
+  // painted 3 px (14 px) into the gutter: `overflow: visible; text-overflow: clip`, as the label is never cut. The column is never narrower than the label, and the headline's room is what is left.
+  it("keeps the right column of the side by side comparison as wide as the label 'Same days last month', and gives the headline only what that leaves", () => {
+    const wide = inContainer("min-width: 360px");
+    const grid = bodyOf(".stat-compare, .widget-sk-compare", wide);
+    const label = prop(grid, "--stat-last-min")!;
+    expect(label, "the label's width as an em count of its own size (--fs-sm), 11.2 em measured in the widest fallback font").toBe("calc(var(--fs-sm) * 11.4)");
+    expect(11.4 * 13, "at least the 146 px measured").toBeGreaterThanOrEqual(146);
+    // The headline: its 3 of 5 parts, but never more than the width the label's column leaves (the figure is nowrap; a wider one would run into the gutter).
+    const room = prop(bodyOf(".stat-compare > .big, .widget-sk-compare", wide), "--fig-room")!;
+    expect(room).toContain("min(");
+    expect(room).toContain("var(--fig-share)");
+    expect(room).toContain("var(--stat-last-min)");
+    expect(room).toContain("var(--fig-gutter)");
+    // Under 360px the stack keeps the old room: no minimum column anywhere outside the container rule.
+    expect(rules.filter((r) => /stat-last-min/.test(r.body) && !r.at.some((a) => a.includes("min-width: 360px")))).toEqual([]);
+    expect(prop(bodyOf(".stat-last-label"), "white-space")).toBe("nowrap");
   });
 
   it("makes the Split by select a 28px control at the small size, in a row of its own, with its label not the app's bold grid", () => {

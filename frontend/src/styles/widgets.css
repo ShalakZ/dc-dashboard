@@ -215,8 +215,11 @@
      elements in the same order, only placed (grid areas), so nothing is added or moved by script. The skeleton below is placed by the same areas. The headline's room is its 3 of 5
      parts of the width left after the 16px gutter (--fig-share, --fig-gutter), which its clamp reads. */
   @container widget (min-width: 360px) {
-    .stat-compare, .widget-sk-compare { --fig-max: var(--widget-figure-max); --fig-gutter: 16px; --fig-share: 0.6; display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); column-gap: 16px; row-gap: 2px; align-content: start; grid-template-areas: "fig last" "name lastwin" "age ." "win ." "change change" "note note"; }
+    .stat-compare, .widget-sk-compare { --fig-max: var(--widget-figure-max); --fig-gutter: 16px; --fig-share: 0.6; --stat-last-min: calc(var(--fs-sm) * 11.4); display: grid; grid-template-columns: minmax(0, 3fr) minmax(var(--stat-last-min), 2fr); column-gap: 16px; row-gap: 2px; align-content: start; grid-template-areas: "fig last" "name lastwin" "age ." "win ." "change change" "note note"; }
     .stat-compare > .big, .widget-sk-compare > .sk-fig { grid-area: fig; }
+    /* w27 FA: "Same days last month" is 11.2 em wide (146 px at 13px, measured in the widest fallback font; --stat-last-min is 11.4 em), more than the 2 of 5 parts of a body under about 380px (143 px in a 3 wide card at 1920,
+       132 px in a 4 wide one at 1440), where it painted into the gutter. The right column is never narrower than the label, and the headline's room is its 3 of 5 parts or what that column leaves, the smaller. */
+    .stat-compare > .big, .widget-sk-compare { --fig-room: min(calc((100cqi - 2 * var(--widget-pad) - var(--fig-gutter)) * var(--fig-share)), calc(100cqi - 2 * var(--widget-pad) - var(--fig-gutter) - var(--stat-last-min))); }
     .stat-compare > .stat-name, .widget-sk-compare > .sk-name { grid-area: name; }
     .stat-compare > .stat-age { grid-area: age; }
     .stat-compare > .stat-window, .widget-sk-compare > .sk-win { grid-area: win; }
