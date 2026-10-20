@@ -7,9 +7,11 @@ asset is named (the same 403 text as a gate), and `GET /api/displays` hides the 
 
 A playlist is saved as a whole: PUT sends every item. An item that comes back with its own `id` keeps that id (a display that holds
 an item id keeps working across a save); items missing from the body are deleted, items without an `id` are new. An item that comes
-back with its own `id` and an unchanged `dashboard_id` or `focus_asset_id` keeps that part as stored (the snapshot name included,
-whether or not the dashboard or asset still exists), so a playlist with a skipped item can still be renamed and reordered; only a
-new or changed part is checked and gets a fresh snapshot name. The last save wins (there is no stale check).
+back with its own `id` and an unchanged `dashboard_id` or `focus_asset_id` keeps that part and is not checked (the dashboard or
+asset may be gone), so a playlist with a skipped item can still be renamed and reordered; only a new or changed part is checked. The
+snapshot name of every part that still exists is refreshed at each save; a part that is gone keeps the name stored at the last save
+that saw it. A save that changes nothing (same name, every item back with the same id, position, seconds, dashboard and focus) is no
+event: no audit row and no new `updated_at`. The last save wins (there is no stale check).
 
 The link secret is shown once, in the answer of `POST /api/displays`, and is never written anywhere else: the display row holds only
 its SHA-256 hash, and no audit row, log line or other answer carries the secret, the hash or the link. Locks: the two caps take an
@@ -59,7 +61,8 @@ def display_refusals(playlist_id: int | None) -> dict[str, HTTPException]:
         "displays_playlist_fk": HTTPException(422, f"playlist {playlist_id} does not exist"),
     }
 
-Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_NAME)]
+# Postgres text cannot hold a NUL (the driver raises, a 500), so a name with one is refused here, as `api/audit.py` refuses it in `q`.
+Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_NAME, pattern=r"^[^\x00]*$")]
 Id = Annotated[StrictInt, Field(ge=1, le=MAX_ID)]
 Seconds = Annotated[StrictInt, Field(ge=MIN_SECONDS, le=MAX_SECONDS)]
 
@@ -164,6 +167,22 @@ def _check_access(user: User, items: list[ItemIn]) -> None:
     if items and not user.can("dashboards.view"):
         raise _refuse()
     if any(item.focus_asset_id is not None for item in items) and not user.can("assets.view"):
+        raise _refuse()
+
+
+async def _check_link_access(db: AsyncSession, user: User, playlist_id: int) -> None:
+    """The rule for a screen that is to show a playlist: a new link (POST /api/displays) and an existing display pointed at another
+    playlist (PUT /api/displays/{id}) are the same act, "make a screen show playlist X", and the screen is a read channel. It needs
+    `dashboards.view`, and `assets.view` too when the playlist has an item with a focus. Runs before the playlist is looked up for
+    its 422; whether a playlist exists is no secret (the listing names them all), what its items name is."""
+    if not user.can("dashboards.view"):
+        raise _refuse()
+    if user.can("assets.view"):
+        return
+    focused = await db.scalar(
+        select(func.count()).select_from(PlaylistItem).where(PlaylistItem.playlist_id == playlist_id, PlaylistItem.focus_asset_id.is_not(None))
+    )
+    if focused:
         raise _refuse()
 
 
@@ -295,9 +314,10 @@ class _Row:
 
 async def _rows(db: AsyncSession, items: list[ItemIn], stored: dict[int, PlaylistItem]) -> list[_Row]:
     """The rows to store, in body order, after the checks. Each part (dashboard, focus) of an item that is new or changed is
-    checked and gets the live name as its snapshot; a part sent back unchanged for an item of this playlist is kept as stored,
-    with no check (the dashboard or the asset may be gone). 422 for an id that is not an item of this playlist, for an item with
-    no dashboard, for a dashboard or an asset that does not exist."""
+    checked and gets the live name as its snapshot; a part sent back unchanged for an item of this playlist is not checked (the
+    dashboard or the asset may be gone): while it still exists its snapshot name is refreshed, once it is gone the stored one is
+    kept. 422 for an id that is not an item of this playlist, for an item with no dashboard, for a dashboard or an asset that
+    does not exist."""
     plan: list[tuple[ItemIn, PlaylistItem | None, bool, bool]] = []
     for item in items:
         existing = None
@@ -310,27 +330,28 @@ async def _rows(db: AsyncSession, items: list[ItemIn], stored: dict[int, Playlis
         if dashboard_new and item.dashboard_id is None:
             raise HTTPException(422, "every item needs a dashboard")
         plan.append((item, existing, dashboard_new, focus_new))
-    wanted = {item.dashboard_id for item, _, dashboard_new, _ in plan if dashboard_new}
+    # Every named dashboard is looked up (and locked), the unchanged ones too: a part that is unchanged and still exists gets a
+    # fresh snapshot name, a dead one is simply absent from `live` and keeps what is stored.
+    wanted = {item.dashboard_id for item, _, _, _ in plan if item.dashboard_id is not None}
     live = await _live_dashboards(db, wanted) if wanted else {}
     for item, _, dashboard_new, _ in plan:
         if dashboard_new and item.dashboard_id not in live:
             raise HTTPException(422, f"dashboard {item.dashboard_id} does not exist")
-    focused = {item.focus_asset_id for item, _, _, focus_new in plan if focus_new and item.focus_asset_id is not None}
-    tree = await AssetTree.load(db) if focused else None
+    tree = await AssetTree.load(db) if any(item.focus_asset_id is not None for item, _, _, _ in plan) else None
     rows: list[_Row] = []
     for item, existing, dashboard_new, focus_new in plan:
-        if dashboard_new:
+        if dashboard_new or item.dashboard_id in live:
             dashboard_id, dashboard_name = item.dashboard_id, live[item.dashboard_id]
         else:
-            dashboard_id, dashboard_name = existing.dashboard_id, existing.dashboard_name
-        if not focus_new:
-            focus_id, focus_name = existing.focus_asset_id, existing.focus_name
-        elif item.focus_asset_id is None:
+            dashboard_id, dashboard_name = existing.dashboard_id, existing.dashboard_name  # unchanged and gone: the stored snapshot
+        if item.focus_asset_id is None:
             focus_id, focus_name = None, None
         elif tree is not None and item.focus_asset_id in tree.nodes:
             focus_id, focus_name = item.focus_asset_id, tree.nodes[item.focus_asset_id].name
-        else:
+        elif focus_new:
             raise HTTPException(422, f"asset {item.focus_asset_id} does not exist")
+        else:
+            focus_id, focus_name = existing.focus_asset_id, existing.focus_name  # unchanged and gone: the stored snapshot
         rows.append(_Row(existing, dashboard_id, dashboard_name, focus_id, focus_name, item.seconds))
     return rows
 
@@ -398,9 +419,18 @@ async def save_playlist(
         raise HTTPException(409, PLAYLIST_NAME_TAKEN)
     old_name = playlist.name
     kept = {row.stored.id for row in rows if row.stored is not None}
+    # A save that changes nothing is not an event (as in the dashboards): the same name and every item back with the same id,
+    # position, seconds, dashboard and focus. A refreshed snapshot name is written but is no change either.
+    old_items = [(i.id, i.position, i.seconds, i.dashboard_id, i.focus_asset_id) for i in sorted(stored.values(), key=lambda i: (i.position, i.id))]
+    new_items = [
+        (row.stored.id if row.stored is not None else None, position, row.seconds, row.dashboard_id, row.focus_asset_id)
+        for position, row in enumerate(rows)
+    ]
+    changed = body.name != old_name or new_items != old_items
     try:
         playlist.name = body.name
-        playlist.updated_at = datetime.now(UTC)
+        if changed:
+            playlist.updated_at = datetime.now(UTC)
         for item_id, item in stored.items():
             if item_id not in kept:
                 await db.delete(item)
@@ -417,9 +447,10 @@ async def save_playlist(
             row.stored.focus_asset_id, row.stored.focus_name = row.focus_asset_id, row.focus_name
         await db.flush()
         answer = _playlist_out(playlist, await _views(db, playlist.id), await _display_count(db, playlist.id), user)
-        subject = {"playlist_id": playlist.id, "name": playlist.name, "items": len(rows)}
-        if not await audit_change(db, user.id, "playlist.updated", subject, {"name": old_name}, {"name": playlist.name}):
-            await audit(db, user.id, "playlist.updated", subject)  # only the items changed: the row is still an event
+        if changed:
+            subject = {"playlist_id": playlist.id, "name": playlist.name, "items": len(rows)}
+            if not await audit_change(db, user.id, "playlist.updated", subject, {"name": old_name}, {"name": playlist.name}):
+                await audit(db, user.id, "playlist.updated", subject)  # only the items changed: the row is still an event
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
@@ -452,19 +483,13 @@ async def create_display(
     body: DisplayIn, response: Response, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
 ) -> DisplayCreated:
     """The ONE answer that carries `link_secret`; only its hash is stored, and nothing else (audit included) holds it."""
-    if not user.can("dashboards.view"):  # the link shows dashboards
-        raise _refuse()
+    await _check_link_access(db, user, body.playlist_id)  # the link shows dashboards, and the assets a focus names
     await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": DISPLAY_CAP_LOCK})
     if (await db.scalar(select(func.count()).select_from(Display)) or 0) >= MAX_DISPLAYS:
         raise HTTPException(422, f"at most {MAX_DISPLAYS} displays")
     playlist = await db.scalar(select(Playlist).where(Playlist.id == body.playlist_id))
     if playlist is None:
         raise HTTPException(422, f"playlist {body.playlist_id} does not exist")
-    focused = await db.scalar(
-        select(func.count()).select_from(PlaylistItem).where(PlaylistItem.playlist_id == playlist.id, PlaylistItem.focus_asset_id.is_not(None))
-    )
-    if focused and not user.can("assets.view"):
-        raise _refuse()
     if await _display_name_taken(db, body.name):
         raise HTTPException(409, DISPLAY_NAME_TAKEN)
     secret, secret_hash = new_secret()
@@ -495,20 +520,22 @@ async def update_display(
     old_playlist = await db.scalar(select(Playlist.name).where(Playlist.id == display.playlist_id))
     playlist_id, playlist_name = display.playlist_id, old_playlist
     if body.playlist_id is not None and body.playlist_id != display.playlist_id:
+        # A new playlist makes the screen show other dashboards (and assets): the same rule as a new link. A rename needs nothing.
+        await _check_link_access(db, user, body.playlist_id)
         chosen = await db.scalar(select(Playlist).where(Playlist.id == body.playlist_id))
         if chosen is None:
             raise HTTPException(422, f"playlist {body.playlist_id} does not exist")
         playlist_id, playlist_name = chosen.id, chosen.name
     if body.name is not None and await _display_name_taken(db, body.name, except_id=display.id):
         raise HTTPException(409, DISPLAY_NAME_TAKEN)
-    before = {"name": display.name, "playlist": old_playlist}
+    before = {"name": display.name, "playlist_id": display.playlist_id, "playlist": old_playlist}
     try:
         display.name = body.name if body.name is not None else display.name
         display.playlist_id = playlist_id
         await db.flush()
         await audit_change(
             db, user.id, "display.updated", {"display_id": display.id, "name": display.name},
-            before, {"name": display.name, "playlist": playlist_name},
+            before, {"name": display.name, "playlist_id": playlist_id, "playlist": playlist_name},
         )
         await db.commit()
     except IntegrityError as exc:
@@ -529,7 +556,10 @@ async def revoke_display(
         display.revoked_at = datetime.now(UTC)
         display.revoked_by = user.id
         await db.flush()
-        await audit(db, user.id, "display.revoked", {"display_id": display.id, "name": display.name})
+        await audit(
+            db, user.id, "display.revoked",
+            {"display_id": display.id, "name": display.name, "playlist_id": display.playlist_id, "playlist": playlist_name},
+        )
         await db.commit()
     return _display_out(display, playlist_name)
 

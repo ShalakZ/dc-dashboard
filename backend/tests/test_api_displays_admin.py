@@ -211,7 +211,11 @@ async def test_a_focus_needs_assets_view_before_the_asset_is_even_looked_up(clie
     # A link to a playlist that has a focus needs assets.view too; sending the unchanged focus back needs it as well.
     assert (await new_display(client, "Hall", focused["id"])).status_code == 403
     assert (await client.put(f"/api/playlists/{focused['id']}", json={"name": "Focused", "items": [item(ops, id=focused["items"][0]["id"], focus=hall)]})).status_code == 403
-    assert (await new_display(client, "Hall", plain["id"])).status_code == 201
+    made = await new_display(client, "Hall", plain["id"])
+    assert made.status_code == 201
+    # Moving that display to the focused playlist is the same act as making a link to it: refused the same way.
+    moved = await client.put(f"/api/displays/{made.json()['display']['id']}", json={"playlist_id": focused["id"]})
+    assert moved.status_code == 403 and moved.json() == {"detail": "insufficient permission"}
 
 
 async def test_the_listing_hides_the_names_a_caller_may_not_see(client, db):
@@ -264,6 +268,22 @@ async def test_a_bad_name_is_422(client, db, name):
 async def test_a_name_of_a_hundred_characters_is_fine(client, db):
     await login_as(client, db, "admin")
     assert (await new_playlist(client, " " + "x" * 100 + " ")).status_code == 201
+
+
+# Postgres text cannot hold a NUL: the driver raised (a 500). Built with chr() so no escape is written in this source.
+NUL = chr(0)
+
+
+@pytest.mark.parametrize("name", [f"a{NUL}b", NUL, f"x{NUL}"], ids=["inside", "alone", "last"])
+async def test_a_nul_in_a_name_is_422_not_a_500(client, db, name):
+    await login_as(client, db, "admin")
+    playlist = (await new_playlist(client, "Wall")).json()
+    display = (await new_display(client, "Hall TV", playlist["id"])).json()["display"]
+    assert (await new_playlist(client, name)).status_code == 422  # create a playlist
+    assert (await client.put(f"/api/playlists/{playlist['id']}", json={"name": name, "items": []})).status_code == 422  # rename one
+    assert (await new_display(client, name, playlist["id"])).status_code == 422  # create a display
+    assert (await client.put(f"/api/displays/{display['id']}", json={"name": name})).status_code == 422  # rename one
+    assert await db.fetchval("SELECT name FROM playlists") == "Wall" and await db.fetchval("SELECT name FROM displays") == "Hall TV"
 
 
 async def test_the_item_fields_are_checked(client, db):
@@ -438,10 +458,69 @@ async def test_a_save_stamps_updated_at_and_a_missing_playlist_is_404(client, db
     await login_as(client, db, "admin")
     created = (await new_playlist(client, "Wall")).json()
     before = await db.fetchval("SELECT updated_at FROM playlists WHERE id = $1", created["id"])
-    await client.put(f"/api/playlists/{created['id']}", json={"name": "Wall", "items": []})
+    await client.put(f"/api/playlists/{created['id']}", json={"name": "Wall renamed", "items": []})
     assert await db.fetchval("SELECT updated_at FROM playlists WHERE id = $1", created["id"]) > before
     gone = await client.put("/api/playlists/424242", json={"name": "Wall", "items": []})
     assert gone.status_code == 404 and gone.json() == {"detail": "playlist not found"}
+
+
+async def test_a_save_that_changes_nothing_is_no_event_and_leaves_updated_at_alone(client, db):
+    # The dashboards precedent: a no-op update is not an event. Same name and every item back with the same id, position,
+    # seconds, dashboard and focus: no playlist.updated row and no new updated_at.
+    await login_as(client, db, "admin")
+    a, b, hall = await make_dashboard(db, "Alpha"), await make_dashboard(db, "Beta"), await make_asset(db, "Hall 1")
+    created = (await new_playlist(client, "Wall", [item(a, 20), item(b, 30, focus=hall)])).json()
+    ida, idb = (i["id"] for i in created["items"])
+    url = f"/api/playlists/{created['id']}"
+    stamp = await db.fetchval("SELECT updated_at FROM playlists WHERE id = $1", created["id"])
+    same = [item(a, 20, id=ida), item(b, 30, focus=hall, id=idb)]
+    saved = await client.put(url, json={"name": " Wall ", "items": same})
+    assert saved.status_code == 200 and saved.json() == created
+    assert await audit_rows(db, "playlist.updated") == []
+    assert await db.fetchval("SELECT updated_at FROM playlists WHERE id = $1", created["id"]) == stamp
+
+    # Each kind of change is still an event: the order alone, the seconds, a focus, a new or a removed item, the name.
+    changes = [
+        [same[1], same[0]],
+        [item(a, 21, id=ida), same[1]],
+        [same[0], item(b, 30, id=idb)],
+        [*same, item(a, 20)],
+        same[:1],
+    ]
+    for number, items in enumerate(changes, start=1):
+        assert (await client.put(url, json={"name": "Wall", "items": items})).status_code == 200
+        assert len(await audit_rows(db, "playlist.updated")) == number, items
+        assert await db.fetchval("SELECT updated_at FROM playlists WHERE id = $1", created["id"]) > stamp
+        stamp = await db.fetchval("SELECT updated_at FROM playlists WHERE id = $1", created["id"])
+    current = [item(i["dashboard_id"], i["seconds"], i["focus_asset_id"], id=i["id"]) for i in playlist_of(await listing(client), created["id"])["items"]]
+    await client.put(url, json={"name": "Wall 2", "items": current})  # only the name changed
+    rows = await audit_rows(db, "playlist.updated")
+    assert len(rows) == len(changes) + 1 and rows[-1]["detail"]["before"] == {"name": "Wall"}
+
+
+async def test_an_unchanged_live_part_gets_a_fresh_snapshot_name_and_a_dead_part_keeps_its_old_one(client, db):
+    await login_as(client, db, "admin")
+    ops, power, hall = await make_dashboard(db, "Ops"), await make_dashboard(db, "Power"), await make_asset(db, "Hall 1")
+    created = (await new_playlist(client, "Wall", [item(ops, focus=hall), item(power)])).json()
+    first, second = created["items"]
+    await db.execute("UPDATE dashboards SET name = 'Ops renamed' WHERE id = $1", ops)
+    await db.execute("UPDATE assets SET name = 'Hall renamed' WHERE id = $1", hall)
+    stamp = await db.fetchval("SELECT updated_at FROM playlists WHERE id = $1", created["id"])
+    body = {"name": "Wall", "items": [item(ops, 60, focus=hall, id=first["id"]), item(power, 60, id=second["id"])]}
+    assert (await client.put(f"/api/playlists/{created['id']}", json=body)).status_code == 200  # unchanged: parts are not "new"
+    stored = await db.fetch("SELECT dashboard_name, focus_name FROM playlist_items ORDER BY position")
+    assert [(r["dashboard_name"], r["focus_name"]) for r in stored] == [("Ops renamed", "Hall renamed"), ("Power", None)]
+    assert await audit_rows(db, "playlist.updated") == []  # refreshing a name is not an event ...
+    assert await db.fetchval("SELECT updated_at FROM playlists WHERE id = $1", created["id"]) == stamp  # ... nor a new version
+    assert (await client.delete(f"/api/dashboards/{ops}")).status_code == 204
+    await db.execute("DELETE FROM assets WHERE id = $1", hall)
+    row = playlist_of(await listing(client), created["id"])["items"][0]
+    assert (row["skipped"], row["dashboard_name"]) == ("dashboard_deleted", "Ops renamed")  # the NEW name, not the one at the first save
+    # Now both parts are dead: a further save keeps what is stored, whatever the live side says.
+    body = {"name": "Wall", "items": [{"id": first["id"], "dashboard_id": None, "focus_asset_id": hall, "seconds": 60}, item(power, 60, id=second["id"])]}
+    assert (await client.put(f"/api/playlists/{created['id']}", json=body)).status_code == 200
+    stored = await db.fetch("SELECT dashboard_name, focus_name FROM playlist_items ORDER BY position")
+    assert [(r["dashboard_name"], r["focus_name"]) for r in stored] == [("Ops renamed", "Hall renamed"), ("Power", None)]
 
 
 # ---- a playlist that has a skipped item can still be saved ----------------------------------------
@@ -648,6 +727,53 @@ async def test_a_display_can_be_renamed_and_pointed_at_another_playlist(client, 
     assert (await client.put("/api/displays/424242", json={"name": "x"})).json() == {"detail": "display not found"}
 
 
+async def test_pointing_a_display_at_another_playlist_follows_the_rules_of_making_a_link(client, db):
+    # Moving a screen to a playlist is the same act as POST /api/displays ("make a link that shows playlist X"): the screen is the
+    # read channel, so it needs dashboards.view, and assets.view too when the playlist has a focus. A rename needs neither.
+    ops, hall = await make_dashboard(db, "Ops"), await make_asset(db, "Hall 1")
+    plain = await make_playlist(db, "Plain", [{"dashboard_id": ops}])
+    focused = await make_playlist(db, "Focused", [{"dashboard_id": ops, "focus_asset_id": hall}])
+    empty = await make_playlist(db, "Empty")
+    display, _ = await make_display(db, "Hall TV", plain)
+    await make_role(db, "m_only", [ADMIN_ONLY])
+    await make_role(db, "m_dash", [ADMIN_ONLY, "dashboards.view"])
+    await make_role(db, "m_all", [ADMIN_ONLY, "dashboards.view", "assets.view"])
+    url, refusal = f"/api/displays/{display.id}", {"detail": "insufficient permission"}
+
+    async def shown() -> tuple[str, int]:
+        row = await db.fetchrow("SELECT name, playlist_id FROM displays WHERE id = $1", display.id)
+        return row["name"], row["playlist_id"]
+
+    async def updates() -> int:
+        return len(await audit_rows(db, "display.updated"))
+
+    await login_as(client, db, "m_only")
+    for target in (empty, focused):  # no dashboards.view: every other playlist is refused, even an empty one
+        refused = await client.put(url, json={"playlist_id": target.id})
+        assert refused.status_code == 403 and refused.json() == refusal
+    refused = await client.put(url, json={"name": "Renamed", "playlist_id": empty.id})
+    assert refused.status_code == 403 and refused.json() == refusal
+    assert await shown() == ("Hall TV", plain.id) and await updates() == 0  # a refusal changes nothing, not even the name
+    assert (await client.put(url, json={"name": "Renamed"})).status_code == 200  # a rename alone needs nothing more
+    assert (await client.put(url, json={"name": "Renamed", "playlist_id": plain.id})).status_code == 200  # the SAME playlist is no change
+    assert await shown() == ("Renamed", plain.id) and await updates() == 1
+    await client.post("/api/logout")
+
+    await login_as(client, db, "m_dash")
+    refused = await client.put(url, json={"playlist_id": focused.id})  # a focus needs assets.view as well
+    assert refused.status_code == 403 and refused.json() == refusal
+    assert await shown() == ("Renamed", plain.id) and await updates() == 1
+    moved = await client.put(url, json={"playlist_id": empty.id})
+    assert moved.status_code == 200 and moved.json()["playlist_name"] == "Empty"
+    assert await updates() == 2
+    await client.post("/api/logout")
+
+    await login_as(client, db, "m_all")
+    moved = await client.put(url, json={"playlist_id": focused.id})
+    assert moved.status_code == 200 and moved.json()["playlist_name"] == "Focused"
+    assert await shown() == ("Renamed", focused.id) and await updates() == 3
+
+
 @pytest.mark.parametrize("body", [{}, {"name": None}, {"playlist_id": None}, {"name": "x", "playlist_id": None}, {"name": ""}, {"playlist_id": "1"}, {"playlist_id": 0}, {"name": "x", "extra": 1}])
 async def test_a_display_update_needs_a_real_value_and_nothing_else(client, db, body):
     await login_as(client, db, "admin")
@@ -727,11 +853,16 @@ async def test_every_write_leaves_an_audit_row_with_ids_and_names_and_never_the_
         ("playlist.updated", {"playlist_id": pid, "name": "Wall A", "items": 1}),
         ("playlist.updated", {"playlist_id": pid, "name": "Wall A2", "items": 1, "before": {"name": "Wall A"}, "after": {"name": "Wall A2"}}),
         ("display.updated", {"display_id": did, "name": "Lobby TV", "before": {"name": "Hall TV"}, "after": {"name": "Lobby TV"}}),
-        ("display.updated", {"display_id": did, "name": "Lobby TV", "before": {"playlist": "Wall A2"}, "after": {"playlist": "Wall B"}}),
         ("display.updated", {
-            "display_id": did, "name": "Hall TV", "before": {"name": "Lobby TV", "playlist": "Wall B"}, "after": {"name": "Hall TV", "playlist": "Wall A2"},
+            "display_id": did, "name": "Lobby TV",
+            "before": {"playlist_id": pid, "playlist": "Wall A2"}, "after": {"playlist_id": other["id"], "playlist": "Wall B"},
         }),
-        ("display.revoked", {"display_id": did, "name": "Hall TV"}),
+        ("display.updated", {
+            "display_id": did, "name": "Hall TV",
+            "before": {"name": "Lobby TV", "playlist_id": other["id"], "playlist": "Wall B"},
+            "after": {"name": "Hall TV", "playlist_id": pid, "playlist": "Wall A2"},
+        }),
+        ("display.revoked", {"display_id": did, "name": "Hall TV", "playlist_id": pid, "playlist": "Wall A2"}),
         ("display.deleted", {"display_id": did, "name": "Hall TV", "playlist_id": pid, "playlist": "Wall A2"}),
         ("playlist.deleted", {"playlist_id": other["id"], "name": "Wall B", "items": 0}),
     ]
