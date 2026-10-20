@@ -11,7 +11,9 @@ back with its own `id` and an unchanged `dashboard_id` or `focus_asset_id` keeps
 asset may be gone), so a playlist with a skipped item can still be renamed and reordered; only a new or changed part is checked. The
 snapshot name of every part that still exists is refreshed at each save; a part that is gone keeps the name stored at the last save
 that saw it. A save that changes nothing (same name, every item back with the same id, position, seconds, dashboard and focus) is no
-event: no audit row and no new `updated_at`. The last save wins (there is no stale check).
+event: no audit row and no new `updated_at`. The last save wins (there is no stale check). When a save changes what the screen shows
+(dashboard, focus, seconds or order) its audit row also lists the items before and after, by name (`items_before`, `items_after`;
+`playlist.created` has `items_after`); a rename alone keeps the plain detail.
 
 The link secret is shown once, in the answer of `POST /api/displays`, and is never written anywhere else: the display row holds only
 its SHA-256 hash, and no audit row, log line or other answer carries the secret, the hash or the link. Locks: the two caps take an
@@ -282,9 +284,20 @@ async def _shown_by(db: AsyncSession, playlist_id: int) -> list[tuple[str, bool]
     return sorted(((name, revoked_at is not None) for name, revoked_at in rows), key=lambda row: (row[0].casefold(), row[0]))
 
 
+SHOWN_NAMES = 3  # how many screens the refusal of a playlist delete names; the rest are counted
+
+
 def _shown_text(shown: list[tuple[str, bool]]) -> str:
-    names = ", ".join(f"{name} (revoked)" if revoked else name for name, revoked in shown)
-    return f"this playlist is shown by: {names}" if names else "this playlist is shown by a display"
+    """The 409 of a playlist delete, bounded and with the way out: the first three screens by name (a revoked one marked), then
+    "and N more"; 1 screen is "its playlist ... it", more are "their ... them". `shown` is sorted by name already."""
+    if not shown:  # the screen was deleted between the refusal and this text: there is still nothing to say but the way out
+        return "this playlist is shown by a screen. Change its playlist or delete it first."
+    names = ", ".join(f"{name} (revoked)" if revoked else name for name, revoked in shown[:SHOWN_NAMES])
+    if len(shown) > SHOWN_NAMES:
+        names += f" and {len(shown) - SHOWN_NAMES} more"
+    if len(shown) == 1:
+        return f"this playlist is shown by 1 screen: {names}. Change its playlist or delete it first."
+    return f"this playlist is shown by {len(shown)} screens: {names}. Change their playlist or delete them first."
 
 
 async def _live_dashboards(db: AsyncSession, ids: set[int]) -> dict[int, str]:
@@ -298,6 +311,12 @@ async def _live_dashboards(db: AsyncSession, ids: set[int]) -> dict[int, str]:
 
 async def _views(db: AsyncSession, playlist_id: int) -> list[ItemView]:
     return (await resolve_playlists(db, [playlist_id]))[playlist_id]
+
+
+def _item_names(views: list[ItemView]) -> list[dict[str, str | int | None]]:
+    """The items as an audit row tells them: in order, by name and never by id, so the row says what the screen showed (the live
+    name of a dashboard or asset, else the name stored at the last save). At most MAX_ITEMS entries keep the detail small."""
+    return [{"dashboard": view.dashboard_name, "focus": view.focus_name, "seconds": view.seconds} for view in views[:MAX_ITEMS]]
 
 
 @dataclass
@@ -397,8 +416,12 @@ async def create_playlist(
             for position, row in enumerate(rows)
         )
         await db.flush()
-        answer = _playlist_out(playlist, await _views(db, playlist.id), 0, user)
-        await audit(db, user.id, "playlist.created", {"playlist_id": playlist.id, "name": playlist.name, "items": len(rows)})
+        views = await _views(db, playlist.id)
+        answer = _playlist_out(playlist, views, 0, user)
+        subject: dict[str, object] = {"playlist_id": playlist.id, "name": playlist.name, "items": len(rows)}
+        if views:  # an empty playlist has nothing to list
+            subject["items_after"] = _item_names(views)
+        await audit(db, user.id, "playlist.created", subject)
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
@@ -427,6 +450,11 @@ async def save_playlist(
         for position, row in enumerate(rows)
     ]
     changed = body.name != old_name or new_items != old_items
+    # What the screen shows is the dashboard, the focus, the seconds and the order. When that differs the audit row lists the items
+    # before and after, by name; an item sent back without its id but with the same content is no such change. The "before" list
+    # is read now, before the first write, with the same live-or-stored names as the "after" list.
+    shows_differently = [(d, f, s) for _, _, s, d, f in old_items] != [(d, f, s) for _, _, s, d, f in new_items]
+    views_before = await _views(db, playlist.id) if shows_differently else None
     try:
         playlist.name = body.name
         if changed:
@@ -446,9 +474,12 @@ async def save_playlist(
             row.stored.dashboard_id, row.stored.dashboard_name = row.dashboard_id, row.dashboard_name
             row.stored.focus_asset_id, row.stored.focus_name = row.focus_asset_id, row.focus_name
         await db.flush()
-        answer = _playlist_out(playlist, await _views(db, playlist.id), await _display_count(db, playlist.id), user)
+        views = await _views(db, playlist.id)
+        answer = _playlist_out(playlist, views, await _display_count(db, playlist.id), user)
         if changed:
-            subject = {"playlist_id": playlist.id, "name": playlist.name, "items": len(rows)}
+            subject: dict[str, object] = {"playlist_id": playlist.id, "name": playlist.name, "items": len(rows)}
+            if views_before is not None:
+                subject["items_before"], subject["items_after"] = _item_names(views_before), _item_names(views)
             if not await audit_change(db, user.id, "playlist.updated", subject, {"name": old_name}, {"name": playlist.name}):
                 await audit(db, user.id, "playlist.updated", subject)  # only the items changed: the row is still an event
         await db.commit()

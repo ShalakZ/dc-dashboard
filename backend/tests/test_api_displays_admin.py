@@ -25,6 +25,11 @@ async def make_dashboard(db, name: str = "Ops") -> int:
     return await db.fetchval("INSERT INTO dashboards (name) VALUES ($1) RETURNING id", name)
 
 
+def shown(dashboard, focus=None, seconds=60) -> dict:
+    """One entry of the `items_before` / `items_after` lists of a playlist audit row: names only, never ids."""
+    return {"dashboard": dashboard, "focus": focus, "seconds": seconds}
+
+
 def item(dashboard_id, seconds=60, focus=None, id=None) -> dict:
     body = {"dashboard_id": dashboard_id, "seconds": seconds}
     if focus is not None:
@@ -677,8 +682,41 @@ async def test_a_playlist_in_use_cannot_be_deleted_and_names_its_displays(client
     await client.post(f"/api/displays/{revoked['id']}/revoke")
     refused = await client.delete(f"/api/playlists/{playlist['id']}")
     assert refused.status_code == 409
-    assert refused.json() == {"detail": "this playlist is shown by: Annex (revoked), Hall TV, Wall B"}
+    assert refused.json() == {
+        "detail": "this playlist is shown by 3 screens: Annex (revoked), Hall TV, Wall B. Change their playlist or delete them first."
+    }
     assert await db.fetchval("SELECT count(*) FROM playlists") == 1 and await db.fetchval("SELECT count(*) FROM playlist_items") == 1
+
+
+@pytest.mark.parametrize(("shown", "text"), [
+    ([("Hall TV", False)], "this playlist is shown by 1 screen: Hall TV. Change its playlist or delete it first."),
+    ([("Hall TV", False), ("Wall B", True)],
+     "this playlist is shown by 2 screens: Hall TV, Wall B (revoked). Change their playlist or delete them first."),
+    ([("A", False), ("B", True), ("C", False)],
+     "this playlist is shown by 3 screens: A, B (revoked), C. Change their playlist or delete them first."),
+    ([("A", False), ("B", True), ("C", False), ("D", False)],
+     "this playlist is shown by 4 screens: A, B (revoked), C and 1 more. Change their playlist or delete them first."),
+    ([(chr(65 + n), n == 5) for n in range(10)],
+     "this playlist is shown by 10 screens: A, B, C and 7 more. Change their playlist or delete them first."),
+    ([], "this playlist is shown by a screen. Change its playlist or delete it first."),  # the screen was deleted in between
+])
+def test_the_playlist_in_use_text_is_bounded_and_says_what_to_do(shown, text):
+    assert displays_api._shown_text(shown) == text
+
+
+async def test_a_playlist_shown_by_many_screens_lists_the_first_three_by_name(client, db):
+    await login_as(client, db, "admin")
+    playlist = (await new_playlist(client, "Wall")).json()
+    for name in ("Zulu", "Bravo", "alpha", "Delta", "Echo", "Charlie", "Foxtrot", "Golf", "Hotel", "India"):
+        created = (await new_display(client, name, playlist["id"])).json()["display"]
+        if name == "Bravo":
+            await client.post(f"/api/displays/{created['id']}/revoke")
+    refused = await client.delete(f"/api/playlists/{playlist['id']}")
+    assert refused.status_code == 409
+    assert refused.json() == {
+        "detail": "this playlist is shown by 10 screens: alpha, Bravo (revoked), Charlie and 7 more. Change their playlist or delete them first."
+    }
+    assert len(refused.json()["detail"]) < 200
 
 
 async def test_an_unused_playlist_is_deleted_with_its_items(client, db):
@@ -703,7 +741,9 @@ async def test_a_display_made_while_deleting_still_blocks_the_delete_with_the_sa
 
     monkeypatch.setattr(displays_api, "_shown_by", empty_the_first_time)
     refused = await client.delete(f"/api/playlists/{playlist['id']}")  # the check missed it: the RESTRICT foreign key decides
-    assert refused.status_code == 409 and refused.json() == {"detail": "this playlist is shown by: Hall TV"}
+    assert refused.status_code == 409 and refused.json() == {
+        "detail": "this playlist is shown by 1 screen: Hall TV. Change its playlist or delete it first."
+    }
     assert len(calls) == 2 and await db.fetchval("SELECT count(*) FROM playlists") == 1
     assert await audit_rows(db, "playlist.deleted") == []
 
@@ -847,10 +887,10 @@ async def test_every_write_leaves_an_audit_row_with_ids_and_names_and_never_the_
     await client.delete(f"/api/playlists/{other['id']}")
     rows = [(r["action"], r["detail"]) for r in await audit_rows(db) if r["action"].startswith(("playlist.", "display."))]
     assert rows == [
-        ("playlist.created", {"playlist_id": pid, "name": "Wall A", "items": 2}),
-        ("playlist.created", {"playlist_id": other["id"], "name": "Wall B", "items": 0}),
+        ("playlist.created", {"playlist_id": pid, "name": "Wall A", "items": 2, "items_after": [shown("Ops"), shown("Power")]}),
+        ("playlist.created", {"playlist_id": other["id"], "name": "Wall B", "items": 0}),  # nothing to list
         ("display.created", {"display_id": did, "name": "Hall TV", "playlist_id": pid, "playlist": "Wall A"}),
-        ("playlist.updated", {"playlist_id": pid, "name": "Wall A", "items": 1}),
+        ("playlist.updated", {"playlist_id": pid, "name": "Wall A", "items": 1, "items_before": [shown("Ops"), shown("Power")], "items_after": [shown("Ops")]}),
         ("playlist.updated", {"playlist_id": pid, "name": "Wall A2", "items": 1, "before": {"name": "Wall A"}, "after": {"name": "Wall A2"}}),
         ("display.updated", {"display_id": did, "name": "Lobby TV", "before": {"name": "Hall TV"}, "after": {"name": "Lobby TV"}}),
         ("display.updated", {
@@ -871,6 +911,86 @@ async def test_every_write_leaves_an_audit_row_with_ids_and_names_and_never_the_
     assert not leaked, "the link secret, its hash or a field named like them is in an audit row"
     users = await db.fetch("SELECT DISTINCT user_id FROM audit_log WHERE action LIKE 'display.%' OR action LIKE 'playlist.%'")
     assert len(users) == 1 and users[0]["user_id"] is not None
+
+
+async def test_a_playlist_change_is_audited_with_the_items_before_and_after_by_name(client, db):
+    await login_as(client, db, "admin")
+    a, b, hall = await make_dashboard(db, "Alpha"), await make_dashboard(db, "Beta"), await make_asset(db, "Hall 1")
+    created = (await new_playlist(client, "Wall", [item(a, 20), item(b, 30, focus=hall)])).json()
+    ida, idb = (i["id"] for i in created["items"])
+    url = f"/api/playlists/{created['id']}"
+    start = [shown("Alpha", None, 20), shown("Beta", "Hall 1", 30)]
+    assert (await audit_rows(db, "playlist.created"))[0]["detail"]["items_after"] == start
+
+    async def last() -> dict:
+        return (await audit_rows(db, "playlist.updated"))[-1]["detail"]
+
+    # Each kind of change to the screen is spelled out by name: the seconds, the order, the focus, a swap, an addition, a removal.
+    steps = [
+        ([item(a, 25, id=ida), item(b, 30, focus=hall, id=idb)], [shown("Alpha", None, 25), shown("Beta", "Hall 1", 30)]),
+        ([item(b, 30, focus=hall, id=idb), item(a, 25, id=ida)], [shown("Beta", "Hall 1", 30), shown("Alpha", None, 25)]),
+        ([item(b, 30, id=idb), item(a, 25, id=ida)], [shown("Beta", None, 30), shown("Alpha", None, 25)]),
+        ([item(b, 30, id=idb), item(b, 25, id=ida)], [shown("Beta", None, 30), shown("Beta", None, 25)]),
+        ([item(b, 30, id=idb), item(b, 25, id=ida), item(a, 40)], [shown("Beta", None, 30), shown("Beta", None, 25), shown("Alpha", None, 40)]),
+        ([item(b, 30, id=idb)], [shown("Beta", None, 30)]),
+    ]
+    before = [shown("Alpha", None, 20), shown("Beta", "Hall 1", 30)]
+    for number, (items, after) in enumerate(steps, start=1):
+        assert (await client.put(url, json={"name": "Wall", "items": items})).status_code == 200
+        detail = await last()
+        assert len(await audit_rows(db, "playlist.updated")) == number
+        assert detail["items_before"] == before and detail["items_after"] == after, number
+        assert detail["items"] == len(after) and "before" not in detail  # the name did not change
+        assert json.dumps(detail).count("dashboard_id") == 0
+        before = after  # the next step starts from what this one left
+
+    # A rename alone keeps today's detail, with no item lists; a rename together with an item change carries both.
+    only = [item(b, 30, id=idb)]
+    assert (await client.put(url, json={"name": "Wall 2", "items": only})).status_code == 200
+    renamed = await last()
+    assert renamed == {"playlist_id": created["id"], "name": "Wall 2", "items": 1, "before": {"name": "Wall"}, "after": {"name": "Wall 2"}}
+    assert (await client.put(url, json={"name": "Wall 3", "items": [item(b, 45, id=idb)]})).status_code == 200
+    both = await last()
+    assert both["before"] == {"name": "Wall 2"} and both["after"] == {"name": "Wall 3"}
+    assert both["items_before"] == [shown("Beta", None, 30)] and both["items_after"] == [shown("Beta", None, 45)]
+
+    # A save that changes nothing writes no row at all.
+    count = len(await audit_rows(db, "playlist.updated"))
+    assert (await client.put(url, json={"name": "Wall 3", "items": [item(b, 45, id=idb)]})).status_code == 200
+    assert len(await audit_rows(db, "playlist.updated")) == count
+
+
+async def test_the_item_lists_of_an_audit_row_use_live_names_and_the_snapshot_of_a_gone_dashboard(client, db):
+    await login_as(client, db, "admin")
+    live, doomed = await make_dashboard(db, "Live"), await make_dashboard(db, "Doomed")
+    created = (await new_playlist(client, "Wall", [item(live, 20), item(doomed, 30)])).json()
+    ida, idb = (i["id"] for i in created["items"])
+    await db.execute("UPDATE dashboards SET name = 'Live renamed' WHERE id = $1", live)  # renamed since the last save
+    assert (await client.delete(f"/api/dashboards/{doomed}")).status_code == 204  # gone: its item keeps the stored name
+    url = f"/api/playlists/{created['id']}"
+    dead = {"id": idb, "dashboard_id": None, "focus_asset_id": None, "seconds": 30}
+    assert (await client.put(url, json={"name": "Wall", "items": [dead, item(live, 20, id=ida)]})).status_code == 200  # reorder
+    detail = (await audit_rows(db, "playlist.updated"))[-1]["detail"]
+    assert detail["items_before"] == [shown("Live renamed", None, 20), shown("Doomed", None, 30)]
+    assert detail["items_after"] == [shown("Doomed", None, 30), shown("Live renamed", None, 20)]
+
+
+async def test_an_audit_row_keeps_at_most_twenty_items_per_list_and_the_audit_list_still_resolves_refs(client, db):
+    await login_as(client, db, "admin")
+    ops = await make_dashboard(db, "Ops")
+    created = (await new_playlist(client, "Wall", [item(ops, 10 + n) for n in range(MAX_ITEMS)])).json()
+    url = f"/api/playlists/{created['id']}"
+    reversed_items = [item(ops, i["seconds"], id=i["id"]) for i in reversed(created["items"])]
+    assert (await client.put(url, json={"name": "Wall", "items": reversed_items})).status_code == 200
+    detail = (await audit_rows(db, "playlist.updated"))[-1]["detail"]
+    assert len(detail["items_before"]) == MAX_ITEMS and len(detail["items_after"]) == MAX_ITEMS
+    assert detail["items_before"][0]["seconds"] == 10 and detail["items_after"][0]["seconds"] == 10 + MAX_ITEMS - 1
+    assert len(json.dumps(detail)) < 4000
+    response = await client.get("/api/audit?limit=50")
+    assert response.status_code == 200
+    entry = next(e for e in response.json()["items"] if e["action"] == "playlist.updated")
+    assert entry["refs"] == {"playlist": {str(created["id"]): "Wall"}}
+    assert entry["detail"]["items_before"] == detail["items_before"] and entry["detail"]["items_after"] == detail["items_after"]
 
 
 async def test_a_failed_write_leaves_no_audit_row(client, db):
