@@ -45,7 +45,7 @@ async def fingerprints(db) -> dict[str, str | None]:
             continue
         if name == "figure_ledger":  # 0014's derived table: it exists at head and a downgrade through 0013 drops it, on purpose
             continue
-        if name in ("playlists", "playlist_items", "displays"):  # 0015's tables: at head, gone below 0015, on purpose
+        if name in ("playlists", "playlist_items", "displays", "history_status"):  # 0015's and 0016's tables: at head, gone below 0015, on purpose
             continue
         fingerprint[name] = await db.fetchval(f'SELECT md5(string_agg(t::text, E\'\\n\' ORDER BY t::text)) FROM "{name}" t')
     return fingerprint

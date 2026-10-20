@@ -1,7 +1,7 @@
 """Migration 0015 (W28): the tables `playlists`, `playlist_items` and `displays` (a playlist of dashboards, and a screen that shows one
 through a secret link).
 
-This file pins the head (the newest migration's test does; test_schema_figure_ledger.py pins only that 0014 follows 0013). The upgrade
+This file pins only that 0015 follows 0014 (the head is pinned by the newest migration's test, test_schema_history.py). The upgrade
 creates three empty tables and touches nothing else; the downgrade drops the three and touches nothing else (the playlists and the
 display links are lost on purpose, every older table is exactly as it was)."""
 import asyncpg
@@ -78,9 +78,16 @@ ROLES = "SELECT id, name, description, builtin, permissions, created_at, updated
 OLD_ROWS = (ASSETS, USERS, DASHBOARDS, WIDGETS, ROLES)
 
 
+# Things of LATER migrations (0016, w30): a snapshot taken at head and one taken below 0015 are compared in the tests below, so
+# `snapshot` leaves out the table `history_status` and shows the unique key that 0016 put on readings under the name and the
+# definition of the plain index it replaced (test_schema_history.py pins the swap itself).
+LATER_TABLES = ("history_status",)
+PLAIN_READINGS_INDEX = "CREATE INDEX readings_point_ts ON public.readings USING btree (point_id, ts DESC)"
+
+
 async def snapshot(db) -> dict:
-    """Columns, indexes, constraints and triggers of every table."""
-    return {
+    """Columns, indexes, constraints and triggers of every table (except the tables of later migrations)."""
+    taken = {
         "columns": [tuple(r) for r in await db.fetch(
             "SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns "
             "WHERE table_schema = 'public' ORDER BY 1, ordinal_position")],
@@ -92,6 +99,10 @@ async def snapshot(db) -> dict:
         "triggers": [tuple(r) for r in await db.fetch(
             "SELECT tgrelid::regclass::text, tgname FROM pg_trigger WHERE NOT tgisinternal ORDER BY 1, 2")],
     }
+    taken["indexes"] = sorted(
+        ("readings", "readings_point_ts", PLAIN_READINGS_INDEX) if row[1] == "readings_point_ts_key" else row
+        for row in taken["indexes"])
+    return {kind: [row for row in entries if row[0] not in LATER_TABLES] for kind, entries in taken.items()}
 
 
 def without_the_tables(snap: dict) -> dict:
@@ -108,21 +119,14 @@ async def fingerprints(db) -> dict[str, str | None]:
     for name in names:
         if name in NEW_TABLES:  # the tables under test: their rows are what the downgrade loses, on purpose
             continue
+        if name in LATER_TABLES:  # 0016's table exists at head and a downgrade through 0015 drops it, on purpose
+            continue
         fingerprint[name] = await db.fetchval(f'SELECT md5(string_agg(t::text, E\'\\n\' ORDER BY t::text)) FROM "{name}" t')
     return fingerprint
 
 
 async def rows(db, query: str) -> list[tuple]:
     return [tuple(r) for r in await db.fetch(query)]
-
-
-def head_revision() -> str:
-    """The one head alembic reports (this file's pin below is the only place that names a revision number as the head)."""
-    heads = run_alembic("heads")
-    assert heads.returncode == 0, heads.stderr
-    revisions = [line.split()[0] for line in heads.stdout.splitlines() if line.strip()]
-    assert len(revisions) == 1, heads.stdout
-    return revisions[0]
 
 
 async def add_dashboard(db, name: str = "Ops") -> int:
@@ -172,9 +176,8 @@ async def seed_new_tables(db) -> None:
 
 # ---- the head ---------------------------------------------------------------------------------------------------------------
 
-def test_the_migration_follows_0014_and_is_the_only_head():
+def test_the_migration_follows_0014():
     assert "0014 -> 0015" in run_alembic("history", "-r", "0014:0015").stdout
-    assert head_revision() == "0015"
 
 
 # ---- at the head: the shape of the three tables -----------------------------------------------------------------------------
