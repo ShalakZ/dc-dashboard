@@ -105,13 +105,15 @@ export function WidgetView({ widgetKey, type, title, config, dashboardRange, tim
   // The footer line's room is held on the focus, not on the words: the note about the asset's name waits for the asset list, and a children card's count comes and goes
   // with its answer, but the body must not move when either arrives.
   const footKeep = follows ? shown.scope === "children" : ctx.focus !== null;
+  // A breakdown by kind keeps its "Split by" row at the bottom of the body, and its loaded card nearly always has the marker hint ("~ estimated") under it (the bars are many), so the
+  // loading card holds that line's room as well: the row would otherwise be drawn 22 px lower than where it lands (w27 FA).
   return (
     <>
       <WidgetFrame
         title={title}
         type={type}
         shape={skeletonShape(type, config)}
-        footSpace={sinceExpected || footKeep || note !== ""}
+        footSpace={sinceExpected || footKeep || note !== "" || shown.bars === "kind"}
         footKeep={footKeep}
         loading={query.isLoading}
         error={query.error}

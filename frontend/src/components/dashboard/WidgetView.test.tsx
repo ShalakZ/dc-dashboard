@@ -425,6 +425,19 @@ describe("WidgetView: a breakdown by kind and a comparison (w24)", () => {
     expect(screen.getByRole("status")).toHaveClass("widget-sk", "widget-sk-kind");
   });
 
+  // w27 FA (review finding 8): the loaded breakdown has its footer line ("~ estimated") under a "Split by" row that sits at the bottom of the body, so a skeleton without that
+  // line was 22 px taller and the row drew 22 px lower before the data landed. The skeleton of a breakdown holds the footer's room; a plain bar does not (it has no bottom row to move).
+  it("keeps the footer line's room under the skeleton of a breakdown by kind, as the loaded card has it, and not under a plain bar's", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    const kind = show({ type: "bar", config: kindConfig() });
+    expect(kind.container.querySelector(".widget-frame > .widget-sk-kind + .widget-foot")).toHaveAttribute("aria-hidden", "true");
+    kind.unmount();
+    client.clear();
+    const plain = show({ type: "bar", config: config({ assets: [1], range: "this_month" }) });
+    expect(plain.container.querySelector(".widget-sk")).not.toBeNull();
+    expect(plain.container.querySelector(".widget-foot")).toBeNull();
+  });
+
   it("explains the ~ of an estimated side in the footer of a comparing stat", async () => {
     const data = compareStatData({ compare: compareBlock({ assets: [compareAsset({ last: compareSide({ estimated: true }) })] }) });
     mockFetch({ "POST /api/widget-data": { body: data } });

@@ -38,7 +38,7 @@ interface Props {
   type?: DataWidgetType;
   /** The skeleton's variant when the loaded card has more rows than its type's plain shape (a comparison, a breakdown by kind). */
   shape?: SkeletonShape;
-  /** Keep the footer line's room while loading, for a widget whose "since" line is known before its data (rolling energy and cost). */
+  /** Keep the footer line's room while loading, for a widget whose "since" line is known before its data (rolling energy and cost), and for a breakdown by kind, whose "Split by" row would sit 22 px lower without it (w27 FA). */
   footSpace?: boolean;
   /** Keep the footer line's room in the loaded card too, as an empty line, when it has nothing to say now but may have the next moment (w25: a note about the focus that comes and goes), so the body does not move. */
   footKeep?: boolean;
