@@ -1,0 +1,4 @@
+@layer w6 {
+  /* w28: the Displays page under Administer (pages/DisplaysPage.tsx and components/displays/*). Tokens only; every selector names a class this piece owns
+     (.dialog, .row and .tile are app.css's, and the clash guard in app.css.test.ts refuses a second rule for them). */
+}
