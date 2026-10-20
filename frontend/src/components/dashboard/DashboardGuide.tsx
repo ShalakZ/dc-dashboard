@@ -48,19 +48,20 @@ export function guideLines(facts: GuideFacts, allowed: boolean): string[] {
 }
 
 /**
- * The panel above the grid: "How to read this dashboard", the lines, and Got it. The heading takes the focus when someone opens the panel again from the
- * header (`headingRef`, tabIndex -1); the viewer moves the focus away when Got it is pressed, so it never falls to the page.
+ * The panel above the grid: "How to read this dashboard" with Got it at the right of the same row (w27 P1: the panel has no row of its own for the button), then
+ * the lines. The heading takes the focus when someone opens the panel again from the header (`headingRef`, tabIndex -1); the viewer moves the focus away when Got it
+ * is pressed, so it never falls to the page. Got it is the panel's only Tab stop, before the lines as it is before the cards.
  */
 export function DashboardGuide({ lines, headingRef, onGotIt }: { lines: readonly string[]; headingRef: Ref<HTMLHeadingElement>; onGotIt: () => void }) {
   return (
     <div className="dash-guide">
-      <h2 ref={headingRef} tabIndex={-1}>How to read this dashboard</h2>
+      <div className="dash-guide-head">
+        <h2 ref={headingRef} tabIndex={-1}>How to read this dashboard</h2>
+        <button type="button" onClick={onGotIt}>Got it</button>
+      </div>
       <ul>
         {lines.map((line) => <li key={line}>{line}</li>)}
       </ul>
-      <div className="dash-guide-foot">
-        <button type="button" onClick={onGotIt}>Got it</button>
-      </div>
     </div>
   );
 }

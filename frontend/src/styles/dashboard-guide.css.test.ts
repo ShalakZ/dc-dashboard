@@ -69,6 +69,16 @@ describe("the guide panel", () => {
     expect(prop(panel, "border-radius")).toBe("var(--radius)");
   });
 
+  it("puts the heading and Got it on one row, the heading at the left and the button at the right, and keeps no row of its own for the button (w27 P1)", () => {
+    const head = body(".dash-guide-head");
+    expect(prop(head, "display")).toBe("flex");
+    expect(prop(head, "justify-content")).toBe("space-between");
+    expect(prop(head, "align-items")).toBe("center");
+    expect(prop(body(".dash-guide-head button"), "flex")).toBe("none"); // the button keeps its size when the heading is long
+    expect(prop(body(".dash-guide h2"), "min-width")).toBe("0"); // and the heading may shrink beside it
+    expect(css).not.toMatch(/\.dash-guide-foot/);
+  });
+
   it("has no pill, no italic, no monospace and no gradient anywhere", () => {
     expect(css).not.toMatch(/border-radius:\s*(999|9999|50%|100%)/);
     expect(css).not.toMatch(/font-style:\s*italic|monospace|gradient\(/);

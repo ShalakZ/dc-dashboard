@@ -70,4 +70,14 @@ describe("the panel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Got it" }));
     expect(onGotIt).toHaveBeenCalledTimes(1);
   });
+
+  it("puts Got it on the heading's row, the heading first, and the list after the row (w27 P1: the panel has no row of its own for the button)", () => {
+    const { container } = render(<DashboardGuide lines={["One."]} headingRef={{ current: null }} onGotIt={() => {}} />);
+    const panel = container.querySelector(".dash-guide")!;
+    expect([...panel.children].map((child) => child.tagName + (child.className ? `.${child.className}` : ""))).toEqual(["DIV.dash-guide-head", "UL"]);
+    const row = panel.querySelector(".dash-guide-head")!;
+    expect([...row.children].map((child) => child.tagName)).toEqual(["H2", "BUTTON"]);
+    expect(row.querySelector("button")).toHaveTextContent("Got it");
+    expect(container.querySelector(".dash-guide-foot")).toBeNull();
+  });
 });

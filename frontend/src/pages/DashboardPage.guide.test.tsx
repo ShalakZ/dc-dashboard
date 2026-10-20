@@ -28,6 +28,8 @@ function open(widgets: Widget[] = [following, fixed], over: Routes = {}, role = 
   return calls;
 }
 const panel = () => screen.queryByRole("heading", { name: GUIDE });
+/** The whole panel: its heading shares a row with Got it (w27 P1), so the heading's parent no longer holds the lines. */
+const box = () => panel()!.closest(".dash-guide") as HTMLElement;
 const readThis = () => screen.getByRole("button", { name: "How to read this" });
 /** The page is ready when the first card's frame is in. */
 const ready = () => screen.findAllByRole("region", { name: /Follows|Racks|Fixed|Compared/ });
@@ -39,7 +41,7 @@ describe("the first-run guide", () => {
     // Synchronous from the moment a card is there: a panel that came a render later would have moved the cards.
     expect(panel()).toBeInTheDocument();
     expect(panel()!.compareDocumentPosition(screen.getByRole("region", { name: "Follows" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(panel()!.parentElement!).getAllByRole("listitem").length).toBeGreaterThanOrEqual(2);
+    expect(within(box()).getAllByRole("listitem").length).toBeGreaterThanOrEqual(2);
   });
 
   it("Got it closes it, remembers that for this account in this browser, and moves the focus to How to read this", async () => {
@@ -49,6 +51,25 @@ describe("the first-run guide", () => {
     expect(panel()).not.toBeInTheDocument();
     expect(window.localStorage.getItem("dcdash.guide.dashboard.v1:1")).toBe("1");
     expect(readThis()).toHaveFocus();
+  });
+
+  it("has Got it on the heading's row, before the lines: the panel has no row for the button, and Got it is its one Tab stop (w27 P1)", async () => {
+    open();
+    await ready();
+    const gotIt = screen.getByRole("button", { name: "Got it" });
+    const head = panel()!.parentElement!;
+    expect(head).toHaveClass("dash-guide-head");
+    expect(head).toContainElement(gotIt);
+    expect(head.nextElementSibling?.tagName).toBe("UL"); // the lines follow the row: nothing, not even a button row, comes after them
+    expect(box().lastElementChild).toBe(head.nextElementSibling);
+    expect(within(box()).getAllByRole("button")).toEqual([gotIt]);
+    // From the heading (where the header's How to read this puts the focus) the next Tab is Got it, and the one after it leaves the panel for the cards.
+    panel()!.focus();
+    expect(panel()).toHaveFocus();
+    await userEvent.tab();
+    expect(gotIt).toHaveFocus();
+    await userEvent.tab();
+    expect(box().contains(document.activeElement)).toBe(false);
   });
 
   it("does not come back for an account that has dismissed it, and the header button is still there", async () => {
@@ -117,7 +138,7 @@ describe("the first-run guide", () => {
   it("lists the lines the dashboard has and the role can use", async () => {
     open([comparing, kinds, fixed]);
     await ready();
-    const lines = within(panel()!.parentElement!).getAllByRole("listitem").map((li) => li.textContent ?? "");
+    const lines = within(box()).getAllByRole("listitem").map((li) => li.textContent ?? "");
     expect(lines).toHaveLength(5);
     expect(lines[0]).toMatch(/^Energy and Cost cards set this month so far/);
     expect(lines[1]).toMatch(/^Focus picks the asset/);
@@ -127,7 +148,7 @@ describe("the first-run guide", () => {
   it("lists only the lines true for a role that cannot open assets (no Focus, no bar clicks)", async () => {
     open([comparing, kinds, fixed], { "GET /api/me": { body: userFor("custom", { permissions: ["dashboards.view"] }) } });
     await ready();
-    const lines = within(panel()!.parentElement!).getAllByRole("listitem").map((li) => li.textContent ?? "");
+    const lines = within(box()).getAllByRole("listitem").map((li) => li.textContent ?? "");
     expect(lines).toHaveLength(3);
     expect(lines.join(" ")).not.toMatch(/Focus|Click a bar/);
     expect(screen.queryByRole("button", { name: "Focus" })).not.toBeInTheDocument();
