@@ -217,8 +217,8 @@ Dashboards are shared by everyone.
   about the values or the CSV changed; Billing and the asset page keep their own formats. The rules are in
   [How figures are shown](dashboard-figures-and-templates.md#how-figures-are-shown).
 - **Reading a dashboard.** A panel **How to read this dashboard** shows once for each browser and account on a dashboard with
-  something to explain, and the header's **How to read this** opens it again. The header also says **Updated 20:09** (when the oldest
-  figure on screen was read, site time) and has **Refresh**. When several bars have the same name, a role that may see the Assets
+  something to explain, and the header's **How to read this** (only on such a dashboard) opens it again. A dashboard with a data card also says
+  **Updated 20:09** in the header (when the oldest figure on screen was read, site time) and has **Refresh**. When several bars have the same name, a role that may see the Assets
   Tree sees the parent too ("Hall 2 / Rack 04"). A card that fails says "This card could not be loaded. It tries again in 30
   seconds." See [How to read this dashboard](dashboard-figures-and-templates.md#how-to-read-this-dashboard) and
   [The header](dashboard-figures-and-templates.md#the-header-updated-and-refresh).

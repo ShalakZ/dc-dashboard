@@ -53,9 +53,9 @@ different there; the rounding is the same.
 
 ## Starting a dashboard from a template
 
-A person who may change dashboards presses **New dashboard** on the Dashboards page. On a site with no dashboards yet the page shows
-the same cards under "No dashboards yet." and a card opens the second step. A person who may only view dashboards sees the sentence
-and no cards.
+A person who may change dashboards presses **New dashboard** on the Dashboards page. On a site with no dashboards yet that person sees
+"No dashboards yet. Create one to get started." with the same cards under it, and a card opens the second step. A person who may only
+view dashboards sees "No dashboards yet." and no cards.
 
 1. **Choose a template.** The cards sit in two rows: **Recommended for this site**, then **More templates**. **Blank** is always the
    last card and is never recommended. Each card has a small picture of its layout, a title and one line. A **Recommended** tag means
@@ -100,8 +100,8 @@ holds only **Make a copy**, an Admin's both, and a Viewer has no menu.
 
 A dashboard that has something to explain (a card that follows the focus, a comparison or a breakdown by kind) shows a short panel
 above its cards the first time a person opens one. It is shown once for each browser and each account. **Got it** closes it and the
-browser remembers that. The header always has a text button **How to read this** that opens the panel again. If the browser does not
-let the page remember anything, the panel shows again after each reload of the page, and **Got it** closes it until then.
+browser remembers that. The header of such a dashboard has a text button **How to read this** that opens the panel again (a dashboard
+with nothing to explain has no panel and no button). If the browser does not let the page remember anything, the panel shows again after each reload of the page, and **Got it** closes it until then.
 
 The panel has two to five lines, and a line appears only when the dashboard has the thing it explains and the role can use it:
 
@@ -114,16 +114,17 @@ The panel has two to five lines, and a line appears only when the dashboard has 
 - "~ means some of the figure is estimated. * means some hours have no rate, so a cost is incomplete." (always)
 - "The (i) button on a card (Details) shows how its figures were worked out; the download button saves them as a CSV file." (always)
 
-Small (i) buttons beside **Focus**, the focus dialog's picker, **Split by** and the widget form's **Show** say in one sentence what the
-choice does. A dashboard with no widgets tells a person who may edit: "This dashboard has no widgets yet. Use Edit, then Add widget."
+Small ? buttons (What does this mean?) beside **Focus**, the focus dialog's picker, **Split by** and the widget form's **Show** say in
+one sentence what the choice does. A dashboard with no widgets tells a person who may edit: "This dashboard has no widgets yet. Use Edit, then Add widget."
 
 ## The header: Updated and Refresh
 
-The header of a dashboard with data cards says **Updated 20:09** and has a **Refresh** button.
+The header of a dashboard with data cards says **Updated 20:09** and has a **Refresh** button. A dashboard with no data card (no cards,
+or only text cards) has neither.
 
 - **Updated** is the time, in the site's time zone, at which this browser received the oldest figure now on the page. The oldest one
-  decides, because that is the figure furthest behind. It is a time to the minute: the server may serve a figure up to 30 seconds old
-  ([Limits](dashboards-and-billing.md#limits)). A card asks again by itself every 30 seconds, and a card that compares with last month
+  decides, because that is the figure furthest behind. It is a time to the minute: the server may serve a figure up to 30 seconds old,
+  60 for the current month ([Limits](dashboards-and-billing.md#limits)). A card asks again by itself every 30 seconds, and a card that compares with last month
   every 5 minutes, so on a dashboard with a comparison the time can be up to 5 minutes behind. Nothing shows before the first figure
   arrives, and while a new range or focus loads the old time stays, dimmed. If a card cannot be refreshed, the time stays at its last
   good figure. A screen reader is not told about each change of the time.
@@ -133,7 +134,7 @@ The header of a dashboard with data cards says **Updated 20:09** and has a **Ref
 ## Smaller things
 
 - **Cards use their room.** The figure of a stat or a gauge grows with its card, up to about 48 pixels, and shrinks before it would
-  clip or break. On a stat that compares, a card wide enough (about 360 pixels inside: three columns on a 1920 pixel screen, four at
+  clip or break. On a stat that compares, a card about 360 pixels wide or more (three columns on a 1920 pixel screen, four at
   1440) sets this month and the same days of last month side by side. A narrower card puts them under each other. The change line and
   the one note line stay underneath.
 - **The same name twice.** When several bars, lines or table rows have the same name, a person who may see the Assets Tree sees the

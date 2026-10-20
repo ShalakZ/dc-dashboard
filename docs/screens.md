@@ -33,8 +33,9 @@ lacks says "No access".
   asset), and a click on a bar of a breakdown narrows it further or opens the asset's page (see
   [A focus asset and Drill-through](dashboards-and-billing.md#dashboards)). Cards write a figure short ("275.43 MWh") and keep the exact one
   in the hover title, Details, tables and tooltips ([How figures are shown](dashboard-figures-and-templates.md#how-figures-are-shown)).
-  The dashboard's header has **Updated 20:09** (when the oldest figure on screen was read), **Refresh**, **How to read this**
-  (reopens the first-run panel **How to read this dashboard**; **Got it** closes it) and, with `assets.view`, **Focus**
+  The dashboard's header has, on a dashboard with a data card, **Updated 20:09** (when the oldest figure on screen was read) and
+  **Refresh**; on a dashboard with something to explain, **How to read this** (reopens the first-run panel **How to read this
+  dashboard**; **Got it** closes it); and, with `assets.view`, **Focus**
   ([the header](dashboard-figures-and-templates.md#the-header-updated-and-refresh)). **New dashboard** (and the cards on an empty list)
   opens a gallery dialog: **Choose a template** (**Recommended for this site**, **More templates**, **Blank** last), then
   **Name**, **Range**, **Back to templates**, **Cancel** and **Create**. The row menu of the Dashboards list has **Make a copy**
