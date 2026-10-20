@@ -13,7 +13,7 @@
 # Exit 4: the restore worked but the retention check failed (every retention job was paused to be safe unless --apply-retention
 # was given; read the messages).
 # Whatever happens after timescaledb_pre_restore(), the script runs timescaledb_post_restore()
-# and starts api/collector again, so a failed restore never leaves the database stranded. A failure between the stop of api/collector
+# and starts api/collector/figures again, so a failed restore never leaves the database stranded. A failure between the stop of api/collector/figures
 # and pre_restore (exit 1, "before the dump was loaded") starts them again too; the database may then be missing or empty: run the
 # restore again with the same dump.
 # Exit 2: bad usage (no dump argument, unknown flag). Exit 1 also when the dump file does not exist or cannot be read.
@@ -52,14 +52,16 @@ if ! docker compose exec -T db pg_restore -f /dev/null < "$DUMP"; then
 fi
 LOG="${TMPDIR:-/tmp}/dcdash-restore-$(date +%Y%m%d-%H%M%S).log"
 PRE_RESTORE_DONE=0
-STOPPED=0   # api and collector are being stopped (set just before the stop call, which may fail half-way)
+STOPPED=0   # api, collector and figures are being stopped (set just before the stop call, which may fail half-way)
 recover() {
   local rc=$?
   if [[ "$PRE_RESTORE_DONE" == 0 && "$STOPPED" == 1 ]]; then
     # Failed after the stop and before the dump was loaded (stop, DROP/CREATE DATABASE, CREATE EXTENSION, pre_restore): there is nothing
-    # to post_restore, but api and collector must not stay down. The exit code is 1, never the raw code of the failing psql (2 = usage).
-    docker compose start api collector >/dev/null || true
-    echo "restore failed (exit $rc) before the dump was loaded: api and collector were started again; the database may be missing or empty. Run the restore again with the same dump." >&2
+    # to post_restore, but api, collector and figures must not stay down. The exit code is 1, never the raw code of the failing psql (2 = usage).
+    # `figures` has no container on an install that has not run `up -d` since it was added, and `start` may refuse the whole list for
+    # that: api and collector then start alone, so a missing figures container is never a reason to leave the stack down.
+    docker compose start api collector figures >/dev/null || docker compose start api collector >/dev/null || true
+    echo "restore failed (exit $rc) before the dump was loaded: api and collector were started again (figures with them); the database may be missing or empty. Run the restore again with the same dump." >&2
     rc=1
   elif [[ "$PRE_RESTORE_DONE" == 1 ]]; then
     # Before the background workers come back: print what retention would delete and pause it if that is data.
@@ -75,18 +77,19 @@ recover() {
       [[ "$rc" != 0 ]] || rc=4
     fi
     docker compose exec -T db psql -U dcdash -d dcdash -c "SELECT timescaledb_post_restore()" >/dev/null || true
-    docker compose start api collector >/dev/null || true   # api runs `alembic upgrade head`, a no-op unless --force restored an older schema
+    # api runs `alembic upgrade head`, a no-op unless --force restored an older schema; api and collector start alone when `figures` has no container
+    docker compose start api collector figures >/dev/null || docker compose start api collector >/dev/null || true
     if [[ "$rc" == 4 ]]; then
-      echo "restore done, but the retention check failed (exit 4): read the lines above; post_restore ran and api/collector were started" >&2
+      echo "restore done, but the retention check failed (exit 4): read the lines above; post_restore ran and api/collector/figures were started" >&2
     elif [[ "$rc" != 0 ]]; then
-      echo "restore failed (exit $rc): ran timescaledb_post_restore() and started api/collector; log: $LOG" >&2
+      echo "restore failed (exit $rc): ran timescaledb_post_restore() and started api/collector/figures; log: $LOG" >&2
     fi
   fi
   exit "$rc"
 }
 trap recover EXIT
 STOPPED=1
-docker compose stop api collector
+docker compose stop api collector figures
 docker compose exec -T db psql -U dcdash -d postgres -c "DROP DATABASE IF EXISTS dcdash WITH (FORCE)" -c "CREATE DATABASE dcdash OWNER dcdash"
 docker compose exec -T db psql -U dcdash -d dcdash -c "CREATE EXTENSION IF NOT EXISTS timescaledb" -c "SELECT timescaledb_pre_restore()"
 PRE_RESTORE_DONE=1

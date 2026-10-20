@@ -7,6 +7,8 @@ services:
     image: ${SCRATCH_PROJECT}-backend:scratch
     volumes: !override
       - ${SCRATCH_CERTS_DIR}:/certs:ro
+  figures:
+    image: ${SCRATCH_PROJECT}-backend:scratch
   simulator:
     image: ${SCRATCH_PROJECT}-backend:scratch
     ports: !reset []

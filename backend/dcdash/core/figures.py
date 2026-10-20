@@ -189,13 +189,19 @@ def window_values_spec(last_day: date, tz_name: str, cost: bool, last: datetime)
     return LedgerSpec("window-values", params, last, ledger_codec.decode_window_values)
 
 
+def last_day_of(end: datetime, tz_name: str) -> date:
+    """The local day a period that ends at `end` (exclusive) falls on: the one thing of `end` a `WindowValues` depends on. A
+    function of its own so that the figures worker derives the very same key as `window_values`."""
+    return (end - timedelta(microseconds=1)).astimezone(ZoneInfo(tz_name)).date()
+
+
 async def window_values(
     db: AsyncSession | None, first: datetime, last: datetime, end: datetime, tz_name: str, cost: bool
 ) -> WindowValues:
     """The value of every asset for the whole UTC hours [`first`, `last`) (`widgets._hour_window`), as `_fill_billing`'s plain
     value mode computes it. `end` is where the period ends: the figures depend on it only through the local day it falls on, so
     that day (not the instant, which a rolling preset moves with every request) is what the cache keys on."""
-    last_day = (end - timedelta(microseconds=1)).astimezone(ZoneInfo(tz_name)).date()  # the local day the period ends on
+    last_day = last_day_of(end, tz_name)  # the local day the period ends on
 
     async def make(session: AsyncSession) -> WindowValues:
         return await compute_window_values(session, first, last, last_day, tz_name, cost)

@@ -349,6 +349,12 @@ async def _data_fingerprint(session: AsyncSession, start: datetime, end: datetim
     return (await session.execute(_DATA, {**_METRICS, "start": start, "end": end})).scalar_one()
 
 
+async def data_fingerprint(session: AsyncSession, start: datetime, end: datetime) -> str:
+    """The data fingerprint of the window [start, end) as seen by `session`: what the figures worker (w26b) stores beside a
+    ledger row, read in the very snapshot the row's value is computed in (a public wrapper, like `config_fingerprint`)."""
+    return await _data_fingerprint(session, start, end)
+
+
 async def _config_for(db: AsyncSession | None) -> str:
     """The configuration fingerprint on `db`, or with no session on a short-lived one of the cache's own engine (a leaf: it
     ends before the caller awaits anything else, and it takes no semaphore)."""

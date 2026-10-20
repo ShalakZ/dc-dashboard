@@ -27,6 +27,10 @@ case "$*" in
     [ -n "$FAKE_STOP_FAILS" ] && { echo "Error response from daemon: cannot stop" >&2; exit 1; } ;;
   # FAKE_PSQL_POSTGRES_FAILS / FAKE_PSQL_PRE_RESTORE_FAILS: the exit code the DROP/CREATE DATABASE call, or the CREATE EXTENSION +
   # timescaledb_pre_restore() call, fails with (psql itself uses 1, 2 and 3)
+  # FAKE_START_FIGURES_FAILS: an install that has not run `up -d` since `figures` was added has no such container, and Compose may
+  # refuse a `start` that names it
+  *"compose start api collector figures"*)
+    [ -n "$FAKE_START_FIGURES_FAILS" ] && { echo 'service "figures" has no container to start' >&2; exit 1; } ;;
   *"DROP DATABASE"*)
     [ -n "$FAKE_PSQL_POSTGRES_FAILS" ] && { echo "psql: error: could not create the database: No space left on device" >&2; exit "$FAKE_PSQL_POSTGRES_FAILS"; } ;;
   *"timescaledb_pre_restore"*)
@@ -465,3 +469,55 @@ def test_restore_ps1_refuses_a_missing_dump_before_the_version_check():
     assert "throw" not in refusal
     assert code.index('Write-Host "restoring into Compose project: $Project"') < code.index(refusal) < code.index("exit 3")
     assert code.index(refusal) < code.index("$Current = ")  # before the schema is asked for: a mistyped path is not a schema problem
+
+
+# ---- the figures worker (w26b) stops and starts with api and collector ------------------------------------------------------------
+# A worker must not compute from a half-restored database. The old needles above are substrings of the new commands and would pass
+# even if `figures` were left out, so the new ones are asserted explicitly.
+
+
+@pytest.mark.parametrize("name", ["restore.sh", "restore.ps1"])
+def test_both_restore_scripts_stop_and_start_figures_with_api_and_collector(name):
+    code = (SCRIPTS / name).read_text()
+    assert "docker compose stop api collector figures" in code, name
+    assert "docker compose start api collector figures" in code, name
+    assert code.count("docker compose start api collector figures") == 2, name  # the early failure and the final start
+    assert "docker compose stop api collector\n" not in code.replace("\r\n", "\n"), name  # no stop that leaves it running
+
+
+@pytest.mark.parametrize("name", ["restore.sh", "restore.ps1"])
+def test_both_restore_scripts_start_api_and_collector_alone_when_the_list_with_figures_fails(name):
+    code = (SCRIPTS / name).read_text().replace("\r\n", "\n")
+    lines = [line for line in code.splitlines() if "docker compose start api collector figures" in line]
+    assert len(lines) == 2
+    for line in lines:  # the same line (sh: `||`; ps1: the exit code of the first) starts the two without figures
+        assert "docker compose start api collector >" in line or "docker compose start api collector |" in line, line
+
+
+def test_restore_ps1_keeps_its_windows_line_endings():
+    raw = (SCRIPTS / "restore.ps1").read_bytes()
+    assert raw.count(b"\r\n") == raw.count(b"\n") and b"\r\n" in raw
+
+
+def test_restore_sh_stops_figures_and_starts_it_again_after_the_restore(tmp_path):
+    result, calls = run_restore(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "docker compose stop api collector figures" in calls
+    assert calls.count("docker compose start api collector figures") == 1 and "docker compose start api collector" not in calls
+
+
+def test_a_missing_figures_container_does_not_keep_api_and_collector_down_or_fail_the_restore(tmp_path):
+    result, calls = run_restore(tmp_path, FAKE_START_FIGURES_FAILS="1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    first = at(calls, "docker compose start api collector figures")
+    starts = [i for i, c in enumerate(calls) if c.startswith("docker compose start")]
+    assert [calls[i] for i in starts] == ["docker compose start api collector figures", "docker compose start api collector"], calls
+    assert at(calls, "timescaledb_post_restore") < first
+
+
+def test_a_missing_figures_container_after_an_early_failure_still_starts_api_and_collector(tmp_path):
+    result, calls = run_restore(tmp_path, FAKE_START_FIGURES_FAILS="1", FAKE_PSQL_POSTGRES_FAILS="1")
+    assert result.returncode == 1, result.stdout + result.stderr  # the restore itself failed: exactly 1
+    starts = [c for c in calls if c.startswith("docker compose start")]
+    assert starts == ["docker compose start api collector figures", "docker compose start api collector"], calls
+    assert "api and collector were started again" in result.stderr
