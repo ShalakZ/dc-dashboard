@@ -4,7 +4,7 @@ What each release (a merged wave) changed, newest first. Each section is headed 
 
 A release that needs an upgrade note carries it as a `###` entry: the schema revision it leads to when there is a migration, what
 changes and what you will notice, the pre-checks to run before it, how to verify it, whether its downgrade is lossless (which decides
-whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 9 releases on this page
+whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 10 releases on this page
 have such an entry (4 of them have no migration) and the archive has 10 more. The other releases need nothing beyond the usual steps of
 [Upgrading and going back](docs/upgrading.md); they have one or two lines here. The releases up to W7j (2026-10-13) are in the
 [changelog archive](docs/changelog-archive.md), with migrations 0004 to 0008; Phase 1A, Phase 1C and Phase 2 brought migrations 0001
@@ -15,6 +15,19 @@ this page; for a version older than W9a, first in the [changelog archive](docs/c
 heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
+
+## w26b (2026-10-20, @@MERGE@@)
+
+Dashboard speed, part 2: the figure ledger. Migration `0014`, no new permission or route, no changed figure (byte for byte w26's answers on four frozen test sites, cold, warm and with the ledger off). A new service, `figures`, keeps each month's figures ready in the database (table `figure_ledger`), made by the same code a request would run, and checks them against a fresh calculation every night. A page uses a stored figure only when it is provably current (same configuration, code and readings; the current month at most about a minute behind); closing a month never uses one, Check month checks the readings on the spot, and in any doubt the page computes as before. First request after an api restart on the pilot hall (217 meters): Billing for a month 1.2 s to 0.28 s, Check month 1.2 s to 0.22 s, the Power dashboard in the browser 3.0 s to 1.0 s. `docker compose exec -T figures python -m dcdash.figures.rebuild --check` proves the stored figures; `DCDASH_FIGURE_LEDGER=0` turns the ledger off. Rules: [Dashboards and billing](docs/dashboards-and-billing.md); the service: [Operating](docs/operating.md).
+
+### Upgrading to w26b (migration 0014)
+
+Schema `0013` to `0014`. Downgrade: **lossless** (the table holds derived data only; the downgrade drops it and touches nothing else). The code to go back to is `099bde2` (the main before w26b). Migration `0014` creates the empty table `figure_ledger`; it writes no other row and needs no pre-check. The `figures` service starts with the ordinary `up -d` and fills the table within a minute.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4: `docker compose up -d --build`. `scripts/update.ps1` does the same through `up -d`; it does not list `figures` in its checks, so look at it yourself in step 3.
+3. **Verify.** `docker compose exec api alembic current` prints `0014 (head)`; `docker compose ps` shows `figures` healthy; a minute later `docker compose exec -T figures python -m dcdash.figures.rebuild --check` ends with `0 DIFFERENT`.
+4. **Going back.** Follow [Upgrading and going back](docs/upgrading.md) with `<previous>` = `0013` and `<old commit>` = `099bde2`; remove the `figures` container as that page says.
 
 ## w26 (2026-10-20, 43660da)
 
