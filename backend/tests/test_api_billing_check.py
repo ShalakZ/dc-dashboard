@@ -414,7 +414,10 @@ async def test_the_answer_costs_the_same_number_of_statements_however_many_asset
     await settle_rollups(db)
     many = await statements_of_one_call()
 
-    assert sum("readings_1h" in s for s in few) == sum("readings_1h" in s for s in many) == 1  # every point in one statement
+    # w26b: a request that misses the ledger first runs the ledger's data fingerprint (one statement over the same rows, tagged
+    # with its own comment); the report's own read is still ONE statement for every point, whatever the number of assets
+    reads = lambda statements: sum("readings_1h" in s and "billing_check data fingerprint" not in s for s in statements)  # noqa: E731
+    assert reads(few) == reads(many) == 1  # every point in one statement
     assert len(few) == len(many)  # nothing is asked per asset or per meter
 
 
