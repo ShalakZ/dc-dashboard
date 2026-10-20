@@ -15,7 +15,7 @@ from helpers import refresh_rollup, restore_builtin_roles  # noqa: E402  (import
 
 BACKEND = Path(__file__).resolve().parents[1]
 TABLES = (
-    "figure_ledger, diag_events, audit_log, widgets, dashboards, tariffs, scan_findings, scans, scan_scopes, graph_layout, jobs, point_latest, "
+    "displays, playlist_items, playlists, figure_ledger, diag_events, audit_log, widgets, dashboards, tariffs, scan_findings, scans, scan_scopes, graph_layout, jobs, point_latest, "
     "readings, mappings, points, assets, sources, sessions, billing_closes, users, settings, asset_kinds"
 )
 

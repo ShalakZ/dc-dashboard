@@ -268,6 +268,50 @@ class Widget(Base):
     h: Mapped[int]
 
 
+class Playlist(Base):
+    """An ordered list of dashboards (its `PlaylistItem` rows) that a display shows. The name is unique (migration 0015)."""
+
+    __tablename__ = "playlists"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+
+
+class PlaylistItem(Base):
+    """One dashboard of a playlist, shown for `seconds` (10 to 3600, a CHECK). Order is (position, id). `dashboard_id` becomes NULL
+    when the dashboard is deleted and `dashboard_name` keeps the name from the last save; `focus_asset_id` has NO foreign key (a
+    deleted asset leaves the item, which is then skipped) and `focus_name` keeps its name from the last save."""
+
+    __tablename__ = "playlist_items"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    playlist_id: Mapped[int] = mapped_column(ForeignKey("playlists.id", ondelete="CASCADE"))
+    position: Mapped[int]
+    dashboard_id: Mapped[int | None] = mapped_column(ForeignKey("dashboards.id", ondelete="SET NULL"))
+    dashboard_name: Mapped[str | None]
+    focus_asset_id: Mapped[int | None]  # no foreign key, on purpose
+    focus_name: Mapped[str | None]
+    seconds: Mapped[int] = mapped_column(default=60, server_default=text("60"))
+
+
+class Display(Base):
+    """A screen with a secret link. Only the SHA-256 hash of the secret is stored (`secret_hash`, unique); a revoked link keeps
+    its row (`revoked_at`). Its playlist cannot be deleted while the row exists (ON DELETE RESTRICT)."""
+
+    __tablename__ = "displays"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    playlist_id: Mapped[int] = mapped_column(ForeignKey("playlists.id", ondelete="RESTRICT"))
+    secret_hash: Mapped[str]
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+    last_seen_at: Mapped[datetime | None] = mapped_column(TZ)
+    last_client: Mapped[str | None]
+    revoked_at: Mapped[datetime | None] = mapped_column(TZ)
+    revoked_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(primary_key=True)

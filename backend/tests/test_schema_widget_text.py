@@ -41,11 +41,12 @@ async def snapshot(db) -> dict:
 
 
 async def fingerprints(db) -> dict[str, str | None]:
-    """A fingerprint of the rows of every table except alembic's own bookkeeping and 0014's derived table `figure_ledger` (it exists
-    at head and a downgrade through 0013 drops it, on purpose): the upgrade must change none of them."""
+    """A fingerprint of the rows of every table except alembic's own bookkeeping, 0014's derived table `figure_ledger` and 0015's
+    `playlists`, `playlist_items` and `displays` (they exist at head and a downgrade through 0013 drops them, on purpose): the
+    upgrade must change none of them."""
     names = [r["tablename"] for r in await db.fetch(
-        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename NOT IN ('alembic_version', 'figure_ledger') "
-        "ORDER BY 1")]
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename NOT IN "
+        "('alembic_version', 'figure_ledger', 'playlists', 'playlist_items', 'displays') ORDER BY 1")]
     assert {"users", "roles", "assets", "settings", "audit_log", "dashboards", "widgets"} <= set(names)
     return {
         name: await db.fetchval(f'SELECT md5(string_agg(t::text, E\'\\n\' ORDER BY t::text)) FROM "{name}" t') for name in names

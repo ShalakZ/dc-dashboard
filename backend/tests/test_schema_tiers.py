@@ -625,7 +625,7 @@ async def test_the_downgrade_refuses_to_drop_hourly_history_the_minute_tier_no_l
 
 async def test_the_downgrade_runs_again_when_a_billing_table_is_already_gone(db):
     try:
-        await db.execute("DROP TABLE widgets, dashboards, tariffs")
+        await db.execute("DROP TABLE playlist_items, widgets, dashboards, tariffs")  # playlist_items (0015) points at dashboards
         _alembic("downgrade", "0003")
         assert await db.fetchval("SELECT version_num FROM alembic_version") == "0003"
     finally:
