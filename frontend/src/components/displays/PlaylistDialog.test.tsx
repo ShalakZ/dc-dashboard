@@ -210,6 +210,34 @@ describe("PlaylistDialog: editing a playlist", () => {
     await userEvent.click(within(item(dialog, 1)).getByRole("button", { name: "What does this mean?" }));
     expect(await screen.findByText("How long this dashboard stays on screen before the next one. 10 to 3600.")).toBeInTheDocument();
   });
+
+  it("keeps the tip's button right beside the label it explains, in a row of its own (not pinned to the far edge of the field)", async () => {
+    const { dialog } = await show(WALL_A);
+    const label = within(item(dialog, 1)).getByText("Seconds on screen");
+    const row = label.parentElement!;
+    expect(row).toHaveClass("playlist-label-row");
+    expect(within(row).getByRole("button", { name: "What does this mean?" })).toBeInTheDocument();
+    expect(row.closest(".has-tip")).toBeNull();
+  });
+});
+
+describe("PlaylistDialog: the status slot", () => {
+  it("puts the reason Save is off in the footer beside Cancel and Save, outside the scrolling body", async () => {
+    const { dialog } = await show(null);
+    const foot = dialog.querySelector(".playlist-foot")!;
+    expect(within(foot as HTMLElement).getByText("Enter a name.")).toBeInTheDocument();
+    expect(dialog.querySelector(".playlist-body")!.textContent).not.toContain("Enter a name.");
+    expect(within(foot as HTMLElement).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  it("puts the server's refusal in the same footer slot", async () => {
+    const { dialog } = await show(null, { "POST /api/playlists": { status: 409, body: { detail: "a playlist with this name already exists" } } });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Wall A");
+    await userEvent.click(save(dialog));
+    const foot = dialog.querySelector(".playlist-foot") as HTMLElement;
+    expect(await within(foot).findByRole("alert")).toHaveTextContent("a playlist with this name already exists");
+    expect(dialog.querySelector(".playlist-body")!.querySelector('[role="alert"]')).toBeNull();
+  });
 });
 
 describe("PlaylistDialog: an item the screens skip", () => {

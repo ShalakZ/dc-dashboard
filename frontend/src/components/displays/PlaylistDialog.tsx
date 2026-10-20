@@ -192,13 +192,15 @@ export function PlaylistDialog({ playlist, limits, onClose }: { playlist: Playli
                               <button type="button" id={focusButtonId} className="playlist-focus" aria-labelledby={`${focusLabelId} ${focusButtonId}`} onClick={() => setPicking(d)}>{focusText(d)}</button>
                             </div>
                           )}
-                          <div className="field has-tip">
-                            <label htmlFor={secondsId}>Seconds on screen</label>
+                          <div className="field">
+                            <div className="playlist-label-row">
+                              <label htmlFor={secondsId}>Seconds on screen</label>
+                              <InfoTip>{secondsTip(limits)}</InfoTip>
+                            </div>
                             <input
                               id={secondsId} type="number" inputMode="numeric" min={limits.min_seconds} max={limits.max_seconds} step={1} value={d.seconds}
                               onChange={(e) => change(d.key, { seconds: e.target.value })}
                             />
-                            <InfoTip>{secondsTip(limits)}</InfoTip>
                           </div>
                         </div>
                         {d.skip && <p className="playlist-skip"><Icon name="alert" /><span>{d.skip}</span></p>}
@@ -211,12 +213,12 @@ export function PlaylistDialog({ playlist, limits, onClose }: { playlist: Playli
                 <button type="button" className="quiet" data-act="add" aria-disabled={atCap ? true : undefined} onClick={add}>Add a dashboard</button>
                 <span className="muted">{items.length} of {limits.items} dashboards</span>
               </div>
-              {/* One slot for the server's refusal and for the hint, so the footer does not move when either appears. */}
+            </div>
+            <div className="row playlist-foot">
+              {/* One slot for the server's refusal and for the reason Save is off, beside the buttons and outside the scrolling body: always in sight, and it never moves them. */}
               <div className="playlist-status">
                 {error ? <p className="error" role="alert">{error}</p> : <p className="muted">{hint ?? ""}</p>}
               </div>
-            </div>
-            <div className="row playlist-foot">
               <button type="button" aria-disabled={busy ? true : undefined} onClick={() => { if (!busy) onClose(); }}>Cancel</button>
               <button type="submit" className="primary" aria-disabled={blocked ? true : undefined}>Save</button>
             </div>

@@ -62,10 +62,20 @@ describe("DisplaysPage: what it shows", () => {
   it("lists each screen with its playlist, status and when it last connected", async () => {
     show();
     await screen.findByRole("cell", { name: "Hall TV" });
-    expect(within(row("Hall TV")).getAllByRole("cell").map((c) => c.textContent)).toEqual(["Hall TV", "Wall A", "Active", "Last connected 3 min ago from 10.0.0.12", ""]);
+    expect(within(row("Hall TV")).getAllByRole("cell").map((c) => c.textContent)).toEqual(["Hall TV", "Wall A", "Active", "3 min ago from 10.0.0.12", ""]);
     expect(within(row("Lobby")).getByText("Never connected")).toBeInTheDocument();
     expect(within(row("Old")).getByText("Revoked")).toBeInTheDocument();
-    expect(within(row("Old")).getByText("Last connected yesterday")).toBeInTheDocument(); // no address was kept
+    expect(within(row("Old")).getByText("Yesterday")).toBeInTheDocument(); // no address was kept
+  });
+
+  it("draws the Last connected cell as two lines, the time and then the address, with the whole sentence as its title", async () => {
+    show();
+    await screen.findByRole("cell", { name: "Hall TV" });
+    const cell = within(row("Hall TV")).getAllByRole("cell")[3];
+    expect(cell).toHaveAttribute("title", "Last connected 3 min ago from 10.0.0.12");
+    expect(cell.querySelector(".displays-from")).toHaveTextContent("from 10.0.0.12");
+    expect(cell.firstElementChild).toHaveTextContent("3 min ago");
+    expect(within(row("Old")).getAllByRole("cell")[3].querySelector(".displays-from")).toBeNull(); // no address, one line
   });
 
   it("lists each playlist with its dashboards and, when some are skipped, a line for each saying why", async () => {

@@ -1,5 +1,5 @@
 import type { DisplayRow, PlaylistItemRow } from "../../api/types";
-import { countText, dashboardLabel, focusLabel, lastConnectedText, skipSentence, skippedText } from "./displayText";
+import { countText, dashboardLabel, focusLabel, lastConnectedParts, lastConnectedText, skipSentence, skippedText } from "./displayText";
 
 const item = (over: Partial<PlaylistItemRow> = {}): PlaylistItemRow => ({
   id: 1, position: 0, seconds: 60, dashboard_id: 3, dashboard_name: "Ops", focus_asset_id: null, focus_name: null, skipped: null, ...over,
@@ -60,5 +60,30 @@ describe("lastConnectedText", () => {
 
   it("falls back to the date once the age is no longer written (after two weeks)", () => {
     expect(lastConnectedText(screen({ last_seen_at: "2026-09-01T10:00:00+00:00", last_client: "10.0.0.12" }), now, "UTC")).toBe("Last connected 2026-09-01 10:00:00 from 10.0.0.12");
+  });
+});
+
+describe("lastConnectedParts: the two lines of the Last connected cell (the column header already says Last connected)", () => {
+  const now = new Date("2026-10-20T12:00:00Z");
+  it("is one line for a link nobody opened", () => {
+    expect(lastConnectedParts(screen(), now, "UTC")).toEqual({ when: "Never connected", from: null });
+  });
+
+  it("splits the time ago from the address, which is written 'from ...'", () => {
+    expect(lastConnectedParts(screen({ last_seen_at: "2026-10-20T11:57:00+00:00", last_client: "10.0.0.12" }), now, "UTC")).toEqual({ when: "3 min ago", from: "from 10.0.0.12" });
+  });
+
+  it("starts the first line with a capital when it is a word, and leaves the address out when none was kept", () => {
+    expect(lastConnectedParts(screen({ last_seen_at: "2026-10-20T11:59:40+00:00" }), now, "UTC")).toEqual({ when: "Just now", from: null });
+    expect(lastConnectedParts(screen({ last_seen_at: "2026-10-19T08:00:00+00:00" }), now, "UTC")).toEqual({ when: "Yesterday", from: null });
+  });
+
+  it("keeps an IPv6 address whole (the cell may break it anywhere)", () => {
+    expect(lastConnectedParts(screen({ last_seen_at: "2026-10-20T11:30:00+00:00", last_client: "2001:db8:85a3::8a2e:370:7334" }), now, "UTC"))
+      .toEqual({ when: "30 min ago", from: "from 2001:db8:85a3::8a2e:370:7334" });
+  });
+
+  it("falls back to the date once the age is no longer written", () => {
+    expect(lastConnectedParts(screen({ last_seen_at: "2026-09-01T10:00:00+00:00", last_client: "10.0.0.12" }), now, "UTC")).toEqual({ when: "2026-09-01 10:00:00", from: "from 10.0.0.12" });
   });
 });

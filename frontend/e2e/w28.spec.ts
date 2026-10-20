@@ -430,7 +430,7 @@ test.describe("W28: display screens", () => {
 
       // The Displays page now knows the screen connected.
       await openDisplays(page);
-      await expect(rowOf(page, SCREEN)).toContainText("Last connected");
+      await expect(rowOf(page, SCREEN)).toContainText(/just now|min ago|h ago/i); // the Last connected cell: "Just now" or "3 min ago", then "from <address>"
       await expect(rowOf(page, SCREEN)).not.toContainText("Never connected");
     } finally {
       await context.close();

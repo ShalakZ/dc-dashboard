@@ -2,11 +2,21 @@
   /* w28: the Displays page under Administer (pages/DisplaysPage.tsx and components/displays/*). Tokens only; every selector names a class this piece owns
      (.dialog, .row and .tile are app.css's, and the clash guard in app.css.test.ts refuses a second rule for them). */
 
-  /* The two tables: the names are cut with an ellipsis (the cell carries the whole name as its title), the times and the buttons stay on one line. */
+  /* The two tables: the names are cut with an ellipsis (the cell carries the whole name as its title) but never below a floor of 12 characters, the counts and
+     the buttons stay on one line. The Last connected cell is two muted lines ("3 min ago", then "from 10.0.0.12"): the first never wraps, the address may
+     break anywhere (an IPv6 one has no spaces), so the column gives way at a seam and the card never scrolls sideways. */
   .displays-table td.displays-name, .displays-table td.displays-playlist { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .displays-table td.displays-name { width: 30%; font-weight: 600; }
+  .displays-table td.displays-name { width: 30%; min-width: 12ch; font-weight: 600; }
   .displays-table td.displays-playlist { width: 22%; }
-  .displays-table td.displays-when, .displays-table td.displays-count { color: var(--text-2); white-space: nowrap; }
+  .displays-table td.displays-count { color: var(--text-2); white-space: nowrap; }
+  .displays-table td.displays-when { color: var(--text-2); white-space: nowrap; }
+  .displays-table td.displays-when .displays-from { display: block; white-space: normal; overflow-wrap: anywhere; }
+
+  /* Below about 1600 px the Screens and the Playlists cards stack, Screens first and full width (app.css puts them side by side from 1280 px; two tables of five
+     and four columns do not fit in half of a laptop window). */
+  @media (max-width: 1599.98px) {
+    .displays-page .page-grid { grid-template-columns: minmax(0, 1fr); }
+  }
   .displays-table :is(th, td).act { width: 1%; text-align: right; white-space: nowrap; }
   .displays-act { display: flex; align-items: center; justify-content: flex-end; gap: 2px; } /* the menu and the bin sit together at the column's right edge */
 
@@ -37,7 +47,7 @@
   .playlist-dialog { width: min(760px, 100%); overflow: hidden; grid-template-rows: auto minmax(0, 1fr); }
   .playlist-pane { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 16px; min-height: 0; margin: 0; }
   .playlist-body { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; min-height: 0; margin: -4px; padding: 4px; overflow: auto; }
-  .playlist-foot { justify-content: flex-end; }
+  .playlist-foot { justify-content: flex-end; flex-wrap: nowrap; }
   .playlist-none { margin: 0; }
   .playlist-items { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
   .playlist-row { min-width: 0; }
@@ -47,10 +57,16 @@
   .playlist-item-tools { display: flex; align-items: center; gap: 2px; }
   .playlist-item-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; align-items: start; }
   .playlist-field-label { color: var(--text); font-size: var(--fs-sm); font-weight: 600; }
+  /* A label with its "?" tip right beside it (app.css's .has-tip pins the tip to the field's far right edge, away from a short label in a wide field). The tip
+     box is as tall as the label's line, so a field with a tip is no taller than the fields beside it. */
+  .playlist-label-row { display: flex; align-items: center; gap: 4px; }
+  .playlist-label-row > .tip { flex: none; height: calc(var(--fs-sm) * 1.4); }
   .playlist-focus { justify-content: flex-start; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; text-align: left; }
   .playlist-skip { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--warn); font-size: var(--fs-sm); }
   .playlist-skip svg.i { flex: none; margin-top: 1px; }
   .playlist-add { display: flex; align-items: center; gap: 12px; }
-  .playlist-status { min-height: 2lh; }
+  /* The reason Save is off and the server's refusal: in the footer beside Cancel and Save, outside the scrolling body, so it is always in sight. Two lines are
+     kept free, so a sentence landing moves nothing. */
+  .playlist-status { flex: 1 1 0; min-width: 0; min-height: 2lh; margin-right: auto; text-align: left; }
   .playlist-status p { margin: 0; font-size: var(--fs-sm); }
 }

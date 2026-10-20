@@ -30,9 +30,21 @@ export function focusLabel(item: PlaylistItemRow): string | null {
 export const countText = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? "" : "s"}`;
 export const skippedText = (n: number): string => (n === 1 ? "1 item is skipped" : `${n} items are skipped`);
 
-/** "Last connected 3 min ago from 10.0.0.12", or "Never connected". After two weeks the age is not written, so the date in the site's zone stands in. */
+/** The age of the last connection ("3 min ago"); after two weeks the age is not written, so the date in the site's zone stands in. */
+const agoText = (lastSeen: string, now: Date, timezone: string): string => relativeTime(lastSeen, now, timezone) ?? formatSiteDateTime(lastSeen, timezone);
+
+/** "Last connected 3 min ago from 10.0.0.12", or "Never connected". The whole sentence, for a title; the cell itself draws `lastConnectedParts`. */
 export function lastConnectedText(screen: DisplayRow, now: Date, timezone: string): string {
   if (screen.last_seen_at === null) return "Never connected";
-  const when = relativeTime(screen.last_seen_at, now, timezone) ?? formatSiteDateTime(screen.last_seen_at, timezone);
-  return `Last connected ${when}${screen.last_client ? ` from ${screen.last_client}` : ""}`;
+  return `Last connected ${agoText(screen.last_seen_at, now, timezone)}${screen.last_client ? ` from ${screen.last_client}` : ""}`;
+}
+
+/**
+ * The Last connected cell as two lines, so a narrow column wraps at a seam instead of scrolling the card sideways: "3 min ago" and "from 10.0.0.12" (the column
+ * header already says "Last connected"). The first line starts with a capital when it is a word ("Just now", "Yesterday"); `from` is null when no address was kept.
+ */
+export function lastConnectedParts(screen: DisplayRow, now: Date, timezone: string): { when: string; from: string | null } {
+  if (screen.last_seen_at === null) return { when: "Never connected", from: null };
+  const when = agoText(screen.last_seen_at, now, timezone);
+  return { when: when.charAt(0).toUpperCase() + when.slice(1), from: screen.last_client ? `from ${screen.last_client}` : null };
 }
