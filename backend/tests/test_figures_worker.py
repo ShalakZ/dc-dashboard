@@ -623,8 +623,12 @@ async def test_a_worker_whose_snapshot_is_older_than_a_stored_row_never_overwrit
 
     monkeypatch.setattr(figures, "compute_month_days", meanwhile)
     report = await cycle(make_state(), months=1)
-    assert report.written == 2  # the two windows; the month lost to the newer row (Postgres refuses the older snapshot's write)
-    assert report.errors + report.skipped == 1
+    assert report.written == 2  # the two windows
+    # The month lost to the newer row, and the protection is the isolation level, not the upsert's WHERE guard: under REPEATABLE
+    # READ Postgres raises a serialization failure for an ON CONFLICT DO UPDATE whose conflicting row the snapshot cannot see,
+    # before the guard is evaluated. (A writer under READ COMMITTED would need the guard, and the guard compares with `now()`,
+    # the start of ITS transaction.) So it is an error of that target, counted and retried next cycle, never a rolled-back row.
+    assert (report.errors, report.skipped) == (1, 0)
     assert await payload_of(db, april.key) == newer
 
 
