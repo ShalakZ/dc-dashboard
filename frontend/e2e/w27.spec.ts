@@ -248,6 +248,14 @@ async function sidebar(page: Page, want: "expanded" | "minimized"): Promise<void
   const shell = page.locator(".shell");
   if ((await shell.getAttribute("data-sidebar")) !== want) await page.locator(".side-toggle").click();
   await expect(shell).toHaveAttribute("data-sidebar", want);
+  // the sidebar's width is a transition (`.shell.ready .side`): measure only when it has arrived, or a later box shifts with it
+  let before = -1;
+  await expect.poll(async () => {
+    const width = (await page.locator(".side").first().boundingBox())?.width ?? 0;
+    const steady = width === before && (want === "expanded" ? width > 200 : width < 100);
+    before = width;
+    return steady;
+  }, { message: `the sidebar is ${want} and has stopped moving`, intervals: [150] }).toBe(true);
   await settled(page);
 }
 
@@ -640,8 +648,7 @@ test.describe("W27: the dashboard experience on the seeded pilot hall", () => {
     await dialog.getByRole("button", { name: "Create", exact: true }).click();
     await expect(page).toHaveURL(/\/dashboards\/\d+$/);
     made.push(Number(new URL(page.url()).pathname.split("/").pop()));
-    await expect(dashboardTitle(page, blankName)).toBeVisible();
-    await expect(button(page, "Save"), "Blank opens in edit mode").toBeVisible();
+    await expect(button(page, "Save"), "Blank opens in edit mode (the editor has a Name field, not the h1 of the viewer)").toBeVisible();
     await button(page, "Cancel").click();
     await expect(button(page, "Edit")).toBeVisible();
     expect(seen.templates.length, "the editor's page asked for the templates").toBeGreaterThan(0);
