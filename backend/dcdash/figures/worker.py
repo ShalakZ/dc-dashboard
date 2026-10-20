@@ -373,6 +373,9 @@ class WorkerState:
         self.summary = Summary()
         self.nightly_done: date | None = None  # the local day of the last nightly check (see `prime_nightly`)
         self.nightly_primed = False  # `nightly_done` is set from the first cycle's clock: the site zone is not known before that
+        self.nightly_failures = 0  # checks that raised in a row on `nightly_failure_day` (a failing check rests, as a failing target does)
+        self.nightly_failure_day: date | None = None
+        self.nightly_not_before = -math.inf  # `_monotonic()` before which a failed check is not tried again
         self.refused_since = 0  # values the codec refused since the last nightly check (it logs them)
         self.stop = asyncio.Event()
         self.stop_at: float | None = None  # `time.monotonic()` when the stop was first seen (not `_monotonic`: a test moves that one)
@@ -860,24 +863,36 @@ async def _nightly_step(
     state: WorkerState, now: datetime, tz_name: str, sessions: async_sessionmaker[AsyncSession], events: JournalPool
 ) -> None:
     """After a cycle: prime the nightly state at the first cycle, then run the check when it is due. A check that raised is logged
-    (once per kind per minute) and is tried again at the next cycle; one that finished is done for the local day. The loop does not
-    cycle while the check runs (a few seconds per stored row, in the small hours): the rows of the open windows may age past the
-    readers' 60 seconds meanwhile, and the readers compute those figures live, as they always could."""
+    (once per kind per minute) and is tried again at the next cycle, then after a growing rest; one that finished is done for the
+    local day. The loop does not cycle while the check runs (a few seconds per stored row, in the small hours): the rows of the open
+    windows may age past the readers' 60 seconds meanwhile, and the readers compute those figures live, as they always could."""
     local = now.astimezone(ZoneInfo(tz_name))
     if not state.nightly_primed:
         prime_nightly(state, local)
         return
     if not nightly_due(local, state.nightly_done):
         return
+    if state.nightly_failure_day != local.date():  # a new local day starts afresh
+        state.nightly_failures, state.nightly_failure_day, state.nightly_not_before = 0, local.date(), -math.inf
+    clock = _monotonic()
+    if clock < state.nightly_not_before:
+        return
     try:
         await run_nightly(sessions, events, state)
     except Exception as exc:
+        # One prompt retry at the next cycle, then the rest of a failing target (`RETRY_UNIT * 2**n`, at most `SETTLED_EVERY`): a
+        # check that fails every time (a builder that raises on a row, a statement that times out) recomputes every stored row at
+        # each attempt, and must not do that every cycle for the rest of the day.
+        state.nightly_failures += 1
+        wait = 0.0 if state.nightly_failures == 1 else min(RETRY_UNIT * 2 ** min(state.nightly_failures, 30), SETTLED_EVERY)
+        state.nightly_not_before = clock + wait
         _log_throttled(
             f"nightly:{type(exc).__name__}", "figures worker: the nightly check failed (%s: %s); trying again at the next cycle",
             type(exc).__name__, str(exc)[:200],
         )
         return
     state.nightly_done = local.date()
+    state.nightly_failures, state.nightly_not_before = 0, -math.inf
 
 
 class _Stopped(Exception):

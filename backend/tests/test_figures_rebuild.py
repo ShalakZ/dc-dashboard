@@ -577,6 +577,54 @@ async def test_the_nightly_check_that_fails_is_tried_again_at_the_next_cycle_and
         await pool.close()
 
 
+async def test_a_nightly_check_that_keeps_failing_rests_longer_each_time_and_starts_afresh_on_a_new_day(db, clock, monkeypatch):
+    _, state = await publish(db)
+    pool = worker.JournalPool(os.environ["DCDASH_DATABASE_URL"])
+    worker.prime_nightly(state, local("UTC", 2026, 4, 8, 2, 0))
+    calls: list[float] = []
+    real = rebuild.check_rows
+    failing = {"on": True}
+
+    async def flaky(*args, **kwargs):
+        calls.append(clock.now)
+        if failing["on"]:
+            raise RuntimeError("a builder raises on one row")
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(rebuild, "check_rows", flaky)
+    at = datetime(2026, 4, 9, 3, 0, tzinfo=UTC)
+
+    async def step(later: timedelta = timedelta(0)) -> None:
+        await worker._nightly_step(state, at + later, "UTC", get_sessionmaker(), pool)
+
+    try:
+        await step()  # the first failure: tried again at the next cycle
+        await step(timedelta(seconds=30))  # (the same instant of the worker's monotonic clock)
+        assert len(calls) == 2 and state.nightly_failures == 2
+        assert state.nightly_not_before == clock.now + min(worker.RETRY_UNIT * 4, worker.SETTLED_EVERY)  # 240 s
+        clock.now += 100
+        await step(timedelta(minutes=2))
+        assert len(calls) == 2  # resting: the whole check is not recomputed at every cycle
+        clock.now += 141
+        await step(timedelta(minutes=5))
+        assert len(calls) == 3 and state.nightly_failures == 3
+        assert state.nightly_not_before == clock.now + min(worker.RETRY_UNIT * 8, worker.SETTLED_EVERY)  # 480 s
+        assert state.nightly_done is None
+        failing["on"] = False
+        clock.now += 481
+        await step(timedelta(minutes=14))
+        assert len(calls) == 4 and state.nightly_done == date(2026, 4, 9) and state.nightly_failures == 0  # a success forgets it all
+        # the next day starts afresh, even after failures the day before
+        failing["on"] = True
+        await step(timedelta(days=1))
+        await step(timedelta(days=1, seconds=30))
+        assert len(calls) == 6 and state.nightly_failures == 2 and state.nightly_failure_day == date(2026, 4, 10)
+        await step(timedelta(days=2))  # a day later still: its own count
+        assert state.nightly_failure_day == date(2026, 4, 11) and state.nightly_failures == 1 and len(calls) == 7
+    finally:
+        await pool.close()
+
+
 async def test_the_first_cycle_primes_the_nightly_state_and_the_loop_runs_the_check_when_03_00_comes(db, fast_loop):
     ids, _ = await publish(db, exact=False)
     april = plan_of(2)[0]
