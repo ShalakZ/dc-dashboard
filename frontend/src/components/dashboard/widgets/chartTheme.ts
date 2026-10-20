@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { ValueAxis } from "../../../lib/chartScale";
 import { escapeHtml } from "../../../lib/widgetFormat";
 
 /**
@@ -137,6 +138,15 @@ export function axisParts(theme: ChartTheme) {
     nameTextStyle: { color: theme.axisText, fontSize: 12 },
     splitLine: { lineStyle: { color: theme.grid, width: 1, type: "solid" as const } },
   };
+}
+
+/**
+ * The value (y) axis of a chart (w27, D3): the shared look of `axisParts`, the axis name of the scale the chart's largest value picked ("kWh", "MWh", "k QAR")
+ * and the tick formatter of that scale ("18,000", "250"). The data stays in base units; only the labels are divided. `extra` adds options of the chart's own.
+ */
+export function valueAxisParts(theme: ChartTheme, axis: ValueAxis, extra: Record<string, unknown> = {}) {
+  const parts = axisParts(theme);
+  return { type: "value" as const, ...parts, ...extra, name: axis.name, axisLabel: { ...parts.axisLabel, formatter: axis.format } };
 }
 
 /** The legend, at the bottom, scrolling when it is long: a 12x3 line for a line chart, a 10x10 square for bars. The caller adds `show`, `data` and `formatter`. */

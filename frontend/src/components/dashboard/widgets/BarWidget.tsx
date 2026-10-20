@@ -5,14 +5,15 @@ import { useNavigate } from "react-router";
 import { useAssets } from "../../../api/queries";
 import type { WidgetData } from "../../../api/types";
 import {
-  breakdownDescription, breakdownLine, drillAction, drillTip, emptyBreakdownText, hasNoBars, isNoDataBar, kindOptions, parentIds, selectedKind, type DrillAction,
+  breakdownCardLine, breakdownDescription, breakdownLine, drillAction, drillTip, emptyBreakdownText, hasNoBars, isNoDataBar, kindOptions, parentIds, selectedKind, type DrillAction,
 } from "../../../lib/breakdown";
+import { valueAxisFor } from "../../../lib/chartScale";
 import { chartDescription } from "../../../lib/widgetDetails";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
 import { chartLabels, escapeHtml, figureText, hasNoReading, labelBucket, NO_DATA, shortLabel, shortLabels, uniqueLabels, unitSuffix } from "../../../lib/widgetFormat";
 import { useFocus } from "../FocusContext";
 import { AXIS_CHARS, barAxisLayout, DEFAULT_CHART_WIDTH, LABEL_LINE_PX, steppedWidth } from "./barAxis";
-import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, type ChartTheme } from "./chartTheme";
+import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, valueAxisParts, type ChartTheme } from "./chartTheme";
 import { useLegendSelection } from "./legendSelection";
 
 const DASH = "—";
@@ -125,7 +126,8 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
             : { rotate: 40, hideOverlap: true }),
         },
       },
-      yAxis: { type: "value", name: data.unit ?? undefined, ...axis },
+      // One scale for the value axis, from the tallest bar (D3); the bars keep their base-unit values and the tooltip its exact figure.
+      yAxis: valueAxisParts(theme, valueAxisFor(data, data.values.map((v) => v.value))),
       series: [{
         type: "bar", color: theme.accent, data: data.values.map((v) => (silent(v) ? null : v.value)),
         // A bar shows the pointer (zrender's default for every shape) only when a click on it does something.
@@ -164,7 +166,8 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
     },
     grid: { left: 60, right: 20, top: 30, bottom: data.series.length > 1 ? 50 : 30 },
     xAxis: { type: "category", data: times.map((t) => formatSiteTick(stamps.get(t)!, timezone, bucket)), ...axis },
-    yAxis: { type: "value", name: data.unit ?? undefined, ...axis },
+    // The tallest bar of any asset in any bucket decides the one scale of the axis (D3).
+    yAxis: valueAxisParts(theme, valueAxisFor(data, data.series.flatMap((s) => s.points.map((p) => p.value)))),
     series: data.series.map((_, i) => ({
       name: labels[i], type: "bar" as const, color: seriesLook(theme, i, data.series.length).color,
       data: cells[i].map((c) => (c.noRate ? dashItem(theme) : c.value)),
@@ -281,7 +284,9 @@ export const BarWidget = memo(function BarWidget({ data, timezone, kind, onKind,
     // The chart (or the sentence that stands in its place), the one reserved line, and the select: the same three children in every state, so the select
     // never remounts (it keeps the focus the viewer gave it) and a line appearing moves nothing.
     const sentence = hasNoBars(data.values) ? emptyBreakdownText(breakdown, data.source) : null;
-    const line = breakdownLine(breakdown, data.unit);
+    // The card shows the sum on the card face ("~262.07 MWh"); one hover away is the exact figure with its marks ("~262,071.80 kWh").
+    const line = breakdownCardLine(breakdown, data.unit, data.source);
+    const exact = breakdownLine(breakdown, data.unit);
     return (
       <div className="widget-bars">
         {sentence !== null ? (
@@ -291,7 +296,7 @@ export const BarWidget = memo(function BarWidget({ data, timezone, kind, onKind,
             <BreakdownBars data={data} timezone={timezone} theme={theme} chartWidth={chartWidth} splitDisabled={splitDisabled} />
           </div>
         )}
-        <p className="bars-note" title={line}>{line}</p>
+        <p className="bars-note" title={exact}>{line}</p>
         <SplitBy data={data} current={kind ?? breakdown.kind} onKind={onKind} disabled={splitDisabled} />
       </div>
     );

@@ -9,6 +9,7 @@ import {
 import { barAxisLayout, DEFAULT_CHART_WIDTH, GRID_SIDES_PX, LABEL_LINE_PX } from "./barAxis";
 import { BarWidget, barOption } from "./BarWidget";
 import { LIGHT_CHART, type ChartTheme } from "./chartTheme";
+import { TableWidget } from "./TableWidget";
 import { bucketMs, compareOption, markIsolated, timeSeriesOption, tooltipFormatter, TimeSeriesWidget, withGaps } from "./TimeSeriesWidget";
 
 vi.mock("echarts-for-react", () => ({
@@ -941,7 +942,7 @@ describe("the breakdown by kind (w24)", () => {
     expect(option.xAxis.data).toEqual(["Rack 1", "Rack 2", "Rack 3"]);
     expect(option.series[0].data).toEqual([100, 90, 80]);
     expect(screen.getByRole("img")).toHaveAccessibleName(/^Bar chart of 3 of 117 Racks under Hall 1\./);
-    expect(container.querySelector(".bars-note")).toHaveTextContent("and 107 more Racks: 1234.50 kWh in all 2 Racks are inside other Racks and are counted there.");
+    expect(container.querySelector(".bars-note")).toHaveTextContent("and 107 more Racks: 1,234.50 kWh in all 2 Racks are inside other Racks and are counted there.");
     expect(container.querySelector(".widget-bars")!.children).toHaveLength(3);
     expect(select()).toBeEnabled();
   });
@@ -1083,5 +1084,190 @@ describe("the breakdown by kind (w24)", () => {
   it("is the old bar chart for a values answer without a breakdown", () => {
     const { container } = render(<BarWidget data={valuesData({ type: "bar", breakdown: null })} timezone={TZ} />);
     expect(container.querySelector(".widget-bars, .bars-split")).toBeNull();
+  });
+});
+
+describe("value axes and exact tooltips on large figures (w27, D3)", () => {
+  interface Labelled { name?: string; axisLabel: { formatter: (value: number) => string; color: string } }
+  const yAxisOf = (option: unknown) => (option as { yAxis: Labelled }).yAxis;
+  const tipOf = (option: unknown, params: unknown) => tipText((option as { tooltip: { formatter: (p: unknown) => string } }).tooltip.formatter(params));
+  const days = (values: (number | null)[], over: Partial<WidgetData> = {}) =>
+    seriesData({
+      source: "energy", metric: null, unit: "kWh", bucket: "day",
+      series: [{ asset_id: 5, name: "LV Panel 1", estimated: false, partial: false, points: values.map((value, i) => seriesPoint({ ts: `2026-10-${String(i + 1).padStart(2, "0")}T00:00:00+03:00`, value, no_data: value === null })) }],
+      ...over,
+    });
+
+  it("reads 18,000 under kWh on a daily chart, with the data and the tooltip exact", () => {
+    const data = days([9_500, 18_000, 12_250.5]);
+    const option = timeSeriesOption(data, TZ);
+    expect(yAxisOf(option).name).toBe("kWh");
+    expect(yAxisOf(option).axisLabel.formatter(18_000)).toBe("18,000");
+    expect(yAxisOf(option).axisLabel.formatter(0)).toBe("0");
+    expect(asOption(option).series[0].data.map((cell) => plain(cell)[1])).toEqual([9_500, 18_000, 12_250.5]);
+    expect(tipOf(option, [{ seriesId: "avg-5", seriesName: "A", value: ["2026-10-02T00:00:00+03:00", 18_000], marker: "" }])).toContain("A 18,000.00 kWh");
+  });
+
+  it("reads 250 and 300 under MWh when the largest value is 275,430 kWh, while the tooltip still says 275,430.26 kWh", () => {
+    const data = days([120_000, 275_430.2575, 90_000]);
+    const option = timeSeriesOption(data, TZ);
+    expect(yAxisOf(option).name).toBe("MWh");
+    expect(yAxisOf(option).axisLabel.formatter(250_000)).toBe("250");
+    expect(yAxisOf(option).axisLabel.formatter(300_000)).toBe("300");
+    expect(asOption(option).series[0].data.map((cell) => plain(cell)[1])).toEqual([120_000, 275_430.2575, 90_000]);
+    expect(tipOf(option, [{ seriesId: "avg-5", seriesName: "A", value: ["2026-10-02T00:00:00+03:00", 275_430.2575], marker: "" }])).toContain("A 275,430.26 kWh");
+  });
+
+  it("goes to MWh at a top value of 99,999.5 kWh and stays in kWh at 99,999.4 (the unit is chosen after rounding)", () => {
+    expect(yAxisOf(timeSeriesOption(days([99_999.5, 10]), TZ)).name).toBe("MWh");
+    expect(yAxisOf(timeSeriesOption(days([99_999.4, 10]), TZ)).name).toBe("kWh");
+  });
+
+  it("names a cost beyond 100,000 in k, with the currency code, and ticks in thousands", () => {
+    const option = timeSeriesOption(days([40_000, 150_000], { source: "cost", unit: "QAR" }), TZ);
+    expect(yAxisOf(option).name).toBe("k QAR");
+    expect(yAxisOf(option).axisLabel.formatter(150_000)).toBe("150");
+    expect(yAxisOf(option).axisLabel.formatter(50_000)).toBe("50");
+    expect(yAxisOf(timeSeriesOption(days([40_000, 99_000], { source: "cost", unit: "QAR" }), TZ)).name).toBe("QAR");
+  });
+
+  it("takes the scale of a metric's band from its largest max, not only from its averages", () => {
+    const metric = seriesData({
+      unit: "kW",
+      series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 90_000, min: 80_000, max: 120_000 })] }],
+    });
+    const option = timeSeriesOption(metric, TZ);
+    expect(yAxisOf(option).name).toBe("MW");
+    expect(yAxisOf(option).axisLabel.formatter(100_000)).toBe("100");
+    // The tooltip's min and max are on the exact face too, so one tooltip never mixes grouped and ungrouped figures.
+    expect(tipOf(option, [{ seriesId: "avg-5", seriesName: "A", value: ["2026-10-08T00:00:00+00:00", 90_000], marker: "" }])).toContain("90,000.00 kW (min 80,000.00, max 120,000.00)");
+  });
+
+  it("leaves a unit that never scales as it is", () => {
+    const option = timeSeriesOption(seriesData({ unit: "V", series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 400, min: 390, max: 1_500_000 })] }] }), TZ);
+    expect(yAxisOf(option).name).toBe("V");
+    expect(yAxisOf(option).axisLabel.formatter(1_000_000)).toBe("1,000,000");
+  });
+
+  it("keeps the axis text colour while it formats", () => {
+    expect(yAxisOf(timeSeriesOption(days([1, 2]), TZ)).axisLabel.color).toBe(LIGHT_CHART.axisText);
+  });
+
+  describe("the bar chart", () => {
+    const perAsset = (values: number[], over: Partial<WidgetData> = {}) =>
+      valuesData({ type: "bar", source: "energy", metric: null, unit: "kWh", values: values.map((value, i) => valueRow({ asset_id: 10 + i, name: `Hall ${i + 1}`, value, point_id: null })), ...over });
+
+    it("reads MWh for bars per asset when the tallest is 275,430 kWh, and the tooltip stays exact", () => {
+      const option = barOption(perAsset([138_130.96, 275_430.2575]), TZ);
+      expect(yAxisOf(option).name).toBe("MWh");
+      expect(yAxisOf(option).axisLabel.formatter(250_000)).toBe("250");
+      expect(barSeries(option)[0].data).toEqual([138_130.96, 275_430.2575]);
+      expect(tipOf(option, [{ name: "Hall 2", dataIndex: 1, seriesIndex: 0, marker: "" }])).toContain("275,430.26 kWh");
+    });
+
+    it("reads kWh with separators for bars below 100,000 kWh", () => {
+      const option = barOption(perAsset([4_000, 18_000]), TZ);
+      expect(yAxisOf(option).name).toBe("kWh");
+      expect(yAxisOf(option).axisLabel.formatter(18_000)).toBe("18,000");
+    });
+
+    it("names a cost beyond 100,000 in k QAR", () => {
+      expect(yAxisOf(barOption(perAsset([40_000, 275_430.26], { source: "cost", unit: "QAR" }), TZ)).name).toBe("k QAR");
+    });
+
+    it("ignores a bar with no figure when it picks the scale", () => {
+      const option = barOption(perAsset([5, 0], { values: [valueRow({ value: 5, point_id: null }), valueRow({ asset_id: 6, name: "B", value: null, no_data: true, point_id: null })] }), TZ);
+      expect(yAxisOf(option).name).toBe("kWh");
+    });
+
+    it("scales a bar-over-time chart by the largest bar of any asset", () => {
+      const series = (id: number, values: number[]) => ({
+        asset_id: id, name: `A${id}`, estimated: false, partial: false,
+        points: values.map((value, i) => seriesPoint({ ts: `2026-10-0${i + 1}T00:00:00+03:00`, value })),
+      });
+      const option = barOption(seriesData({ type: "bar", source: "energy", metric: null, unit: "kWh", bucket: "day", series: [series(5, [10, 20]), series(6, [150_000, 30])] }), TZ);
+      expect(yAxisOf(option).name).toBe("MWh");
+      expect(yAxisOf(option).axisLabel.formatter(100_000)).toBe("100");
+    });
+
+    it("scales a breakdown's axis by its bars", () => {
+      const data = breakdownData(2, { values: [valueRow({ asset_id: 10, name: "Hall 1", value: 138_130.96, point_id: null }), valueRow({ asset_id: 11, name: "Hall 2", value: 150_503.32, estimated: true, point_id: null })] });
+      const option = barOption(data, TZ);
+      expect(yAxisOf(option).name).toBe("MWh");
+      expect(yAxisOf(option).axisLabel.formatter(150_000)).toBe("150");
+    });
+  });
+
+  describe("the comparison chart", () => {
+    it("draws both months on one axis from the larger of the two", () => {
+      const data = compareSeriesData(3, 3);
+      data.series[0].points[2] = seriesPoint({ ts: "2026-10-03T00:00:00+03:00", value: 10_000 });
+      data.compare!.assets[0].last_points[1] = seriesPoint({ ts: "2026-09-02T00:00:00+03:00", value: 275_430.26 });
+      const option = compareOption(data, TZ);
+      expect(yAxisOf(option).name).toBe("MWh");
+      expect(yAxisOf(option).axisLabel.formatter(250_000)).toBe("250");
+      expect(tipOf(option, [{ dataIndex: 1, seriesIndex: 1, marker: "" }])).toContain("2 Sep 275,430.26 kWh");
+    });
+
+    it("reads kWh when neither month reaches 100,000", () => {
+      const option = compareOption(compareSeriesData(3, 3), TZ);
+      expect(yAxisOf(option).name).toBe("kWh");
+      expect(yAxisOf(option).axisLabel.formatter(100)).toBe("100");
+    });
+
+    it("scales a cost comparison in k QAR and leaves out a currency-changed month that has no figures", () => {
+      const data = compareSeriesData(3, 3, { source: "cost", unit: "QAR" });
+      data.series[0].points[1] = seriesPoint({ ts: "2026-10-02T00:00:00+03:00", value: 180_000 });
+      expect(yAxisOf(compareOption(data, TZ)).name).toBe("k QAR");
+    });
+  });
+
+  describe("the breakdown line (card face) and its title (exact face)", () => {
+    const circuits = breakdownData(2, {
+      breakdown: breakdownBlock({ kind: "Circuit", count: 231, shown: 12, more: { count: 219, with_value: 207, value: 262_071.8, estimated: true, partial: false } }),
+    });
+
+    it("reads 'and 219 more Circuits: ~262.07 MWh in all (12 with no data)' with the exact figure one hover away", () => {
+      const { container } = render(<BarWidget data={circuits} timezone={TZ} />);
+      const note = container.querySelector(".bars-note")!;
+      expect(note).toHaveTextContent("and 219 more Circuits: ~262.07 MWh in all (12 with no data)");
+      expect(note).toHaveAttribute("title", "and 219 more Circuits: ~262,071.80 kWh in all (12 with no data)");
+    });
+
+    it("keeps the * of a cost on the card and in the title, with the k and the currency code", () => {
+      const cost = breakdownData(2, {
+        source: "cost", unit: "QAR",
+        breakdown: breakdownBlock({ count: 117, more: { count: 107, with_value: 107, value: 275_430.26, estimated: false, partial: true } }),
+      });
+      const { container } = render(<BarWidget data={cost} timezone={TZ} />);
+      const note = container.querySelector(".bars-note")!;
+      expect(note).toHaveTextContent("and 107 more Racks: 275.43k* QAR in all");
+      expect(note).toHaveAttribute("title", "and 107 more Racks: 275,430.26* QAR in all");
+    });
+
+    it("puts the inside-others sentence in the title too", () => {
+      const { container } = render(<BarWidget data={breakdownData(3, { breakdown: breakdownBlock({ inside_others: 2 }) })} timezone={TZ} />);
+      expect(container.querySelector(".bars-note")).toHaveAttribute("title", "and 107 more Racks: 1,234.50 kWh in all 2 Racks are inside other Racks and are counted there.");
+    });
+  });
+});
+
+describe("the table keeps the exact face (w27)", () => {
+  it("prints a cell with separators and two decimals, with its marks, and never scales it", () => {
+    render(<TableWidget data={valuesData({ type: "table", source: "energy", metric: null, unit: "kWh", values: [
+      valueRow({ name: "Hall 1", value: 138_130.96, point_id: null }),
+      valueRow({ asset_id: 6, name: "Hall 2", value: 275_430.2575, estimated: true, point_id: null }),
+      valueRow({ asset_id: 7, name: "Hall 3", value: 4_000, point_id: null }),
+    ] })} />);
+    const cells = screen.getAllByRole("row").slice(1).map((row) => within(row).getAllByRole("cell")[1].textContent);
+    expect(cells).toEqual(["138,130.96", "~275,430.26", "4,000.00"]);
+  });
+
+  it("keeps a cost's * and a missing rate's dash", () => {
+    render(<TableWidget data={valuesData({ type: "table", source: "cost", metric: null, unit: "QAR", values: [
+      valueRow({ name: "Hall 1", value: 33_051.6309, partial: true, point_id: null }),
+      valueRow({ asset_id: 6, name: "Hall 2", value: null, point_id: null }),
+    ] })} />);
+    expect(screen.getAllByRole("row").slice(1).map((row) => within(row).getAllByRole("cell")[1].textContent)).toEqual(["33,051.63*", "—"]);
   });
 });

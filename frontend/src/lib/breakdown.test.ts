@@ -1,6 +1,6 @@
 import { breakdownBlock, breakdownData, valueRow } from "../test/dashboardFixtures";
 import {
-  breakdownDescription, breakdownLine, drillAction, drillTip, emptyBreakdownText, hasNoBars, insideOthersText, isNoDataBar, kindNoun, kindOptions, moreFigure, moreText,
+  breakdownCardLine, breakdownDescription, breakdownLine, drillAction, drillTip, emptyBreakdownText, hasNoBars, insideOthersText, isNoDataBar, kindNoun, kindOptions, moreCard, moreCardText, moreFigure, moreText,
   narrowLabel, parentIds, pluralKind, selectedKind,
 } from "./breakdown";
 
@@ -24,7 +24,7 @@ describe("the kind in the plural", () => {
 
 describe("the line under the chart", () => {
   it("says how many more and their sum in all, with the unit", () => {
-    expect(moreText(more(), "kWh")).toBe("and 107 more Racks: 1234.50 kWh in all");
+    expect(moreText(more(), "kWh")).toBe("and 107 more Racks: 1,234.50 kWh in all");
   });
 
   it("carries the sum's ~ and * marks, and a cost's currency", () => {
@@ -49,11 +49,55 @@ describe("the line under the chart", () => {
   });
 
   it("is both sentences on one line, or whichever applies, or nothing", () => {
-    expect(breakdownLine({ ...more(), inside_others: 3 }, "kWh")).toBe("and 107 more Racks: 1234.50 kWh in all 3 Racks are inside other Racks and are counted there.");
-    expect(breakdownLine(more(), "kWh")).toBe("and 107 more Racks: 1234.50 kWh in all");
+    expect(breakdownLine({ ...more(), inside_others: 3 }, "kWh")).toBe("and 107 more Racks: 1,234.50 kWh in all 3 Racks are inside other Racks and are counted there.");
+    expect(breakdownLine(more(), "kWh")).toBe("and 107 more Racks: 1,234.50 kWh in all");
     expect(breakdownLine(breakdownBlock({ inside_others: 2, more: { count: 0, with_value: 0, value: null, estimated: false, partial: false } }), "kWh"))
       .toBe("2 Racks are inside other Racks and are counted there.");
     expect(breakdownLine(breakdownBlock({ more: { count: 0, with_value: 0, value: null, estimated: false, partial: false } }), "kWh")).toBe("");
+  });
+});
+
+describe("the line under the chart on the card face (w27) and its exact face one hover away", () => {
+  const circuits = (over: Partial<ReturnType<typeof breakdownBlock>["more"]> = {}) =>
+    breakdownBlock({ kind: "Circuit", more: { count: 219, with_value: 207, value: 262_071.8, estimated: true, partial: false, ...over } });
+
+  it("reads 'and 219 more Circuits: ~262.07 MWh in all (12 with no data)' for 262,071.80 kWh, and keeps the exact figure for the title", () => {
+    expect(breakdownCardLine(circuits(), "kWh", "energy")).toBe("and 219 more Circuits: ~262.07 MWh in all (12 with no data)");
+    expect(breakdownLine(circuits(), "kWh")).toBe("and 219 more Circuits: ~262,071.80 kWh in all (12 with no data)");
+    expect(moreCardText(circuits(), "kWh", "energy")).toBe("and 219 more Circuits: ~262.07 MWh in all (12 with no data)");
+  });
+
+  it("gives the sum its own scale: below 100,000 kWh it stays in kWh, with the card's decimals", () => {
+    expect(moreCard(more({ value: 1234.5 }), "kWh", "energy")).toEqual({ text: "1,234.50 kWh", without: 0 });
+    expect(moreCard(more({ value: 33_051.6309 }), "kWh", "energy").text).toBe("33,052 kWh");
+    expect(moreCard(more({ value: 99_999.5 }), "kWh", "energy").text).toBe("100.00 MWh");
+    expect(moreCard(more({ value: 99_999.4 }), "kWh", "energy").text).toBe("99,999 kWh");
+  });
+
+  it("scales a cost in k and M with the currency code, and keeps its marks in order", () => {
+    expect(moreCard(more({ value: 275_430.26, partial: true }), "QAR", "cost").text).toBe("275.43k* QAR");
+    expect(moreCard(more({ value: 1_234_567, estimated: true, partial: true }), "QAR", "cost").text).toBe("~1.23M* QAR");
+    expect(moreCard(more({ value: 33_051.63 }), null, "cost").text).toBe("33,051.63");
+  });
+
+  it("never scales a unit that does not scale, and counts the bars with no figure the same way as the exact face", () => {
+    expect(moreCard(more({ count: 10, with_value: 7, value: 1_500_000 }), "V", "metric")).toEqual({ text: "1,500,000.00 V", without: 3 });
+    expect(moreFigure(more({ count: 10, with_value: 7, value: 1_500_000 }), "V")).toEqual({ text: "1,500,000.00 V", without: 3 });
+  });
+
+  it("is a dash with no unit when the sum cannot be worked out, and empty when nothing was left out", () => {
+    expect(moreCard(more({ count: 5, with_value: 0, value: null }), "kWh", "energy")).toEqual({ text: "—", without: 0 });
+    expect(breakdownCardLine(more({ count: 5, with_value: 0, value: null }), "kWh", "energy")).toBe("and 5 more Racks: —");
+    expect(breakdownCardLine(more({ count: 0, with_value: 0, value: null }), "kWh", "energy")).toBe("");
+  });
+
+  it("puts the inside-others sentence after the card figure too", () => {
+    expect(breakdownCardLine({ ...more({ value: 262_071.8 }), inside_others: 3 }, "kWh", "energy"))
+      .toBe("and 107 more Racks: 262.07 MWh in all 3 Racks are inside other Racks and are counted there.");
+  });
+
+  it("leaves the exact face of Details alone: grouped, two decimals, never scaled, marks kept", () => {
+    expect(moreFigure(more({ value: 262_071.8, estimated: true, partial: true }), "kWh")).toEqual({ text: "~262,071.80* kWh", without: 0 });
   });
 });
 
