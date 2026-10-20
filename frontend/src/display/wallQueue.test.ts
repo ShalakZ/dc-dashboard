@@ -210,6 +210,21 @@ describe("createWidgetQueue: cancel, clear, pause", () => {
     expect(t.clock.pending).toBe(0);
   });
 
+  it("starts a job at the end of the cool-down even while cancelled requests are still on the wire", async () => {
+    const t = setup();
+    t.queue.enqueue(t.job(1));
+    t.queue.enqueue(t.job(2));
+    t.queue.enqueue(t.job(3)); // waits: both slots are taken
+    t.queue.cancel("k1");
+    t.queue.cancel("k2");
+    t.calls[0].reject(new TypeError("network")); await settle(); // a cool-down of 5 s; k2's request hangs on
+    expect(t.queue.inFlight()).toBe(1);
+    t.clock.advance(4_999);
+    expect(t.calls).toHaveLength(2);
+    t.clock.advance(1);
+    expect(t.calls.map((call) => call.widget)).toEqual([1, 2, 3]);
+  });
+
   it("starts a new request for a key cancelled while running and enqueued again", async () => {
     const t = setup();
     t.queue.enqueue(t.job(1));

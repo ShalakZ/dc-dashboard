@@ -87,12 +87,12 @@ export function isDataWidget(type: string): boolean {
 }
 
 /** How old a card's figures may get before they are asked for again: a minute for a comparison (the server's figure cache adds up to a minute), 30 s for the others. */
-export function wallRefetchMs(config: WidgetConfig): number {
-  return config.compare === "same_days_last_month" ? WALL_COMPARE_REFETCH_MS : WALL_REFETCH_MS;
+export function wallRefetchMs(config: WidgetConfig | null | undefined): number {
+  return config?.compare === "same_days_last_month" ? WALL_COMPARE_REFETCH_MS : WALL_REFETCH_MS;
 }
 
 /** True when a card has no answer yet, or its answer is old enough to ask again; a negative age (the clock moved back) counts as due. */
-export function refetchDue(config: WidgetConfig, answeredAt: number | null, now: number): boolean {
+export function refetchDue(config: WidgetConfig | null | undefined, answeredAt: number | null, now: number): boolean {
   if (answeredAt === null) return true;
   const age = now - answeredAt;
   return age < 0 || age >= wallRefetchMs(config);

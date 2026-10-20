@@ -139,6 +139,12 @@ describe("wallRefetchMs and refetchDue", () => {
     expect(wallRefetchMs(config({ compare: "none" }))).toBe(30_000);
     expect(wallRefetchMs(config({ compare: "same_days_last_month" }))).toBe(60_000);
   });
+  it("does not throw for a config the playlist left unreadable (null or missing): it is a plain 30 s card", () => {
+    expect(wallRefetchMs(null)).toBe(30_000);
+    expect(wallRefetchMs(undefined)).toBe(30_000);
+    expect(refetchDue(null, 1_000, 1_000 + 30_000)).toBe(true);
+    expect(refetchDue(undefined, 1_000, 1_000 + 29_999)).toBe(false);
+  });
   it("is due with no answer", () => {
     expect(refetchDue(config(), null, 1_000_000)).toBe(true);
   });

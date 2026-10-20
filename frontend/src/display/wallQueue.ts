@@ -89,7 +89,7 @@ export function createWidgetQueue(deps: QueueDeps): WidgetQueue {
     const t = now();
     if (coolUntil - t > MAX_COOL_MS) coolUntil = 0; // the clock moved back by more than any wait: do not sit out a cool-down that cannot be real
     if (t < coolUntil) {
-      if (jobs.size > running) arm(coolUntil - t); // only worth a timer when something waits
+      if (waitingJobs().length > 0) arm(coolUntil - t); // only worth a timer when something waits (cancelled requests still on the wire are not in `jobs`)
       return;
     }
     while (running < MAX_IN_FLIGHT) {
