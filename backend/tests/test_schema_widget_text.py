@@ -114,9 +114,8 @@ async def recorded_revision(db) -> str:
 
 # ---- the head ---------------------------------------------------------------------------------------------------------------
 
-def test_the_migration_follows_0012_and_is_the_only_head():
-    assert "0012 -> 0013" in run_alembic("history", "-r", "0012:0013").stdout
-    assert head_revision() == "0013"
+def test_the_migration_follows_0012():
+    assert "0012 -> 0013" in run_alembic("history", "-r", "0012:0013").stdout  # the one head is pinned by the newest migration's test
 
 
 # ---- at the head: the six types ---------------------------------------------------------------------------------------------
