@@ -40,10 +40,14 @@ the readings it reads to equal the row's exactly.) Anything else is a miss and t
 
     docker compose exec -T figures python -m dcdash.figures.rebuild --check
 
-recomputes every stored row in one snapshot and prints one line per row and a summary of four counts: `equal` (the same bytes as a fresh
-calculation), `moved on` (readings arrived since the row was made: not a difference, and normal for the current month), `stale` (made
-by another build or another configuration: never used) and `DIFFERENT` (a fault: the first differing asset and day are named). Only
-`DIFFERENT` gives exit code 1; the command writes nothing. `--all` and `--month YYYY-MM` rebuild instead of checking.
+judges every stored row, each in a snapshot of its own, and prints one line per row and a summary of five counts: `equal` (the same bytes
+as a fresh calculation), `moved on` (readings arrived since the row was made: not a difference, and normal for the current month),
+`stale` (made by another build or another configuration: never used), `DIFFERENT` (a fault: the first differing asset and day are
+named) and `error` (the row could not be judged). It proves only rows that are unchanged and settled: the rows of the open month are
+normally `moved on` (the summary says how many). Exit code 0: every row is fine; 1: at least one row is `DIFFERENT`; 3: the proof could
+not be completed (an `error` line, or a database that did not answer). On 1 or 3 paste the whole output. The check writes nothing.
+`--all` and `--month YYYY-MM` rebuild instead of checking (a month the worker does not keep is refused, exit 2); like the worker they
+run niced.
 
 What this wave found about tests:
 

@@ -65,10 +65,13 @@ When a figure looks wrong (Billing and a dashboard disagree, or a number seems s
     docker compose exec -T figures python -m dcdash.figures.rebuild --check
     docker compose logs --tail 80 figures
 
-The first compares every stored figure with a fresh calculation and writes nothing. It prints one line per figure and then a summary with
-four counts. `equal` is as it should be. `moved on` means readings arrived since the figure was stored: normal for the current month, not
-a difference. `stale` means it was made under another configuration or another build: the api never uses it and the service replaces it.
-`DIFFERENT` is a fault: the command exits with code 1 and names the first asset and day that differ; paste it at once. The second shows
+The first compares every stored figure with a fresh calculation, each in a snapshot of its own, and writes nothing. It prints one line
+per figure and then a summary with five counts. `equal` is as it should be. `moved on` means readings arrived since the figure was
+stored: normal for the current month (the rows of the open month are usually `moved on`; the summary says how many), not a difference.
+`stale` means it was made under another configuration or another build: the api never uses it and the service replaces it.
+`DIFFERENT` is a fault: the command exits with code 1 and names the first asset and day that differ. `error` means a row could not be
+judged; the command then exits with code 3, as it does when the database did not answer. On exit code 1 or 3 paste the whole output at
+once. The second shows
 the service's own log. A quiet log is normal; a warning names what failed (a figure that could not be made or stored, a database that did
 not answer). If `docker compose exec` says the service is not running, or `docker compose ps` does not show `figures` as `healthy`, the pages
 are only slower: start it with `docker compose up -d figures`. `scripts\update.ps1` does not check this service.

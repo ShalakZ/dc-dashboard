@@ -977,6 +977,9 @@ _MASK_CASES = [   # (text, a regular expression the masked line must fully match
     # the compose service names say nothing about the site and tell the reader WHICH container failed: a URL naming them masks nothing
     ("GET http://api:8000/health and opc.tcp://simulator:4840 then == api == db exited; services: api, collector, db, simulator, web",
      r"GET http://api:8000/health and opc\.tcp://simulator:4840 then == api == db exited; services: api, collector, db, simulator, web"),
+    # (w26b) the figures service is one of them too: its log line names it, and a masked "== HOST-3 ==" would not say which container failed
+    ("GET http://figures:8000/x then == figures == exited; services: api, collector, db, figures, web",
+     r"GET http://figures:8000/x then == figures == exited; services: api, collector, db, figures, web"),
 ]
 
 

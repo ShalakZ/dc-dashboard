@@ -172,9 +172,12 @@ Waves without a migration also have entries in the CHANGELOG (for example W7p, n
 `figures` service fills it. The service is new in `compose.yaml` and starts with the ordinary `docker compose up -d`.
 `scripts\update.ps1` starts it the same way but does not list it in its health checks, so after an update look at `docker compose ps`:
 `figures` should be `healthy` within a few minutes. If it is not running the pages are only slower, never wrong. An older image left
-running beside the new table is harmless: it does not know the table. Going back to code from before w26b: stop `figures` first
-(`docker compose stop figures`) and remove its container with the others (option b: add `figures` to the `docker compose rm` line; option a:
-add `--remove-orphans` to the final `up -d --build`), because the old `compose.yaml` does not know the service (not rehearsed).
+running beside the new table is harmless: the old code ignores the table. Going back to code from before w26b: stop `figures` first
+(`docker compose stop figures`), because the old `compose.yaml` does not know the service and would leave its container running. Remove
+the container one of two ways. Either while the new checkout is still in place (before the `git checkout`), run
+`docker compose rm --stop --force figures` (option b: the same as adding `figures` to the `rm` line of its step 1); or leave it and add
+`--remove-orphans` to the next `up -d` that you run from the OLD checkout, whose compose file no longer has the service. There is no
+need for `docker compose down --remove-orphans` (it would also take every other container down). Not rehearsed.
 
 ## Upgrading images
 
