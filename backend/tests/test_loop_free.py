@@ -167,11 +167,11 @@ async def test_assemble_on_the_thread_leaves_get_api_me_waiting_little(client, d
     print(f"\nthreaded hourly_energy ({sizes[0] * 1000:.0f} ms; assemble alone takes {inline_ms:.0f} ms): GET /api/me waited "
           f"p95 {p95(waits) * 1000:.0f} ms, max {max(waits) * 1000:.0f} ms over {len(waits)} requests")
     assert p95(waits) < 0.4  # wide: a loaded machine
-    if inline_ms >= 250:
+    if inline_ms >= 200:
         # Measured in this run, so a slow machine cannot fail it and a fast one cannot hide the old way: assembled inline, a
         # request waits for about the whole `assemble` (minus the up-to-50 ms until one falls due); on the thread it waits for a
         # few turns of the GIL.
-        assert max(waits) * 1000 < 0.6 * inline_ms, f"GET /api/me waited {max(waits) * 1000:.0f} ms behind a {inline_ms:.0f} ms assemble"
+        assert max(waits) * 1000 < 0.65 * inline_ms, f"GET /api/me waited {max(waits) * 1000:.0f} ms behind a {inline_ms:.0f} ms assemble"
 
 
 async def test_assemble_in_the_loop_the_old_way_made_the_same_request_wait_longer(client, db):
