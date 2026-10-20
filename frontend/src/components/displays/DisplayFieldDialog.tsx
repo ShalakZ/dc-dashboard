@@ -2,13 +2,18 @@ import { useId, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { useUpdateDisplay } from "../../api/queries";
 import type { DisplayRow, PlaylistRow } from "../../api/types";
+import { useAuth } from "../../auth/AuthProvider";
 import { useAction } from "../../hooks/useAction";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
+import { upperFirst } from "../../lib/upperFirst";
 import { useToast } from "../Toasts";
+import { focusRefusal, namesFocus } from "./displayText";
 
 /**
- * Rename display / Change playlist (w28): one field, Save and Cancel. The server's refusal (a name already taken, a 403, a 422) is shown here and the dialog
- * stays open. Built on `useDialogFocus` (focus on the field, Tab wraps, Escape cancels unless a save is running, focus back to the row menu's button on close).
+ * Rename display / Change playlist (w28): one field, Save and Cancel. The server's refusal (a name already taken, a 403, a 422) is shown here, starting with a
+ * capital, and the dialog stays open. A 403 for a playlist that names a focus asset, from a role that may not see the assets, says why instead of the generic
+ * "Your role does not allow this." Built on `useDialogFocus` (focus on the field, Tab wraps, Escape cancels unless a save is running, focus back to the row
+ * menu's button on close).
  */
 export function DisplayFieldDialog({ display, field, playlists, onClose }: {
   display: DisplayRow;
@@ -16,6 +21,7 @@ export function DisplayFieldDialog({ display, field, playlists, onClose }: {
   playlists: readonly PlaylistRow[];
   onClose: () => void;
 }) {
+  const { can } = useAuth();
   const update = useUpdateDisplay();
   const toast = useToast();
   const { run, busy, error, clear } = useAction();
@@ -38,7 +44,12 @@ export function DisplayFieldDialog({ display, field, playlists, onClose }: {
       return;
     }
     void run(async () => {
-      await update.mutateAsync({ id: display.id, body: field === "name" ? { name: trimmed } : { playlist_id: playlist } });
+      try {
+        await update.mutateAsync({ id: display.id, body: field === "name" ? { name: trimmed } : { playlist_id: playlist } });
+      } catch (e) {
+        const chosen = playlists.find((p) => p.id === playlist);
+        throw focusRefusal(e, field === "playlist" && !can("assets.view") && namesFocus((chosen?.items ?? []).map((item) => item.focus_asset_id)));
+      }
       toast.success(field === "name" ? "Display renamed" : "Playlist changed");
       onClose();
     });
@@ -60,7 +71,7 @@ export function DisplayFieldDialog({ display, field, playlists, onClose }: {
               </select>
             )}
           </div>
-          <p className="error displays-error" role="alert">{error}</p>
+          <p className="error displays-error" role="alert">{error ? upperFirst(error) : null}</p>
           <div className="row">
             <button type="button" aria-disabled={busy ? true : undefined} onClick={() => { if (!busy) onClose(); }}>Cancel</button>
             <button type="submit" className="primary" aria-disabled={blocked ? true : undefined}>Save</button>

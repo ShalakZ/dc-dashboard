@@ -122,7 +122,7 @@ describe("DisplaysPage: what it shows", () => {
 
   it("shows the server's sentence when the list cannot be read", async () => {
     show(FULL, { "GET /api/displays": { status: 500, body: { detail: "the displays could not be read" } } });
-    expect(await screen.findByRole("alert")).toHaveTextContent("the displays could not be read");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load the displays: the displays could not be read");
   });
 });
 
@@ -159,7 +159,7 @@ describe("DisplaysPage: Revoke", () => {
     await screen.findByRole("cell", { name: "Hall TV" });
     await chooseFromMenu("Hall TV", "Revoke");
     const dialog = await screen.findByRole("dialog", { name: "Revoke Hall TV?" });
-    expect(dialog).toHaveTextContent("Revoke Hall TV?The screen goes blank within a minute.");
+    expect(dialog).toHaveTextContent("Revoke Hall TV?The screen stops showing dashboards within a minute.");
     expect(within(dialog).getAllByRole("button").map((b) => b.textContent)).toEqual(["Cancel", "Revoke"]);
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -190,7 +190,7 @@ describe("DisplaysPage: Revoke", () => {
     await chooseFromMenu("Hall TV", "Revoke");
     const dialog = await screen.findByRole("dialog", { name: "Revoke Hall TV?" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("this display belongs to another site");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("This display belongs to another site");
     await waitFor(() => expect(reads(calls)).toBe(before + 1)); // on failure too: the page may be out of date
   });
 });
@@ -206,7 +206,7 @@ describe("DisplaysPage: Rename and Change playlist", () => {
     await userEvent.clear(within(dialog).getByLabelText("Name"));
     await userEvent.type(within(dialog).getByLabelText("Name"), "Lobby");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-    expect(await within(dialog).findByText("a display with this name already exists")).toBeInTheDocument();
+    expect(await within(dialog).findByText("A display with this name already exists")).toBeInTheDocument();
     expect(writes(calls).map((c) => [c.method, c.path, c.body])).toEqual([["PUT", "/api/displays/1", { name: "Lobby" }]]);
   });
 
@@ -254,9 +254,55 @@ describe("DisplaysPage: Delete", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete Wall A" }));
     const dialog = await screen.findByRole("dialog", { name: 'Delete playlist "Wall A"?' });
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("this playlist is shown by: Hall TV, Old (revoked)");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("This playlist is shown by: Hall TV, Old (revoked). Change their playlist or delete them first.");
     expect(screen.getByRole("dialog", { name: 'Delete playlist "Wall A"?' })).toBeInTheDocument();
     expect(writes(calls).map((c) => [c.method, c.path])).toEqual([["DELETE", "/api/playlists/1"]]);
+  });
+
+  it("keeps the refusal in a slot of its own that is there before it lands, so Cancel and Delete do not move, and gives it no second copy in the dialog", async () => {
+    const detail = "this playlist is shown by 10 screens: A, B, C and 7 more. Change their playlist or delete them first.";
+    show(FULL, { "DELETE /api/playlists/1": { status: 409, body: { detail } } });
+    await screen.findByRole("cell", { name: "Hall TV" });
+    await userEvent.click(screen.getByRole("button", { name: "Delete Wall A" })); // Wall A is shown by a screen, so the refusal is expected
+    const dialog = await screen.findByRole("dialog", { name: 'Delete playlist "Wall A"?' });
+    const slot = dialog.querySelector(".displays-refusal")!;
+    expect(slot).toBeInTheDocument(); // reserved at once, empty
+    expect(slot).toBeEmptyDOMElement();
+    expect(slot).toHaveClass("displays-refusal-reserved");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(slot).toHaveTextContent("This playlist is shown by 10 screens: A, B, C and 7 more. Change their playlist or delete them first."));
+    expect(slot.textContent!.match(/Change their playlist/g)).toHaveLength(1); // the server's advice is not repeated
+    expect(within(dialog).getAllByRole("alert")).toEqual([slot]); // the dialog's own error line stays unused
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Delete Wall A" })); // opened again: the old refusal is gone
+    expect(within(await screen.findByRole("dialog", { name: 'Delete playlist "Wall A"?' })).getByRole("alert")).toBeEmptyDOMElement();
+  });
+
+  it("reserves no room for a refusal on a playlist no screen shows", async () => {
+    show(FULL);
+    await screen.findByRole("cell", { name: "Hall TV" });
+    await userEvent.click(screen.getByRole("button", { name: "Delete Wall B" }));
+    const dialog = await screen.findByRole("dialog", { name: 'Delete playlist "Wall B"?' });
+    expect(dialog.querySelector(".displays-refusal")).not.toHaveClass("displays-refusal-reserved");
+  });
+
+  it("shows another refusal of the delete in the same slot, with a capital and a full stop", async () => {
+    show(FULL, { "DELETE /api/playlists/2": { status: 404, body: { detail: "playlist not found" } } });
+    await screen.findByRole("cell", { name: "Hall TV" });
+    await userEvent.click(screen.getByRole("button", { name: "Delete Wall B" }));
+    const dialog = await screen.findByRole("dialog", { name: 'Delete playlist "Wall B"?' });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(within(dialog).getByRole("alert")).toHaveTextContent("Playlist not found."));
+  });
+
+  it("starts the refusal of a screen's delete or revoke with a capital too", async () => {
+    show(FULL, { "DELETE /api/displays/2": { status: 409, body: { detail: "this display is busy" } } });
+    await screen.findByRole("cell", { name: "Lobby" });
+    await userEvent.click(within(row("Lobby")).getByRole("button", { name: "Delete Lobby" }));
+    const dialog = await screen.findByRole("dialog", { name: 'Delete display "Lobby"?' });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("This display is busy");
   });
 
   it("deletes a playlist no screen shows", async () => {

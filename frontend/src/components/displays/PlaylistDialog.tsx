@@ -5,10 +5,12 @@ import type { DisplayLimits, PlaylistIn, PlaylistRow } from "../../api/types";
 import { useAuth } from "../../auth/AuthProvider";
 import { useAction } from "../../hooks/useAction";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
+import { upperFirst } from "../../lib/upperFirst";
 import { Icon } from "../Icon";
 import { InfoTip } from "../InfoTip";
 import { useToast } from "../Toasts";
-import { HIDDEN, skipSentence } from "./displayText";
+import { DiscardDialog } from "./DiscardDialog";
+import { FOCUS_NEEDS_ASSETS, HIDDEN, namesFocus, skipSentence } from "./displayText";
 import { FocusPickDialog } from "./FocusPickDialog";
 
 /**
@@ -29,6 +31,10 @@ interface Draft {
 }
 
 type Aim = { key: number; act: "up" | "down" | "remove" | "dashboard" } | { act: "add" };
+
+/** The editor's state as a string: two snapshots are equal when nothing the person can change was changed (a name's edge spaces do not count). */
+const snapshot = (name: string, drafts: readonly Draft[]): string =>
+  JSON.stringify([name.trim(), drafts.map((d) => [d.id ?? null, d.dashboardId, d.focusId, d.seconds.trim()])]);
 
 /** The fewest and most seconds, with a sentence for the Seconds field's tip. */
 const secondsTip = (limits: DisplayLimits) => `How long this dashboard stays on screen before the next one. ${limits.min_seconds} to ${limits.max_seconds}.`;
@@ -63,7 +69,17 @@ export function PlaylistDialog({ playlist, limits, onClose }: { playlist: Playli
     })),
   );
   const [picking, setPicking] = useState<Draft | null>(null); // the item whose focus is being chosen
-  useDialogFocus(root, onClose, { busy, initial: nameInput });
+  // A role that may not see the assets still sends each stored focus back (see above); the server refuses that, so the editor says why before it is tried.
+  const needsAssets = !canFocus && namesFocus(items.map((d) => d.focusId));
+  const [loaded] = useState(() => snapshot(name, items)); // what the editor opened with, to tell whether anything was changed
+  const [asking, setAsking] = useState(false); // Escape or Cancel with unsaved changes: ask before they are thrown away
+  const dirty = snapshot(name, items) !== loaded;
+  const requestClose = () => {
+    if (busy) return;
+    if (dirty) setAsking(true);
+    else onClose();
+  };
+  useDialogFocus(root, requestClose, { busy, initial: nameInput });
 
   const dashboardsById = useMemo(() => new Map((dashboards.data ?? []).map((d) => [d.id, d.name])), [dashboards.data]);
   const dashboardText = (d: Draft): string | null => (d.dashboardId === null ? null : dashboardsById.get(d.dashboardId) ?? d.dashboardName ?? HIDDEN);
@@ -153,6 +169,7 @@ export function PlaylistDialog({ playlist, limits, onClose }: { playlist: Playli
                 <input id={nameId} ref={nameInput} value={name} maxLength={100} autoComplete="off" onChange={(e) => { clear(); setName(e.target.value); }} />
               </div>
               {dashboards.error && <p className="error" role="alert">Could not load the dashboards: {dashboards.error.message}</p>}
+              {needsAssets && <p className="playlist-skip"><Icon name="alert" /><span>{FOCUS_NEEDS_ASSETS}</span></p>}
               {items.length === 0 ? (
                 <p className="muted playlist-none">No dashboards yet. Add one to show it on a screen.</p>
               ) : (
@@ -217,9 +234,9 @@ export function PlaylistDialog({ playlist, limits, onClose }: { playlist: Playli
             <div className="row playlist-foot">
               {/* One slot for the server's refusal and for the reason Save is off, beside the buttons and outside the scrolling body: always in sight, and it never moves them. */}
               <div className="playlist-status">
-                {error ? <p className="error" role="alert">{error}</p> : <p className="muted">{hint ?? ""}</p>}
+                {error ? <p className="error" role="alert">{upperFirst(error)}</p> : <p className="muted">{hint ?? ""}</p>}
               </div>
-              <button type="button" aria-disabled={busy ? true : undefined} onClick={() => { if (!busy) onClose(); }}>Cancel</button>
+              <button type="button" aria-disabled={busy ? true : undefined} onClick={requestClose}>Cancel</button>
               <button type="submit" className="primary" aria-disabled={blocked ? true : undefined}>Save</button>
             </div>
           </form>
@@ -235,6 +252,7 @@ export function PlaylistDialog({ playlist, limits, onClose }: { playlist: Playli
           onClose={() => setPicking(null)}
         />
       )}
+      {asking && <DiscardDialog onKeep={() => setAsking(false)} onDiscard={onClose} />}
     </>,
     document.body,
   );

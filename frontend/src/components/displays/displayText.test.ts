@@ -1,5 +1,6 @@
+import { ApiError } from "../../api/client";
 import type { DisplayRow, PlaylistItemRow } from "../../api/types";
-import { countText, dashboardLabel, focusLabel, lastConnectedParts, lastConnectedText, skipSentence, skippedText } from "./displayText";
+import { countText, dashboardLabel, focusLabel, focusRefusal, FOCUS_NEEDS_ASSETS, lastConnectedParts, lastConnectedText, namesFocus, playlistDeleteRefusal, skipSentence, skippedText } from "./displayText";
 
 const item = (over: Partial<PlaylistItemRow> = {}): PlaylistItemRow => ({
   id: 1, position: 0, seconds: 60, dashboard_id: 3, dashboard_name: "Ops", focus_asset_id: null, focus_name: null, skipped: null, ...over,
@@ -85,5 +86,42 @@ describe("lastConnectedParts: the two lines of the Last connected cell (the colu
 
   it("falls back to the date once the age is no longer written", () => {
     expect(lastConnectedParts(screen({ last_seen_at: "2026-09-01T10:00:00+00:00", last_client: "10.0.0.12" }), now, "UTC")).toEqual({ when: "2026-09-01 10:00:00", from: "from 10.0.0.12" });
+  });
+});
+
+describe("namesFocus and focusRefusal: the 403 of a playlist that names a focus asset", () => {
+  it("says whether any item names a focus asset", () => {
+    expect(namesFocus([])).toBe(false);
+    expect(namesFocus([null, null])).toBe(false);
+    expect(namesFocus([null, 11])).toBe(true);
+  });
+
+  it("turns a 403 into the sentence that says what is missing, only when a focus is named", () => {
+    const forbidden = new ApiError(403, "insufficient permission");
+    expect(focusRefusal(forbidden, true)).toEqual(new Error(FOCUS_NEEDS_ASSETS));
+    expect(FOCUS_NEEDS_ASSETS).toBe("This playlist names a focus asset. Saving it or showing it on a screen also needs See the Assets Tree.");
+    expect(focusRefusal(forbidden, false)).toBe(forbidden); // no focus named: the 403 is about something else
+    const taken = new ApiError(409, "a display with this name already exists");
+    expect(focusRefusal(taken, true)).toBe(taken); // another status is left alone
+    const plain = new Error("boom");
+    expect(focusRefusal(plain, true)).toBe(plain);
+  });
+});
+
+describe("playlistDeleteRefusal: the sentence a refused playlist delete shows", () => {
+  it("starts with a capital, ends with a full stop and says what to do, for the old text of the server", () => {
+    expect(playlistDeleteRefusal(new ApiError(409, "this playlist is shown by: Hall TV, Old (revoked)")))
+      .toBe("This playlist is shown by: Hall TV, Old (revoked). Change their playlist or delete them first.");
+  });
+
+  it("does not say it twice when the server already did (the bounded text)", () => {
+    const text = "this playlist is shown by 10 screens: A, B, C and 7 more. Change their playlist or delete them first.";
+    expect(playlistDeleteRefusal(new ApiError(409, text))).toBe("This playlist is shown by 10 screens: A, B, C and 7 more. Change their playlist or delete them first.");
+  });
+
+  it("adds no advice to another refusal, only the capital and the full stop", () => {
+    expect(playlistDeleteRefusal(new ApiError(404, "playlist not found"))).toBe("Playlist not found.");
+    expect(playlistDeleteRefusal(new ApiError(403, "insufficient permission"))).toBe("Your role does not allow this.");
+    expect(playlistDeleteRefusal(new Error("Failed to fetch"))).toBe("Failed to fetch.");
   });
 });

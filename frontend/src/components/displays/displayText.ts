@@ -1,6 +1,27 @@
+import { ApiError } from "../../api/client";
 import type { DisplayRow, PlaylistItemRow } from "../../api/types";
 import { relativeTime } from "../../lib/relativeTime";
+import { sentence } from "../../lib/sentence";
 import { formatSiteDateTime } from "../../lib/siteTime";
+
+/** Why a role without `assets.view` is refused (the server's 403 does not say): the playlist names a focus asset, which only a role that may see the assets can send. */
+export const FOCUS_NEEDS_ASSETS = "This playlist names a focus asset. Saving it or showing it on a screen also needs See the Assets Tree.";
+
+/** True when any of these focus ids is set. The server sends the id of a focus asset even when the caller may not read its name. */
+export const namesFocus = (focusIds: readonly (number | null)[]): boolean => focusIds.some((id) => id !== null);
+
+/** A 403 for a playlist that names a focus asset says what is missing instead of the generic "Your role does not allow this."; anything else is left as it was. */
+export function focusRefusal(error: unknown, applies: boolean): unknown {
+  return applies && error instanceof ApiError && error.status === 403 ? new Error(FOCUS_NEEDS_ASSETS) : error;
+}
+
+const IN_USE_ADVICE = "Change their playlist or delete them first.";
+
+/** What a refused playlist delete says: the server's sentence with a capital and a full stop, and, for the 409 (a screen still shows it), what to do about it. */
+export function playlistDeleteRefusal(error: unknown): string {
+  const text = sentence(error instanceof Error ? error.message : String(error));
+  return error instanceof ApiError && error.status === 409 && !text.includes(IN_USE_ADVICE) ? `${text} ${IN_USE_ADVICE}` : text;
+}
 
 /** What the answer says in place of a name the caller may not read (the server sends null for it); only for a thing that exists. */
 export const HIDDEN = "(hidden)";

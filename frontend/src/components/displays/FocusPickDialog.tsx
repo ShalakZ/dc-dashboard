@@ -23,7 +23,12 @@ export function FocusPickDialog({ title, current, onChoose, onClose }: {
   const loading = useRef<HTMLParagraphElement>(null);
   const known = list.data?.some((a) => a.id === current) ?? false;
   const [draft, setDraft] = useState<number | null>(current);
-  useDialogFocus(root, onClose, { initial: loading });
+  // Where the focus starts, read when the dialog mounts: the Loading line while the list is on its way, else the search box (a list that is cached is drawn at
+  // once, so there is no Loading line and the first control would be the "?" tip).
+  const start = useRef<{ readonly current: HTMLElement | null }>({
+    get current() { return loading.current ?? root.current?.querySelector<HTMLElement>('input[type="search"]') ?? null; },
+  });
+  useDialogFocus(root, onClose, { initial: start.current });
   // The Loading line is where the focus starts; the search box takes it once the list is here, unless the person has moved on.
   const ready = list.data !== undefined;
   useEffect(() => {

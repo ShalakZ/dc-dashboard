@@ -26,13 +26,15 @@ Open **Administer > Displays** and choose **New playlist**. Give it a name (1 to
 - **Seconds on screen**: how long it stays before the next one, 10 to 3600.
 
 **Move up**, **Move down** and **Remove** change the order. A playlist holds up to 20 dashboards; the site holds up to 30 playlists and
-50 displays. Saving replaces the whole list, and the last save wins.
+50 displays. Saving replaces the whole list, and the last save wins. Cancel or Escape on a playlist with changes that are not saved asks
+"Discard your changes?" first; Keep editing goes back to it.
 
 ## Make a display and copy its link
 
 Choose **New display**, give it a name and a playlist, and choose **Create display**. The next step shows the **Display link** in a field
 that cannot be edited. Choose **Copy link**. On a site served over plain http the browser may not allow copying: the button then selects
-the text and says "Press Ctrl+C to copy". Then choose **Done**.
+the text and says "Press Ctrl+C to copy". Then choose **Done**. Only **Done** closes this step: Escape just moves the focus to Done, and a click
+outside the window does nothing, so a stray key cannot lose the link.
 
 The window warns: "Anyone who has this link can see these dashboards without signing in. It is shown only now: copy it before you close
 this window." Once it is closed the link cannot be shown again. If you lose it, revoke the display and make a new one.
@@ -70,7 +72,7 @@ nothing to the display routes. It cannot ask for another range or another asset 
 
 ## Revoke and delete
 
-In the row menu of a screen, **Revoke** asks first ("The screen goes blank within a minute."). The server refuses the screen's very next
+In the row menu of a screen, **Revoke** asks first ("The screen stops showing dashboards within a minute."). The server refuses the screen's very next
 request; the screen notices within a minute and shows the "revoked" sentence above. The row stays, marked Revoked, and revoking twice
 does nothing more. **Delete** removes the record and the link stops for good. A revoked display keeps its name until you delete it, so
 another display cannot take that name meanwhile.

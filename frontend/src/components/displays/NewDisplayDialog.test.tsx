@@ -6,12 +6,14 @@ import { useDisplays } from "../../api/queries";
 import { authed } from "../../test/dashboardFixtures";
 import { mockFetch, type Routes } from "../../test/fetchMock";
 import { renderWithProviders } from "../../test/render";
-import { displaysList, playlist, screenRow } from "./displayFixtures";
+import { userFor } from "../../test/users";
+import { displaysList, playlist, playlistItem, screenRow } from "./displayFixtures";
+import { FOCUS_NEEDS_ASSETS } from "./displayText";
 import { LINK_WARNING, NewDisplayDialog } from "./NewDisplayDialog";
 
 // A made-up secret for the tests, never printed: the assertions below are booleans so a failure does not echo it.
 const SECRET = "Zk3_test-secret-0123456789abcdefghijklmnopq";
-const PLAYLISTS = [playlist(1, "Wall A"), playlist(2, "Wall B")];
+const PLAYLISTS = [playlist(1, "Wall A"), playlist(2, "Wall B"), playlist(3, "Wall C", [playlistItem(41, { focus_asset_id: 11, focus_name: "Hall 1" })])]; // Wall C names a focus asset
 const CREATED = { display: screenRow(7, "Hall TV", 1, "Wall A"), link_secret: SECRET };
 
 const seen: { client?: QueryClient } = {};
@@ -49,7 +51,7 @@ describe("NewDisplayDialog, step 1", () => {
   it("opens with the focus on Name, a Playlist select holding the playlists, and Create display waiting for a name", async () => {
     const { dialog } = await show();
     expect(within(dialog).getByLabelText("Name")).toHaveFocus();
-    expect(within(dialog).getAllByRole("option").map((o) => o.textContent)).toEqual(["Wall A", "Wall B"]);
+    expect(within(dialog).getAllByRole("option").map((o) => o.textContent)).toEqual(["Wall A", "Wall B", "Wall C"]);
     expect(within(dialog).getByRole("button", { name: "Create display" })).toHaveAttribute("aria-disabled", "true");
     await userEvent.click(within(dialog).getByRole("button", { name: "Create display" }));
     expect(screen.getByRole("dialog", { name: "New display" })).toBeInTheDocument();
@@ -76,7 +78,7 @@ describe("NewDisplayDialog, step 1", () => {
     const { dialog } = await show({ "POST /api/displays": { status: 409, body: { detail: "a display with this name already exists" } } });
     await userEvent.type(within(dialog).getByLabelText("Name"), "Hall TV");
     await userEvent.click(within(dialog).getByRole("button", { name: "Create display" }));
-    expect(await within(dialog).findByText("a display with this name already exists")).toBeInTheDocument();
+    expect(await within(dialog).findByText("A display with this name already exists")).toBeInTheDocument();
     expect(within(dialog).getByLabelText("Name")).toBeInTheDocument();
     expect(within(dialog).queryByLabelText("Display link")).toBeNull();
   });
@@ -87,7 +89,7 @@ describe("NewDisplayDialog, step 1", () => {
     const before = reads();
     await userEvent.type(within(dialog).getByLabelText("Name"), "Hall TV");
     await userEvent.click(within(dialog).getByRole("button", { name: "Create display" }));
-    await within(dialog).findByText("a display with this name already exists");
+    await within(dialog).findByText("A display with this name already exists");
     await waitFor(() => expect(reads()).toBe(before + 1));
   });
 });
@@ -198,15 +200,58 @@ describe("NewDisplayDialog, step 2: the link, once", () => {
     expect(leftBehind().queries).toBe(false);
   });
 
-  it("Escape does what Done does: the dialog closes, the secret is dropped, and nothing else is sent", async () => {
+  it("Escape does NOT close it (the link is shown only once): the focus goes to Done, the link stays, nothing is sent", async () => {
+    const { dialog, calls } = await show();
+    const field = await makeIt(dialog);
+    const before = calls.length;
+    expect(within(dialog).getByRole("button", { name: "Copy link" })).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "New display" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Done" })).toHaveFocus();
+    expect(field.value === LINK()).toBe(true); // still there to copy
+    expect(within(dialog).getByRole("status")).toBeEmptyDOMElement(); // nothing is announced for it
+    await userEvent.keyboard("{Escape}"); // again: still open
+    expect(screen.getByRole("dialog", { name: "New display" })).toBeInTheDocument();
+    expect(posts(calls)).toHaveLength(1);
+    expect(calls.slice(before).filter((c) => c.method !== "GET")).toEqual([]);
+  });
+
+  it("only Done finishes: the dialog closes, the secret is dropped, and the focus returns to the opener", async () => {
     const { dialog, calls } = await show();
     await makeIt(dialog);
-    const before = calls.length;
     await userEvent.keyboard("{Escape}");
+    await userEvent.keyboard("{Enter}"); // Escape put the focus on Done: Enter presses it
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await waitFor(() => expect(leftBehind()).toEqual({ mutations: false, queries: false, page: false, fields: false }));
-    expect(posts(calls)).toHaveLength(1); // the create only
-    expect(calls.slice(before).filter((c) => c.method !== "GET")).toEqual([]);
+    expect(posts(calls)).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Open it" })).toHaveFocus();
+  });
+});
+
+describe("NewDisplayDialog: a playlist that names a focus asset, for a role that may not see the assets", () => {
+  const ROLE: Routes = { "GET /api/me": { body: userFor("Wall editor", { permissions: ["displays.manage", "dashboards.view"] as never }) } };
+  const FORBIDDEN: Routes = { "POST /api/displays": { status: 403, body: { detail: "insufficient permission" } } };
+
+  it("says why the server refused, in place of the generic sentence", async () => {
+    const { dialog } = await show({ ...ROLE, ...FORBIDDEN });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Hall TV");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Playlist"), "Wall C");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create display" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(FOCUS_NEEDS_ASSETS);
+  });
+
+  it("leaves the generic sentence for a playlist that names no focus", async () => {
+    const { dialog } = await show({ ...ROLE, ...FORBIDDEN });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Hall TV");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create display" })); // Wall A: no focus
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Your role does not allow this.");
+  });
+
+  it("leaves the generic sentence for a role that may see the assets (the refusal is about something else)", async () => {
+    const { dialog } = await show(FORBIDDEN);
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Hall TV");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Playlist"), "Wall C");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create display" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Your role does not allow this.");
   });
 });

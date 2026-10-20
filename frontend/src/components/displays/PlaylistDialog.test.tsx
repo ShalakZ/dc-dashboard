@@ -122,22 +122,116 @@ describe("PlaylistDialog: a new playlist", () => {
     const { dialog } = await show(null, { "POST /api/playlists": { status: 409, body: { detail: "a playlist with this name already exists" } } });
     await userEvent.type(within(dialog).getByLabelText("Name"), "Wall A");
     await userEvent.click(save(dialog));
-    expect(await within(dialog).findByText("a playlist with this name already exists")).toBeInTheDocument();
+    expect(await within(dialog).findByText("A playlist with this name already exists")).toBeInTheDocument();
     expect(within(dialog).getByLabelText("Name")).toHaveValue("Wall A");
     await userEvent.type(within(dialog).getByLabelText("Name"), "2"); // typing again drops the stale refusal
-    expect(within(dialog).queryByText("a playlist with this name already exists")).toBeNull();
+    expect(within(dialog).queryByText("A playlist with this name already exists")).toBeNull();
   });
 
-  it("Escape closes it and the focus goes back to the opener; Tab wraps from Save to Name", async () => {
+  it("Tab wraps from Save to Name and back", async () => {
     const { dialog } = await show(null);
     await userEvent.type(within(dialog).getByLabelText("Name"), "x");
     await userEvent.tab({ shift: true }); // Name is the first control: round to the last
     expect(save(dialog)).toHaveFocus();
     await userEvent.tab();
     expect(within(dialog).getByLabelText("Name")).toHaveFocus();
+  });
+});
+
+describe("PlaylistDialog: closing with unsaved changes", () => {
+  const question = () => screen.getByRole("alertdialog", { name: "Discard your changes?" });
+
+  it("Escape and Cancel close an untouched playlist at once, and the focus goes back to the opener", async () => {
+    const { dialog } = await show(null);
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open it" })).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "Open it" }));
+    await userEvent.click(within(await screen.findByRole("dialog", { name: "New playlist" })).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(dialog).not.toBeInTheDocument();
+  });
+
+  it("an edit that is typed and then undone is not a change", async () => {
+    const { dialog } = await show(WALL_A);
+    await userEvent.type(within(dialog).getByLabelText("Name"), "x");
+    await userEvent.keyboard("{Backspace}");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("Escape with a typed name asks first; Keep editing leaves the editor as it was, with what was typed", async () => {
+    const { dialog } = await show(null);
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Wall C");
+    await userEvent.keyboard("{Escape}");
+    const ask = question();
+    expect(within(ask).getAllByRole("button").map((b) => b.textContent)).toEqual(["Keep editing", "Discard"]);
+    expect(within(ask).getByRole("button", { name: "Keep editing" })).toHaveFocus();
+    await userEvent.keyboard("{Escape}"); // Escape in the question is Keep editing, and closes nothing else
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "New playlist" })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Wall C");
+    expect(within(dialog).getByLabelText("Name")).toHaveFocus();
+  });
+
+  it("Cancel asks too, and Discard closes the editor with the focus back on its opener and nothing sent", async () => {
+    const { dialog, calls } = await show(null);
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Wall C");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await userEvent.click(within(question()).getByRole("button", { name: "Discard" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open it" })).toHaveFocus();
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it("asks after any item change: a seconds value, a moved item or an added one", async () => {
+    const { dialog } = await show(WALL_A);
+    await userEvent.type(within(item(dialog, 1)).getByLabelText("Seconds on screen"), "5");
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(within(question()).getByRole("button", { name: "Keep editing" }));
+    await userEvent.clear(within(item(dialog, 1)).getByLabelText("Seconds on screen"));
+    await userEvent.type(within(item(dialog, 1)).getByLabelText("Seconds on screen"), "30"); // back to what was stored
+    await userEvent.click(within(item(dialog, 1)).getByRole("button", { name: "Move down Hall A" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(question()).toBeInTheDocument();
+    await userEvent.click(within(question()).getByRole("button", { name: "Keep editing" }));
+    await userEvent.click(within(item(dialog, 2)).getByRole("button", { name: "Move up Hall A" })); // back in its place
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add a dashboard" }));
+    await userEvent.keyboard("{Escape}");
+    expect(question()).toBeInTheDocument();
+  });
+
+  it("a saved playlist closes without the question", async () => {
+    const { dialog } = await show(null);
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Wall C");
+    await userEvent.click(save(dialog));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open it" })).toHaveFocus();
+  });
+});
+
+describe("PlaylistDialog: a role that may not see the assets", () => {
+  const NEEDS = "This playlist names a focus asset. Saving it or showing it on a screen also needs See the Assets Tree.";
+  const ROLE = ["displays.manage", "dashboards.view"];
+
+  it("says above the items why a playlist that names a focus will be refused", async () => {
+    const { dialog } = await show(WALL_A, {}, ROLE);
+    const note = within(dialog).getByText(NEEDS);
+    expect(note.compareDocumentPosition(dialog.querySelector(".playlist-items")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(dialog).queryByRole("button", { name: /^Focus/ })).toBeNull();
+  });
+
+  it("says nothing when no item names a focus", async () => {
+    const plain = playlist(1, "Wall A", [playlistItem(21, { dashboard_id: 3, dashboard_name: "Hall A" })]);
+    const first = await show(plain, {}, ROLE);
+    expect(within(first.dialog).queryByText(NEEDS)).toBeNull();
+  });
+
+  it("says nothing to an administrator", async () => {
+    const { dialog } = await show(WALL_A);
+    expect(within(dialog).queryByText(NEEDS)).toBeNull();
   });
 });
 
@@ -235,7 +329,7 @@ describe("PlaylistDialog: the status slot", () => {
     await userEvent.type(within(dialog).getByLabelText("Name"), "Wall A");
     await userEvent.click(save(dialog));
     const foot = dialog.querySelector(".playlist-foot") as HTMLElement;
-    expect(await within(foot).findByRole("alert")).toHaveTextContent("a playlist with this name already exists");
+    expect(await within(foot).findByRole("alert")).toHaveTextContent("A playlist with this name already exists");
     expect(dialog.querySelector(".playlist-body")!.querySelector('[role="alert"]')).toBeNull();
   });
 });
@@ -298,6 +392,21 @@ describe("PlaylistDialog: the Focus field", () => {
     expect((writes(calls)[0].body as { items: { id: number; focus_asset_id: number | null }[] }).items.map((i) => [i.id, i.focus_asset_id])).toEqual([[21, 12], [22, 11], [23, null]]);
   });
 
+  it("opens with the focus on its search box, also the second time, when the asset list is already cached and no Loading line is drawn", async () => {
+    const { dialog } = await show(WALL_A);
+    const focus = within(item(dialog, 1)).getByRole("button", { name: "Focus Whole site" });
+    await userEvent.click(focus);
+    let picker = await screen.findByRole("dialog", { name: "Focus for Hall A" });
+    await within(picker).findByRole("radio", { name: "Hall 2" });
+    expect(within(picker).getByRole("searchbox")).toHaveFocus(); // the first time: the Loading line, then the box
+    await userEvent.click(within(picker).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Focus for Hall A" })).toBeNull();
+    await userEvent.click(within(item(dialog, 1)).getByRole("button", { name: "Focus Whole site" }));
+    picker = await screen.findByRole("dialog", { name: "Focus for Hall A" });
+    expect(within(picker).queryByText("Loading assets…")).toBeNull(); // cached: the list is there at the first paint
+    expect(within(picker).getByRole("searchbox")).toHaveFocus(); // not the "?" tip, which is the first control
+  });
+
   it("Whole site clears a focus", async () => {
     const { dialog, calls } = await show(WALL_A);
     await userEvent.click(within(item(dialog, 2)).getByRole("button", { name: "Focus Hall 1" }));
@@ -338,7 +447,7 @@ describe("PlaylistDialog: the Focus field", () => {
   it("shows the server's 403 when a role without assets.view saves a playlist that names a focus", async () => {
     const { dialog } = await show(WALL_A, { "PUT /api/playlists/1": { status: 403, body: { detail: "choosing a focus needs permission to see assets" } } }, ["displays.manage", "dashboards.view"]);
     await userEvent.click(save(dialog));
-    expect(await within(dialog).findByText("choosing a focus needs permission to see assets")).toBeInTheDocument();
+    expect(await within(dialog).findByText("Choosing a focus needs permission to see assets")).toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Edit playlist" })).toBeInTheDocument();
   });
 
