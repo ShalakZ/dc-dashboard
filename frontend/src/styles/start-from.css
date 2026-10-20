@@ -1,5 +1,0 @@
-@layer w6 {
-  /* w25: "Start from" in the New dashboard dialog (a fieldset of two radios, styled by the dialog's own fieldset rule in app.css) and the two buttons of the
-     empty Dashboards page (pages/DashboardsPage.tsx). The buttons are ordinary ones; .empty already spaces a button from the sentence above it. */
-  .start-from-buttons { justify-content: center; } /* two buttons that wrap in a narrow window stay centred under the sentence */
-}
