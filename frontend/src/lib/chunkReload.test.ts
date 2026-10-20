@@ -170,7 +170,7 @@ describe("installChunkReload (a tab left open across an update)", () => {
       const stop = installChunkReload(fakeStorage(), reload, () => 1_000_000);
       preloadError();
       await settle();
-      expect(fetchMock).toHaveBeenCalledWith("/", expect.objectContaining({ method: "HEAD", cache: "no-store" }));
+      expect(fetchMock).toHaveBeenCalledWith("/", expect.objectContaining({ method: "HEAD", cache: "no-store", signal: expect.any(AbortSignal) }));
       expect(reload).toHaveBeenCalledTimes(1); // a stale chunk is a 404 from a live server; a 502 is a live proxy
       stop();
     }
@@ -279,7 +279,7 @@ describe("reloadIfServerAnswers (the one reload path)", () => {
     vi.stubGlobal("location", { ...window.location, reload });
     vi.stubGlobal("fetch", fetchMock);
     await expect(reloadIfServerAnswers()).resolves.toBe(true);
-    expect(fetchMock).toHaveBeenCalledWith("/", expect.objectContaining({ method: "HEAD", cache: "no-store" }));
+    expect(fetchMock).toHaveBeenCalledWith("/", expect.objectContaining({ method: "HEAD", cache: "no-store", signal: expect.any(AbortSignal) }));
     expect(reload).toHaveBeenCalledTimes(1);
     expect(Number(window.sessionStorage.getItem(CHUNK_RELOAD_KEY))).toBeGreaterThan(0);
     await expect(reloadIfServerAnswers()).resolves.toBe(false); // the guard
