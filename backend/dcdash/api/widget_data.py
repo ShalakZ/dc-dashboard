@@ -45,12 +45,9 @@ class WidgetDataRequest(BaseModel):
         return value
 
 
-async def _compute(body: WidgetDataRequest, db: AsyncSession, user: User) -> WidgetResult:
-    # A focus is the one new way to NAME an arbitrary asset, so it needs assets.view, checked first and also for a fixed widget.
-    # Without a focus a following widget shows a dashboards.view-only role the sole top-level asset, the top-level assets (or the sole
-    # one's children) as rows, or their count: nothing a config naming those ids, `missing` and the CSV rows (full paths) do not already give.
-    if body.focus is not None and not user.can("assets.view"):
-        raise HTTPException(403, INSUFFICIENT_PERMISSION)
+async def compute_checked(body: WidgetDataRequest, db: AsyncSession) -> WidgetResult:
+    """The figures of one widget request, once the caller has been judged: the user route and the display route (w28) both end
+    here, so the two answers cannot drift apart. Judging who may ask (a focus needs assets.view) stays with the caller."""
     if body.type == "text":  # a Text widget has no figures: refused before its config is even looked at
         raise HTTPException(422, "a text widget has no data")
     try:
@@ -63,6 +60,15 @@ async def _compute(body: WidgetDataRequest, db: AsyncSession, user: User) -> Wid
         return await compute_widget(db, body.type, config, body.range, _now(), focus=body.focus)
     except SiteZoneError as exc:
         raise HTTPException(409, str(exc)) from None
+
+
+async def _compute(body: WidgetDataRequest, db: AsyncSession, user: User) -> WidgetResult:
+    # A focus is the one new way to NAME an arbitrary asset, so it needs assets.view, checked first and also for a fixed widget.
+    # Without a focus a following widget shows a dashboards.view-only role the sole top-level asset, the top-level assets (or the sole
+    # one's children) as rows, or their count: nothing a config naming those ids, `missing` and the CSV rows (full paths) do not already give.
+    if body.focus is not None and not user.can("assets.view"):
+        raise HTTPException(403, INSUFFICIENT_PERMISSION)
+    return await compute_checked(body, db)
 
 
 @router.post("/widget-data")

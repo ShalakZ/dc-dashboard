@@ -1,4 +1,371 @@
-"""stub: filled by T3/T4."""
-from fastapi import APIRouter
+"""The display credential and the three routes a connected display screen may call (w28).
+
+A display is a browser that opened a secret link: `POST /api/display/claim` swaps the secret in a JSON body for the cookie
+`dcdash_display` (HttpOnly, SameSite=Strict, Path=/api/display). `current_display` is the ONE dependency that reads that cookie.
+It is not an account: it never starts a session, never looks at a sign-in cookie and grants nothing but the three routes below,
+and a signed-in account's cookie means nothing on them. Only the SHA-256 hash of the secret is stored; every request looks the
+row up again (no cache of any kind), so a revoked or deleted display is refused on its very next request.
+
+  POST /api/display/claim        the secret in the body is the credential; rate limited per client address
+  GET  /api/display/playlist     the display's own playlist, its dashboards and widgets, the site timezone, the build, the status
+  POST /api/display/widget-data  the figures of one widget of that playlist, by ids; the stored config is used, never a sent one
+
+The secret, its hash and the link never reach a log line, an audit row, an exception message or an answer (the create answer of
+the admin routes is the one exception). Nothing here echoes the request body.
+"""
+import logging
+import math
+import re
+from typing import Annotated, Any
+from urllib.parse import urlsplit
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from dcdash.api.auth import _is_https
+from dcdash.api.deps import get_db
+from dcdash.api.health import LiveStatus, read_live_status
+from dcdash.api.security import LoginLimiter
+from dcdash.api.security_events import RowBudget, client_address
+from dcdash.api.settings import current_timezone
+from dcdash.api.widget_data import WidgetDataRequest, compute_checked
+from dcdash.core.audit import audit
+from dcdash.core.build import build_info
+from dcdash.core.db import get_sessionmaker
+from dcdash.core.displays import DISPLAY_WIDGET_BUDGET_PER_MINUTE, MAX_DISPLAYS, ItemView, Skip, hash_secret, resolve_items
+from dcdash.core.models import Display, Playlist
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/display", tags=["display"])
+
+COOKIE = "dcdash_display"
+COOKIE_MAX_AGE = 34_560_000  # 400 days, the longest a browser keeps a cookie; the link itself never expires
+INVALID_LINK = "this display link is not valid"  # the one text for a wrong, a revoked and a deleted secret
+NOT_CONNECTED = "not connected"
+NOT_FOUND = "not found"  # the one text of every widget-data 404
+SITE_NAME = "DC Dashboard"  # the site has no name setting (`/api/site` has a timezone and a currency only): the app title
+MAX_ID = 2_147_483_647
+CLAIM_BODY_LIMIT = 1024  # bytes: a claim is {"secret": "<43 characters>"}; anything bigger is refused unread
+PLAYLIST_BUDGET_PER_MINUTE = 30  # a screen asks once a minute; this leaves room for reloads and a few screens behind one proxy
+LAST_SEEN_EVERY_SECONDS = 50  # the playlist answer writes last_seen_at at most this often, so a 60 s poll always writes
+# What a secret can look like (`secrets.token_urlsafe`). Anything else cannot be a secret: it is refused before it is hashed.
+_SECRET_SHAPE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_DEFAULT_PORT = {"http": 80, "https": 443}
+
+# Module state, in one place; `reset_display_state` empties it (the test fixture calls it). One api worker, like the sign-in limiter:
+# with more workers each would count on its own.
+claim_limiter = LoginLimiter(10, 900)  # 10 wrong secrets from one address in 15 minutes block that address for 15 minutes
+connected_budget = RowBudget(30, 300)  # display.connected rows: a screen that reloads in a loop must not flood the audit table
+blocked_budget = RowBudget(10, 300)  # display.claim_blocked rows
+widget_budgets: dict[int, RowBudget] = {}  # per display id; bounded by `_take`
+playlist_budgets: dict[int, RowBudget] = {}
+
+
+def reset_display_state() -> None:
+    claim_limiter.clear()
+    connected_budget.clear()
+    blocked_budget.clear()
+    widget_budgets.clear()
+    playlist_budgets.clear()
+
+
+# --- the credential ---------------------------------------------------------------------------------------------------------
+
+
+async def current_display(request: Request, db: AsyncSession = Depends(get_db)) -> Display:
+    """The display that holds the cookie, or 401. The row is read again on every request: revoking takes effect at once."""
+    token = request.cookies.get(COOKIE)
+    if token and _SECRET_SHAPE.fullmatch(token):  # a longer or odd value cannot be a secret: 401 without hashing it
+        display = await db.scalar(
+            select(Display).where(Display.secret_hash == hash_secret(token), Display.revoked_at.is_(None))
+        )
+        if display is not None:
+            return display
+    raise HTTPException(401, NOT_CONNECTED)
+
+
+# --- the claim --------------------------------------------------------------------------------------------------------------
+
+
+class ClaimBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    secret: str = Field(min_length=1, max_length=64)
+
+
+def _authority(scheme: str, hostname: str | None, port: int | None) -> str | None:
+    """host[:port] in one spelling: lower case (urlsplit does that), IPv6 in brackets, the scheme's default port dropped."""
+    if not hostname:
+        return None
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    return host if port is None or port == _DEFAULT_PORT[scheme] else f"{host}:{port}"
+
+
+def _origin_authority(origin: str) -> str | None:
+    """The host:port an Origin header names, None when it is not a plain http(s) origin (`null`, no scheme, junk)."""
+    try:
+        parts = urlsplit(origin)
+        scheme, port = parts.scheme.lower(), parts.port
+    except ValueError:
+        return None
+    if scheme not in _DEFAULT_PORT or parts.username is not None or parts.password is not None:
+        return None
+    if parts.path or parts.query or parts.fragment:
+        return None
+    return _authority(scheme, parts.hostname, port)
+
+
+def _host_authority(request: Request) -> str | None:
+    host = request.headers.get("host")
+    if not host:
+        return None
+    try:
+        parts = urlsplit("//" + host)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.username is not None or parts.password is not None or parts.path or parts.query or parts.fragment:
+        return None
+    return _authority("https" if _is_https(request) else "http", parts.hostname, port)
+
+
+def _comes_from_another_site(request: Request) -> bool:
+    """The CSRF rule: a hostile page must not make a visitor's browser a display. Headers a browser sets itself are judged;
+    a request without them (curl, a script, an old browser) passes, because the secret is the credential."""
+    if request.headers.get("sec-fetch-site", "").strip().lower() in ("cross-site", "same-site"):
+        return True
+    origin = request.headers.get("origin")
+    if origin is None:
+        return False
+    named, own = _origin_authority(origin), _host_authority(request)
+    return named is None or own is None or named != own  # `Origin: null` is present and different
+
+
+async def _read_claim(request: Request) -> ClaimBody:
+    """The body of a claim: JSON only, small, and never quoted back in an error."""
+    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        raise HTTPException(422, "send the claim as JSON")
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > CLAIM_BODY_LIMIT:
+            raise HTTPException(422, "the claim is too large")
+    try:
+        return ClaimBody.model_validate_json(bytes(raw))
+    except ValidationError:
+        raise HTTPException(422, "the claim must be a JSON object with a secret of 1 to 64 characters") from None
+
+
+def _retry_after(seconds: float) -> dict[str, str]:
+    return {"Retry-After": str(max(1, math.ceil(seconds)))}
+
+
+@router.post(
+    "/claim", status_code=204, response_class=Response,
+    openapi_extra={"requestBody": {"required": True, "content": {"application/json": {"schema": ClaimBody.model_json_schema()}}}},
+)
+async def claim(request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    """Swap the secret of a display link for the display cookie. The order is fixed, and only a wrong secret counts toward
+    the block: a blocked address (429, before any database work), another site (403), not JSON (422), a malformed body (422),
+    then the lookup (401 for a wrong, a revoked and a deleted secret alike)."""
+    client = client_address(request)
+    waiting = claim_limiter.retry_after(client)
+    if waiting > 0:
+        raise HTTPException(429, "too many wrong links from this address", headers=_retry_after(waiting))
+    if _comes_from_another_site(request):
+        raise HTTPException(403, "a display link can only be opened from its own address")
+    body = await _read_claim(request)
+
+    display = None
+    if _SECRET_SHAPE.fullmatch(body.secret):
+        display = await db.scalar(select(Display).where(Display.secret_hash == hash_secret(body.secret)))
+    if display is None or display.revoked_at is not None:
+        was_blocked = claim_limiter.blocked(client)  # no await between this line and the next two: the 10th failure is seen once
+        claim_limiter.record_failure(client)
+        if not was_blocked and claim_limiter.blocked(client) and blocked_budget.take() is not None:
+            await db.rollback()  # release the request's connection first: a burst of failures needs one connection each, not two
+            try:  # best effort, like a failed sign-in: the 401 goes out whatever happens here
+                async with get_sessionmaker()() as session:
+                    await audit(session, None, "display.claim_blocked", {"client": client})
+                    await session.commit()
+            except Exception:
+                log.exception("could not write the display.claim_blocked audit row")
+        raise HTTPException(401, INVALID_LINK)
+
+    answer = Response(status_code=204)
+    answer.set_cookie(
+        COOKIE, body.secret, max_age=COOKIE_MAX_AGE, httponly=True, samesite="strict", path="/api/display",
+        secure=_is_https(request),
+    )
+    answer.headers["Cache-Control"] = "no-store"
+    if connected_budget.take() is not None:  # a screen that reloads in a loop writes at most 30 rows in 5 minutes
+        await audit(db, None, "display.connected", {"display_id": display.id, "name": display.name, "client": client})
+        await db.commit()
+    return answer
+
+
+# --- the playlist -----------------------------------------------------------------------------------------------------------
+
+
+class DisplayName(BaseModel):
+    name: str
+
+
+class WidgetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    type: str
+    title: str
+    config: dict[str, Any]
+    x: int
+    y: int
+    w: int
+    h: int
+
+
+class DashboardOut(BaseModel):
+    id: int
+    name: str
+    range: str
+    widgets: list[WidgetOut]
+
+
+class FocusOut(BaseModel):
+    id: int
+    name: str
+    trail: list[str]
+
+
+class ItemOut(BaseModel):
+    id: int
+    seconds: int
+    dashboard: DashboardOut | None
+    focus: FocusOut | None
+    skipped: Skip | None
+
+
+class PlaylistOut(BaseModel):
+    name: str
+    items: list[ItemOut]
+
+
+class SiteOut(BaseModel):
+    name: str
+    timezone: str
+
+
+class PlaylistAnswer(BaseModel):
+    display: DisplayName
+    playlist: PlaylistOut
+    site: SiteOut
+    build: str
+    status: LiveStatus
+
+
+def _too_many_requests() -> HTTPException:
+    return HTTPException(429, "too many requests", headers={"Retry-After": "60"})
+
+
+async def _take(budgets: dict[int, RowBudget], display: Display, cap: int, db: AsyncSession) -> bool:
+    """One request of `display` against its own budget (cap requests a minute); False when it is over. Only a display that
+    passed `current_display` ever gets an entry, and when the dict outgrows twice the display limit the entries of displays that
+    no longer exist are dropped."""
+    budget = budgets.get(display.id)
+    if budget is None:
+        if len(budgets) >= 2 * MAX_DISPLAYS:
+            live = set(await db.scalars(select(Display.id)))
+            for gone in [key for key in budgets if key not in live]:
+                del budgets[gone]
+        budget = budgets.setdefault(display.id, RowBudget(cap, 60))
+    return budget.take() is not None
+
+
+def _item_out(view: ItemView) -> ItemOut:
+    dashboard = None
+    if view.dashboard is not None:
+        dashboard = DashboardOut(
+            id=view.dashboard.id, name=view.dashboard.name, range=view.dashboard.range,
+            widgets=[WidgetOut.model_validate(widget) for widget in view.widgets],
+        )
+    focus = None
+    if view.trail is not None and view.focus_asset_id is not None and view.focus_name is not None:  # a live focus only
+        focus = FocusOut(id=view.focus_asset_id, name=view.focus_name, trail=view.trail)
+    return ItemOut(id=view.id, seconds=view.seconds, dashboard=dashboard, focus=focus, skipped=view.skipped)
+
+
+@router.get("/playlist", response_model=PlaylistAnswer)
+async def get_playlist(
+    request: Request, response: Response, db: AsyncSession = Depends(get_db), display: Display = Depends(current_display)
+) -> PlaylistAnswer:
+    """Everything a screen needs in one answer, so that it never calls /api/site, /api/status, /api/assets or /api/dashboards."""
+    if not await _take(playlist_budgets, display, PLAYLIST_BUDGET_PER_MINUTE, db):
+        raise _too_many_requests()
+    display_id, display_name, playlist_id = display.id, display.name, display.playlist_id
+    # One statement says "seen": it writes only when the stored time is older than 50 seconds (or there is none), so a screen
+    # polling every 60 s always writes and a reload loop writes once. It commits only when it changed a row.
+    seen = await db.execute(
+        text(
+            "UPDATE displays SET last_seen_at = now(), last_client = :client WHERE id = :id AND revoked_at IS NULL "
+            "AND (last_seen_at IS NULL OR last_seen_at < now() - make_interval(secs => :every))"
+        ),
+        {"client": client_address(request), "id": display_id, "every": LAST_SEEN_EVERY_SECONDS},
+    )
+    if seen.rowcount:
+        await db.commit()
+    playlist_name = await db.scalar(select(Playlist.name).where(Playlist.id == playlist_id))
+    items = [_item_out(view) for view in await resolve_items(db, playlist_id)]
+    response.headers["Cache-Control"] = "no-store"
+    return PlaylistAnswer(
+        display=DisplayName(name=display_name),
+        playlist=PlaylistOut(name=playlist_name or "", items=items),
+        site=SiteOut(name=SITE_NAME, timezone=await current_timezone(db)),
+        build=build_info().build_id,
+        status=await read_live_status(db),
+    )
+
+
+# --- the figures ------------------------------------------------------------------------------------------------------------
+
+
+class DisplayWidgetRequest(BaseModel):
+    """Ids only. A display never sends a config, a range or a focus: all three come from what an administrator saved."""
+
+    model_config = ConfigDict(extra="forbid")
+    item: Annotated[StrictInt, Field(ge=1, le=MAX_ID)]
+    widget: Annotated[StrictInt, Field(ge=1, le=MAX_ID)]
+
+
+@router.post("/widget-data")
+async def post_widget_data(
+    body: DisplayWidgetRequest, response: Response, db: AsyncSession = Depends(get_db),
+    display: Display = Depends(current_display),
+) -> dict[str, Any]:
+    """The answer `/api/widget-data` gives for the widget as it is stored: its config, its own range (else the dashboard's) and,
+    for a widget that follows the focus, the focus of the item. The item must be one of THIS display's playlist and the widget
+    one of that item's dashboard; whatever else is asked, 404 with one text. No account is involved, so no permission is asked."""
+    if not await _take(widget_budgets, display, DISPLAY_WIDGET_BUDGET_PER_MINUTE, db):
+        raise _too_many_requests()
+    # The item is looked up among the items of THIS display's playlist, resolved the way the playlist answer resolves them, so that
+    # an item a screen is told to skip (its dashboard deleted, its focus asset gone, no widgets) answers no figures either. In
+    # particular a following widget of an item whose focus is gone must never fall back to the whole site.
+    view = next((candidate for candidate in await resolve_items(db, display.playlist_id) if candidate.id == body.item), None)
+    if view is None or view.skipped is not None or view.dashboard is None:
+        raise HTTPException(404, NOT_FOUND)
+    widget = next((candidate for candidate in view.widgets if candidate.id == body.widget), None)
+    if widget is None:  # not a widget of that item's dashboard
+        raise HTTPException(404, NOT_FOUND)
+    dashboard = view.dashboard
+    config = widget.config if isinstance(widget.config, dict) else {}
+    try:
+        # The focus is the one the item stores, as stored: never derived from the trail and never None for a focus that exists.
+        request = WidgetDataRequest(
+            type=widget.type, config=config, range=config.get("range") or dashboard.range, focus=view.focus_asset_id
+        )
+    except ValidationError:  # something stored no longer fits (a type or a range that was removed): never a 500, never the text
+        raise HTTPException(422, "this widget cannot be shown") from None
+    result = await compute_checked(request, db)
+    response.headers["Cache-Control"] = "no-store"
+    return result.as_json()

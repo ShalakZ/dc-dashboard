@@ -119,12 +119,13 @@ async def db(pool):
 
 @pytest.fixture
 def app(db):
-    from dcdash.api import auth
+    from dcdash.api import auth, display
     from dcdash.api.main import create_app
     from dcdash.api.security_events import sign_in_events
 
     auth.limiter.clear()
     sign_in_events.clear()
+    display.reset_display_state()  # the claim limiter, the audit budgets and the per-display request budgets (w28)
     return create_app()
 
 
