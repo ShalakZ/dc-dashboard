@@ -475,9 +475,14 @@ test.describe("W28: display screens", () => {
     const { context, screen } = await newScreen(browser);
     try {
       await screen.clock.install(); // before the page loads: the minute of its poll is then ours to move
+      let loads = 0;
+      screen.on("load", () => { loads += 1; });
       await screen.goto(shown.url);
       await expect(screenText(screen)).toHaveText(connected(revScreen, revList, 2));
-      await expectReloadedWithoutFragment(screen); // the page loads again after the claim; the minute below is moved on the new document
+      // The page loads again after the claim; the minute below is moved on the new document. (Not the navigation entry here: the fake clock replaces
+      // `performance.getEntriesByType` with an empty list, so case 2 checks that entry and this case counts document loads.)
+      await expect.poll(() => loads, { message: "the page loaded again after the claim" }).toBeGreaterThanOrEqual(2);
+      await expectBareDisplayAddress(screen);
 
       await openDisplays(page);
       const row = rowOf(page, revScreen);
