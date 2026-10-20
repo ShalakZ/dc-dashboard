@@ -86,7 +86,7 @@ log = logging.getLogger(__name__)
 MAX_ENTRIES = 16
 DEFAULT_TTL_SECONDS = 30.0
 MAX_ATTEMPTS = 3  # the third never coalesces and stores nothing unless its snapshot matches the request's
-CONCURRENT_COMPUTATIONS = 2  # also the cache's pool size; the pool allows one more connection than this
+CONCURRENT_COMPUTATIONS = 2  # also the cache's pool size; the pool allows one more connection than this. Invariant: every user of the pool that is not a one-statement leaf holds the semaphore, so at most this many connections are held by long work and the overflow connection is always free for a leaf (a `db=None` fingerprint); never raise `max_overflow` to 0 or open a session without the semaphore
 POOL_TIMEOUT_SECONDS = 20  # how long a statement waits for a connection of the cache's pool before it fails
 WARM_FRACTION = 0.6  # of the TTL: how long after a check the background revalidation runs
 KEEP_WARM_SECONDS = 600.0  # a key nobody used for this long is no longer kept warm
@@ -624,7 +624,8 @@ async def get_or_compute(
 
     `db` is the request's session and is used only for the two cheap fingerprint statements. `None` (a request that already
     holds a connection of the request pool through another call and must not ask for a second) reads them instead on a
-    short-lived session of the cache's own engine, one statement at a time; nothing else differs. `compute(session)` receives
+    short-lived session of the cache's own engine, one statement at a time (a separate transaction: a caller with uncommitted
+    configuration writes must pass its session); nothing else differs. `compute(session)` receives
     the cache's own session (a repeatable-read snapshot) and must return a compact, read-only value.
     """
     _bind_loop()  # first: a new event loop forgets the old one's state now, never between a task's registration and its start

@@ -56,7 +56,7 @@ When a page is slow on an installation, run this in the project folder and paste
 
     docker compose exec -T api python -m dcdash.diagnostics.speed
 
-About 25 plain lines: how many assets, points, meters and hourly rows there are, and how many seconds one month of energy, Billing, Check month and the Storage page's queries take (each run twice, so a cache shows as a drop; the check switches the figure cache off for its run, so a drop between the two runs is the database's own cache). It only reads, in a read-only transaction (Billing's month is computed on the figure cache's own small connection pool, with read-only statements, outside that transaction), and prints counts and seconds, never a name, an address or a password. A large database can take a few minutes.
+About 25 plain lines: how many assets, points, meters and hourly rows there are, and how many seconds one month of energy, Billing, Check month and the Storage page's queries take (each run twice, so a cache shows as a drop; the check switches the figure cache off for its run, so a drop between the two runs is the database's own cache). It only reads, in a read-only transaction (Billing's month is computed on the figure cache's own small connection pool, with read-only statements, outside that transaction and without the statement timeout, so a stalled database can hang that one stage), and prints counts and seconds, never a name, an address or a password. A large database can take a few minutes.
 
 ## Reading a report (what Claude looks at)
 1. The **header**: build id and time, to know which code produced it.

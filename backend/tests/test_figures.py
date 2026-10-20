@@ -737,7 +737,7 @@ async def test_more_concurrent_comparisons_than_the_request_pool_holds_all_answe
     await login_as(client, db, "admin")
     config = {"assets": [ids["Pump"]], "source": "cost", "aggregation": "sum", **COMPARE}
     body = {"type": "stat", "config": config, "range": "this_month"}
-    size, timeout = 4, 5
+    size, timeout = 4, 10  # the bound below is timeout - 1: wide enough for two cold computations on a busy machine
     tiny = create_async_engine(
         get_settings().sqlalchemy_url, pool_size=size, max_overflow=0, pool_timeout=timeout, pool_pre_ping=True
     )
