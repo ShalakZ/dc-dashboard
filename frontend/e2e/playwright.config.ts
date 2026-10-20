@@ -392,14 +392,27 @@ export default defineConfig({
     // Display screens (playlists and display links). It MAKES ITS OWN DATA through the API in beforeAll (`W28 <run> site` with two dashboards of one stat each; every playlist and display a case makes is
     // named `W28 <run> ...`) and deletes all of it in afterAll, also after a failed case (displays first), and puts the account's own look back. It talks to the real API (nothing is mocked) and needs no
     // scratch stack. Case 1 makes a playlist and a display in the dialogs and reads the link once; case 2 opens it in a new browser context (cookie, the three display routes, 401 elsewhere, figures equal the
-    // administrator's); cases 3 and 4 revoke a display and delete a dashboard; case 5 is the keyboard-only pass at 1440 x 900 and 1024 x 640, light and dark. The LAST case (6) makes ten wrong claims
-    // and an eleventh that is refused: it BLOCKS THE STACK'S CLIENT ADDRESS for 15 minutes (a right claim too), so nothing may come after this project that opens a display link, and it is skipped when
-    // W28_SKIP_BLOCK is set. The secrets it used are appended to the file named by W28_SECRET_FILE (default /tmp/w28-secret.txt). The cases are serial.
+    // administrator's); cases 3 and 4 revoke a display and delete a dashboard; case 5 is the keyboard-only pass at 1440 x 900 and 1024 x 640, light and dark. The last case (6) makes ten wrong claims
+    // and an eleventh that is refused: it BLOCKS THE STACK'S CLIENT ADDRESS for 15 minutes for WRONG secrets (a right secret still connects, api/display.py:295-301), so no project after this one may make a
+    // wrong claim (w29 makes right claims only), and it is skipped when W28_SKIP_BLOCK is set. The secrets it used are appended to the file named by W28_SECRET_FILE (default /tmp/w28-secret.txt). The cases are serial.
     {
       name: "w28",
       testMatch: "w28.spec.ts",
       dependencies: ["w27"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
+    // The wall, the rotating screen a connected display shows (w29). It MAKES ITS OWN DATA through the API (`W29 <run> site`, two dashboards, a playlist of them with a focus asset on the second, a display; the
+    // cases that edit or delete a dashboard make dashboards, a playlist and a display of their own, all named `W29 <run> ...`) and deletes it all in afterAll, also after a failed case (displays first). It talks to
+    // the real API, needs no scratch stack of its own, and MAKES RIGHT CLAIMS ONLY: it runs after w28's case 6, which blocks the stack's client address for wrong secrets, and a right secret still connects.
+    // Cases: the rotation (first dashboard, "1 of 2", the figure equal to the administrator's, no scroll, the cursor hidden after 3 s, the second dashboard with its focus asset within 20 s, in real time); a deleted
+    // dashboard ("1 of 1" within 80 s) and an edited one (its new card within 80 s, no navigation, no band) under `page.clock`; band 1 (the playlist's `status` replaced in the page) and band 2 (130 s of aborted
+    // requests under `page.clock`, then the way back); an empty playlist; the header's share of the height at 1920 x 1080 and 3840 x 2160; and that the page asks for /api/display/* only. The clock is moved with
+    // `runFor` (never `fastForward`: a jump of over 15 s is a wake). The secrets it used are appended to the file named by W29_SECRET_FILE (default /tmp/w29-secret.txt). The cases are serial.
+    {
+      name: "w29",
+      testMatch: "w29.spec.ts",
+      dependencies: ["w28"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1920, height: 1080 } },
     },
   ],
 });
