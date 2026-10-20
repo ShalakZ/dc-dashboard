@@ -26,6 +26,7 @@ export function CreateDashboardDialog({ onClose, initialChoice = null }: { onClo
   const nameInput = useRef<HTMLInputElement>(null);
   const nameId = useId();
   const rangeId = useId();
+  const hintId = useId();
   const [choice, setChoice] = useState<TemplateChoice | null>(initialChoice);
   const [name, setName] = useState("");
   const [range, setRange] = useState<RangePreset>(() => (initialChoice === null || initialChoice === "blank" ? BLANK_TEMPLATE.range : templates.data?.templates.find((t) => t.id === initialChoice)?.range ?? BLANK_TEMPLATE.range));
@@ -96,7 +97,7 @@ export function CreateDashboardDialog({ onClose, initialChoice = null }: { onClo
               </div>
               <div className="field">
                 <label htmlFor={nameId}>Name</label>
-                <input id={nameId} ref={nameInput} value={name} maxLength={100} placeholder={picked.id === "blank" ? undefined : picked.title} onChange={(e) => setName(e.target.value)} />
+                <input id={nameId} ref={nameInput} value={name} maxLength={100} placeholder={picked.id === "blank" ? undefined : picked.title} aria-describedby={hintId} onChange={(e) => setName(e.target.value)} />
               </div>
               <div className="field">
                 <label htmlFor={rangeId}>Range</label>
@@ -104,7 +105,8 @@ export function CreateDashboardDialog({ onClose, initialChoice = null }: { onClo
                   {RANGE_PRESETS.map((p) => <option key={p} value={p}>{RANGE_LABELS[p]}</option>)}
                 </select>
               </div>
-              {finalName === "" && <p className="muted">Enter a name.</p>}
+              {/* The line is always there (templates.css reserves its height), so the dialog does not change size when the typing starts; it describes Name, not Create. */}
+              <p id={hintId} className="muted tpl-hint">{finalName === "" ? "Enter a name." : ""}</p>
               {error && <p className="error" role="alert">{error}</p>}
             </div>
             <div className="row tpl-foot">

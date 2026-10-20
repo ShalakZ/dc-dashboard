@@ -34,6 +34,12 @@ describe("styles/templates.css", () => {
     expect(css).not.toMatch(/\.tpl-title-row/); // the title has a row of its own no more: nothing can wrap under it
   });
 
+  it("the name hint's line is reserved: it keeps one line of its own height with no text, so the dialog never changes height when the typing starts (w27 FA)", () => {
+    const hint = body(".tpl-hint");
+    expect(prop(hint, "min-height")).toBe("1lh");
+    expect(prop(hint, "margin")).toBe("0");
+  });
+
   it("a card keeps its text at the top: the base button centres a shorter text in the stretched card, and the titles of a row would not line up (w27 P1)", () => {
     expect(prop(body(".tpl-card"), "align-items")).toBe("start");
     expect(prop(body(".tpl-card"), "align-content")).toBe("start");

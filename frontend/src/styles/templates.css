@@ -10,6 +10,7 @@
   .tpl-foot { justify-content: flex-end; }
   .tpl-back { margin-right: auto; } /* Back to templates at the left, Cancel and Create at the right */
   .tpl-step { margin: 0; font-size: var(--fs-md); font-weight: 600; }
+  .tpl-hint { min-height: 1lh; margin: 0; } /* the name hint keeps its line with no text: the dialog does not change height when the typing starts (w27 FA) */
 
   /* Create and the other buttons wait with aria-disabled (a button that has the focus must not lose it): they look idle and do nothing. */
   .tpl-foot button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }

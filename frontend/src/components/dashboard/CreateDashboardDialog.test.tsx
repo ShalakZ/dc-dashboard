@@ -212,6 +212,32 @@ describe("CreateDashboardDialog, step 2: Blank", () => {
     expect(toasts.calls).toEqual([{ kind: "success", text: "Dashboard created" }]);
   });
 
+  // w27 FA (review finding 9): the hint was in the form from the start and left at the first keystroke, so the dialog shrank by a line and Create moved up 16 px.
+  it("keeps the hint's line when the typing starts: the same element stays, its text goes, it describes Name and stays out of Create's name", async () => {
+    const { dialog } = await show();
+    const name = await choose(dialog, "Blank");
+    const hint = within(dialog).getByText("Enter a name.");
+    expect(hint).toHaveClass("tpl-hint");
+    expect(name).toHaveAccessibleDescription("Enter a name.");
+    expect(create(dialog)).toHaveAccessibleName("Create");
+    expect(create(dialog)).toHaveAccessibleDescription("");
+    await userEvent.type(name, "H");
+    expect(hint.isConnected, "the line stays in the form").toBe(true);
+    expect(hint).toBeEmptyDOMElement();
+    expect(name).toHaveAccessibleDescription("");
+    expect(create(dialog)).toHaveAccessibleName("Create");
+    await userEvent.clear(name);
+    expect(hint).toHaveTextContent("Enter a name.");
+  });
+
+  it("a template that names itself has the line too, empty", async () => {
+    const { dialog } = await show();
+    await choose(dialog, "Power");
+    const hint = dialog.querySelector(".tpl-hint");
+    expect(hint).not.toBeNull();
+    expect(hint).toBeEmptyDOMElement();
+  });
+
   it("Enter in an empty Name does nothing", async () => {
     const { calls, dialog } = await show();
     const name = await choose(dialog, "Blank");
