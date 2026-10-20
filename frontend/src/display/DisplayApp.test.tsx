@@ -3,8 +3,12 @@ import { StrictMode, useEffect, useState } from "react";
 import { manualTimers } from "../test/manualTimers";
 import { DisplayApp, DisplayBoundary } from "./DisplayApp";
 import { claimMemoSnapshot, resetClaimMemo, startDisplay, type DisplayState } from "./displayLoop";
+import { reloadClean } from "./reloadClean";
 import { holdSecret } from "./secretHandle";
 import { takeFragment } from "./takeFragment";
+
+// jsdom has no navigation (location.replace is "not implemented"), so the reload after a good claim is a recorded stub.
+vi.mock("./reloadClean", () => ({ reloadClean: vi.fn() }));
 
 // Lets one test make the screen's effect fail, to prove the boundary's fallback is still a dark, titled screen.
 const failure = vi.hoisted(() => ({ on: false }));
@@ -102,6 +106,10 @@ const text = () => document.querySelector("[aria-live]")?.textContent;
 beforeEach(() => {
   failure.on = false;
   events.length = 0;
+  vi.mocked(reloadClean).mockReset();
+  vi.mocked(reloadClean).mockImplementation(() => {
+    events.push("reloadClean");
+  });
   resetClaimMemo();
   window.history.replaceState(null, "", "/display");
 });
@@ -126,7 +134,7 @@ describe("the claim flow", () => {
     render(<DisplayApp handle={handle} timers={c.timers} />);
     expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
 
-    expect(events).toEqual(["replaceState", CLAIM, PLAYLIST]);
+    expect(events).toEqual(["replaceState", CLAIM, "reloadClean", PLAYLIST]);
     expect(window.location.hash).toBe("");
     expect(window.location.href).not.toContain("#");
     expect(window.location.pathname).toBe("/display");
@@ -660,5 +668,82 @@ describe("the secret is released after the first definite answer", () => {
     expect(await screen.findByText("connected")).toBeInTheDocument();
     expect(count(CLAIM)).toBe(1);
     expect(calls.slice(1).some(carries)).toBe(false);
+  });
+});
+
+describe("the page reloads without the fragment after a good claim (adversarial review M1)", () => {
+  // replaceState clears the address bar, but the page's navigation entry keeps `/display#<secret>` for the document's whole life; only a new
+  // document drops it. The cookie is set by then, and a load without a fragment makes no claim, so the reload cannot loop.
+  const reloads = () => vi.mocked(reloadClean).mock.calls.length;
+
+  it("a 204 reloads once, after the cookie answer, before the first playlist request, and the sentence does not change", async () => {
+    window.history.replaceState(null, "", `/display#${SECRET}`);
+    stubFetch({ [CLAIM]: [204], [PLAYLIST]: [three] });
+    const handle = holdSecret(takeFragment());
+    render(<DisplayApp handle={handle} timers={clock().timers} />);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    expect(reloads()).toBe(1);
+    expect(events).toEqual([CLAIM, "reloadClean", PLAYLIST]);
+    expect(vi.mocked(reloadClean).mock.calls[0]).toEqual([]); // it is told nothing, above all not the secret
+  });
+
+  it.each([
+    ["a 401", 401, REVOKED],
+    ["a 403", 403, REVOKED],
+    ["a 422", 422, REVOKED],
+    ["a 429", 429, BLOCKED],
+    ["a 503", 503, OFFLINE],
+    ["a network error", "network", OFFLINE],
+  ] as const)("%s never reloads: the page keeps its own sentence (a reload would say 'not connected')", async (_name, reply, sentence) => {
+    stubFetch({ [CLAIM]: [reply], [PLAYLIST]: [three] });
+    render(<DisplayApp handle={holdSecret(SECRET)} timers={clock().timers} />);
+    expect(await screen.findByText(sentence)).toBeInTheDocument();
+    await settle();
+    expect(reloads()).toBe(0);
+    expect(count(CLAIM)).toBe(1);
+  });
+
+  it("a claim that had no answer reloads only when the retry is accepted, and then once", async () => {
+    stubFetch({ [CLAIM]: ["network", 204], [PLAYLIST]: [three] });
+    const c = clock();
+    render(<DisplayApp handle={holdSecret(SECRET)} timers={c.timers} />);
+    expect(await screen.findByText(OFFLINE)).toBeInTheDocument();
+    expect(reloads()).toBe(0);
+    await advance(c, 5_000);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    expect(count(CLAIM)).toBe(2);
+    expect(reloads()).toBe(1);
+  });
+
+  it("a screen opened without a link makes no claim and does not reload (the cookie is already there)", async () => {
+    stubFetch({ [PLAYLIST]: [three] });
+    render(<DisplayApp handle={null} timers={clock().timers} />);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    expect(reloads()).toBe(0);
+  });
+
+  it("StrictMode's double effect reloads once", async () => {
+    stubFetch({ [CLAIM]: [204], [PLAYLIST]: [three] });
+    render(
+      <StrictMode>
+        <DisplayApp handle={holdSecret(SECRET)} timers={clock().timers} />
+      </StrictMode>,
+    );
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    expect(count(CLAIM)).toBe(1);
+    expect(reloads()).toBe(1);
+  });
+
+  it("a second mount of the screen after the claim (an error boundary's retry) does not reload again", async () => {
+    stubFetch({ [CLAIM]: [204], [PLAYLIST]: [three] });
+    const c = clock();
+    const handle = holdSecret(SECRET);
+    const view = render(<DisplayApp handle={handle} timers={c.timers} />);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    view.unmount();
+    render(<DisplayApp handle={handle} timers={c.timers} />);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    expect(count(CLAIM)).toBe(1);
+    expect(reloads()).toBe(1);
   });
 });

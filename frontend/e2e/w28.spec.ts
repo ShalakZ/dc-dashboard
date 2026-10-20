@@ -13,7 +13,7 @@ import { navLink, rowAction } from "./shell";
 // controller's log grep; no assertion message of this file holds a secret, a link or the cookie.
 //   1   THE LINK IS SHOWN ONCE. Administer > Displays through the sidebar; a playlist with two dashboards and a display made in the dialogs; the "Display link" field holds `<origin>/display#<secret>`;
 //       Copy link says Copied (or the fallback sentence); after Done neither the page, nor its storage, nor a reload holds the secret.
-//   2   A NEW BROWSER OPENS THE LINK. The address becomes exactly /display (no fragment), the cookie `dcdash_display` is httpOnly, SameSite=Strict, Path=/api/display and not readable by the page, the
+//   2   A NEW BROWSER OPENS THE LINK. The address becomes exactly /display (no fragment) and the page loads again after the claim, so its navigation entry has no fragment either, the cookie `dcdash_display` is httpOnly, SameSite=Strict, Path=/api/display and not readable by the page, the
 //       page says "Connected as ... 2 dashboards."; that cookie (also sent by hand) gets 401 on /api/me, /api/widget-data, /api/dashboards and /api/assets; the display routes answer 200, the figures equal the
 //       admin's /api/widget-data for the stored widget, and an administrator's own session means nothing on them.
 //   3   REVOKE. A display page under page.clock; the administrator revokes it (Actions > Revoke > Revoke); one minute later the page says "revoked or is not valid" and the Screens card says Revoked.
@@ -225,6 +225,20 @@ test.describe("W28: display screens", () => {
     await expect.poll(() => screen.url() === `${ORIGIN}/display`, { message: "the address is /display with no fragment" }).toBe(true);
   }
 
+  /**
+   * The page's navigation entry (the address the document was loaded from) is a bare `/display`. `history.replaceState` does not change it, so this holds only
+   * once the page has loaded /display again after the claim. The old document may still be on screen for a moment and an evaluate during the load throws, hence the poll.
+   * Booleans only: a failure never prints the secret.
+   */
+  async function expectReloadedWithoutFragment(screen: Page): Promise<void> {
+    await expect
+      .poll(
+        () => screen.evaluate(() => performance.getEntriesByType("navigation").map((e) => !e.name.includes("#") && e.name.endsWith("/display"))).catch(() => [false]),
+        { message: "the page's navigation entry is a bare /display with no fragment (the page reloaded after the claim)" },
+      )
+      .toEqual([true]);
+  }
+
   async function boxOf(target: Locator): Promise<Box> {
     return target.evaluate((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; });
   }
@@ -360,6 +374,14 @@ test.describe("W28: display screens", () => {
       await expectBareDisplayAddress(screen);
       await expect(screenText(screen)).toHaveText(connected(SCREEN, LIST, 2));
 
+      // After the claim was accepted the page loads /display again as a fresh document (review M1): replaceState clears the address bar but the
+      // browser keeps the first address, fragment included, in the navigation entry of the old document for its whole life, where any script of the page could read it.
+      // The old document may still be on screen for a moment (the text can come from it), and an evaluate during the load throws, so poll. Booleans only: a failure never prints the secret.
+      await expectReloadedWithoutFragment(screen);
+      await expectBareDisplayAddress(screen);
+      expect(screen.url().endsWith("/display"), "the address ends with /display").toBe(true);
+      await expect(screenText(screen)).toHaveText(connected(SCREEN, LIST, 2));
+
       const cookie = (await context.cookies()).find((c) => c.name === COOKIE);
       expect(cookie, `the cookie ${COOKIE} is set`).toBeTruthy();
       expect(cookie!.httpOnly, "the cookie is httpOnly").toBe(true);
@@ -428,6 +450,7 @@ test.describe("W28: display screens", () => {
       await screen.clock.install(); // before the page loads: the minute of its poll is then ours to move
       await screen.goto(shown.url);
       await expect(screenText(screen)).toHaveText(connected(revScreen, revList, 2));
+      await expectReloadedWithoutFragment(screen); // the page loads again after the claim; the minute below is moved on the new document
 
       await openDisplays(page);
       const row = rowOf(page, revScreen);

@@ -1,4 +1,5 @@
 import { claim, getPlaylist, type PlaylistReply } from "./displayApi";
+import { reloadClean } from "./reloadClean";
 import type { SecretHandle } from "./secretHandle";
 
 // What the display screen does after the page loaded: trade the link's secret for the cookie (once), read the playlist, read it again
@@ -61,7 +62,15 @@ function claimOnce(handle: SecretHandle): Promise<ClaimOutcome> {
   const entry = {
     outcome: claim(secret).then(
       ({ status, retryAfter }): ClaimOutcome => {
-        if (status >= 200 && status < 300) return answered(handle, "ok");
+        if (status >= 200 && status < 300) {
+          // The cookie is set. The browser keeps this document's first address (with the secret) in its navigation entry for as long as the
+          // document lives, so the page is loaded again without it. Only an accepted claim does this: after a refusal the page must keep
+          // saying so (a fresh load has no link and would say "not connected"). It is here, in the one claim of the page load, so a second
+          // start of the screen (StrictMode, an error boundary) shares the answer and never reloads twice.
+          const outcome = answered(handle, "ok");
+          reloadClean();
+          return outcome;
+        }
         if (status === 401 || status === 403 || status === 422) return answered(handle, "refused");
         // A 429 is never a definite answer: the secret stays in the handle for the retry.
         return status === 429 ? { kind: "blocked", waitMs: retryWait(retryAfter, BLOCKED_RETRY_MIN_MS, BLOCKED_RETRY_MS) } : "unreachable";
