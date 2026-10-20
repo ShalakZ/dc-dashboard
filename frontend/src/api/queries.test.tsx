@@ -6,7 +6,7 @@ import { isStaleMove, moveRefusals } from "../lib/moveText";
 import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import {
-  auditPageOptions, auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
+  auditPageOptions, auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDashboardTemplates, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData, widgetRefetchMs,
   useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
   useAddStarterKinds, useAssetKinds, useAssets, useBulkDeleteAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
@@ -1601,5 +1601,24 @@ describe("closing and reopening a billing month (W11)", () => {
     await waitFor(() => expect(costsAnswered).toBe(1));
     await act(async () => { await result.current.close.mutateAsync({ month: "2026-09", note: "" }); });
     expect(costsAnswered).toBe(2);
+  });
+});
+
+describe("dashboard templates (w27)", () => {
+  it("reads the server's templates once, under its own key", async () => {
+    const calls = mockFetch({ "GET /api/dashboard-templates": { body: { nothing_metered: false, templates: [] } } });
+    const { result } = renderHook(() => useDashboardTemplates(), { wrapper });
+    await waitFor(() => expect(result.current.data).toEqual({ nothing_metered: false, templates: [] }));
+    expect(calls.filter((c) => c.path === "/api/dashboard-templates")).toHaveLength(1);
+    expect(keys.dashboardTemplates).toEqual(["dashboards", "templates"]);
+  });
+
+  it("asks for nothing while it is disabled (a role without dashboards.edit)", async () => {
+    const calls = mockFetch({ "GET /api/dashboard-templates": { body: { nothing_metered: false, templates: [] } } });
+    const { result } = renderHook(() => useDashboardTemplates(false), { wrapper });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(calls).toEqual([]);
   });
 });

@@ -7,7 +7,7 @@ import type {
   Asset, AssetImpact, AssetKind, AssetKindIn, AssetKindPatch, StarterPackResult, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingReopened, BillingSettings, Connector, MonthCheck, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
   FleetSummary, GeneralSettings, GraphModel, Metric, MoveBody, MovePreview, MoveResult, PermissionRow, PointRow, RangePreset, RemoveSourcesResult, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, SourceImpact, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
-  WidgetData, DataWidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
+  WidgetData, DataWidgetType, DashboardTemplates, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
 } from "./types";
 
 export const keys = {
@@ -50,6 +50,8 @@ export const keys = {
   /** Prefix of every month check query: a close or reopen refreshes these in the background, without waiting for them. */
   billingMonthCheckAll: ["billing", "month-check"] as const,
   dashboardList: ["dashboards", "list"] as const,
+  /** The server's dashboard templates (w27). Under the `dashboards` prefix, apart from the list: a created dashboard does not change which templates are recommended. */
+  dashboardTemplates: ["dashboards", "templates"] as const,
   defaultDashboard: ["dashboards", "default"] as const,
   dashboard: (id: number) => ["dashboards", "detail", id] as const,
   widgetData: ["widget-data"] as const,
@@ -650,6 +652,14 @@ export function usePutDefaultDashboard() {
 
 export const useDashboard = (id: number) =>
   useQuery({ queryKey: keys.dashboard(id), queryFn: () => api.get<Dashboard>(`/api/dashboards/${id}`) });
+
+/**
+ * The templates the New dashboard dialog offers, with the widgets each one makes and which ones suit THIS site (w27). `enabled` is false for a role
+ * without `dashboards.edit` (the route is theirs alone): nothing is asked, and the query stays pending. Read again every time the dialog or the empty
+ * page mounts, since meters and rates change what is recommended.
+ */
+export const useDashboardTemplates = (enabled = true) =>
+  useQuery({ queryKey: keys.dashboardTemplates, enabled, queryFn: () => api.get<DashboardTemplates>("/api/dashboard-templates") });
 
 export function useCreateDashboard() {
   const client = useQueryClient();

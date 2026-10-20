@@ -454,8 +454,24 @@ export interface Dashboard { id: number; name: string; range: RangePreset; updat
 export interface DashboardListItem { id: number; name: string; range: RangePreset; widget_count: number; updated_at: string }
 /** The dashboard people land on; `null` when none is set. */
 export interface DefaultDashboard { dashboard_id: number | null }
-/** `recipe` (w25): "power" makes the server fill the new dashboard with the starter Power widgets; Blank sends no key. */
-export interface DashboardIn { name: string; range?: RangePreset; recipe?: "power" }
+/** The ids of the server's dashboard templates, in the order it lists them (w27). */
+export type TemplateId = "power" | "cost" | "areas" | "day";
+/** `recipe` (w25, widened in w27): a template id makes the server fill the new dashboard with that template's widgets; Blank sends no key. */
+export interface DashboardIn { name: string; range?: RangePreset; recipe?: TemplateId }
+/**
+ * One widget of a template, as `GET /api/dashboard-templates` lists it (w27): the place on the 12-column grid and just enough of the config to draw a glyph.
+ * A text widget has `source` null, `compare` "none", `bars` "asset" and `scope` "fixed" (never null, so these types stay plain).
+ */
+export interface TemplateWidget {
+  type: WidgetType; x: number; y: number; w: number; h: number;
+  source: WidgetSource | null; compare: WidgetCompareMode; bars: WidgetBars; scope: WidgetScope;
+}
+/** A template: `recommended` is true of THIS site; `needs` says in a plain sentence what is missing when it is not (null when nothing is). `range` is the default range of the dashboard it makes. */
+export interface DashboardTemplate {
+  id: TemplateId; title: string; description: string; range: RangePreset; recommended: boolean; needs: string | null; widgets: TemplateWidget[];
+}
+/** The answer: `nothing_metered` is true when no asset has its own meter, so every template would show no data. Blank is the client's own card. */
+export interface DashboardTemplates { nothing_metered: boolean; templates: DashboardTemplate[] }
 export interface DashboardSave { name: string; range: RangePreset; updated_at: string; widgets: WidgetIn[] }
 
 /**

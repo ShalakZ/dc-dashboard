@@ -1,16 +1,44 @@
 import type {
-  Asset, CompareAsset, CompareChange, CompareSide, Dashboard, DataWidget, DataWidgetType, TextStyle, TextWidget, WidgetBreakdown, WidgetCompare,
-  WidgetConfig, WidgetData, WidgetPoint, WidgetValue,
+  Asset, CompareAsset, CompareChange, CompareSide, Dashboard, DashboardTemplate, DashboardTemplates, DataWidget, DataWidgetType, TemplateWidget, TextStyle, TextWidget,
+  WidgetBreakdown, WidgetCompare, WidgetConfig, WidgetData, WidgetPoint, WidgetValue,
 } from "../api/types";
 import { userFor } from "./users";
 
 export const SITE = { timezone: "Asia/Qatar", currency: "QAR" };
 
-/** The three requests every page test needs: no setup pending, who is signed in, and the site zone. */
+/** One widget of a template as the server lists it (a data widget following the focus unless overridden). */
+const tplWidget = (type: TemplateWidget["type"], x: number, y: number, w: number, h: number, over: Partial<TemplateWidget> = {}): TemplateWidget => ({
+  type, x, y, w, h, source: type === "text" ? null : "energy", compare: "none", bars: "asset", scope: type === "text" ? "fixed" : "focus", ...over,
+});
+const tplHeading = () => tplWidget("text", 0, 0, 12, 1);
+/** The four templates of the pilot hall (D5: power, cost, areas, day; the first three recommended), with the widget lists the server builds (D7). */
+export const templateCards = (): DashboardTemplate[] => [
+  {
+    id: "power", title: "Power", description: "This month's energy and cost against last month, the biggest assets and the energy by day.", range: "this_month", recommended: true, needs: null,
+    widgets: [tplHeading(), tplWidget("stat", 0, 1, 3, 3, { compare: "same_days_last_month" }), tplWidget("stat", 3, 1, 3, 3, { source: "cost", compare: "same_days_last_month" }), tplWidget("bar", 6, 1, 6, 3, { bars: "kind" }), tplWidget("timeseries", 0, 4, 12, 4, { compare: "same_days_last_month" })],
+  },
+  {
+    id: "cost", title: "Cost", description: "What the energy costs, where it goes and how it moves.", range: "this_month", recommended: true, needs: null,
+    widgets: [tplHeading(), tplWidget("stat", 0, 1, 3, 3, { source: "cost", compare: "same_days_last_month" }), tplWidget("bar", 3, 1, 9, 3, { source: "cost", bars: "kind" }), tplWidget("timeseries", 0, 4, 12, 4, { source: "cost", compare: "same_days_last_month" }), tplWidget("table", 0, 8, 12, 4, { source: "cost", scope: "children" })],
+  },
+  {
+    id: "areas", title: "Energy by area", description: "The areas side by side: a table, a bar each and a line each by day.", range: "this_month", recommended: true, needs: null,
+    widgets: [tplHeading(), tplWidget("table", 0, 1, 6, 4, { scope: "children" }), tplWidget("bar", 6, 1, 6, 4, { scope: "children" }), tplWidget("timeseries", 0, 5, 12, 4, { scope: "children" })],
+  },
+  {
+    id: "day", title: "Last 24 hours", description: "The last day, hour by hour.", range: "24h", recommended: false, needs: null,
+    widgets: [tplHeading(), tplWidget("timeseries", 0, 1, 12, 4), tplWidget("table", 0, 5, 12, 4, { scope: "children" })],
+  },
+];
+/** The answer of `GET /api/dashboard-templates` on a metered site: Power, Cost and Energy by area recommended. */
+export const templatesBody = (over: Partial<DashboardTemplates> = {}): DashboardTemplates => ({ nothing_metered: false, templates: templateCards(), ...over });
+
+/** The requests every page test needs: no setup pending, who is signed in, the site zone, and the templates the New dashboard dialog offers (only an editor asks). */
 export const authed = (role: string) => ({
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: userFor(role) },
   "GET /api/site": { body: SITE },
+  "GET /api/dashboard-templates": { body: templatesBody() },
 });
 
 export const assetList: Asset[] = [
