@@ -7,13 +7,13 @@ import type { WidgetData } from "../../../api/types";
 import {
   breakdownCardLine, breakdownDescription, breakdownLine, drillAction, drillTip, emptyBreakdownText, hasNoBars, isNoDataBar, kindOptions, parentIds, selectedKind, type DrillAction,
 } from "../../../lib/breakdown";
-import { valueAxisFor } from "../../../lib/chartScale";
+import { largestAbs, valueAxisFor } from "../../../lib/chartScale";
 import { chartDescription } from "../../../lib/widgetDetails";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
 import { chartLabels, escapeHtml, figureText, hasNoReading, labelBucket, NO_DATA, shortLabel, shortLabels, uniqueLabels, unitSuffix, type ParentNames } from "../../../lib/widgetFormat";
 import { InfoTip } from "../../InfoTip";
 import { useFocus } from "../FocusContext";
-import { AXIS_CHARS, barAxisLayout, DEFAULT_CHART_HEIGHT, DEFAULT_CHART_WIDTH, LABEL_LINE_PX, nameGapFor, steppedHeight, steppedWidth, TOP_PX } from "./barAxis";
+import { AXIS_CHARS, barAxisLayout, DEFAULT_CHART_HEIGHT, DEFAULT_CHART_WIDTH, LABEL_LINE_PX, steppedHeight, steppedWidth, tickPxOf } from "./barAxis";
 import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, valueAxisParts, type ChartTheme } from "./chartTheme";
 import { useLegendSelection } from "./legendSelection";
 
@@ -103,7 +103,7 @@ export function barOption(
     const labels = chartLabels(data.values, parents);
     // One scale for the value axis, from the tallest bar (D3); the bars keep their base-unit values and the tooltip its exact figure.
     const valueAxis = valueAxisFor(data, data.values.map((v) => v.value));
-    const layout = barAxisLayout(labels, chartWidth, chartHeight, valueAxis.name !== undefined);
+    const layout = barAxisLayout(labels, chartWidth, chartHeight, valueAxis.name !== undefined, tickPxOf(valueAxis.format, largestAbs(data.values.map((v) => v.value))));
     // A metric that recorded nothing is "no data", with no dash mark: the dash means a missing rate and nothing else. A cost
     // without a rate keeps its dash whether or not anything was recorded, like the stat, the table and Billing.
     // A breakdown by kind (w24) is the exception: there a bar that recorded nothing (no figure, or the zero of a meter silent for the whole range,
@@ -129,13 +129,14 @@ export function barOption(
       xAxis: {
         type: "category", data: labels, ...axis, ...(notes ? { triggerEvent: true } : {}),
         axisLabel: {
-          ...axis.axisLabel, interval: 0, formatter: (v: string) => layout.labels.get(String(v)) ?? shortLabel(String(v), AXIS_CHARS),
+          ...axis.axisLabel, interval: layout.every - 1, formatter: (v: string) => layout.labels.get(String(v)) ?? shortLabel(String(v), AXIS_CHARS),
           ...(layout.mode === "wrap"
-            ? { width: layout.slot - 4, overflow: "truncate", ellipsis: "…", lineHeight: LABEL_LINE_PX }
+            ? { width: layout.slot * layout.every - 4, overflow: "truncate", ellipsis: "…", lineHeight: LABEL_LINE_PX }
             : layout.mode === "none" ? { show: false } : { rotate: 40, hideOverlap: true }),
         },
       },
-      yAxis: valueAxisParts(theme, valueAxis, layout.top < TOP_PX ? { nameGap: nameGapFor(layout.top) } : {}),
+      // A short box (a breakdown at its minimum height) draws the unit's name turned beside the axis, which keeps `top` at 12 px for two lines of names (barAxis.ts).
+      yAxis: valueAxisParts(theme, valueAxis, layout.besideGap > 0 ? { nameLocation: "middle", nameGap: layout.besideGap, nameRotate: 90 } : {}),
       series: [{
         type: "bar", color: theme.accent, data: data.values.map((v) => (silent(v) ? null : v.value)),
         // A bar shows the pointer (zrender's default for every shape) only when a click on it does something.

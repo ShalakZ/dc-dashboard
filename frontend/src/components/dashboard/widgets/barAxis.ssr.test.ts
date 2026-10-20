@@ -170,25 +170,44 @@ describe("the plot of a bar chart with a turned axis (the normal mode of a narro
 
 // w27 P1: the breakdown card of the Power dashboard at its minimum height holds a chart 124 px tall. Rotated names (up to 80 px of height) took all of it, the
 // plot was a 3 px sliver and the unit's name sat on the first name. The plot keeps its share and the names are cut to what is left, or left off.
+// w27 FA: the unit's name stands turned beside the axis in such a box (the top is 12 px), so two lines of names fit under the plot, and a card too narrow for them
+// names every second bar.
 describe("the plot of a short chart (a breakdown card at its minimum height)", () => {
   const RACKS = [
     "Rack 35 / Feed A", "Rack 14 / Feed A", "Rack 19 / Feed A", "Rack 04 / Feed B (#16)", "Rack 03 / Feed B", "Rack 22 / Feed A", "Rack 12 / Feed B",
     "Rack 38 / Feed A", "Rack 04 / Feed B (#198)", "Rack 24 / Feed A",
   ];
-  /** Where the unit's title ("kWh") is drawn: the top and the bottom of its text, in the picture's pixels. */
+  /** Where the unit's title ("kWh") is drawn: its box in the picture's pixels, and whether it is turned (a title beside the axis is; one above the plot is not). */
   const unitBox = (svg: string) => {
     const unit = pieces(svg).find((p) => p.text === "kWh");
-    return unit ? { top: unit.matrix[5] + unit.dy - 7, bottom: unit.matrix[5] + unit.dy + 7 } : null; // the text is centred on its y
+    if (!unit) return null;
+    const turned = unit.transform.startsWith("matrix");
+    const length = echarts.format.getTextRect("kWh", "12px sans-serif").width;
+    if (!turned) return { turned, left: unit.matrix[4] - length / 2, right: unit.matrix[4] + length / 2, top: unit.matrix[5] + unit.dy - 7, bottom: unit.matrix[5] + unit.dy + 7 }; // centred on its y
+    const middle = unit.matrix[2] * unit.dy + unit.matrix[4]; // the turned line's centre across the picture (the matrix is a quarter turn)
+    return { turned, left: middle - 7, right: middle + 7, top: unit.matrix[5] - length / 2, bottom: unit.matrix[5] + length / 2 };
   };
+  /** The left edge of the y axis's numbers (anchored at their end, not turned). */
+  const numbersLeft = (svg: string) => Math.min(...pieces(svg).filter((p) => p.text !== "kWh" && p.anchor === "end" && !p.transform.startsWith("matrix"))
+    .map((p) => p.matrix[4] - echarts.format.getTextRect(p.text, "12px sans-serif").width));
   const CASES: [number, number][] = [[427, 124], [543, 124], [783, 124], [427, 160], [543, 214], [783, 214], [427, 304], [783, 304]];
 
-  it.each(CASES)("a chart of %i x %i px keeps 45 percent of its height (and 60 px) for the plot, with the unit's name above it, inside the picture", (width, height) => {
+  it.each(CASES)("a chart of %i x %i px keeps 45 percent of its height (and 60 px) for the plot, with the unit's name beside the axis in a short box, above the plot in a roomy one, inside the picture", (width, height) => {
     const { drawn, plot, svg } = draw(RACKS, width, {}, height);
     expect(plot.bars, "every bar is drawn").toBe(RACKS.length);
     expect(plot.baseline - plot.top).toBeGreaterThanOrEqual(Math.max(60, Math.floor(height * 0.45)));
     const unit = unitBox(svg)!;
     expect(unit.top, "the unit's name is not cut at the top").toBeGreaterThanOrEqual(0);
-    expect(unit.bottom, "the unit's name stands above the plot").toBeLessThanOrEqual(plot.top);
+    expect(unit.left, "the unit's name is not cut at the left").toBeGreaterThanOrEqual(0);
+    if (height < 143) {
+      expect(unit.turned, "a short box turns the unit's name and puts it beside the axis").toBe(true);
+      expect(unit.right, "the unit's name stands clear of the axis's numbers").toBeLessThanOrEqual(numbersLeft(svg));
+      expect(unit.bottom).toBeLessThanOrEqual(plot.baseline + 1);
+      expect(plot.top, "the top number is not cut").toBeGreaterThanOrEqual(7);
+    } else {
+      expect(unit.turned).toBe(false);
+      expect(unit.bottom, "the unit's name stands above the plot").toBeLessThanOrEqual(plot.top);
+    }
     for (const label of drawn) for (const corner of label.boxes.flat()) {
       expect(corner[0]).toBeGreaterThanOrEqual(0);
       expect(corner[0]).toBeLessThanOrEqual(width);
@@ -197,9 +216,24 @@ describe("the plot of a short chart (a breakdown card at its minimum height)", (
     }
   });
 
-  it("draws no names where not even eight characters fit under the plot, and the names it does draw are cut, whole in the tooltip", () => {
-    expect(draw(RACKS, 427, {}, 124).layout.mode).toBe("none");
-    expect(draw(RACKS, 427, {}, 124).drawn).toHaveLength(0);
+  it("names every bar at 783 px, every second at 427 and 543 px (two slots each, two lines), and none where not even that fits", () => {
+    const wide = draw(RACKS, 783, {}, 124);
+    expect(wide.layout.mode).toBe("wrap");
+    expect(wide.drawn).toHaveLength(RACKS.length);
+    for (const width of [427, 543]) {
+      const narrow = draw(RACKS, width, {}, 124);
+      expect(narrow.layout.mode).toBe("wrap");
+      expect(narrow.layout.every).toBe(2);
+      expect(narrow.drawn, `${width} px`).toHaveLength(Math.ceil(RACKS.length / 2));
+      for (const label of narrow.drawn) expect(label.lines.length).toBeLessThanOrEqual(2);
+      const texts = narrow.drawn.map((label) => label.lines.join(" "));
+      expect(new Set(texts).size, "no two names alike").toBe(texts.length);
+    }
+    expect(draw(RACKS, 250, {}, 124).layout.mode).toBe("none");
+    expect(draw(RACKS, 250, {}, 124).drawn).toHaveLength(0);
+  });
+
+  it("draws names turned and cut, whole in the tooltip, in a card a little taller", () => {
     const taller = draw(RACKS, 427, {}, 214);
     expect(taller.layout.mode).toBe("rotate");
     expect(taller.drawn).toHaveLength(RACKS.length);

@@ -513,20 +513,26 @@ describe("bar", () => {
   it("lays the axis out for the chart height too (w27 P1): a minimum-height card keeps its plot, the names are cut or left off, the unit's name keeps its room", () => {
     const names = ["Rack 35 / Feed A", "Rack 14 / Feed A", "Rack 19 / Feed A", "Rack 04 / Feed B (#16)", "Rack 03 / Feed B", "Rack 22 / Feed A", "Rack 12 / Feed B", "Rack 38 / Feed A"];
     const racks = byAsset(names.map((name, i) => valueRow({ asset_id: 40 + i, name, value: 1_000 + i * 500 })));
-    type Opt = AxisOpt & { yAxis: { name?: string; nameGap?: number } };
+    type Opt = AxisOpt & { yAxis: { name?: string; nameGap?: number; nameLocation?: string; nameRotate?: number } };
     const roomy = barOption(racks, TZ, LIGHT_CHART, 427) as unknown as Opt;
     const short = barOption(racks, TZ, LIGHT_CHART, 427, undefined, undefined, 124) as unknown as Opt;
     const medium = barOption(racks, TZ, LIGHT_CHART, 427, undefined, undefined, 240) as unknown as Opt;
     expect(roomy.grid.top).toBe(30);
     expect(roomy.yAxis.nameGap).toBeUndefined(); // the library's own gap
+    expect(roomy.yAxis.nameLocation).toBeUndefined(); // the unit's name stands above the plot, in the top
     expect(roomy.xAxis.axisLabel.rotate).toBe(40);
-    // A 124 px chart cannot hold eight characters of a turned name under a plot of 60 px: no names, the plot takes the room, the y numbers keep theirs (containLabel).
-    expect(short.grid.top).toBe(24);
-    expect(short.yAxis.nameGap).toBe(6); // the unit's name is not cut at the picture's top
-    expect(short.yAxis.name).toBe("kWh");
-    expect(short.xAxis.axisLabel).toMatchObject({ show: false });
-    expect(short.grid.containLabel).toBe(true);
-    expect(short.grid.bottom).toBe(8);
+    // A 124 px chart cannot hold eight characters of a turned name under a plot of 60 px, so it names every second bar across two slots (w27 FA); the unit's name stands turned
+    // beside the axis (top 12 px), clear of the y numbers, which the gap and the left margin make room for.
+    expect(short.grid.top).toBe(12);
+    expect(short.yAxis).toMatchObject({ name: "kWh", nameLocation: "middle", nameRotate: 90 });
+    expect(short.yAxis.nameGap).toBeGreaterThan(20);
+    expect(short.grid.left).toBeGreaterThanOrEqual(short.yAxis.nameGap! + 14);
+    expect(short.xAxis.axisLabel).toMatchObject({ interval: 1 });
+    expect(short.xAxis.axisLabel).not.toMatchObject({ show: false });
+    expect(short.xAxis.axisLabel.width).toBeGreaterThan(roomy.xAxis.axisLabel.width ?? 0);
+    expect(short.grid.containLabel).toBeUndefined();
+    expect(roomy.xAxis.axisLabel.interval).toBe(0);
+    expect(medium.grid.top).toBe(30);
     // Cut names are the same cuts the width-only layout makes, only shorter: the full names stay in the category data (tooltip, clicks, text alternative).
     expect(medium.xAxis.axisLabel.rotate).toBe(40);
     const shownMedium = Array.from(medium.xAxis.axisLabel.formatter(names[3])).length;
