@@ -67,10 +67,13 @@ function DisplayScreen({ handle, timers, wallTimers }: Props) {
       isHidden: () => document.hidden,
     }),
   );
+  // The wall runs only while the page shows it: behind the "revoked" sentence it makes no request (a stopped wall keeps its state and starts again with the next good read).
+  const showing = state.kind === "connected";
   useEffect(() => {
+    if (!showing) return;
     wall.start();
     return () => wall.stop();
-  }, [wall]);
+  }, [wall, showing]);
   useEffect(() => {
     const stop = startDisplay(handle, setState, { timers });
     stopRef.current = stop;

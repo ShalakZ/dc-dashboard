@@ -18,7 +18,7 @@ describe("the constants of the brief", () => {
     expect([FETCH_AHEAD_MS, SWAP_WAIT_MS, FADE_HALF_MS, HEARTBEAT_MS, WAKE_JUMP_MS]).toEqual([8_000, 5_000, 150, 5_000, 15_000]);
     expect([NOT_UPDATED_MS, SCREEN_BAND_MS, WAKE_HOLD_MS, RELOAD_GUARD_MS, REREAD_MIN_MS]).toEqual([120_000, 120_000, 10_000, 10_000, 10_000]);
     expect(MAX_IN_FLIGHT).toBe(2);
-    expect(BACKOFF_STEPS_MS).toEqual([5_000, 10_000, 20_000, 40_000, 60_000]);
+    expect(BACKOFF_STEPS_MS).toEqual([5_000, 10_000, 20_000]);
     expect(JITTER_MAX).toBe(0.3);
     expect(REVOKED_STEPS_MS).toEqual([300_000, 900_000, 3_600_000]);
     expect([COLLECTOR_DOWN_MS, READINGS_FLOOR_SECONDS]).toEqual([50_000, 60]);
@@ -171,14 +171,14 @@ describe("jittered, failureWait, busyWait", () => {
     expect(jittered(7_000, () => 0.999)).toBe(9_098);
     expect(jittered(1_000, () => 1 / 3)).toBe(1_100);
   });
-  it("starts the failure waits at 5 s and doubles to 60 s, then stays", () => {
+  it("starts the failure waits at 5 s and doubles to 20 s, then stays (a recovered server is reached within 20 s, plan A13)", () => {
     const waits = [0, 1, 2, 3, 4, 5, 6, 40].map((attempt) => failureWait(attempt, () => 0));
-    expect(waits).toEqual([5_000, 10_000, 20_000, 40_000, 60_000, 60_000, 60_000, 60_000]);
+    expect(waits).toEqual([5_000, 10_000, 20_000, 20_000, 20_000, 20_000, 20_000, 20_000]);
   });
   it("jitters the failure waits by 0 to 30 percent", () => {
     expect(failureWait(0, () => 0)).toBe(5_000);
     expect(failureWait(0, () => 0.999)).toBe(6_499);
-    expect(failureWait(4, () => 0.999)).toBe(77_982);
+    expect(failureWait(4, () => 0.999)).toBe(25_994);
   });
   it("treats a negative attempt as the first", () => {
     expect(failureWait(-3, () => 0)).toBe(5_000);

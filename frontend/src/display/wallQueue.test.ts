@@ -405,11 +405,11 @@ describe("createWidgetQueue: a 429 (R4)", () => {
 });
 
 describe("createWidgetQueue: failures back off (R4)", () => {
-  it("waits 5, 10, 20, 40, 60 and 60 s between the attempts of one failing job, and reports every failure", async () => {
+  it("waits 5, 10 and 20 s, then 20 s again, between the attempts of one failing job, and reports every failure", async () => {
     const t = setup({ random: () => 0, auto: () => "network" });
     t.queue.enqueue(t.job(1));
     await settle();
-    const waits = [5_000, 10_000, 20_000, 40_000, 60_000, 60_000];
+    const waits = [5_000, 10_000, 20_000, 20_000, 20_000, 20_000];
     for (const wait of waits) {
       const before = t.calls.length;
       t.clock.advance(wait - 1);
@@ -418,7 +418,7 @@ describe("createWidgetQueue: failures back off (R4)", () => {
       await settle();
       expect(t.calls).toHaveLength(before + 1);
     }
-    expect(t.calls.map((call) => call.at)).toEqual([0, 5_000, 15_000, 35_000, 75_000, 135_000, 195_000]);
+    expect(t.calls.map((call) => call.at)).toEqual([0, 5_000, 15_000, 35_000, 55_000, 75_000, 95_000]);
     expect(t.results).toHaveLength(7);
     expect(t.results.every((entry) => entry.result.kind === "failed")).toBe(true);
   });

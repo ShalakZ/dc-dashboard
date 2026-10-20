@@ -318,6 +318,20 @@ describe("the states", () => {
     expect(await screen.findByText(REVOKED)).toBeInTheDocument();
   });
 
+  it("behind the revoked sentence the wall is stopped (no timer of its own left), and starts again with the next good read", async () => {
+    stubFetch({ [PLAYLIST]: [three, 401, three] });
+    const c = clock();
+    render(<DisplayApp handle={null} {...c.props} />);
+    await onWall(3);
+    expect(c.wall.count).toBeGreaterThan(1); // the wall's tick and the page's wake heartbeat run while the wall is shown
+    await advance(c, 60_000);
+    expect(await screen.findByText(REVOKED)).toBeInTheDocument();
+    expect(c.wall.count).toBe(1); // only the page's own wake heartbeat stays; the wall's tick is gone
+    await advance(c, FIVE_MINUTES);
+    await onWall(3);
+    expect(c.wall.count).toBeGreaterThan(1);
+  });
+
   it("a 401 on the playlist right after a good claim is a revoked link too (a link was tried)", async () => {
     stubFetch({ [CLAIM]: [204], [PLAYLIST]: [401] });
     render(<DisplayApp handle={holdSecret(SECRET)} {...clock().props} />);

@@ -27,7 +27,7 @@ export const REREAD_MIN_MS = 10_000;
 /** The most widget requests of one display on the wire at once (w28 leaves ten screens about one slot each). */
 export const MAX_IN_FLIGHT = 2;
 /** The wait after the 1st, 2nd, 3rd, 4th and later failure of a request; jittered. */
-export const BACKOFF_STEPS_MS: readonly number[] = [5_000, 10_000, 20_000, 40_000, 60_000];
+export const BACKOFF_STEPS_MS: readonly number[] = [5_000, 10_000, 20_000];
 /** Every wait grows by a random 0 to 30 percent, so ten screens that failed together do not come back together. */
 export const JITTER_MAX = 0.3;
 /** A revoked link is asked about again after these waits, then never (a reload asks again). */
