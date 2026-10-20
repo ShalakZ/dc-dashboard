@@ -1,9 +1,22 @@
 @layer w6 {
-  /* w27: the first-run guide above a dashboard's cards (components/dashboard/DashboardGuide.tsx, shown by DashboardViewer.tsx). Tokens only; every selector
-     names a class this piece owns (.dash-head and .row are app.css's). */
+  /* w27: the first-run guide above a dashboard's cards (components/dashboard/DashboardGuide.tsx) and the viewer's header additions (DashboardViewer.tsx):
+     the "Updated 20:09" time with Refresh, and the title that may shrink. Tokens only; every selector names a class this piece owns (.dash-head and .row
+     are app.css's, and the clash guard in app.css.test.ts refuses a second rule for them). */
 
   .dash-guide { display: grid; gap: 8px; margin: 0 0 12px; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
   .dash-guide h2 { margin: 0; font-size: var(--fs-md); font-weight: 600; }
   .dash-guide ul { display: grid; gap: 4px; margin: 0; padding: 0 0 0 18px; font-size: var(--fs-sm); }
   .dash-guide-foot { display: flex; justify-content: flex-end; }
+
+  /* The title may be as long as the name allows (100 characters): it wraps inside the row, even a name with no space in it, and never pushes the controls out. */
+  .dash-title { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+
+  /* The time and Refresh travel together, so the pair wraps as one. The time has its room from the first paint ("Updated 00:00" is 13 characters, the digits are
+     tabular), so it appearing, or changing, moves nothing; a new range or focus dims the previous time until its answer lands. */
+  .dash-fresh { display: inline-flex; flex: none; align-items: center; gap: 4px; }
+  .dash-updated { display: inline-block; min-width: 13ch; color: var(--text-2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .dash-updated-wait { opacity: 0.55; }
+
+  /* Refresh waits with aria-disabled (it keeps the focus the click gave it): it looks idle and does nothing. */
+  .dash-fresh button[aria-disabled="true"], .dash-fresh button[aria-disabled="true"]:hover { background: none; opacity: 0.55; cursor: not-allowed; }
 }
