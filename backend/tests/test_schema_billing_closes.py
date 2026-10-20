@@ -43,6 +43,8 @@ async def fingerprints(db) -> dict[str, str | None]:
     for name in names:
         if name == "billing_closes":  # the table under test: its rows are what the downgrade loses, on purpose
             continue
+        if name == "figure_ledger":  # 0014's derived table: it exists at head and a downgrade through 0013 drops it, on purpose
+            continue
         fingerprint[name] = await db.fetchval(f'SELECT md5(string_agg(t::text, E\'\\n\' ORDER BY t::text)) FROM "{name}" t')
     return fingerprint
 
