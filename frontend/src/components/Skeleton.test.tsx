@@ -870,7 +870,22 @@ describe("WidgetSkeleton, the variants of a comparing stat and a breakdown by ki
     const rows = rowsOf(region);
     expect(rows).toHaveLength(3); // the loaded .widget-bars has the chart, .bars-note and .bars-split
     expect(rows[2]).toHaveClass("sk-split");
-    expect(rows[2].children).toHaveLength(2);
+    expect(rows[2].children).toHaveLength(2); // the label and the select: a card with no tip in its row (the editor's grid and preview)
+  });
+
+  it("draws the help button's slot between 'Split by' and the select of a live card, so the select does not move 32 px when the data lands (w27 P1)", () => {
+    const { container } = render(<WidgetSkeleton type="bar" shape="kind-bars" label="Loading Racks" tip />);
+    const row = container.querySelector(".sk-split")!;
+    expect([...row.children].map((el) => (el as HTMLElement).style.width)).toEqual(["45px", "24px", "120px"]);
+    expect(row.children[1]).toHaveClass("sk-tip");
+    // The 24 px of the placeholder is the real button's: .tip-btn in app.css (the row's 8px gap is the same in both rows, .sk-split and .bars-split).
+    expect(/\.tip-btn\s*\{[^}]*width:\s*24px[^}]*height:\s*24px/.test(readFileSync("src/app.css", "utf8"))).toBe(true);
+    const widgets = readFileSync("src/styles/widgets.css", "utf8");
+    expect(/\.widget-sk-kind \.sk-split\s*\{[^}]*gap:\s*8px/.test(widgets)).toBe(true);
+    expect(/\.bars-split\s*\{[^}]*gap:\s*8px/.test(widgets)).toBe(true);
+    // a card with no Details button (the editor) draws no tip in its loaded row, so its skeleton has no slot either
+    const loaded = render(<WidgetSkeleton type="bar" shape="kind-bars" label="Loading Racks" />).container.querySelector(".sk-split")!;
+    expect(loaded.querySelector(".sk-tip")).toBeNull();
   });
 
   it("is the plain chart box for a comparing chart, and the plain shapes for every other card", () => {

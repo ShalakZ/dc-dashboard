@@ -60,6 +60,15 @@ describe("WidgetFrame", () => {
     expect(screen.getByRole("status")).toHaveClass("widget-sk-kind");
   });
 
+  it("draws the help button's slot in the breakdown skeleton of a card that has a Details button (a live one), and none in one that has not (w27 P1)", () => {
+    const live = frame({ loading: true, type: "bar", shape: "kind-bars", details: () => {} });
+    expect(live.container.querySelector(".sk-split .sk-tip")).not.toBeNull();
+    live.unmount();
+    const editor = frame({ loading: true, type: "bar", shape: "kind-bars" });
+    expect(editor.container.querySelector(".sk-split")).not.toBeNull();
+    expect(editor.container.querySelector(".sk-tip")).toBeNull();
+  });
+
   it("reserves the footer line while loading only when asked, so the body does not shrink when a since line arrives (energy and cost)", () => {
     const { container, unmount } = frame({ loading: true, type: "stat" });
     expect(container.querySelector(".widget-foot")).toBeNull();

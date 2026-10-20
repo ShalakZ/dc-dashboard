@@ -130,7 +130,7 @@ export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint
       {csvError && <p className="error" role="alert">CSV export failed: {csvError}</p>}
       {loading ? (
         <>
-          <WidgetSkeleton type={type} shape={shape} label={`Loading ${title}`} />
+          <WidgetSkeleton type={type} shape={shape} label={`Loading ${title}`} tip={details !== undefined} />
           {footSpace && <p className="widget-foot" aria-hidden="true" />}
         </>
       ) : (

@@ -25,7 +25,7 @@ export function WidgetBody({ type, data, config, timezone, live, onKind, splitDi
   if (type === "gauge") return <GaugeWidget data={data} config={config} live={live} />;
   return (
     // The same shape the card showed while the data loaded, as a bare body: the chart chunk's wait is not a second status.
-    <Suspense fallback={<WidgetSkeleton type={type} shape={skeletonShape(type, config)} />}>
+    <Suspense fallback={<WidgetSkeleton type={type} shape={skeletonShape(type, config)} tip={!splitDisabled} />}>
       {type === "timeseries" && <TimeSeriesWidget data={data} timezone={timezone} parents={parents} />}
       {type === "bar" && <BarWidget data={data} timezone={timezone} kind={config.kind} onKind={onKind} splitDisabled={splitDisabled} parents={parents} />}
     </Suspense>
