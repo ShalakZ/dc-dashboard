@@ -23,7 +23,7 @@ those, the page or the control shows nothing. The server does not enforce these 
 | | `assets.delete` | Delete assets | risky | Delete an asset (its mappings go with it). | `assets.view` |
 | | `assets.kinds` | Manage asset kinds | risky | Create, rename, re-icon and delete asset kinds (a rename or a move changes the kind of every asset that uses it), and add the data-centre starter kinds. | `assets.edit`, `assets.view` |
 | Dashboards | `dashboards.view` | See dashboards | see | Open dashboards and their widgets, receive live values, and read the values of any point through a widget. | |
-| | `dashboards.edit` | Change dashboards | change | Create, edit and delete dashboards and their widgets. | `dashboards.view`, `assets.view`, `discovery.view` |
+| | `dashboards.edit` | Change dashboards | change | Create (from a template), edit, copy and delete dashboards and their widgets. | `dashboards.view`, `assets.view`, `discovery.view` |
 | | `dashboards.default` | Choose the default dashboard | risky | Choose the dashboard everybody lands on. | `dashboards.view` |
 | Billing and tariffs | `billing.view` | See billing | see | Open the Billing page: energy and cost per asset and month. | |
 | | `billing.export` | Export billing as CSV | risky | Download the billing table as a CSV file. | `billing.view` |
@@ -68,7 +68,15 @@ with `?asset=<id>` is ignored (the page says "This link opens the dashboard on o
 whole site."), and the server refuses a `POST /api/widget-data` or `/api/widget-data/csv` that carries a `focus` with a 403
 (`INSUFFICIENT_PERMISSION`). A request without `focus` is unchanged. **Change dashboards** lists See the Assets Tree under "Also needs"
 (the widget form picks assets), so a role with both sees the Focus button when it views a dashboard; starting a
-dashboard from Power needs only `dashboards.edit`. There is no per-asset visibility, so See the Assets Tree opens the whole tree and a
+dashboard from a template (Power, Cost, Energy by area, Last 24 hours: `POST /api/dashboards` with a `recipe`) needs only `dashboards.edit`,
+and so does the list that fills the template gallery (`GET /api/dashboard-templates`: each template, the widgets it creates and whether it
+suits this site). A role with only `dashboards.view` gets a 403 from that route, and the app shows it no **New dashboard** button, no
+gallery and, on an empty list, only the line "No dashboards yet.". Making a copy of a dashboard (`POST /api/dashboards/{id}/copy`: the same
+range and widgets under the name "<name> (copy)", counted up if that is taken) needs only `dashboards.edit` as well, counts toward
+the 50 dashboards and never becomes the default. Its button, **Make a copy**, is in the row menu of the Dashboards list, which holds
+what the role may do: **Make a copy** for `dashboards.edit` and **Make default** or **Clear default** for `dashboards.default`. An
+Operator therefore sees a menu with **Make a copy** only, an Admin sees both, a Viewer sees no menu. The first-run panel and the
+**Updated** time and **Refresh** in a dashboard's header need only `dashboards.view`. There is no per-asset visibility, so See the Assets Tree opens the whole tree and a
 focus can name any asset in it.
 
 `assets.edit` also lets a person move assets in the Assets Tree ([Moving assets](assets-and-kinds.md#moving-assets)); deleting the picked

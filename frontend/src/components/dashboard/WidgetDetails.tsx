@@ -14,7 +14,7 @@ import {
   aggregationWords, assetRows, bucketStartText, figuresText, freshnessLine, hasNoRate, isLatestReading, markerMeanings, noMetricIds,
   rangeWords, removedCount, seriesSummary, sourceWords, windowText, type AssetRow, type DetailFigure, type SeriesSummaryRow, type SummaryKey,
 } from "../../lib/widgetDetails";
-import { figureOrNoData, figureText, flagsOf, noMetricText, removedText, unitSuffix } from "../../lib/widgetFormat";
+import { figureOrNoData, figureText, flagsOf, noMetricText, removedText, unitSuffix, type ParentNames } from "../../lib/widgetFormat";
 import { Drawer } from "../Drawer";
 import { Icon } from "../Icon";
 import { PAGE_NEED } from "../navItems";
@@ -34,6 +34,8 @@ export interface WidgetDetailsProps {
   following: boolean;
   /** Present = the footer offers Download CSV, the same export as the card's button. */
   csv?: CsvSource;
+  /** The parent names of the asset list (w27 R6), the same map the card's bars and table use, so a repeated asset name reads the same everywhere; undefined = "Rack 04 (#12)". */
+  parentNames?: ParentNames;
   onClose: () => void;
   returnFocus?: () => HTMLElement | null;
 }
@@ -175,7 +177,7 @@ function SummaryCell({ column, row, states, data, timezone }: {
  * mean, and the figures as text (a chart is a picture). It is built from the answer the card already has, through the pure helpers of
  * `lib/widgetDetails.ts`, which say only what that answer proves. The ages count up every second while it is open.
  */
-export function WidgetDetails({ title, type, data, config, timezone, following, csv, onClose, returnFocus }: WidgetDetailsProps) {
+export function WidgetDetails({ title, type, data, config, timezone, following, csv, parentNames, onClose, returnFocus }: WidgetDetailsProps) {
   const now = useNow(1000);
   const { can } = useAuth();
   const queryClient = useQueryClient();
@@ -191,8 +193,8 @@ export function WidgetDetails({ title, type, data, config, timezone, following, 
   const latest = isLatestReading(data, config);
   // A reading time only means something for the latest reading of a metric (the backend's `ts` of a stat, gauge or table row)
   const fresh = data.mode === "values" && data.source === "metric" && config.aggregation === "last" && (type === "stat" || type === "gauge" || type === "table");
-  const rows: AssetRow[] = assetRows(data).map((row) => ({ ...row, states: fresh ? row.states.filter((s) => s !== "stale") : row.states })); // "stale" is the Freshness section's
-  const summary = seriesSummary(data, config);
+  const rows: AssetRow[] = assetRows(data, parentNames).map((row) => ({ ...row, states: fresh ? row.states.filter((s) => s !== "stale") : row.states })); // "stale" is the Freshness section's
+  const summary = seriesSummary(data, config, parentNames);
   const meanings = [...markerMeanings(data), ...costMarkMeanings(data)]; // the cost column of a comparison of energy has marks the card does not draw
   // The "no rate" line sits after the "~" and "*" lines (the fixed order of `markerMeanings`); it offers the page that fixes it
   // to a role that may open that page (the sidebar's own check), never to one that would be refused.

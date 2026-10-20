@@ -519,7 +519,7 @@ describe("WidgetDetails: a comparison and a breakdown (w24)", () => {
     expect(view.getByRole("heading", { name: "Comparison" })).toBeInTheDocument();
     const rows = view.getAllByRole("row").map((row) => within(row).queryAllByRole("cell").map((c) => c.textContent));
     expect(rows).toContainEqual(["This month so far", "2026-10-01 to 2026-10-17", "~12.30", "~4.50*"]);
-    expect(rows).toContainEqual(["Same days last month", "2026-09-01 to 2026-09-17", "1300.00", "260.00"]);
+    expect(rows).toContainEqual(["Same days last month", "2026-09-01 to 2026-09-17", "1,300.00", "260.00"]);
     expect(rows).toContainEqual(["Change", "", "up ~25.0 % (~+2.50 kWh)", "up ~1.00* QAR"]); // the change carries the marks of its figures (the kWh column never a star)
     expect(view.getByRole("columnheader", { name: "Cost (QAR)" })).toBeInTheDocument();
     expect(view.getByText("Cost: No percentage: some of the cost has no rate.")).toBeInTheDocument();
@@ -534,8 +534,8 @@ describe("WidgetDetails: a comparison and a breakdown (w24)", () => {
     const { dialog } = open("stat", compareStatData({ compare: compareBlock({ assets: [compareAsset({ this: side, last: compareSide({ cost: null }) })] }) }), COMPARE());
     const view = within(dialog());
     const rows = view.getAllByRole("row").map((row) => within(row).queryAllByRole("cell").map((c) => c.textContent));
-    expect(rows).toContainEqual(["This month so far", "2026-10-01 to 2026-10-17", "1500.00", "300.00*"]);
-    expect(rows).toContainEqual(["Same days last month", "2026-09-01 to 2026-09-17", "1500.00", "—"]);
+    expect(rows).toContainEqual(["This month so far", "2026-10-01 to 2026-10-17", "1,500.00", "300.00*"]);
+    expect(rows).toContainEqual(["Same days last month", "2026-09-01 to 2026-09-17", "1,500.00", "—"]);
     expect(view.getByText("* partial: some energy in the period had no rate, so the cost is incomplete")).toBeInTheDocument();
     expect(view.getByText("— no rate: no tariff applies to this figure")).toBeInTheDocument();
   });
@@ -547,7 +547,7 @@ describe("WidgetDetails: a comparison and a breakdown (w24)", () => {
     const { dialog } = open("stat", data, config({ source: "cost", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" }));
     const view = within(dialog());
     const rows = view.getAllByRole("row").map((row) => within(row).queryAllByRole("cell").map((c) => c.textContent));
-    expect(rows).toContainEqual(["Same days last month", "2026-09-01 to 2026-09-17", "1500.00", "—"]);
+    expect(rows).toContainEqual(["Same days last month", "2026-09-01 to 2026-09-17", "1,500.00", "—"]);
     expect(dialog().textContent).not.toMatch(/no rate/i);
     expect(view.queryByRole("link", { name: "Set a rate in Tariffs" })).not.toBeInTheDocument();
     expect(view.getByText("Cost: No cost comparison: the currency changed since last month closed.")).toBeInTheDocument();
@@ -586,6 +586,46 @@ describe("WidgetDetails: a comparison and a breakdown (w24)", () => {
       ["Not drawn", "10 Racks: ~40.00 kWh in all (3 with no data)"], ["With no data", "2"],
       ["Inside others", "3 Racks are inside other Racks and are counted there."],
     ]);
+  });
+
+  it("keeps the exact face on large figures: grouped digits, two decimals, never MWh, with the marks (w27)", () => {
+    const data = compareStatData({
+      values: [valueRow({ value: 275_430.2575, estimated: true, point_id: null })],
+      compare: compareBlock({
+        assets: [compareAsset({
+          this: compareSide({ kwh: 275_430.2575, cost: 33_051.6309, estimated: true }), last: compareSide({ kwh: 275_993.077, cost: 33_119.1692, estimated: true }),
+          kwh: compareChange({ abs: -562.8195, percent: -0.2039 }), cost: compareChange({ abs: -67.5383, percent: -0.2039 }),
+        })],
+      }),
+    });
+    const { dialog } = open("stat", data, COMPARE());
+    const rows = within(dialog()).getAllByRole("row").map((row) => within(row).queryAllByRole("cell").map((c) => c.textContent));
+    expect(rows).toContainEqual(["This month so far", "2026-10-01 to 2026-10-17", "~275,430.26", "~33,051.63"]);
+    expect(rows).toContainEqual(["Same days last month", "2026-09-01 to 2026-09-17", "~275,993.08", "~33,119.17"]);
+    expect(rows).toContainEqual(["Change", "", "down ~0.2 % (~-562.82 kWh)", "down ~0.2 % (~-67.54 QAR)"]);
+  });
+
+  it("writes a large change in full, with its sign and without a scale letter (w27)", () => {
+    const data = compareStatData({ compare: compareBlock({ assets: [compareAsset({ kwh: compareChange({ abs: 150_000, percent: 54.3 }), cost: compareChange({ abs: 1_234_567.891, percent: 12.5 }) })] }) });
+    const { dialog } = open("stat", data, COMPARE());
+    const rows = within(dialog()).getAllByRole("row").map((row) => within(row).queryAllByRole("cell").map((c) => c.textContent));
+    expect(rows).toContainEqual(["Change", "", "up 54.3 % (+150,000.00 kWh)", "up 12.5 % (+1,234,567.89 QAR)"]);
+  });
+
+  it("lists the bars left out of a breakdown on the exact face, with their marks (w27)", () => {
+    const data = breakdownData(3, { breakdown: breakdownBlock({ kind: "Circuit", count: 231, shown: 12, more: { count: 219, with_value: 207, value: 262_071.8, estimated: true, partial: false } }) });
+    const { dialog } = open("bar", data, KIND());
+    expect(within(dialog()).getByText("Not drawn").closest("div")!.querySelector("dd")!.textContent).toBe("219 Circuits: ~262,071.80 kWh in all (12 with no data)");
+  });
+
+  it("prints the per-asset value column of a large bar chart the same way: separators, two decimals, marks (w27)", () => {
+    const data = valuesData({
+      type: "bar", source: "energy", metric: null, unit: "kWh",
+      values: [valueRow({ name: "Hall 1", value: 138_130.96, point_id: null }), valueRow({ asset_id: 6, name: "Hall 2", value: 150_503.32, estimated: true, point_id: null })],
+    });
+    const { dialog } = open("bar", data, config({ source: "energy", metric: null, aggregation: "sum" }));
+    const table = within(dialog()).getByRole("table");
+    expect(within(table).getAllByRole("row").slice(1).map(cellsOf)).toEqual([["Hall 1", "138,130.96"], ["Hall 2estimated", "~150,503.32"]]);
   });
 
   it("says the whole site when there is no root, and leaves out the rows that have nothing to say", () => {

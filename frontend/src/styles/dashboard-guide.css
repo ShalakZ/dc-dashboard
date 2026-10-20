@@ -1,0 +1,31 @@
+@layer w6 {
+  /* w27: the first-run guide above a dashboard's cards (components/dashboard/DashboardGuide.tsx) and the viewer's header additions (DashboardViewer.tsx):
+     the "Updated 20:09" time with Refresh, and the title that may shrink. Tokens only; every selector names a class this piece owns (.dash-head and .row
+     are app.css's, and the clash guard in app.css.test.ts refuses a second rule for them). */
+
+  .dash-guide { display: grid; gap: 8px; margin: 0 0 12px; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+  .dash-guide h2 { min-width: 0; margin: 0; font-size: var(--fs-md); font-weight: 600; }
+  .dash-guide ul { display: grid; gap: 4px; margin: 0; padding: 0 0 0 18px; font-size: var(--fs-sm); }
+  /* w27 P1: the heading at the left and Got it at the right of one row, so the panel has no row of its own for the button (it was 40px taller). */
+  .dash-guide-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+  .dash-guide-head button { flex: none; }
+
+  /* The title may be as long as the name allows (100 characters): it wraps inside the row, even a name with no space in it, and never pushes the controls out. */
+  .dash-title { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+
+  /* w27 P1: every control of the header is in ONE group at the right of the row. The row (.dash-head, a wrapping flex row) puts the group beside the title when both
+     fit, else under it as a unit, still at the right: no control is ever left alone on a line of its own. The group has two parts, and breaks between them only when
+     it alone is wider than the row (a narrow window with the sidebar open); a part never wraps inside itself, and in the second the focus link (which may be cut with an
+     ellipsis, focus-header.css) gives way, so it does not push Edit to a line of its own. CSS only: nothing measures a width. */
+  .dash-controls { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; max-width: 100%; margin-left: auto; }
+  .dash-info, .dash-view { display: flex; flex: 0 1 auto; flex-wrap: nowrap; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+
+  /* The time and Refresh travel together, so the pair wraps as one. The time has its room from the first paint ("Updated 00:00" is 13 characters, the digits are
+     tabular), so it appearing, or changing, moves nothing; a new range or focus dims the previous time until its answer lands. */
+  .dash-fresh { display: inline-flex; flex: none; align-items: center; gap: 4px; }
+  .dash-updated { display: inline-block; min-width: 13ch; color: var(--text-2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .dash-updated-wait { opacity: 0.55; }
+
+  /* Refresh waits with aria-disabled (it keeps the focus the click gave it): it looks idle and does nothing. */
+  .dash-fresh button[aria-disabled="true"], .dash-fresh button[aria-disabled="true"]:hover { background: none; opacity: 0.55; cursor: not-allowed; }
+}

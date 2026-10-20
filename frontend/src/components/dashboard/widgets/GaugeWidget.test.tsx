@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { pickScale } from "../../../lib/figures";
 import { config, valueRow, valuesData } from "../../../test/dashboardFixtures";
 import { LiveValuesContext } from "../LiveValuesContext";
 import { GaugeWidget, gaugeFigure, gaugeFillPath, gaugeShare, scaleText } from "./GaugeWidget";
@@ -56,14 +57,23 @@ describe("gaugeFillPath: the filled part of the arc, a path of its own (a dash w
 });
 
 describe("scaleText: the ends of the scale are settings, written as the config states them", () => {
-  it("drops the decimals of a whole number and keeps at most two of any other", () => {
+  it("drops the decimals of a whole number and keeps the decimals of any other", () => {
     expect(scaleText(0)).toBe("0");
     expect(scaleText(200)).toBe("200");
     expect(scaleText(49)).toBe("49");
     expect(scaleText(0.5)).toBe("0.5");
-    expect(scaleText(0.125)).toBe("0.13");
+    expect(scaleText(0.125)).toBe("0.125"); // a scale end keeps the decimals of its own value (w27 review 2)
     expect(scaleText(-10)).toBe("-10");
     expect(scaleText(-0)).toBe("0");
+  });
+
+  it("groups the digits of a long end and divides by the gauge's scale (w27, the tick face)", () => {
+    expect(scaleText(2000)).toBe("2,000");
+    expect(scaleText(1234567.5)).toBe("1,234,567.5");
+    expect(scaleText(20000, 1000)).toBe("20");
+    expect(scaleText(250000, 1000)).toBe("250");
+    expect(scaleText(500, 1000)).toBe("0.5");
+    expect(scaleText(0, 1000)).toBe("0");
   });
 });
 
@@ -73,6 +83,18 @@ describe("gaugeFigure: the strings the figure shows (the ones the ECharts detail
     expect(gaugeFigure({ value: 12.5, unit: "kW", estimated: true, partial: true })).toEqual({ num: "~12.50*", unit: " kW" });
     expect(gaugeFigure({ value: 0.9, unit: "" })).toEqual({ num: "0.90", unit: "" });
     expect(gaugeFigure({ value: 3, unit: null })).toEqual({ num: "3.00", unit: "" });
+  });
+  it("is on the card face: separators below 10,000, no decimals up to 100,000, then the next unit", () => {
+    expect(gaugeFigure({ value: 1500, unit: "kW" })).toEqual({ num: "1,500.00", unit: " kW" });
+    expect(gaugeFigure({ value: 33051.6309, unit: "kW" })).toEqual({ num: "33,052", unit: " kW" });
+    expect(gaugeFigure({ value: 275430.2575, unit: "kW", estimated: true })).toEqual({ num: "~275.43", unit: " MW" });
+    expect(gaugeFigure({ value: 12345.678, unit: "V" })).toEqual({ num: "12,345.68", unit: " V" }); // a voltage never scales
+  });
+  it("prints a figure in the scale it is given, and a non-number as the dash with no unit", () => {
+    const mw = pickScale("energy", "kW", [0, 200000]);
+    expect(gaugeFigure({ value: 150000, unit: "kW", scale: mw })).toEqual({ num: "150.00", unit: " MW" });
+    expect(gaugeFigure({ value: Number.NaN, unit: "kW" })).toEqual({ num: "—", unit: "" });
+    expect(gaugeFigure({ value: Number.POSITIVE_INFINITY, unit: "kW", noData: true })).toEqual({ num: "no data", unit: "" });
   });
   it("says 'no data' for a metric that recorded nothing, the dash for a missing value, and never a unit after either", () => {
     expect(gaugeFigure({ value: null, unit: "kW", noData: true })).toEqual({ num: "no data", unit: "" });
@@ -103,6 +125,53 @@ describe("the gauge is a meter", () => {
     gaugeOf(valuesData({ type: "gauge", values: [valueRow({ value: -5 })] }));
     expect(screen.getByRole("meter")).toHaveAttribute("aria-valuenow", "0");
     expect(screen.getByRole("meter")).toHaveAttribute("aria-valuetext", "-5.00 kW, below the scale");
+  });
+
+  it("reads the figure, the two ends and the spoken values in ONE scale picked over value, min and max (w27 review 18)", () => {
+    const { container } = gaugeOf(valuesData({ type: "gauge", values: [valueRow({ value: 150000 })] }), config({ aggregation: "last", min: 0, max: 200000 }));
+    const meter = screen.getByRole("meter");
+    expect([...container.querySelectorAll(".gauge-scale > *")].map((e) => e.textContent)).toEqual(["0", "200 MW"]);
+    expect(figure(container)).toHaveTextContent("150.00 MW");
+    expect(meter).toHaveAttribute("aria-valuemin", "0");
+    expect(meter).toHaveAttribute("aria-valuemax", "200");
+    expect(meter).toHaveAttribute("aria-valuenow", "150");
+    expect(meter).toHaveAttribute("aria-valuetext", "150.00 MW");
+    expect(figure(container)).toHaveAttribute("title", "150,000.00 kW"); // the exact value, in the base unit
+  });
+
+  it("prints a scale end that is not round with its own decimals, the same number the aria values carry (w27 review 2: 12,345 kW as 12.345 MW, never 12.35)", () => {
+    const { container } = gaugeOf(valuesData({ type: "gauge", values: [valueRow({ value: 150000 })] }), config({ aggregation: "last", min: 12345, max: 200000 }));
+    expect([...container.querySelectorAll(".gauge-scale > *")].map((e) => e.textContent)).toEqual(["12.345", "200 MW"]);
+    expect(screen.getByRole("meter")).toHaveAttribute("aria-valuemin", "12.345");
+  });
+
+  it("lets a max that is bigger than the figure decide the unit: 10.50 kW on a 0 to 200,000 kW dial reads 0.01 MW (one unit for all three numbers)", () => {
+    const { container } = gaugeOf(valuesData({ type: "gauge" }), config({ aggregation: "last", min: 0, max: 200000 }));
+    expect([...container.querySelectorAll(".gauge-scale > *")].map((e) => e.textContent)).toEqual(["0", "200 MW"]);
+    expect(figure(container)).toHaveTextContent("0.01 MW");
+    expect(figure(container)).toHaveAttribute("title", "10.50 kW");
+    expect(screen.getByRole("meter")).toHaveAttribute("aria-valuemax", "200");
+  });
+
+  it("groups the digits of the figure and the ends below the next unit: 1,500.00 kW on a 0 to 2,000 kW dial", () => {
+    const { container } = gaugeOf(valuesData({ type: "gauge", values: [valueRow({ value: 1500 })] }), config({ aggregation: "last", min: 0, max: 2000 }));
+    expect([...container.querySelectorAll(".gauge-scale > *")].map((e) => e.textContent)).toEqual(["0", "2,000 kW"]);
+    expect(figure(container)).toHaveTextContent("1,500.00 kW");
+    expect(screen.getByRole("meter")).toHaveAttribute("aria-valuetext", "1,500.00 kW");
+    expect(screen.getByRole("meter")).toHaveAttribute("aria-valuemax", "2000");
+  });
+
+  it("never scales a unit that is not energy or power", () => {
+    const { container } = gaugeOf(valuesData({ type: "gauge", unit: "V", values: [valueRow({ value: 12345.678 })] }), config({ aggregation: "last", min: 0, max: 50000 }));
+    expect([...container.querySelectorAll(".gauge-scale > *")].map((e) => e.textContent)).toEqual(["0", "50,000 V"]);
+    expect(figure(container)).toHaveTextContent("12,345.68 V");
+  });
+
+  it("treats a figure that is not a number as missing: the dash, an image, no fill", () => {
+    const { container } = gaugeOf(valuesData({ type: "gauge", values: [valueRow({ value: Number.NaN })] }));
+    expect(figure(container)).toHaveTextContent(/^—$/);
+    expect(screen.queryByRole("meter")).not.toBeInTheDocument();
+    expect(fill(container)).toBeNull();
   });
 
   it("is an image, with no reading attributes, when there is no value", () => {
@@ -218,20 +287,41 @@ describe("the gauge when there is no figure", () => {
   });
 });
 
+describe("the figure's size (w27 R5) and its look as a measured figure", () => {
+  it("never styles a measured figure as no data, though it carries its exact value as a title", () => {
+    const { container } = gaugeOf();
+    expect(figure(container)).toHaveAttribute("title", "10.50 kW");
+    expect(figure(container)).not.toHaveClass("none");
+  });
+
+  it("passes the character count of the figure and its unit to the stylesheet, which sizes the figure from them and the card's width", () => {
+    const { container } = gaugeOf();
+    expect(figure(container).style.getPropertyValue("--fig-chars")).toBe("5"); // "10.50"
+    expect(figure(container).style.getPropertyValue("--fig-unit")).toBe("2"); // "kW"
+  });
+
+  it("counts at least one character for a figure with none, and none for the unit of a dash", () => {
+    const { container } = gaugeOf(valuesData({ type: "gauge", values: [valueRow({ value: null })] }));
+    expect(figure(container).style.getPropertyValue("--fig-chars")).toBe("1"); // "—"
+    expect(figure(container).style.getPropertyValue("--fig-unit")).toBe("0");
+  });
+});
+
 describe("the figure and the name", () => {
   it("shows a measured figure in the normal colour, its unit apart, and the asset name below it", () => {
     const { container } = gaugeOf();
     expect(figure(container)).toHaveTextContent("10.50 kW");
     expect(figure(container)).not.toHaveClass("muted");
-    expect(figure(container)).not.toHaveAttribute("title");
+    expect(figure(container)).toHaveAttribute("title", "10.50 kW"); // the exact value with its unit
     expect(screen.getByText("10.50")).toHaveClass("stat-num");
     expect(screen.getByText("kW")).toHaveClass("stat-unit");
     expect(container.querySelector(".gauge-name")).toHaveTextContent("LV Panel 1");
   });
 
-  it("draws a measured figure's markers", () => {
-    gaugeOf(valuesData({ type: "gauge", values: [valueRow({ estimated: true, partial: true })] }));
+  it("draws a measured figure's markers, and its title keeps them", () => {
+    const { container } = gaugeOf(valuesData({ type: "gauge", values: [valueRow({ estimated: true, partial: true })] }));
     expect(screen.getByText("~10.50*")).toBeInTheDocument();
+    expect(figure(container)).toHaveAttribute("title", "~10.50* kW");
   });
 
   it("dims a stale figure and says how old it is, after the name", () => {

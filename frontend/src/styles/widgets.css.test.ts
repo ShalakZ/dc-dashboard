@@ -33,6 +33,7 @@ const TOKENS: Array<[name: string, light: string, dark: string]> = [
   ["widget-row-h", "32px", "32px"],
   ["widget-figure", "28px", "28px"],
   ["widget-figure-sm", "20px", "20px"],
+  ["widget-figure-max", "48px", "48px"],
   ["widget-unit-fs", "13px", "13px"],
   ["widget-handle", "#868fa0", "#6f7888"],
   ["widget-preview-h", "260px", "260px"],
@@ -267,18 +268,68 @@ describe("styles/widgets.css", () => {
       expect(css).not.toMatch(/:disabled/);
     });
 
-    it("every @container rule uses the container's own name and one of the two thresholds", () => {
+    it("every @container rule uses the container's own name and one of the three thresholds (the third, 360px, is where a comparing stat sets its two months side by side, w27)", () => {
       const queries = new Set(rules.flatMap((r) => r.at.filter((a) => a.startsWith("@container"))));
-      expect([...queries].sort()).toEqual(["@container widget (max-width: 199.98px)", "@container widget (max-width: 279.98px)"]);
+      expect([...queries].sort()).toEqual(["@container widget (max-width: 199.98px)", "@container widget (max-width: 279.98px)", "@container widget (min-width: 360px)"]);
     });
 
-    it("an unknown width never decides a size: the figure is 28px and 20px under 200px, the arc's stroke a fifth thinner (10px and 8px)", () => {
-      expect(bodyOf(".stat .big")).toMatch(/font-size:\s*var\(--widget-figure\)/);
-      expect(bodyOf(".stat .big", inContainer("max-width: 199.98px"))).toMatch(/font-size:\s*var\(--widget-figure-sm\)/);
-      expect(bodyOf(".gauge-figure")).toMatch(/font-size:\s*var\(--widget-figure\)/);
-      expect(bodyOf(".gauge-figure", inContainer("max-width: 199.98px"))).toMatch(/font-size:\s*var\(--widget-figure-sm\)/);
+    it("an unknown width never decides a size: the arc's stroke is a fifth thinner under 200px (10px and 8px), and the figure no longer has a fixed size of its own (it is the clamp below)", () => {
+      expect(bodyOf(".stat .big"), "the figure's rule has no fixed size").not.toMatch(/font-size/);
+      expect(bodyOf(".gauge-figure"), "the figure's rule has no fixed size").not.toMatch(/font-size/);
+      expect(bodyOf(".stat .big", inContainer("max-width: 199.98px")), "the narrow card has no fixed figure size").toBe("");
+      expect(bodyOf(".gauge-figure", inContainer("max-width: 199.98px")), "the narrow card has no fixed figure size").toBe("");
       expect(bodyOf(".gauge-track, .gauge-fill")).toMatch(/stroke-width:\s*var\(--gauge-width\)/);
       expect(bodyOf(".gauge-track, .gauge-fill", inContainer("max-width: 199.98px"))).toMatch(/stroke-width:\s*calc\(var\(--gauge-width\) \* 0\.8\)/);
+    });
+  });
+
+  // w27 R5: the stat and gauge figure uses its card. It is the largest size that keeps the figure and its unit on one line in the card's own width, from the small token up to the
+  // new max token. The width is the `widget` container's (cqi); the component passes the counts (--fig-chars, --fig-unit), never a measured width.
+  describe("the figure's size (w27 R5)", () => {
+    const size = bodyOf(".stat .big, .gauge-figure, .widget-sk");
+
+    it("is a clamp from --widget-figure-sm to --widget-figure-max over the card's width (cqi) divided by the figure's character count, and the figure's font-size is that clamp", () => {
+      expect(size).toMatch(/--fig-size:\s*clamp\(/);
+      expect(size).toMatch(/var\(--widget-figure-sm\)/);
+      expect(size).toMatch(/cqi/);
+      expect(size).toMatch(/\/\s*\(var\(--fig-chars/);
+      expect(size).toMatch(/var\(--fig-unit/);
+      expect(size).toMatch(/var\(--fig-max,\s*var\(--widget-figure-max\)\)/);
+      expect(bodyOf(".stat .big, .gauge-figure")).toMatch(/font-size:\s*var\(--fig-size\)/);
+    });
+
+    it("keeps the small size as its floor while the bare figure fits at it (the unit may drop under it); only a figure too long for its card even then gets smaller, to the body text size at the least", () => {
+      expect(size).toMatch(/--fig-bare:/);
+      expect(size).toMatch(/clamp\(min\(var\(--widget-figure-sm\), max\(var\(--fs-base\), var\(--fig-bare\)\)\), var\(--fig-fit\)/);
+    });
+
+    it("asks nothing of a script: no width is measured, the counts are inline custom properties with a default", () => {
+      expect(size).toMatch(/var\(--fig-chars,\s*\d+\)/);
+      expect(size).toMatch(/var\(--fig-unit,\s*\d+\)/);
+      expect(css).not.toMatch(/ResizeObserver|offsetWidth|getBoundingClientRect/);
+    });
+
+    it("a stale reading (its age line takes room), a comparing stat stacked under 360px and the gauge (its dial takes the height) keep the old 28px as their top; the two months side by side may use the max, sharing the width", () => {
+      expect(bodyOf(".stat:has(> .stat-age), .stat-compare, .widget-sk-compare, .widget-sk[data-type=\"gauge\"], .gauge")).toMatch(/--fig-max:\s*var\(--widget-figure\)/);
+      const side = bodyOf(".stat-compare, .widget-sk-compare", inContainer("min-width: 360px"));
+      expect(side).toMatch(/--fig-max:\s*var\(--widget-figure-max\)/);
+      expect(side).toMatch(/--fig-gutter:\s*\d+px/);
+      expect(side).toMatch(/--fig-share:\s*0\.\d+/);
+      expect(side).toMatch(/display:\s*grid/);
+      expect(bodyOf(".stat:has(> .stat-age)", inContainer("min-width: 360px")), "the age line's cap is not undone by the wide rule (it is more specific than .stat-compare)").toBe("");
+    });
+
+    it("the skeleton's figure row reads the same clamp with a typical count, so it is as tall as a typical figure's row", () => {
+      expect(bodyOf(".widget-sk")).toMatch(/--fig-chars:\s*9/);
+      expect(bodyOf('.widget-sk[data-type="gauge"]')).toMatch(/--fig-chars:\s*5/);
+    });
+  });
+
+  describe("a figure that recorded nothing is the only one styled as no data (w27 regression: every titled figure drew small and grey)", () => {
+    it("is keyed on the class, never on a title: the exact value is the title of EVERY measured figure", () => {
+      expect(css).not.toMatch(/\[title/);
+      expect(bodyOf(".stat .big.none")).toMatch(/font-size:\s*var\(--fs-sm\)/);
+      expect(bodyOf(".gauge-figure.none")).toMatch(/font-size:\s*var\(--fs-sm\)/);
     });
   });
 
@@ -298,7 +349,7 @@ describe("styles/widgets.css", () => {
       expect(bodyOf(".stat .big.muted")).toMatch(/color:\s*var\(--stale\)/);
       expect(bodyOf(".stat .stat-unit, .gauge-figure .stat-unit")).toMatch(/font-size:\s*var\(--widget-unit-fs\)/);
       expect(bodyOf(".stat .stat-unit, .gauge-figure .stat-unit")).toMatch(/color:\s*var\(--text-2\)/);
-      const none = bodyOf(".stat .big.none, .stat .big[title]");
+      const none = bodyOf(".stat .big.none");
       expect(none).toMatch(/font-size:\s*var\(--fs-sm\)/);
       expect(none).toMatch(/font-weight:\s*400/);
       expect(none).toMatch(/color:\s*var\(--text-2\)/);
@@ -558,6 +609,7 @@ describe("styles/widgets.css, the comparison and the breakdown (w24)", () => {
     for (const cls of [
       "stat-compare", "stat-window", "stat-last", "stat-last-label", "stat-last-fig", "stat-change", "stat-note", "stat-nothing",
       "widget-bars", "bars-note", "bars-split", "widget-sk-compare", "widget-sk-kind", "sk-compare-last", "sk-split",
+      "sk-fig", "sk-name", "sk-win", "sk-lastwin", "sk-change", "sk-note",
     ]) expect(named.has(cls), `.${cls}`).toBe(true);
   });
 
@@ -593,6 +645,48 @@ describe("styles/widgets.css, the comparison and the breakdown (w24)", () => {
     const fig = bodyOf(".stat-last-fig");
     expect(prop(fig, "max-width"), "alone on its line the figure may take the whole row").toBe("100%");
     expect(prop(fig, "flex"), "the figure is not pinned to its size beside the label").toBeUndefined();
+  });
+
+  it("sets this month and the same days last month side by side from a body of 360px, in CSS only: the same seven elements placed by grid areas, the change and the note under both (w27 R5)", () => {
+    const wide = inContainer("min-width: 360px");
+    const grid = bodyOf(".stat-compare, .widget-sk-compare", wide);
+    expect(prop(grid, "display")).toBe("grid");
+    expect(prop(grid, "grid-template-columns"), "the right column is never narrower than its label (w27 FA)").toBe("minmax(0, 3fr) minmax(var(--stat-last-min), 2fr)");
+    expect(prop(grid, "grid-template-areas")).toBe('"fig last" "name lastwin" "age ." "win ." "change change" "note note"');
+    expect(prop(grid, "--fig-share"), "the headline's room is its 3 of the 5 parts left after the gutter").toBe("0.6");
+    expect(prop(grid, "--fig-gutter")).toBe(prop(grid, "column-gap"));
+    const place = (selector: string) => prop(bodyOf(selector, wide), "grid-area");
+    expect(place(".stat-compare > .big, .widget-sk-compare > .sk-fig")).toBe("fig");
+    expect(place(".stat-compare > .stat-name, .widget-sk-compare > .sk-name")).toBe("name");
+    expect(place(".stat-compare > .stat-age")).toBe("age");
+    expect(place(".stat-compare > .stat-window, .widget-sk-compare > .sk-win")).toBe("win");
+    expect(place(".stat-compare > .stat-last, .widget-sk-compare > .sk-compare-last")).toBe("last");
+    expect(place(".stat-compare > .stat-last + .stat-window, .widget-sk-compare > .sk-lastwin")).toBe("lastwin");
+    expect(place(".stat-compare > .stat-change, .widget-sk-compare > .sk-change")).toBe("change");
+    expect(place(".stat-compare > .stat-note, .widget-sk-compare > .sk-note")).toBe("note");
+    expect(prop(bodyOf(".stat-compare > .stat-nothing", wide), "grid-column"), "the 'nothing yet' sentence takes the whole width").toBe("1 / -1");
+    expect(prop(bodyOf(".stat-compare > .stat-last, .widget-sk-compare > .sk-compare-last", wide), "flex-direction"), "label over figure in the narrower column").toBe("column");
+    // under 360px nothing of this applies: the old stack, the unchanged 2px gap and wrapping row
+    expect(rules.filter((r) => /stat-compare|widget-sk-compare/.test(r.selector) && /grid-area|grid-template|display:\s*grid/.test(r.body) && !r.at.some((a) => a.includes("min-width: 360px")))).toEqual([]);
+  });
+
+  // w27 FA (review finding 11): "Same days last month" is 146 px at 13px, and the right column's 2 of 5 parts is 143 px in a 3 wide card at 1920 (and 132 px in a 4 wide one at 1440), so the label
+  // painted 3 px (14 px) into the gutter: `overflow: visible; text-overflow: clip`, as the label is never cut. The column is never narrower than the label, and the headline's room is what is left.
+  it("keeps the right column of the side by side comparison as wide as the label 'Same days last month', and gives the headline only what that leaves", () => {
+    const wide = inContainer("min-width: 360px");
+    const grid = bodyOf(".stat-compare, .widget-sk-compare", wide);
+    const label = prop(grid, "--stat-last-min")!;
+    expect(label, "the label's width as an em count of its own size (--fs-sm), 11.2 em measured in the widest fallback font").toBe("calc(var(--fs-sm) * 11.4)");
+    expect(11.4 * 13, "at least the 146 px measured").toBeGreaterThanOrEqual(146);
+    // The headline: its 3 of 5 parts, but never more than the width the label's column leaves (the figure is nowrap; a wider one would run into the gutter).
+    const room = prop(bodyOf(".stat-compare > .big, .widget-sk-compare", wide), "--fig-room")!;
+    expect(room).toContain("min(");
+    expect(room).toContain("var(--fig-share)");
+    expect(room).toContain("var(--stat-last-min)");
+    expect(room).toContain("var(--fig-gutter)");
+    // Under 360px the stack keeps the old room: no minimum column anywhere outside the container rule.
+    expect(rules.filter((r) => /stat-last-min/.test(r.body) && !r.at.some((a) => a.includes("min-width: 360px")))).toEqual([]);
+    expect(prop(bodyOf(".stat-last-label"), "white-space")).toBe("nowrap");
   });
 
   it("makes the Split by select a 28px control at the small size, in a row of its own, with its label not the app's bold grid", () => {

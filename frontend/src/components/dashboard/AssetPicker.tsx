@@ -1,10 +1,11 @@
-import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { memo, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { Asset } from "../../api/types";
 import {
   ancestorsOf, buildPickerModel, chipText, countsBelow, filterPicker, isFolded, pickAllUnder, sameAssets, visibleRows,
   type PickerNode,
 } from "../../lib/pickerModel";
 import { Icon } from "../Icon";
+import { InfoTip } from "../InfoTip";
 
 // The helpers live in lib/pickerRows.ts; they stay importable from here for the pages and dialogs that use them.
 export { assetLabels, assetOptions, pickerLabel, pickerRows } from "../../lib/pickerRows";
@@ -26,6 +27,8 @@ interface Props {
   empty?: string;
   /** The legend (default "Asset" when single, else "Assets"). */
   label?: string;
+  /** A help bubble beside the legend (w27: the Focus dialog's). The group keeps the legend's words alone as its name; the tip's button is not part of it. */
+  tip?: ReactNode;
 }
 
 /** Rows drawn at first, and how many more each "Show more" adds: a long list stays quick to draw. */
@@ -109,8 +112,9 @@ const Row = memo(function Row({ node, single, group, checked, disabled, note, fo
  * The asset field of the widget editor: a search box and a kind filter over a folded tree of checkboxes (radios when single), the picks as
  * removable chips, and "Pick all under" a row. A name used twice shows its parent path to a screen reader. It knows nothing of widget forms.
  */
-export function AssetPicker({ assets, selected, onChange, single, max, tree, notes, empty = "No assets yet.", label }: Props) {
+export function AssetPicker({ assets, selected, onChange, single, max, tree, notes, empty = "No assets yet.", label, tip }: Props) {
   const group = useId();
+  const legendText = useId();
   const stableAssets = useStableAssets(assets);
   const stableTree = useStableAssets(tree ?? assets);
   const model = useMemo(() => buildPickerModel(stableAssets, stableTree), [stableAssets, stableTree]);
@@ -236,8 +240,10 @@ export function AssetPicker({ assets, selected, onChange, single, max, tree, not
   const removable = !single || selected.length > 1;
 
   return (
-    <fieldset className="asset-picker" onFocus={(e) => { lastFocus.current = e.target as HTMLElement; }}>
-      <legend>{label ?? (single ? "Asset" : "Assets")}</legend>
+    <fieldset className="asset-picker" aria-labelledby={tip ? legendText : undefined} onFocus={(e) => { lastFocus.current = e.target as HTMLElement; }}>
+      <legend>
+        {tip ? <><span id={legendText}>{label ?? (single ? "Asset" : "Assets")}</span> <InfoTip>{tip}</InfoTip></> : (label ?? (single ? "Asset" : "Assets"))}
+      </legend>
       {model.nodes.length === 0 ? (
         <p className="muted">{empty}</p>
       ) : (

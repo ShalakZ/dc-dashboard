@@ -1,12 +1,45 @@
 import {
   breakdownBlock, breakdownData, compareAsset, compareBlock, compareChange, compareSeriesData, compareSide, compareStatData, seriesData, seriesPoint, valueRow, valuesData,
 } from "../test/dashboardFixtures";
+import { familyOf, pickScale } from "./figures";
 import {
-  ageText, chartLabels, escapeHtml, figureOrNoData, figureText, flagsOf, formatValue, labelBucket, markerHint, noMetricText, removedText, shortLabel,
-  shortLabels, sinceText, skeletonShape, uniqueLabels, unitSuffix,
+  ageText, cardFigureOrNoData, chartLabels, escapeHtml, figureOrNoData, figureText, flagsOf, formatValue, labelBucket, markerHint, noMetricText, removedText, shortLabel,
+  hasRepeatedNames, parentNamesOf, shortLabels, sinceText, skeletonShape, uniqueLabels, unitSuffix,
 } from "./widgetFormat";
 
 const none = { estimated: false, partial: false };
+
+describe("figureText is the exact face (w27)", () => {
+  it("groups the digits and keeps two decimals, never scaling: 1,234.50 and ~275,430.26", () => {
+    expect(figureText(1234.5, none)).toBe("1,234.50");
+    expect(figureText(275430.2575, { estimated: true, partial: false })).toBe("~275,430.26");
+    expect(figureText(-1234.5, none)).toBe("-1,234.50");
+    expect(figureText(1234567.891, { estimated: false, partial: true })).toBe("1,234,567.89*");
+  });
+  it("prints a zero without a minus and a non-number as the dash", () => {
+    expect(figureText(-0.004, none)).toBe("0.00");
+    expect(figureText(Number.NaN, none)).toBe("—");
+    expect(figureText(Number.POSITIVE_INFINITY, { estimated: true, partial: true })).toBe("—");
+  });
+});
+
+describe("cardFigureOrNoData is the card face of figureOrNoData (w27)", () => {
+  const kwh = (value: number) => pickScale(familyOf("kWh", "energy"), "kWh", [value]);
+  it("scales a figure, keeps its marks and puts no unit behind it", () => {
+    expect(cardFigureOrNoData(275430.2575, { estimated: true, partial: false }, false, "energy", kwh(275430.2575))).toBe("~275.43");
+    expect(cardFigureOrNoData(33051.6309, none, false, "energy", kwh(33051.6309))).toBe("33,052");
+    expect(cardFigureOrNoData(275430.26, { estimated: false, partial: true }, false, "cost", pickScale("cost", "QAR", [275430.26]))).toBe("275.43k*");
+  });
+  it("says 'no data' for a metric that recorded nothing and the dash for any other missing figure, with no scaling", () => {
+    expect(cardFigureOrNoData(null, none, true, "metric", kwh(0))).toBe("no data");
+    expect(cardFigureOrNoData(null, none, false, "metric", kwh(0))).toBe("—");
+    expect(cardFigureOrNoData(null, none, true, "cost", pickScale("cost", "QAR", [0]))).toBe("—");
+    expect(cardFigureOrNoData(Number.NaN, none, false, "energy", kwh(0))).toBe("—");
+  });
+  it("shows a muted zero as a figure, as figureOrNoData does", () => {
+    expect(cardFigureOrNoData(0, none, true, "energy", kwh(0))).toBe("0.00");
+  });
+});
 
 describe("figureText", () => {
   it("shows two decimals, ~ in front of an estimated figure and * behind a partial one", () => {
@@ -67,6 +100,52 @@ describe("markers and labels", () => {
     ];
     expect(uniqueLabels(rows)).toEqual(["Panel (#1)", "Panel (#2)", "Main"]);
     expect(chartLabels(rows)).toEqual(["Panel (#1)", "Panel (#2) ~", "Main *"]);
+  });
+  it("gives a repeated name its parent's name when the parents are known, and leaves a unique name alone (w27 R6)", () => {
+    const rows = [
+      { asset_id: 12, name: "Rack 04", estimated: false, partial: false },
+      { asset_id: 13, name: "Rack 04", estimated: true, partial: false },
+      { asset_id: 20, name: "Main", estimated: false, partial: true },
+    ];
+    const parents = new Map([[12, "Hall 2"], [13, "Hall 3"], [20, "Site"]]);
+    expect(uniqueLabels(rows, parents)).toEqual(["Hall 2 / Rack 04", "Hall 3 / Rack 04", "Main"]);
+    expect(chartLabels(rows, parents)).toEqual(["Hall 2 / Rack 04", "Hall 3 / Rack 04 ~", "Main *"]);
+  });
+  it("falls back to (#id) for the assets that are still ambiguous after the parent's name: three assets, one name, two share a parent", () => {
+    const rows = [12, 13, 14].map((asset_id) => ({ asset_id, name: "Rack 04", estimated: false, partial: false }));
+    const parents = new Map([[12, "Hall 2"], [13, "Hall 3"], [14, "Hall 3"]]);
+    expect(uniqueLabels(rows, parents)).toEqual(["Hall 2 / Rack 04", "Hall 3 / Rack 04 (#13)", "Hall 3 / Rack 04 (#14)"]);
+    expect(chartLabels(rows.map((r, i) => ({ ...r, estimated: i === 2 })), parents)).toEqual(["Hall 2 / Rack 04", "Hall 3 / Rack 04 (#13)", "Hall 3 / Rack 04 (#14) ~"]);
+  });
+  it("is today's text without the parents, with an empty list, and for an asset whose parent is not known", () => {
+    const rows = [12, 13].map((asset_id) => ({ asset_id, name: "Rack 04" }));
+    const today = ["Rack 04 (#12)", "Rack 04 (#13)"];
+    expect(uniqueLabels(rows)).toEqual(today);
+    expect(uniqueLabels(rows, undefined)).toEqual(today);
+    expect(uniqueLabels(rows, new Map())).toEqual(today);
+    expect(uniqueLabels(rows, new Map([[99, "Elsewhere"]]))).toEqual(today);
+    // one known parent and one top-level asset: the bare name and the parent form already differ
+    expect(uniqueLabels(rows, new Map([[13, "Hall 3"]]))).toEqual(["Rack 04", "Hall 3 / Rack 04"]);
+  });
+  it("never lets the parent form collide with another label", () => {
+    const rows = [{ asset_id: 1, name: "Rack 04" }, { asset_id: 2, name: "Rack 04" }, { asset_id: 3, name: "Hall 2 / Rack 04" }];
+    expect(uniqueLabels(rows, new Map([[1, "Hall 2"], [2, "Hall 3"]]))).toEqual(["Hall 2 / Rack 04 (#1)", "Hall 3 / Rack 04", "Hall 2 / Rack 04 (#3)"]);
+  });
+  it("reads the parent names from the asset list: only an asset whose parent is in the list gets one", () => {
+    const asset = (id: number, parent_id: number | null, name: string) => ({ id, parent_id, name, kind: "rack", sort_order: id });
+    const parents = parentNamesOf([asset(1, null, "Site"), asset(2, 1, "Hall 2"), asset(12, 2, "Rack 04"), asset(13, 99, "Orphan")]);
+    expect([...parents]).toEqual([[2, "Site"], [12, "Hall 2"]]);
+  });
+  it("says whether a response repeats a name (only then does a label need a parent)", () => {
+    expect(hasRepeatedNames([{ name: "A" }, { name: "B" }])).toBe(false);
+    expect(hasRepeatedNames([{ name: "A" }, { name: "A" }])).toBe(true);
+    expect(hasRepeatedNames([])).toBe(false);
+  });
+  it("keeps the (#id) of a parent label whole when it is cut for an axis or a legend", () => {
+    const a = shortLabel("Hall 3 / Main-Switchboard-Feeder-Room (#13) ~", 24);
+    const b = shortLabel("Hall 3 / Main-Switchboard-Feeder-Room (#14) ~", 24);
+    expect(a).not.toBe(b);
+    expect(a.endsWith(" (#13) ~")).toBe(true);
   });
   it("escapes HTML, because asset names are typed by users and ECharts renders tooltip text as HTML", () => {
     expect(escapeHtml(`<b>"x" & 'y'</b>`)).toBe("&lt;b&gt;&quot;x&quot; &amp; &#39;y&#39;&lt;/b&gt;");

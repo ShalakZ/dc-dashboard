@@ -1,7 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type Download, type Locator, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
-import { navLink, signOut, userBlock } from "./shell";
+import { markGuideSeen, navLink, signOut, userBlock } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // Phase 3 on the state the journey and discovery projects leave behind: admin `admin` / `correct-horse`; assets Site
 // (root) > Panel 01, LVP02 ... LVP10, plus MV2; the collector has been polling for some minutes. The database is young,
@@ -209,6 +211,7 @@ test("phase 3 journey: currency and tariff, billing, cost tile, an operator's da
     await expect(page.getByRole("heading", { name: "Dashboards", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "New dashboard" }).click();
     const create = page.getByRole("dialog", { name: "New dashboard" });
+    await create.getByRole("button", { name: "Blank", exact: true }).click(); // w27: the first step is the template gallery
     await create.getByLabel("Name", { exact: true }).fill(DASHBOARD);
     await create.getByRole("button", { name: "Create", exact: true }).click();
     await expect(page).toHaveURL(/\/dashboards\/\d+$/);

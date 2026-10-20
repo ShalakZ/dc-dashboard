@@ -314,6 +314,13 @@ describe("assetRows, removedCount and noMetricIds", () => {
     const data = valuesData({ values: [valueRow({ asset_id: 5, name: "Feed" }), valueRow({ asset_id: 6, name: "Feed" })] });
     expect(assetRows(data).map((r) => r.name)).toEqual(["Feed (#5)", "Feed (#6)"]);
   });
+  it("names them by their parent when the parents are known (w27 R6), the same text the bars and the table show", () => {
+    const parents = new Map([[5, "Hall 2"], [6, "Hall 3"]]);
+    const values = valuesData({ values: [valueRow({ asset_id: 5, name: "Feed" }), valueRow({ asset_id: 6, name: "Feed" }), valueRow({ asset_id: 7, name: "Main" })] });
+    expect(assetRows(values, parents).map((r) => r.name)).toEqual(["Hall 2 / Feed", "Hall 3 / Feed", "Main"]);
+    const series = timeseries({ series: [5, 6].map((id) => ({ asset_id: id, name: "Feed", estimated: false, partial: false, points: [] })) });
+    expect(assetRows(series, parents).map((r) => r.name)).toEqual(["Hall 2 / Feed", "Hall 3 / Feed"]);
+  });
   it("counts the removed assets and lists the assets without the metric", () => {
     const data = valuesData({ missing: [11, 12], no_metric: [8] });
     expect(removedCount(data)).toBe(2);
@@ -403,6 +410,7 @@ describe("seriesSummary: a metric series", () => {
       ],
     });
     expect(seriesSummary(two, cfg())!.rows.map((r) => r.name)).toEqual(["Feed (#5)", "Feed (#6)"]);
+    expect(seriesSummary(two, cfg(), new Map([[5, "Hall 2"], [6, "Hall 3"]]))!.rows.map((r) => r.name)).toEqual(["Hall 2 / Feed", "Hall 3 / Feed"]);
   });
 });
 
@@ -495,6 +503,11 @@ describe("chartDescription", () => {
     const pf = valuesData({ type: "bar", metric: "power_factor", unit: null });
     expect(chartDescription("bar", pf)).toContain("power_factor, Last 24 hours.");
     expect(chartDescription("timeseries", timeseries({ series: [] }))).toBe("Line chart with no data. Open Details for the figures.");
+  });
+  it("names a repeated name by its parent as the chart does, and by (#id) without the parents (w27 R6)", () => {
+    const twins = valuesData({ type: "bar", values: [valueRow({ asset_id: 12, name: "Rack 04" }), valueRow({ asset_id: 13, name: "Rack 04" })] });
+    expect(chartDescription("bar", twins)).toContain("Bar chart of 2 assets: Rack 04 (#12), Rack 04 (#13).");
+    expect(chartDescription("bar", twins, new Map([[12, "Hall 2"], [13, "Hall 3"]]))).toContain("Bar chart of 2 assets: Hall 2 / Rack 04, Hall 3 / Rack 04.");
   });
   it("is empty for a type that is not a chart", () => {
     expect(chartDescription("gauge", valuesData({ type: "gauge" }))).toBe("");

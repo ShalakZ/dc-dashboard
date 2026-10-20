@@ -43,11 +43,11 @@
   --toast-clear: 96px;                                    /* room under a page, so the end of a list scrolls clear of a settled toast (two lines: 62px plus its 16px margin) */
   /* w13 dashboard widgets (styles/widgets.css; the dark values are themes.css's, the presets change none of them). Every widget colour, size and corner is one
      of these, so a tweak is an edit here: the card (density and corners: --widget-pad, --widget-head-h, --widget-row-h, --widget-radius, --widget-shadow,
-     --widget-figure and -sm), the chart colours (--chart-1 to --chart-8, --chart-band-opacity, --chart-grid, --chart-tip-bg) and the gauge (--gauge-track,
+     --widget-figure, -sm and -max), the chart colours (--chart-1 to --chart-8, --chart-band-opacity, --chart-grid, --chart-tip-bg) and the gauge (--gauge-track,
      --gauge-fill, --gauge-width). The arc is a 180 degree SVG path: its shape is a constant in the code, not a token. Contrast of every pair in every look: styles/widgets.css.test.ts. */
   --widget-bg: var(--bg); --widget-border: var(--border); --widget-radius: var(--radius); --widget-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
   --widget-pad: 12px; --widget-head-h: 36px; --widget-head-row: var(--surface); --widget-row-h: 32px;
-  --widget-figure: 28px; --widget-figure-sm: 20px; --widget-unit-fs: 13px;   /* the stat and gauge figure; the figure under 200px of card width; the unit after it */
+  --widget-figure: 28px; --widget-figure-sm: 20px; --widget-figure-max: 48px; --widget-unit-fs: 13px;   /* the stat and gauge figure (the top of a gauge, a stale stat and a stacked comparison); its smallest size; its largest, where the card is wide enough (styles/widgets.css clamps between the two); the unit after it */
   --widget-handle: var(--field-border); --widget-preview-h: 260px;          /* the editor's edge resize handles; the editor preview's height (three rows) */
   /* the series, in the order chosen by simulating deuteranopia and protanopia (series 6 to 8 are also drawn dashed); no red, red stays --crit */
   --chart-1: #2563eb; --chart-2: #c2570c; --chart-3: #0f8a5f; --chart-4: #c2307a; --chart-5: #0e7f9a; --chart-6: #7c5cd6; --chart-7: #a16207; --chart-8: #64748b;

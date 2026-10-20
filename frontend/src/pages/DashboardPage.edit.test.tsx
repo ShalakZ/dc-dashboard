@@ -4,6 +4,7 @@ import { defaultSize, nextPosition, toDrafts } from "../lib/layout";
 import { assetList, authed, config, dashboard, widget, widgetDataRoute } from "../test/dashboardFixtures";
 import { FakeEventSource } from "../test/fakeEventSource";
 import { mockFetch, type Routes } from "../test/fetchMock";
+import { markGuideSeen } from "../test/guideSeen";
 import { holdFetch } from "../test/holdFetch";
 import { model, point, source } from "../test/graphFixtures";
 import { renderWithDataRouter } from "../test/render";
@@ -39,6 +40,7 @@ vi.mock("react-grid-layout", async (importOriginal) => {
 beforeEach(() => {
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
+  markGuideSeen(); // w27: a dashboard with a following card shows the guide on its first visit; these tests are not about it
 });
 
 type Call = { method: string; path: string; body: unknown };

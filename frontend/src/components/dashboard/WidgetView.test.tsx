@@ -269,6 +269,38 @@ describe("WidgetView: Details", () => {
     expect(screen.queryByRole("button", { name: /Details/ })).not.toBeInTheDocument();
   });
 
+  describe("a failed card (w27 R11)", () => {
+    it("says it could not be loaded and when it tries again, from its own interval, with the server's text in the title", async () => {
+      mockFetch({ "POST /api/widget-data": { status: 500, body: { detail: "broken" } } });
+      const plain = show({ type: "stat" });
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(/^This card could not be loaded\. It tries again in 30 seconds\.$/);
+      expect(alert).toHaveAttribute("title", "broken");
+      plain.unmount();
+      client.clear();
+      const comparing = config({ source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" });
+      show({ type: "stat", config: comparing, dashboardRange: "this_month" });
+      expect(await screen.findByRole("alert")).toHaveTextContent(/^This card could not be loaded\. It tries again in 5 minutes\.$/);
+    });
+
+    it("says it could not be refreshed when the figures of an earlier answer are still drawn", async () => {
+      let reads = 0;
+      mockFetch({ "POST /api/widget-data": () => (reads++ === 0 ? { body: valuesData({ type: "stat", values: [valueRow({ value: 10.5 })] }) } : { status: 500, body: { detail: "broken" } }) });
+      show({ type: "stat" });
+      await screen.findByText("10.50");
+      await client.invalidateQueries();
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(/^This card could not be refreshed\. It tries again in 30 seconds\.$/);
+      expect(screen.getByText("10.50")).toBeInTheDocument();
+    });
+
+    it("prints the server's text as well in the editor's preview (no Details button there), so a refusal is not lost", async () => {
+      mockFetch({ "POST /api/widget-data": { status: 422, body: { detail: "max must be above min" } } });
+      show({ type: "gauge", details: false, csv: false });
+      expect(await screen.findByRole("alert")).toHaveTextContent("This card could not be loaded. It tries again in 30 seconds. max must be above min");
+    });
+  });
+
   it("links the asset names to their pages for a role that may open them, and writes plain names for one that may not", async () => {
     mockFetch({ "POST /api/widget-data": { body: stat() } });
     const first = show({ type: "stat" });
@@ -393,6 +425,19 @@ describe("WidgetView: a breakdown by kind and a comparison (w24)", () => {
     expect(screen.getByRole("status")).toHaveClass("widget-sk", "widget-sk-kind");
   });
 
+  // w27 FA (review finding 8): the loaded breakdown has its footer line ("~ estimated") under a "Split by" row that sits at the bottom of the body, so a skeleton without that
+  // line was 22 px taller and the row drew 22 px lower before the data landed. The skeleton of a breakdown holds the footer's room; a plain bar does not (it has no bottom row to move).
+  it("keeps the footer line's room under the skeleton of a breakdown by kind, as the loaded card has it, and not under a plain bar's", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    const kind = show({ type: "bar", config: kindConfig() });
+    expect(kind.container.querySelector(".widget-frame > .widget-sk-kind + .widget-foot")).toHaveAttribute("aria-hidden", "true");
+    kind.unmount();
+    client.clear();
+    const plain = show({ type: "bar", config: config({ assets: [1], range: "this_month" }) });
+    expect(plain.container.querySelector(".widget-sk")).not.toBeNull();
+    expect(plain.container.querySelector(".widget-foot")).toBeNull();
+  });
+
   it("explains the ~ of an estimated side in the footer of a comparing stat", async () => {
     const data = compareStatData({ compare: compareBlock({ assets: [compareAsset({ last: compareSide({ estimated: true }) })] }) });
     mockFetch({ "POST /api/widget-data": { body: data } });
@@ -407,8 +452,8 @@ describe("WidgetView: a breakdown by kind and a comparison (w24)", () => {
     });
     mockFetch({ "POST /api/widget-data": { body: data } });
     const { container } = show({ type: "stat", config: config({ source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" }) });
-    await screen.findByText("1500.00");
-    expect(container.querySelector(".big")).toHaveTextContent(/^1500\.00 ?kWh$/);
+    await screen.findByText("1,500.00");
+    expect(container.querySelector(".big")).toHaveTextContent(/^1,500\.00 ?kWh$/);
     expect(container.querySelector(".widget-foot")).toBeNull(); // nothing to explain on the card
     await userEvent.click(screen.getByRole("button", { name: "Details for Hall" }));
     const dialog = screen.getByRole("dialog");
@@ -420,7 +465,7 @@ describe("WidgetView: a breakdown by kind and a comparison (w24)", () => {
     const data = compareStatData({ compare: compareBlock({ left_out_days: ["2026-10-31"], assets: [compareAsset({ rate_change: { date: "2026-10-05" } })] }) });
     mockFetch({ "POST /api/widget-data": { body: data } });
     show({ type: "stat", config: config({ source: "energy", metric: null, aggregation: "sum", range: "this_month", compare: "same_days_last_month" }) });
-    await screen.findByText("1500.00");
+    await screen.findByText("1,500.00");
     await userEvent.click(screen.getByRole("button", { name: "Details for Hall" }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByRole("heading", { name: "Comparison" })).toBeInTheDocument();
@@ -428,6 +473,8 @@ describe("WidgetView: a breakdown by kind and a comparison (w24)", () => {
     expect(within(dialog).getByRole("cell", { name: "2026-09-01 to 2026-09-17" })).toBeInTheDocument();
     expect(within(dialog).getByText("up 15.4 % (+200.00 kWh)")).toBeInTheDocument();
     expect(within(dialog).getByText("up 15.4 % (+40.00 QAR)")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("1,500.00").length).toBeGreaterThan(0); // Details keeps the exact face, grouped
+    expect(within(dialog).getAllByText("1,300.00").length).toBeGreaterThan(0);
     expect(within(dialog).getByText("31 October has no matching day in September.")).toBeInTheDocument();
     expect(within(dialog).getByText("Cost: A rate changed on 5 Oct, so the cost change is not only usage.")).toBeInTheDocument();
   });

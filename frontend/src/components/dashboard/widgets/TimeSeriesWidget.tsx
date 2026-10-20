@@ -5,8 +5,9 @@ import type { WidgetData } from "../../../api/types";
 import { compareChartDescription, compareLineNames, dayOfMonthLabel, measureOf, NOTHING_YET } from "../../../lib/compare";
 import { chartDescription } from "../../../lib/widgetDetails";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
-import { chartLabels, figureText, formatValue, labelBucket, lastCostGone, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
-import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, type ChartTheme } from "./chartTheme";
+import { valueAxisFor } from "../../../lib/chartScale";
+import { chartLabels, figureText, labelBucket, lastCostGone, shortLabel, shortLabels, unitSuffix, type ParentNames } from "../../../lib/widgetFormat";
+import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, valueAxisParts, type ChartTheme } from "./chartTheme";
 import { useLegendSelection } from "./legendSelection";
 
 type Point = WidgetData["series"][number]["points"][number];
@@ -16,6 +17,8 @@ type ChartRow = Row | { value: Row; symbol: string; symbolSize: number };
 
 /** Characters a legend entry shows; the full name is in the chart tooltip and in the legend's own tooltip (S7-3). */
 const LEGEND_CHARS = 24;
+/** The min and max of a tooltip row carry no marks of their own (the average beside them does): they are printed on the exact face, like every other figure of the tooltip. */
+const NO_MARKS = { estimated: false, partial: false };
 
 /**
  * Spacing between buckets, which decides what counts as a hole in the data. Energy and cost series name their bucket
@@ -104,7 +107,7 @@ export function tooltipFormatter(data: WidgetData, timezone: string, theme: Char
     const head = tipHead(formatSiteDateTime(new Date(stamp(lines[0].item)).toISOString(), timezone), theme);
     return head + lines.map(({ item, point }) => {
       const figure = point.value === null ? "—" : `${figureText(point.value, point)}${unitSuffix(data.unit)}`;
-      const spread = point.value !== null && point.min !== null && point.max !== null ? ` (min ${formatValue(point.min)}, max ${formatValue(point.max)})` : "";
+      const spread = point.value !== null && point.min !== null && point.max !== null ? ` (min ${figureText(point.min, NO_MARKS)}, max ${figureText(point.max, NO_MARKS)})` : "";
       return tipRow(item.marker ?? "", String(item.seriesName ?? ""), `${figure}${spread}`, stateWords(data, point), theme);
     }).join("");
   };
@@ -140,13 +143,15 @@ export function timeAxisBounds(data: WidgetData): { min: number; max: number } |
  * hidden band first would give an invisible icon), and the two band series that follow carry the line's name and colour, so one click on the
  * legend switches the line and its band together. The line has the higher z, so it stays on top of its band.
  */
-export function timeSeriesOption(data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART): EChartsOption {
-  const labels = chartLabels(data.series);
+export function timeSeriesOption(data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART, parents?: ParentNames): EChartsOption {
+  const labels = chartLabels(data.series, parents);
   const legendShort = shortLabels(labels, LEGEND_CHARS);
   const bucket = labelBucket(data);
   const band = data.source === "metric";
   const base = chartBase(theme);
   const axis = axisParts(theme);
+  // One scale for the value axis, from the largest value any line or band draws (D3); the data stays in base units.
+  const yAxis = valueAxisFor(data, data.series.flatMap((s) => s.points.flatMap((p) => (band ? [p.value, p.min, p.max] : [p.value]))));
   const series = data.series.flatMap((s, i): object[] => {
     const { color, type } = seriesLook(theme, i, data.series.length);
     const width = bucketMs(data.bucket, s.points);
@@ -180,7 +185,7 @@ export function timeSeriesOption(data: WidgetData, timezone: string, theme: Char
       // hideOverlap: labels that would run together are dropped, whatever the width of the widget or the span of the axis
       axisLabel: { ...axis.axisLabel, hideOverlap: true, formatter: (value: number | string) => formatSiteTick(new Date(Number(value)).toISOString(), timezone, bucket) },
     },
-    yAxis: { type: "value", name: data.unit ?? undefined, scale: band, ...axis },
+    yAxis: valueAxisParts(theme, yAxis, { scale: band }),
     series,
   } as EChartsOption;
 }
@@ -234,6 +239,8 @@ export function compareOption(data: WidgetData, timezone: string, theme: ChartTh
     return { text: figure, state: stateWords(data, point) };
   }));
   const colors = [0, 1].map((i) => seriesLook(theme, i, 2).color);
+  // One scale for both months: the largest day of either line decides (D3).
+  const yAxis = valueAxisFor(data, sides.flatMap((points) => points.flatMap((p) => (p.no_data ? [] : [p.value]))));
   const base = chartBase(theme);
   const axis = axisParts(theme);
   return {
@@ -254,7 +261,7 @@ export function compareOption(data: WidgetData, timezone: string, theme: ChartTh
     legend: { ...legendParts(theme, "line"), show: true, data: names },
     grid: { left: 60, right: 20, top: 30, bottom: 50 },
     xAxis: { type: "category", data: Array.from({ length: days }, (_, i) => String(i + 1)), ...axis },
-    yAxis: { type: "value", name: data.unit ?? undefined, ...axis },
+    yAxis: valueAxisParts(theme, yAxis),
     series: [0, 1].map((i) => ({
       id: i === 0 ? "this-month" : "last-month", name: names[i], type: "line" as const, color: colors[i], z: i === 0 ? 3 : 2, symbol: "none",
       lineStyle: { width: 2, type: i === 0 ? "solid" as const : "dashed" as const }, connectNulls: false,
@@ -268,7 +275,7 @@ export function compareOption(data: WidgetData, timezone: string, theme: ChartTh
  * stream batch re-renders every widget of the dashboard, and a new option object (its formatters are new closures)
  * makes echarts-for-react call setOption with notMerge, which resets the legend and closes an open tooltip.
  */
-export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone }: { data: WidgetData; timezone: string }) {
+export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone, parents }: { data: WidgetData; timezone: string; parents?: ParentNames }) {
   const legend = useLegendSelection();
   const theme = useChartTheme();
   const compare = data.compare;
@@ -286,9 +293,9 @@ export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone 
   if (data.series.every((s) => s.points.every((p) => p.no_data))) return <p className="widget-empty">No data in this range.</p>;
   // The canvas is a picture: the box around it is the chart's text alternative (the figures themselves are in the Details panel).
   return (
-    <div className="widget-chart" role="img" aria-label={chartDescription("timeseries", data)}>
+    <div className="widget-chart" role="img" aria-label={chartDescription("timeseries", data, parents)}>
       <ReactECharts
-        option={legend.apply(timeSeriesOption(data, timezone, theme), data.series.map((s) => s.asset_id))} onEvents={legend.onEvents}
+        option={legend.apply(timeSeriesOption(data, timezone, theme, parents), data.series.map((s) => s.asset_id))} onEvents={legend.onEvents}
         style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge
       />
     </div>

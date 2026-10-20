@@ -1,0 +1,55 @@
+@layer w6 {
+  /* w27: the template gallery of the New dashboard dialog and the empty Dashboards page (components/dashboard/TemplateGallery.tsx, TemplatePreview.tsx,
+     CreateDashboardDialog.tsx, pages/DashboardsPage.tsx). Tokens only; every selector names a class this piece owns (.dialog and .row are app.css's). */
+
+  /* The dialog: wide enough for three cards across. Its body is the one box that scrolls, so Cancel and Create stay in sight in a short window (1024x640,
+     800x600); the padding and the equal negative margin keep a focus ring at the body's edge from being clipped by its scrolling. */
+  .tpl-dialog { width: min(760px, 100%); overflow: hidden; grid-template-rows: auto minmax(0, 1fr); }
+  .tpl-pane { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 16px; min-height: 0; margin: 0; }
+  .tpl-body { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; min-height: 0; margin: -4px; padding: 4px; overflow: auto; }
+  .tpl-foot { justify-content: flex-end; }
+  .tpl-back { margin-right: auto; } /* Back to templates at the left, Cancel and Create at the right */
+  .tpl-step { margin: 0; font-size: var(--fs-md); font-weight: 600; }
+  .tpl-hint { min-height: 1lh; margin: 0; } /* the name hint keeps its line with no text: the dialog does not change height when the typing starts (w27 FA) */
+
+  /* Create and the other buttons wait with aria-disabled (a button that has the focus must not lose it): they look idle and do nothing. */
+  .tpl-foot button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+  .tpl-foot button[aria-disabled="true"]:hover { background: var(--bg); }
+  .tpl-create[aria-disabled="true"], .tpl-create[aria-disabled="true"]:hover { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); opacity: 1; cursor: not-allowed; }
+
+  /* The gallery: a row of recommended cards, then the rest, Blank last. */
+  .tpl-gallery { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .tpl-gallery > section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .tpl-heading { margin: 0; color: var(--text-2); font-size: var(--fs-sm); font-weight: 600; }
+  .tpl-status { margin: 0; font-size: var(--fs-sm); }
+  .tpl-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
+  .tpl-cards > li { display: flex; min-width: 0; } /* the cards of a row are as tall as the tallest */
+
+  /* A card is a button: the base button's box (border, radius, focus ring) with its content laid out as a column. */
+  .tpl-card { display: grid; grid-template-rows: auto 1fr; align-content: start; align-items: start; justify-items: stretch; gap: 10px; width: 100%; height: 100%; min-height: 0; padding: 10px; border-color: var(--border); background: var(--bg); text-align: left; font-weight: 400; } /* align-items: start, or the base button centres a shorter text in the stretched card and the titles of a row do not line up (w27 P1) */
+  .tpl-card:hover { border-color: var(--accent); }
+  .tpl-text { display: grid; align-content: start; gap: 4px; min-width: 0; }
+  .tpl-title { min-width: 0; overflow-wrap: anywhere; color: var(--text); font-size: var(--fs-base); font-weight: 600; }
+  /* The picture and the tag: the tag stands on a strip of its own above the picture, at the right, on one line, so it never wraps under a title or covers a glyph of the picture (w27 P1, FA). Only the
+     recommended cards carry it, and they share a row, so their pictures line up; it follows the picture in the markup and `order` puts it first. */
+  .tpl-shot { display: grid; gap: 6px; min-width: 0; }
+  .tpl-tag { order: -1; justify-self: end; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent-ink); font-size: var(--fs-xs); font-weight: 600; line-height: 1.4; white-space: nowrap; }
+  .tpl-desc { color: var(--text-2); font-size: var(--fs-sm); }
+  .tpl-needs { color: var(--text-2); font-size: var(--fs-xs); }
+
+  /* The picture: one rectangle per widget on the 12-column grid (TemplatePreview.tsx); text widgets are thin bars, a template with no widget (Blank) is a dashed frame. */
+  .tpl-preview { display: block; width: 100%; height: auto; aspect-ratio: 2 / 1; border-radius: var(--radius-sm); background: var(--surface); } /* one box for every card: 2 to 1, whatever the drawing holds (the SVG is scaled to fit it, preserveAspectRatio) */
+  .tpl-glyph { fill: var(--bg); stroke: var(--border-strong); stroke-width: 0.6; }
+  .tpl-glyph-text { fill: var(--border-strong); stroke: none; }
+  .tpl-mark { fill: none; stroke: var(--accent); stroke-width: 1.1; stroke-linecap: round; stroke-linejoin: round; }
+  .tpl-blank { fill: none; stroke: var(--border-strong); stroke-width: 0.8; stroke-dasharray: 3 2; }
+
+  /* Step 2 says what was chosen above the Name. */
+  .tpl-chosen { display: flex; align-items: center; gap: 12px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+  .tpl-chosen-preview { flex: none; width: 112px; }
+  .tpl-chosen-text { display: grid; gap: 2px; min-width: 0; font-size: var(--fs-sm); }
+  .tpl-chosen-title { font-size: var(--fs-base); font-weight: 600; }
+
+  /* On the empty Dashboards page the gallery sits under the sentence, as wide as the dialog's body is, in the middle. */
+  .tpl-inline { max-width: 960px; margin: 20px auto 0; }
+}

@@ -1,7 +1,8 @@
 @layer w6 {
   /* w13 dashboard widgets: the card, its states, the six widget types, the editor preview and the editor grid's library chrome. Tokens only (app.css :root, dark values in
-     themes.css): no raw colour, no island, nothing here knows which look is on. Sections are named for the task whose markup they style. The narrow-card rules are the two
-     @container blocks at the end (a width threshold belongs in CSS), measured against the card itself: 200px and 280px. Shared names (.big, .num, .muted, .kv, .chip) are
+     themes.css): no raw colour, no island, nothing here knows which look is on. Sections are named for the task whose markup they style. The width rules are the three
+     @container blocks at the end (a width threshold belongs in CSS), measured against the card itself: 200px and 280px (narrow), 360px (a comparing stat sets its two months side by side), and
+     the figure's own clamp (a stat's and a gauge's size follows the card's width, 100cqi). Shared names (.big, .num, .muted, .kv, .chip) are
      never written bare here, and the Details panel's wd-* classes are widgets-details.css (app.css.test.ts: one page file cannot restyle another). */
 
   /* ===== The grid: the read-only CSS grid (12 columns, rows and gap inline from lib/gridMetrics) and the editor's frame ===== */
@@ -58,6 +59,10 @@
   .widget-sk[data-type="gauge"] > span { text-align: center; } /* the figure's and the name's lines sit under the dial, as the real ones do */
   /* w24: the skeleton of a card with more rows than its type's plain shape draws the same rows at the same heights, so nothing moves when the data lands.
      A comparing stat: the 2px gap of .stat-compare; a breakdown by kind: the chart block, the one reserved line and the 28px "Split by" row, 4px apart. */
+  /* w27: a stat or gauge skeleton's figure row is as tall as the row of a typical figure (9 characters and a 3 letter unit; a gauge's 5 and 2), read from the SAME clamp as the real one
+     (--fig-size, see .stat .big), so only the difference between two figures' lengths can move a row when the data lands, never a fixed guess of 28px. */
+  .widget-sk { --fig-chars: 9; --fig-unit: 3; }
+  .widget-sk[data-type="gauge"] { --fig-chars: 5; --fig-unit: 2; }
   .widget-sk-compare { gap: 2px; }
   .widget-sk-compare .sk-compare-last { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; }
   .widget-sk-kind { gap: 4px; }
@@ -66,9 +71,25 @@
 
   /* ===== Stat (Task 3): the figure, its unit, the asset name, and the age of a stale reading ===== */
   .stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .stat .big { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 4px; min-width: 0; margin: 0; color: var(--text); font-size: var(--widget-figure); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; }
+  .stat .big { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 4px; min-width: 0; margin: 0; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; }
   .stat .big.muted { color: var(--stale); } /* a stale reading: the age beside it is the signal, the dimming is support */
-  .stat .big.none, .stat .big[title] { color: var(--text-2); font-size: var(--fs-sm); font-weight: 400; line-height: 1.4; } /* nothing recorded: the words "no data", not a figure */
+  /* Nothing recorded: the words "no data" (or a cost's dash), not a figure. Keyed on the class the component sets, NEVER on a title: every measured figure carries its exact value as its title (w27). */
+  .stat .big.none { color: var(--text-2); font-size: var(--fs-sm); font-weight: 400; line-height: 1.4; }
+  /* The figure's size (w27 R5): the largest that keeps the figure AND its unit on one line in the card's own width, from --widget-figure-sm up to --fig-max (--widget-figure-max, or the old
+     --widget-figure where the card has no room to grow: a stale reading's age line, a comparison stacked under 360px, the gauge, whose dial takes the height). The width is the `widget`
+     container's (100cqi) less the body's two paddings and, side by side, the other column (--fig-room); the unit takes 13px text at 0.85em a character and a 4px gap (6px, with a little
+     spare). The component passes the two counts as inline custom properties (--fig-chars, --fig-unit): text length is a count, not a measurement, so no script measures a width (front end
+     pack 10). 0.7em a character is a bold digit (or the wider "~") of the widest fallback font (DejaVu Sans, measured), so the face the app asks for (Segoe UI, narrower) has room left
+     over and none ever overflows. Where the unit cannot stay beside a figure even at the small size, the figure keeps the small size and the unit drops under it (a 2 wide card at 1024);
+     only a figure too long for its card at the small size, unit or not, shrinks past it, to the body text size at the least, rather than spill: it never splits and nothing clips. */
+  .stat .big, .gauge-figure, .widget-sk {
+    --fig-room: calc((100cqi - 2 * var(--widget-pad) - var(--fig-gutter, 0px)) * var(--fig-share, 1));
+    --fig-fit: calc((var(--fig-room) - var(--fig-unit, 0) * 0.85 * var(--widget-unit-fs) - 6px) / (var(--fig-chars, 8) * 0.7));
+    --fig-bare: calc((var(--fig-room) - 6px) / (var(--fig-chars, 8) * 0.7));
+    --fig-size: clamp(min(var(--widget-figure-sm), max(var(--fs-base), var(--fig-bare))), var(--fig-fit), var(--fig-max, var(--widget-figure-max)));
+  }
+  .stat .big, .gauge-figure { font-size: var(--fig-size); }
+  .stat:has(> .stat-age), .stat-compare, .widget-sk-compare, .widget-sk[data-type="gauge"], .gauge { --fig-max: var(--widget-figure); }
   .stat .stat-num, .gauge-figure .stat-num { white-space: nowrap; } /* a figure never splits; the unit drops under it instead */
   .stat .stat-unit, .gauge-figure .stat-unit { color: var(--text-2); font-size: var(--widget-unit-fs); font-weight: 400; }
   .stat-name { min-width: 0; overflow: hidden; color: var(--text-2); font-size: var(--fs-sm); text-overflow: ellipsis; white-space: nowrap; }
@@ -109,9 +130,9 @@
   .gauge-fill { stroke: var(--gauge-fill); }
   .gauge-scale { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); width: min(88cqw, calc((100cqh - var(--gauge-scale-h)) * 88 / 52)); min-width: max-content; display: flex; justify-content: space-between; gap: 8px; color: var(--text-2); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; line-height: var(--gauge-scale-h); }
   .gauge-scale > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .gauge-figure { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 0 4px; margin: 0; color: var(--text); font-size: var(--widget-figure); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; }
+  .gauge-figure { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 0 4px; margin: 0; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; } /* its size: the clamp under .stat .big */
   .gauge-figure.muted { color: var(--stale); }
-  .gauge-figure.none, .gauge-figure[title] { color: var(--text-2); font-size: var(--fs-sm); font-weight: 400; line-height: 1.4; }
+  .gauge-figure.none { color: var(--text-2); font-size: var(--fs-sm); font-weight: 400; line-height: 1.4; } /* the words "no data": by class, never by the title every measured figure has */
   .gauge-name { min-width: 0; overflow: hidden; color: var(--text-2); font-size: var(--fs-sm); text-align: center; text-overflow: ellipsis; white-space: nowrap; }
   /* a stale gauge adds " · 47 min ago" to the name's line: the name gives way first (an ellipsis), the age never does */
   .gauge-name:has(> small) { display: flex; justify-content: center; gap: 4px; }
@@ -187,8 +208,25 @@
   @container widget (max-width: 199.98px) {
     .widget-tools .widget-csv-btn { display: none; } /* it is the Details drawer's Download CSV below 200px */
     .widget-grip { display: none; }
-    .stat .big { font-size: var(--widget-figure-sm); }
-    .gauge-figure { font-size: var(--widget-figure-sm); }
-    .gauge-track, .gauge-fill { stroke-width: calc(var(--gauge-width) * 0.8); }
+    .gauge-track, .gauge-fill { stroke-width: calc(var(--gauge-width) * 0.8); } /* the figure needs no rule here: its clamp already reads the card's width */
+  }
+  /* A comparing stat with room (a body of 360px or more: a 3 wide card at 1920, a 4 wide one at 1440) sets this month and the same days last month SIDE BY SIDE: the headline, the name and the
+     window on the left (3 parts), last month's label, figure and window on the right (2 parts), the change and the one reserved note line under both. The seven rows are the same
+     elements in the same order, only placed (grid areas), so nothing is added or moved by script. The skeleton below is placed by the same areas. The headline's room is its 3 of 5
+     parts of the width left after the 16px gutter (--fig-share, --fig-gutter), which its clamp reads. */
+  @container widget (min-width: 360px) {
+    .stat-compare, .widget-sk-compare { --fig-max: var(--widget-figure-max); --fig-gutter: 16px; --fig-share: 0.6; --stat-last-min: calc(var(--fs-sm) * 11.4); display: grid; grid-template-columns: minmax(0, 3fr) minmax(var(--stat-last-min), 2fr); column-gap: 16px; row-gap: 2px; align-content: start; grid-template-areas: "fig last" "name lastwin" "age ." "win ." "change change" "note note"; }
+    .stat-compare > .big, .widget-sk-compare > .sk-fig { grid-area: fig; }
+    /* w27 FA: "Same days last month" is 11.2 em wide (146 px at 13px, measured in the widest fallback font; --stat-last-min is 11.4 em), more than the 2 of 5 parts of a body under about 380px (143 px in a 3 wide card at 1920,
+       132 px in a 4 wide one at 1440), where it painted into the gutter. The right column is never narrower than the label, and the headline's room is its 3 of 5 parts or what that column leaves, the smaller. */
+    .stat-compare > .big, .widget-sk-compare { --fig-room: min(calc((100cqi - 2 * var(--widget-pad) - var(--fig-gutter)) * var(--fig-share)), calc(100cqi - 2 * var(--widget-pad) - var(--fig-gutter) - var(--stat-last-min))); }
+    .stat-compare > .stat-name, .widget-sk-compare > .sk-name { grid-area: name; }
+    .stat-compare > .stat-age { grid-area: age; }
+    .stat-compare > .stat-window, .widget-sk-compare > .sk-win { grid-area: win; }
+    .stat-compare > .stat-last, .widget-sk-compare > .sk-compare-last { grid-area: last; flex-direction: column; align-items: flex-start; gap: 0; margin-top: 0; }
+    .stat-compare > .stat-last + .stat-window, .widget-sk-compare > .sk-lastwin { grid-area: lastwin; }
+    .stat-compare > .stat-change, .widget-sk-compare > .sk-change { grid-area: change; }
+    .stat-compare > .stat-note, .widget-sk-compare > .sk-note { grid-area: note; }
+    .stat-compare > .stat-nothing { grid-column: 1 / -1; } /* the one sentence of a comparison with nothing to compare yet: the whole width, not the headline's part */
   }
 }

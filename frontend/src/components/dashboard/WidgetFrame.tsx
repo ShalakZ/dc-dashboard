@@ -24,6 +24,12 @@ interface Props {
   note?: string;
   /** The body still shows the answer for another focus asset while the new one loads (w25): dimmed, and announced as busy, until the real answer lands. */
   stale?: boolean;
+  /** How long the card waits before it asks again (`widgetRefetchMs`), so a failure can say when it tries again. Left out, the sentence says nothing of it. */
+  retryMs?: number;
+  /** Figures of an earlier answer are still drawn under the failure: the card could not be refreshed, not loaded. */
+  drawn?: boolean;
+  /** The server's own text is printed in the card as well as in its title: where there is no Details button to look it up (the editor's preview and grid). */
+  showReason?: boolean;
   /** Present = show the CSV button; this is the query the export repeats. */
   csv?: CsvSource;
   /** Present = show the Details button, which calls this with the button itself (the drawer gives focus back to it). It waits (aria-disabled) while the data loads, and while the body is the previous focus's answer (`stale`). */
@@ -32,7 +38,7 @@ interface Props {
   type?: DataWidgetType;
   /** The skeleton's variant when the loaded card has more rows than its type's plain shape (a comparison, a breakdown by kind). */
   shape?: SkeletonShape;
-  /** Keep the footer line's room while loading, for a widget whose "since" line is known before its data (rolling energy and cost). */
+  /** Keep the footer line's room while loading, for a widget whose "since" line is known before its data (rolling energy and cost), and for a breakdown by kind, whose "Split by" row would sit 22 px lower without it (w27 FA). */
   footSpace?: boolean;
   /** Keep the footer line's room in the loaded card too, as an empty line, when it has nothing to say now but may have the next moment (w25: a note about the focus that comes and goes), so the body does not move. */
   footKeep?: boolean;
@@ -41,6 +47,20 @@ interface Props {
   /** Mark the header as the grab area of the editor's grid. */
   dragHandle?: boolean;
   children?: ReactNode;
+}
+
+/** The wait in words: "30 seconds", "5 minutes". */
+export function waitText(ms: number): string {
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+  const minutes = Math.round(seconds / 60);
+  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+}
+
+/** What a failed card says (w27, R11): that it could not be loaded (or refreshed, when older figures are still drawn) and when it tries again. The server's text is the title. */
+export function failedText(drawn: boolean, retryMs: number | undefined): string {
+  const tries = retryMs === undefined ? "" : ` It tries again in ${waitText(retryMs)}.`;
+  return `This card could not be ${drawn ? "refreshed" : "loaded"}.${tries}`;
 }
 
 /** A chip: the words for the card that has room, the bare count (hidden from a screen reader, which reads the words) for a narrow one. */
@@ -76,7 +96,7 @@ export function useCsvExport(csv: CsvSource | undefined): { busy: boolean; error
 }
 
 /** The box around every widget: title, Details and CSV buttons, the warning chips, the footer line, and the loading and error states. */
-export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint = "", since = "", note = "", stale = false, csv, details, type, shape, footSpace = false, footKeep = false, actions, dragHandle = false, children }: Props) {
+export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint = "", since = "", note = "", stale = false, retryMs, drawn = false, showReason = false, csv, details, type, shape, footSpace = false, footKeep = false, actions, dragHandle = false, children }: Props) {
   const { busy, error: csvError, run: exportCsv } = useCsvExport(csv);
   return (
     <section className="widget-frame" aria-label={title}>
@@ -110,13 +130,18 @@ export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint
       {csvError && <p className="error" role="alert">CSV export failed: {csvError}</p>}
       {loading ? (
         <>
-          <WidgetSkeleton type={type} shape={shape} label={`Loading ${title}`} />
+          <WidgetSkeleton type={type} shape={shape} label={`Loading ${title}`} tip={details !== undefined} />
           {footSpace && <p className="widget-foot" aria-hidden="true" />}
         </>
       ) : (
         <>
           <div className={stale ? "widget-body follow-stale" : "widget-body"} aria-busy={stale ? true : undefined}>
-            {error && <p className="widget-error" role="alert"><Icon name="alert" />{error.message}</p>}
+            {error && (
+              <p className="widget-error" role="alert" title={error.message}>
+                <Icon name="alert" />
+                <span>{failedText(drawn, retryMs)}{showReason && ` ${error.message}`}</span>
+              </p>
+            )}
             {children}
           </div>
           {(since || hint || note) ? (

@@ -20,4 +20,12 @@ describe("useAction", () => {
     expect(result.current.busy).toBe(false);
     expect(result.current.error).toBeNull();
   });
+
+  it("clear forgets the last error without running anything", async () => {
+    const { result } = renderHook(() => useAction());
+    await act(() => result.current.run(async () => { throw new Error("a dashboard with this name already exists"); }));
+    expect(result.current.error).toBe("a dashboard with this name already exists");
+    act(() => result.current.clear());
+    expect(result.current.error).toBeNull();
+  });
 });

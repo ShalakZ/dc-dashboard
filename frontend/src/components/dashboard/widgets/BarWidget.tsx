@@ -5,14 +5,16 @@ import { useNavigate } from "react-router";
 import { useAssets } from "../../../api/queries";
 import type { WidgetData } from "../../../api/types";
 import {
-  breakdownDescription, breakdownLine, drillAction, drillTip, emptyBreakdownText, hasNoBars, isNoDataBar, kindOptions, parentIds, selectedKind, type DrillAction,
+  breakdownCardLine, breakdownDescription, breakdownLine, drillAction, drillTip, emptyBreakdownText, hasNoBars, isNoDataBar, kindOptions, parentIds, selectedKind, type DrillAction,
 } from "../../../lib/breakdown";
+import { largestAbs, valueAxisFor } from "../../../lib/chartScale";
 import { chartDescription } from "../../../lib/widgetDetails";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
-import { chartLabels, escapeHtml, figureText, hasNoReading, labelBucket, NO_DATA, shortLabel, shortLabels, uniqueLabels, unitSuffix } from "../../../lib/widgetFormat";
+import { chartLabels, escapeHtml, figureText, hasNoReading, labelBucket, NO_DATA, shortLabel, shortLabels, uniqueLabels, unitSuffix, type ParentNames } from "../../../lib/widgetFormat";
+import { InfoTip } from "../../InfoTip";
 import { useFocus } from "../FocusContext";
-import { AXIS_CHARS, barAxisLayout, DEFAULT_CHART_WIDTH, LABEL_LINE_PX, steppedWidth } from "./barAxis";
-import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, type ChartTheme } from "./chartTheme";
+import { AXIS_CHARS, barAxisLayout, DEFAULT_CHART_HEIGHT, DEFAULT_CHART_WIDTH, LABEL_LINE_PX, steppedHeight, steppedWidth, tickPxOf } from "./barAxis";
+import { axisParts, chartBase, legendParts, LIGHT_CHART, seriesLook, tipHead, tipRow, useChartTheme, valueAxisParts, type ChartTheme } from "./chartTheme";
 import { useLegendSelection } from "./legendSelection";
 
 const DASH = "—";
@@ -87,14 +89,21 @@ function tooltipFor(
  * names wrap inside their slots, or turn by 40 degrees when the slots are too narrow to hold a wrapped name.
  * `drill` (w25) is what a click on each bar of a breakdown by kind does, in the bars' order: it adds the last line of the tooltip, makes the axis names emit
  * events and gives the bars the pointer. With none, a breakdown's bars say with their cursor that a click does nothing.
+ * `parents` (w27 R6) is the asset list's parent names: a name several bars share is drawn "Hall 2 / Rack 04" (see `uniqueLabels`); without it the label is "Rack 04 (#12)".
+ * `chartHeight` (w27 P1) is the height of the chart's box: the plot keeps its share of it and the names are cut to what is left (barAxis.ts).
  */
-export function barOption(data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART, chartWidth: number = DEFAULT_CHART_WIDTH, drill?: readonly DrillAction[]): EChartsOption {
+export function barOption(
+  data: WidgetData, timezone: string, theme: ChartTheme = LIGHT_CHART, chartWidth: number = DEFAULT_CHART_WIDTH, drill?: readonly DrillAction[], parents?: ParentNames,
+  chartHeight: number = DEFAULT_CHART_HEIGHT,
+): EChartsOption {
   const unit = unitSuffix(data.unit);
   const base = chartBase(theme);
   const axis = axisParts(theme);
   if (data.mode === "values") {
-    const labels = chartLabels(data.values);
-    const layout = barAxisLayout(labels, chartWidth);
+    const labels = chartLabels(data.values, parents);
+    // One scale for the value axis, from the tallest bar (D3); the bars keep their base-unit values and the tooltip its exact figure.
+    const valueAxis = valueAxisFor(data, data.values.map((v) => v.value));
+    const layout = barAxisLayout(labels, chartWidth, chartHeight, valueAxis.name !== undefined, tickPxOf(valueAxis.format, largestAbs(data.values.map((v) => v.value))));
     // A metric that recorded nothing is "no data", with no dash mark: the dash means a missing rate and nothing else. A cost
     // without a rate keeps its dash whether or not anything was recorded, like the stat, the table and Billing.
     // A breakdown by kind (w24) is the exception: there a bar that recorded nothing (no figure, or the zero of a meter silent for the whole range,
@@ -106,7 +115,7 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
       if (v.value === null) return noReading(v) ? { text: NO_DATA, state: "" } : { text: DASH, state: stateOf(v, data.source === "cost") };
       return { text: `${figureText(v.value, v)}${unit}${v.no_data ? ` (${NO_DATA})` : ""}`, state: stateOf(v, false) };
     });
-    const names = uniqueLabels(data.values);
+    const names = uniqueLabels(data.values, parents);
     const notes = drill && data.breakdown ? drill.map((action, i) => drillTip(action, names[i], isNoDataBar(data.values[i]))) : undefined;
     return {
       ...base,
@@ -115,17 +124,19 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
       // truncation only catch a line that is wider than the estimate. Rotated (a crowded axis): hideOverlap may still drop some names (the
       // tooltip and the Details panel have every one), and containLabel keeps the first rotated name from being cut at the left edge. With
       // containLabel the names and the y numbers sit INSIDE the rectangle that left and bottom describe, so those two are plain margins there.
-      grid: { left: layout.left, right: 20, top: 30, bottom: layout.bottom, ...(layout.mode === "rotate" ? { containLabel: true } : {}) },
+      // `containLabel` is also kept where the names are left off (a box too short for them), so the y axis's numbers keep their room at the left.
+      grid: { left: layout.left, right: 20, top: layout.top, bottom: layout.bottom, ...(layout.mode !== "wrap" ? { containLabel: true } : {}) },
       xAxis: {
         type: "category", data: labels, ...axis, ...(notes ? { triggerEvent: true } : {}),
         axisLabel: {
-          ...axis.axisLabel, interval: 0, formatter: (v: string) => layout.labels.get(String(v)) ?? shortLabel(String(v), AXIS_CHARS),
+          ...axis.axisLabel, interval: layout.every - 1, formatter: (v: string) => layout.labels.get(String(v)) ?? shortLabel(String(v), AXIS_CHARS),
           ...(layout.mode === "wrap"
-            ? { width: layout.slot - 4, overflow: "truncate", ellipsis: "…", lineHeight: LABEL_LINE_PX }
-            : { rotate: 40, hideOverlap: true }),
+            ? { width: layout.slot * layout.every - 4, overflow: "truncate", ellipsis: "…", lineHeight: LABEL_LINE_PX }
+            : layout.mode === "none" ? { show: false } : { rotate: 40, hideOverlap: true }),
         },
       },
-      yAxis: { type: "value", name: data.unit ?? undefined, ...axis },
+      // A short box (a breakdown at its minimum height) draws the unit's name turned beside the axis, which keeps `top` at 12 px for two lines of names (barAxis.ts).
+      yAxis: valueAxisParts(theme, valueAxis, layout.besideGap > 0 ? { nameLocation: "middle", nameGap: layout.besideGap, nameRotate: 90 } : {}),
       series: [{
         type: "bar", color: theme.accent, data: data.values.map((v) => (silent(v) ? null : v.value)),
         // A bar shows the pointer (zrender's default for every shape) only when a click on it does something.
@@ -138,7 +149,7 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
   const stamps = new Map<number, string>();
   for (const s of data.series) for (const p of s.points) stamps.set(Date.parse(p.ts), p.ts);
   const times = [...stamps.keys()].sort((a, b) => a - b);
-  const labels = chartLabels(data.series);
+  const labels = chartLabels(data.series, parents);
   const legendShort = shortLabels(labels, LEGEND_CHARS);
   const bucket = labelBucket(data);
   // A bucket nobody recorded is a gap (null, no bar); a bucket recorded without a rate is a dash.
@@ -164,13 +175,17 @@ export function barOption(data: WidgetData, timezone: string, theme: ChartTheme 
     },
     grid: { left: 60, right: 20, top: 30, bottom: data.series.length > 1 ? 50 : 30 },
     xAxis: { type: "category", data: times.map((t) => formatSiteTick(stamps.get(t)!, timezone, bucket)), ...axis },
-    yAxis: { type: "value", name: data.unit ?? undefined, ...axis },
+    // The tallest bar of any asset in any bucket decides the one scale of the axis (D3).
+    yAxis: valueAxisParts(theme, valueAxisFor(data, data.series.flatMap((s) => s.points.map((p) => p.value)))),
     series: data.series.map((_, i) => ({
       name: labels[i], type: "bar" as const, color: seriesLook(theme, i, data.series.length).color,
       data: cells[i].map((c) => (c.noRate ? dashItem(theme) : c.value)),
     })),
   } as EChartsOption;
 }
+
+/** The help beside "Split by" (w27 R11). */
+const SPLIT_TIP = "Draws one bar for each asset of the chosen kind.";
 
 /**
  * The row under a breakdown's chart: "Split by" and the kinds present under the root, as "Rack (117)". `current` is the kind shown (the viewer's choice
@@ -183,6 +198,8 @@ function SplitBy({ data, current, onKind, disabled }: { data: WidgetData; curren
   return (
     <div className="bars-split">
       <label htmlFor={id}>Split by</label>
+      {/* Only the live card has a tip: the editor's grid and preview show the select inert, and a second "What does this mean?" in the dialog would make its lookups match twice. */}
+      {!disabled && <InfoTip>{SPLIT_TIP}</InfoTip>}
       <select id={id} value={selectedKind(options, current)} disabled={disabled} onChange={(e) => onKind?.(e.target.value)}>
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
@@ -190,7 +207,7 @@ function SplitBy({ data, current, onKind, disabled }: { data: WidgetData; curren
   );
 }
 
-interface BarsProps { data: WidgetData; timezone: string; theme: ChartTheme; chartWidth: number }
+interface BarsProps { data: WidgetData; timezone: string; theme: ChartTheme; chartWidth: number; chartHeight: number; parents?: ParentNames }
 const BREAKDOWN_CHART_STYLE = { height: "100%", width: "100%", minHeight: 120 };
 
 /**
@@ -198,8 +215,8 @@ const BREAKDOWN_CHART_STYLE = { height: "100%", width: "100%", minHeight: 120 };
  * Memoised on its own because BreakdownBars, its parent, re-renders whenever the dashboard's focus changes (it reads the focus context), and a fresh option
  * would make echarts-for-react set it again (see TimeSeriesWidget).
  */
-const PlainBars = memo(function PlainBars({ data, timezone, theme, chartWidth }: BarsProps) {
-  return <ReactECharts option={barOption(data, timezone, theme, chartWidth)} style={BREAKDOWN_CHART_STYLE} notMerge />;
+const PlainBars = memo(function PlainBars({ data, timezone, theme, chartWidth, chartHeight, parents }: BarsProps) {
+  return <ReactECharts option={barOption(data, timezone, theme, chartWidth, undefined, parents, chartHeight)} style={BREAKDOWN_CHART_STYLE} notMerge />;
 });
 
 /** What ECharts hands a click handler: the part that was clicked and, for a bar, its index, for an axis name, the category as it was given (not as it is drawn). */
@@ -221,7 +238,7 @@ export function clickedBar(params: ClickParams, labels: readonly string[]): numb
  * It waits for the asset list (children are read from it), and until then behaves like PlainBars. Only this component asks for the list and for the router, so a
  * card that cannot drill needs neither.
  */
-const DrillBars = memo(function DrillBars({ data, timezone, theme, chartWidth }: BarsProps) {
+const DrillBars = memo(function DrillBars({ data, timezone, theme, chartWidth, chartHeight, parents }: BarsProps) {
   const assets = useAssets().data;
   const { setFocus, anyFollowing } = useFocus();
   const navigate = useNavigate();
@@ -230,11 +247,11 @@ const DrillBars = memo(function DrillBars({ data, timezone, theme, chartWidth }:
     const parents = parentIds(assets);
     return data.values.map((bar) => drillAction(bar.asset_id, parents, anyFollowing));
   }, [assets, data.values, anyFollowing]);
-  const option = useMemo(() => barOption(data, timezone, theme, chartWidth, actions), [data, timezone, theme, chartWidth, actions]);
+  const option = useMemo(() => barOption(data, timezone, theme, chartWidth, actions, parents, chartHeight), [data, timezone, theme, chartWidth, chartHeight, actions, parents]);
   // The handler ECharts holds never changes (a new one would be bound again on every refetch); it calls whatever the latest render decided.
   const click = useRef<(params: ClickParams) => void>(() => {});
   click.current = (params) => {
-    const index = clickedBar(params, chartLabels(data.values));
+    const index = clickedBar(params, chartLabels(data.values, parents)); // the labels the axis was given: the same function and the same map as barOption
     const bar = data.values[index];
     if (!bar || !actions) return;
     if (actions[index] === "narrow") setFocus(bar.asset_id);
@@ -258,19 +275,26 @@ interface BarWidgetProps {
   onKind?: (kind: string) => void;
   /** The select is shown but cannot be used (the editor's grid and preview). */
   splitDisabled?: boolean;
+  /** The parent names of the asset list (w27 R6), for a name several bars share; undefined without `assets.view` or before the list is here. Keep it stable (the card is memoised). */
+  parents?: ParentNames;
 }
 
 /** Bars per asset (the aggregation over the range) or per time bucket, grouped by asset. Memoised for the reason given at TimeSeriesWidget. A breakdown by kind (`data.breakdown`) adds its line and the "Split by" select. */
-export const BarWidget = memo(function BarWidget({ data, timezone, kind, onKind, splitDisabled = false }: BarWidgetProps) {
+export const BarWidget = memo(function BarWidget({ data, timezone, kind, onKind, splitDisabled = false, parents }: BarWidgetProps) {
   const legend = useLegendSelection();
   const theme = useChartTheme();
-  // The width of the chart's box, in steps of 8 px, for the axis layout. The box is held in state (a callback ref) so that the observer follows it
-  // when the data arrives after an empty first render. A box with no width (jsdom, a server render) or no ResizeObserver leaves the default 480 px.
+  // The width of the chart's box, in steps of 8 px, and its height, in steps of 4 px, for the axis layout. The box is held in state (a callback ref) so that
+  // the observer follows it when the data arrives after an empty first render. A box with no size (jsdom, a server render) or no ResizeObserver leaves the
+  // defaults (480 x 280 px).
   const [box, setBox] = useState<HTMLDivElement | null>(null);
   const [chartWidth, setChartWidth] = useState(DEFAULT_CHART_WIDTH);
+  const [chartHeight, setChartHeight] = useState(DEFAULT_CHART_HEIGHT);
   useLayoutEffect(() => {
     if (!box || typeof ResizeObserver !== "function") return undefined;
-    const measure = () => setChartWidth(steppedWidth(box.clientWidth));
+    const measure = () => {
+      setChartWidth(steppedWidth(box.clientWidth));
+      setChartHeight(steppedHeight(box.clientHeight));
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(box);
@@ -281,17 +305,19 @@ export const BarWidget = memo(function BarWidget({ data, timezone, kind, onKind,
     // The chart (or the sentence that stands in its place), the one reserved line, and the select: the same three children in every state, so the select
     // never remounts (it keeps the focus the viewer gave it) and a line appearing moves nothing.
     const sentence = hasNoBars(data.values) ? emptyBreakdownText(breakdown, data.source) : null;
-    const line = breakdownLine(breakdown, data.unit);
+    // The card shows the sum on the card face ("~262.07 MWh"); one hover away is the exact figure with its marks ("~262,071.80 kWh").
+    const line = breakdownCardLine(breakdown, data.unit, data.source);
+    const exact = breakdownLine(breakdown, data.unit);
     return (
       <div className="widget-bars">
         {sentence !== null ? (
           <p className="widget-empty">{sentence}</p>
         ) : (
           <div ref={setBox} className="widget-chart" role="img" aria-label={breakdownDescription(data, breakdown)}>
-            <BreakdownBars data={data} timezone={timezone} theme={theme} chartWidth={chartWidth} splitDisabled={splitDisabled} />
+            <BreakdownBars data={data} timezone={timezone} theme={theme} chartWidth={chartWidth} chartHeight={chartHeight} parents={parents} splitDisabled={splitDisabled} />
           </div>
         )}
-        <p className="bars-note" title={line}>{line}</p>
+        <p className="bars-note" title={exact}>{line}</p>
         <SplitBy data={data} current={kind ?? breakdown.kind} onKind={onKind} disabled={splitDisabled} />
       </div>
     );
@@ -303,9 +329,9 @@ export const BarWidget = memo(function BarWidget({ data, timezone, kind, onKind,
   if (empty) return <p className="widget-empty">No data in this range.</p>;
   // The canvas is a picture: the box around it is the chart's text alternative (the figures themselves are in the Details panel).
   return (
-    <div ref={setBox} className="widget-chart" role="img" aria-label={chartDescription("bar", data)}>
+    <div ref={setBox} className="widget-chart" role="img" aria-label={chartDescription("bar", data, parents)}>
       <ReactECharts
-        option={legend.apply(barOption(data, timezone, theme, chartWidth), data.mode === "series" ? data.series.map((s) => s.asset_id) : [])} onEvents={legend.onEvents}
+        option={legend.apply(barOption(data, timezone, theme, chartWidth, undefined, parents, chartHeight), data.mode === "series" ? data.series.map((s) => s.asset_id) : [])} onEvents={legend.onEvents}
         style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge
       />
     </div>

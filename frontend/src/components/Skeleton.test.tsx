@@ -841,6 +841,28 @@ describe("WidgetSkeleton, the variants of a comparing stat and a breakdown by ki
     expect(container.querySelectorAll(".sk-line")).toHaveLength(0); // blocks of a set height, so each row is the loaded row's height
   });
 
+  it("names each row of a comparing stat's skeleton for the stylesheet, in the loaded card's order, so the two months sit side by side from 360px exactly as the real card (w27)", () => {
+    render(<WidgetSkeleton type="stat" shape="compare-stat" label="Loading Power" />);
+    const rows = rowsOf(screen.getByRole("status"));
+    expect(rows.map((row) => row.className)).toEqual([
+      "sk sk-block sk-fig", "sk sk-block sk-name", "sk sk-block sk-win", "sk-compare-last", "sk sk-block sk-lastwin", "sk sk-block sk-change", "sk sk-block sk-note",
+    ]);
+    const loaded = render(<StatWidget data={compareStatData()} live={false} />).container.querySelector(".stat")!;
+    expect(rowsOf(loaded).map((row) => row.className.split(" ").find((c) => /^(big|stat-name|stat-window|stat-last|stat-change|stat-note)$/.test(c)))).toEqual([
+      "big", "stat-name", "stat-window", "stat-last", "stat-window", "stat-change", "stat-note",
+    ]);
+  });
+
+  it("sets the figure row of a stat and a gauge skeleton from the real figure's clamp (--fig-size), not from a fixed 28px", () => {
+    const heightOf = (el: Element | null) => (el as HTMLElement).getAttribute("style") ?? "";
+    const stat = render(<WidgetSkeleton type="stat" label="Loading Energy" />).container;
+    expect(heightOf(stat.querySelector(".sk-block"))).toContain("--fig-size");
+    const gauge = render(<WidgetSkeleton type="gauge" label="Loading Gauge" />).container;
+    expect(heightOf(gauge.querySelector(".sk-line"))).toContain("--fig-size");
+    const compare = render(<WidgetSkeleton type="stat" shape="compare-stat" label="Loading Cost" />).container;
+    expect(heightOf(compare.querySelector(".sk-fig"))).toContain("--fig-size");
+  });
+
   it("draws the chart, the reserved line and the Split by row for a breakdown by kind", () => {
     render(<WidgetSkeleton type="bar" shape="kind-bars" label="Loading Racks" />);
     const region = screen.getByRole("status");
@@ -848,7 +870,22 @@ describe("WidgetSkeleton, the variants of a comparing stat and a breakdown by ki
     const rows = rowsOf(region);
     expect(rows).toHaveLength(3); // the loaded .widget-bars has the chart, .bars-note and .bars-split
     expect(rows[2]).toHaveClass("sk-split");
-    expect(rows[2].children).toHaveLength(2);
+    expect(rows[2].children).toHaveLength(2); // the label and the select: a card with no tip in its row (the editor's grid and preview)
+  });
+
+  it("draws the help button's slot between 'Split by' and the select of a live card, so the select does not move 32 px when the data lands (w27 P1)", () => {
+    const { container } = render(<WidgetSkeleton type="bar" shape="kind-bars" label="Loading Racks" tip />);
+    const row = container.querySelector(".sk-split")!;
+    expect([...row.children].map((el) => (el as HTMLElement).style.width)).toEqual(["45px", "24px", "120px"]);
+    expect(row.children[1]).toHaveClass("sk-tip");
+    // The 24 px of the placeholder is the real button's: .tip-btn in app.css (the row's 8px gap is the same in both rows, .sk-split and .bars-split).
+    expect(/\.tip-btn\s*\{[^}]*width:\s*24px[^}]*height:\s*24px/.test(readFileSync("src/app.css", "utf8"))).toBe(true);
+    const widgets = readFileSync("src/styles/widgets.css", "utf8");
+    expect(/\.widget-sk-kind \.sk-split\s*\{[^}]*gap:\s*8px/.test(widgets)).toBe(true);
+    expect(/\.bars-split\s*\{[^}]*gap:\s*8px/.test(widgets)).toBe(true);
+    // a card with no Details button (the editor) draws no tip in its loaded row, so its skeleton has no slot either
+    const loaded = render(<WidgetSkeleton type="bar" shape="kind-bars" label="Loading Racks" />).container.querySelector(".sk-split")!;
+    expect(loaded.querySelector(".sk-tip")).toBeNull();
   });
 
   it("is the plain chart box for a comparing chart, and the plain shapes for every other card", () => {

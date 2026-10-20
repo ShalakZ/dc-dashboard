@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { roleLabel } from "./roles";
-import { userBlock } from "./shell";
+import { markGuideSeen, userBlock } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // Security headers (deploy/security-headers.caddy) on the state the journey, discovery and phase3 projects leave behind: admin
 // `admin` / `correct-horse`, assets Site > Panel 01 ..., a source `sim`, the dashboard "Phase 3 overview", and a collector that has

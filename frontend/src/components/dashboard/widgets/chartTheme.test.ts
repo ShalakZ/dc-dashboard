@@ -2,7 +2,8 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { baseTokens, resolveVar } from "../../../test/themeTools";
-import { axisParts, chartBase, LIGHT_CHART, legendParts, readChartTheme, seriesLook, tipHead, tipRow, useChartTheme, type ChartTheme } from "./chartTheme";
+import { valueAxisFor } from "../../../lib/chartScale";
+import { axisParts, chartBase, LIGHT_CHART, legendParts, readChartTheme, seriesLook, tipHead, tipRow, useChartTheme, valueAxisParts, type ChartTheme } from "./chartTheme";
 
 const ROOT = document.documentElement;
 const TOKENS = ["--chart-1", "--chart-2", "--chart-3", "--chart-4", "--chart-5", "--chart-6", "--chart-7", "--chart-8", "--accent", "--chart-axis-text", "--chart-axis-line", "--chart-grid", "--chart-tip-bg", "--chart-tip-text", "--chart-tip-border", "--chart-band-opacity"];
@@ -146,6 +147,20 @@ describe("the shared option parts", () => {
     expect(parts.axisTick).toEqual({ lineStyle: { color: "#2b313b" } });
     expect(parts.nameTextStyle).toMatchObject({ color: "#a3adbd", fontSize: 12 });
     expect(parts.splitLine).toEqual({ lineStyle: { color: "#222831", width: 1, type: "solid" } });
+  });
+
+  it("builds a value axis in the axis look, named and labelled by the scale its chart picked (w27)", () => {
+    const axis = valueAxisParts(dark, valueAxisFor({ unit: "kWh", source: "energy" }, [275_430.26]), { scale: true });
+    expect(axis).toMatchObject({ type: "value", name: "MWh", scale: true, axisLabel: { color: "#a3adbd", fontSize: 12 }, axisLine: { lineStyle: { color: "#2b313b" } } });
+    expect(axis.axisLabel.formatter(250_000)).toBe("250");
+    const plain = valueAxisParts(dark, valueAxisFor({ unit: "kWh", source: "energy" }, [18_000]));
+    expect(plain).toMatchObject({ type: "value", name: "kWh" });
+    expect(plain.axisLabel.formatter(18_000)).toBe("18,000");
+    expect(valueAxisParts(dark, valueAxisFor({ unit: null, source: "metric" }, [3])).name).toBeUndefined();
+  });
+
+  it("drops the value ticks that would be drawn over each other, so a chart at its minimum height never crams its axis (w27 R5)", () => {
+    expect(valueAxisParts(dark, valueAxisFor({ unit: "kWh", source: "energy" }, [4_000])).axisLabel.hideOverlap).toBe(true);
   });
 
   it("draws the legend at the bottom, scrolling, in 12px axis ink: a 12x3 line for lines, a 10x10 square for bars", () => {

@@ -30,10 +30,17 @@ lacks says "No access".
   **Details**, a panel with what the card shows, its time window and freshness, what its markers mean and its figures as text (where a
   figure says "no rate", a person who may open Tariffs gets a link to it there). With `assets.view` as well, a dashboard can be pointed at
   one asset with the **Focus** button (held in the address as `?asset=<id>` and shown in the trail; the cards set to follow it show that
-  asset), and a click on a bar of a breakdown narrows it further or opens the asset's page; **New dashboard** can **Start from**
-  Power, a starter with this month's energy and cost against last month (see
-  [A focus asset, Drill-through and The Power starter](dashboards-and-billing.md#dashboards)).
-  An admin (`dashboards.default`) can mark one as the default, and the sidebar entry and the
+  asset), and a click on a bar of a breakdown narrows it further or opens the asset's page (see
+  [A focus asset and Drill-through](dashboards-and-billing.md#dashboards)). Cards write a figure short ("275.43 MWh") and keep the exact one
+  in the hover title, Details, tables and tooltips ([How figures are shown](dashboard-figures-and-templates.md#how-figures-are-shown)).
+  The dashboard's header has, on a dashboard with a data card, **Updated 20:09** (when the oldest figure on screen was read) and
+  **Refresh**; on a dashboard with something to explain, **How to read this** (reopens the first-run panel **How to read this
+  dashboard**; **Got it** closes it); and, with `assets.view`, **Focus**
+  ([the header](dashboard-figures-and-templates.md#the-header-updated-and-refresh)). **New dashboard** (and the cards on an empty list)
+  opens a gallery dialog: **Choose a template** (**Recommended for this site**, **More templates**, **Blank** last), then
+  **Name**, **Range**, **Back to templates**, **Cancel** and **Create**. The row menu of the Dashboards list has **Make a copy**
+  for a role that may change dashboards ([templates and copies](dashboard-figures-and-templates.md#starting-a-dashboard-from-a-template)).
+  An admin (`dashboards.default`) can mark one as the default (**Make default** in the same menu), and the sidebar entry and the
   first page after signing in then open it. See [Dashboards and billing](dashboards-and-billing.md).
 - **Billing** (everyone): needs `billing.view`. Energy and cost per asset per day and per month, picked with the Year and Month
   selects, with a CSV export (`billing.export`); on a page about 1,600 px wide or more (a 1,920 px screen at 100 percent scaling, sidebar open) the month controls and the table
@@ -143,4 +150,4 @@ lacks says "No access".
   browser. It also holds the links to Password and Sign out.
 - **Password** (everyone): change your own password; your other sessions are signed out.
 
-Related: [Install and run](install-and-run.md), [Assets and kinds](assets-and-kinds.md), [Sources and discovery](sources-and-discovery.md), [Dashboards and billing](dashboards-and-billing.md), [Storage](storage.md), [Roles and permissions](roles-and-permissions.md), [Operating the stack](operating.md), [Field debugging](field-debugging.md).
+Related: [Install and run](install-and-run.md), [Assets and kinds](assets-and-kinds.md), [Sources and discovery](sources-and-discovery.md), [Dashboards and billing](dashboards-and-billing.md), [Dashboard figures, templates and the guide](dashboard-figures-and-templates.md), [Storage](storage.md), [Roles and permissions](roles-and-permissions.md), [Operating the stack](operating.md), [Field debugging](field-debugging.md).

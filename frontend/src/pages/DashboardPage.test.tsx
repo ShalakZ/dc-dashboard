@@ -8,6 +8,7 @@ import { downloadCsv } from "../lib/download";
 import { progress } from "../lib/progress";
 import { authed, breakdownBlock, breakdownData, config, dashboard, dataFor, textWidget, valueRow, valuesData, widget, widgetDataRoute } from "../test/dashboardFixtures";
 import { mockFetch, type Routes } from "../test/fetchMock";
+import { markGuideSeen } from "../test/guideSeen";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithDataRouter, renderWithProviders } from "../test/render";
 import { userFor } from "../test/users";
@@ -168,6 +169,21 @@ describe("DashboardPage (view)", () => {
     expect(FakeEventSource.instances).toHaveLength(1);
   });
 
+  it("reads a big streamed figure on the card face and keeps the exact value in the title (w27)", async () => {
+    open();
+    const stat = within(await region("Current power"));
+    await stat.findByText("10.50");
+    await waitFor(() => expect(FakeEventSource.open).toHaveLength(1));
+    act(() => FakeEventSource.open[0].onopen?.());
+    act(() => FakeEventSource.open[0].emit([[7, 1_760_000_000, 275430.2575, 0]]));
+    expect(stat.getByText("275.43")).toHaveClass("stat-num");
+    expect(stat.getByText("MW")).toHaveClass("stat-unit");
+    expect(stat.getByText("275.43").closest(".big")).toHaveAttribute("title", "275,430.26 kW");
+    act(() => FakeEventSource.open[0].emit([[7, 1_760_000_001, 1234.5, 0]]));
+    expect(stat.getByText("1,234.50")).toBeInTheDocument(); // below 10,000 the base unit keeps two decimals and gains separators
+    expect(stat.getByText("kW")).toHaveClass("stat-unit");
+  });
+
   it("goes back to the fetched figures when the stream drops, and to the stream when it is back", async () => {
     open();
     const stat = within(await region("Current power"));
@@ -262,7 +278,11 @@ describe("DashboardPage (view)", () => {
         return type === "table" ? { status: 500, body: { detail: "query failed" } } : { body: dataFor(type) };
       },
     });
-    expect(await within(await region("Assets")).findByRole("alert")).toHaveTextContent("query failed");
+    // w27 R11: the card says that it could not be loaded and when it tries again; the server's own text is the title.
+    const alert = await within(await region("Assets")).findByRole("alert");
+    expect(alert).toHaveTextContent("This card could not be loaded. It tries again in 30 seconds.");
+    expect(alert).not.toHaveTextContent("query failed");
+    expect(alert).toHaveAttribute("title", "query failed");
     const stat = within(await region("Current power"));
     await stat.findByText("10.50");
     expect(stat.queryByRole("alert")).not.toBeInTheDocument();
@@ -280,6 +300,12 @@ describe("DashboardPage (view)", () => {
     open("viewer", { "GET /api/dashboards/3": { body: dashboard({ widgets: [] }) } });
     expect(await screen.findByText("This dashboard has no widgets yet.")).toBeInTheDocument();
     expect(FakeEventSource.instances).toHaveLength(0);
+  });
+
+  it("tells a role that can edit how to add one, and a role that cannot keeps the plain sentence (w27 R11)", async () => {
+    open("operator", { "GET /api/dashboards/3": { body: dashboard({ widgets: [] }) } });
+    expect(await screen.findByText("This dashboard has no widgets yet. Use Edit, then Add widget.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
   });
 
   it("keeps showing the dashboard, with a notice, when a background refetch fails", async () => {
@@ -562,6 +588,7 @@ describe("DashboardPage with a focus asset (the header)", () => {
   });
 
   describe("a click on a bar narrows the dashboard only where something follows the focus (W2)", () => {
+    beforeEach(markGuideSeen); // these dashboards have a following card and a breakdown: the guide is not what is looked at here
     const hall = { id: 2, name: "Hall 1" }; // has children in `deep`
     const bars = widget(8, "bar", { title: "Hall bars", config: config({ assets: [], source: "energy", metric: null, aggregation: "sum", bars: "kind", kind: "Hall", range: "this_month" }), x: 0, y: 0, w: 6, h: 5 });
     const followed = widget(9, "stat", { title: "Follows", config: config({ assets: [], source: "energy", metric: null, aggregation: "sum", range: "this_month", scope: "focus" }), x: 6, y: 0, w: 3, h: 2 });
@@ -589,6 +616,7 @@ describe("DashboardPage with a focus asset (the header)", () => {
   });
 
   describe("the Focus button and the link to the asset's page", () => {
+    beforeEach(markGuideSeen);
     const focusButton = () => screen.findByRole("button", { name: "Focus" });
 
     it("is a button with a dialog behind it, after the range select and before Edit", async () => {

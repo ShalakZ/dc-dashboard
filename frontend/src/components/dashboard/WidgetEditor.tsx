@@ -28,6 +28,7 @@ export const PREVIEW_DELAY_MS = 300;
 const PREVIEW_KEY = "widget-editor-preview";
 
 const COMPARE_TIP = "Only complete days count: this month from the 1st up to yesterday, against the same number of days from the 1st of last month, so both sides cover the same number of days. On the 1st there is nothing to compare yet, and the card says so.";
+const SHOW_TIP = "Choose the assets this card shows here, or let it follow the dashboard's Focus.";
 const KIND_TIP = "Choose the level that carries the meters, for example Panels or Racks. Each bar is that asset's own reading. If two levels both have meters (racks and the panels that feed them), a total over both counts the same energy twice.";
 
 interface Props {
@@ -77,8 +78,9 @@ interface ScopeChoiceProps {
 function ScopeChoice({ form, name, noteId, onChoose }: ScopeChoiceProps) {
   const offered = SCOPE_OPTIONS.filter((o) => o.scope !== "children" || form.scope === "children" || scopeAllowed(form, "children"));
   return (
-    <fieldset aria-describedby={form.scope === "fixed" ? undefined : noteId}>
-      <legend>Show</legend>
+    <fieldset aria-describedby={form.scope === "fixed" ? undefined : noteId} aria-labelledby={`${name}-legend`}>
+      {/* The tip is in the legend but the group is named by the word alone (aria-labelledby), so a lookup of the group "Show" still finds it. */}
+      <legend><span id={`${name}-legend`}>Show</span> <InfoTip>{SHOW_TIP}</InfoTip></legend>
       {offered.map((o) => (
         <label key={o.scope}>
           <input type="radio" name={name} checked={form.scope === o.scope} onChange={() => onChoose(o.scope)} />

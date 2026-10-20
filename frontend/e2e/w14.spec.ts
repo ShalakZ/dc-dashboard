@@ -1,6 +1,9 @@
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
 import { answer, defs, type ShowcaseWidget, type WidgetRequest } from "./w13Showcase";
 import { node as nid, SMALL, smallModel, type ApiGraphModel } from "./graphModel";
+import { markGuideSeen } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // W14 (six small polish items after w12c and w13): P1 the labels of a bar chart wrap instead of colliding, P2 the Discovery source card shows a long name on two lines, P3 the Discovery bar keeps
 // the words of its counts longer and an ON control does not look like the keyboard focus, P4 the Details table reads plainly in a wider drawer, P5 Details offers a link to Tariffs next to "no rate",

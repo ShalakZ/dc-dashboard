@@ -6,9 +6,9 @@ import { isStaleMove, moveRefusals } from "../lib/moveText";
 import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import {
-  auditPageOptions, auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
+  auditPageOptions, auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDashboardTemplates, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData, widgetRefetchMs,
-  useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
+  useCopyDashboard, useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
   useAddStarterKinds, useAssetKinds, useAssets, useBulkDeleteAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
   loadMovePreview, useMoveAssets, useRemoveDiscoveredSources, useTidyLayout, useBillingMonths, useBillingMonthCheck, useCloseBillingMonth, useReopenBillingMonth, monthCheckRefetchMs,
 } from "./queries";
@@ -551,6 +551,33 @@ describe("useWidgetData refetching (w24)", () => {
     expect(asked(calls)).toBe(1);
     await advance(60_000); // 5 min 1 s
     expect(asked(calls)).toBe(2);
+  });
+
+  // w27 R13.4. React Query 5 asks again on its interval only while the page is visible (focusManager, refetchIntervalInBackground is off): a dashboard left in a
+  // hidden tab sends no request for its figures and catches up when the tab is seen again. This pins what the app relies on; nothing in the app sets it.
+  describe("a hidden tab", () => {
+    const setVisibility = (state: "visible" | "hidden") => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+      act(() => { document.dispatchEvent(new Event("visibilitychange", { bubbles: true })); });
+    };
+    afterEach(() => { delete (document as unknown as Record<string, unknown>).visibilityState; });
+
+    it("pauses the refetch of a widget's figures, a plain one and a comparing one, and reads again when the tab is visible", async () => {
+      vi.useFakeTimers();
+      const calls = mockFetch({ "POST /api/widget-data": { body: answer } });
+      renderHook(() => ({
+        plain: useWidgetData("stat", base, "this_month"),
+        comparing: useWidgetData("table", { ...base, compare: "same_days_last_month" }, "this_month"),
+      }), { wrapper: stableWrapper() });
+      await advance(1_000);
+      expect(asked(calls)).toBe(2);
+      setVisibility("hidden");
+      await advance(10 * 60_000); // twenty intervals of the plain widget and two of the comparing one
+      expect(asked(calls), "nothing was asked for while the tab was hidden").toBe(2);
+      setVisibility("visible");
+      await advance(1_000);
+      expect(asked(calls), "back in view, both read again").toBeGreaterThan(2);
+    });
   });
 });
 
@@ -1601,5 +1628,47 @@ describe("closing and reopening a billing month (W11)", () => {
     await waitFor(() => expect(costsAnswered).toBe(1));
     await act(async () => { await result.current.close.mutateAsync({ month: "2026-09", note: "" }); });
     expect(costsAnswered).toBe(2);
+  });
+});
+
+describe("dashboard templates (w27)", () => {
+  it("reads the server's templates once, under its own key", async () => {
+    const calls = mockFetch({ "GET /api/dashboard-templates": { body: { nothing_metered: false, templates: [] } } });
+    const { result } = renderHook(() => useDashboardTemplates(), { wrapper });
+    await waitFor(() => expect(result.current.data).toEqual({ nothing_metered: false, templates: [] }));
+    expect(calls.filter((c) => c.path === "/api/dashboard-templates")).toHaveLength(1);
+    expect(keys.dashboardTemplates).toEqual(["dashboards", "templates"]);
+  });
+
+  it("asks for nothing while it is disabled (a role without dashboards.edit)", async () => {
+    const calls = mockFetch({ "GET /api/dashboard-templates": { body: { nothing_metered: false, templates: [] } } });
+    const { result } = renderHook(() => useDashboardTemplates(false), { wrapper });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("copying a dashboard (w27)", () => {
+  const listItem = { id: 3, name: "Hall A", range: "24h", widget_count: 2, updated_at: "2026-10-08T06:00:00+00:00" };
+
+  it.each([
+    ["a copy", 201, { id: 9, name: "Hall A (copy)", range: "24h", updated_at: "2026-10-08T06:00:00+00:00", widgets: [] }],
+    ["a refused copy (the name is taken)", 409, { detail: "a dashboard with this name already exists" }],
+    ["a copy of a dashboard that is gone", 404, { detail: "dashboard not found" }],
+  ])("posts to the dashboard's copy route with no body, and after %s the dashboard list is read again (onSettled)", async (_name, status, reply) => {
+    const calls = mockFetch({
+      "GET /api/dashboards": { body: [listItem] },
+      "POST /api/dashboards/3/copy": { status, body: reply },
+    });
+    const { result } = renderHook(() => ({ list: useDashboards(), copy: useCopyDashboard() }), { wrapper: stableWrapper() });
+    const reads = () => calls.filter((c) => c.method === "GET" && c.path === "/api/dashboards").length;
+    await waitFor(() => expect(reads()).toBe(1));
+    await act(async () => { await result.current.copy.mutateAsync(3).catch(() => undefined); });
+    expect(calls.filter((c) => c.method === "POST").map((c) => [c.path, c.body])).toEqual([["/api/dashboards/3/copy", undefined]]);
+    await waitFor(() => expect(reads()).toBe(2));
+    if (status === 201) expect(result.current.copy.data).toMatchObject({ id: 9, name: "Hall A (copy)" });
+    else expect(result.current.copy.error).toBeInstanceOf(ApiError);
   });
 });

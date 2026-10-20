@@ -1,5 +1,6 @@
 import type { Asset, WidgetBreakdown, WidgetData } from "../api/types";
 import { kindKey } from "./kinds";
+import { cardText, familyOf, pickScale } from "./figures";
 import { figureText, unitSuffix } from "./widgetFormat";
 
 /*
@@ -14,25 +15,41 @@ export const pluralKind = (kind: string): string => (/s$/i.test(kind) ? kind : `
 /** The kind for `count` assets: as it is for one, plural for any other number. */
 export const kindNoun = (kind: string, count: number): string => (count === 1 ? kind : pluralKind(kind));
 
-/** The total of the bars left out, as a figure with its `~` and `*` marks and unit; a dash when nobody could work it out. `without` is how many of them had no figure (the total leaves them out). */
-export function moreFigure(breakdown: WidgetBreakdown, unit: string | null): { text: string; without: number } {
+/** The total of the bars left out as text (marks and unit included; a dash when nobody could work it out), and `without`: how many of them had no figure (the total leaves them out). */
+export interface MoreFigure { text: string; without: number }
+
+const noneLeft = (): MoreFigure => ({ text: DASH, without: 0 });
+const withoutOf = (more: WidgetBreakdown["more"]): number => Math.max(0, more.count - more.with_value);
+
+/** The EXACT face (Details' "Not drawn" row, the line's title): the base unit, grouped, two decimals, marks kept: "~262,071.80 kWh". */
+export function moreFigure(breakdown: WidgetBreakdown, unit: string | null): MoreFigure {
   const { more } = breakdown;
-  if (more.value === null) return { text: DASH, without: 0 };
-  return { text: `${figureText(more.value, more)}${unitSuffix(unit)}`, without: Math.max(0, more.count - more.with_value) };
+  if (more.value === null) return noneLeft();
+  return { text: `${figureText(more.value, more)}${unitSuffix(unit)}`, without: withoutOf(more) };
 }
 
-/**
- * "and 107 more Racks: 1234.50 kWh in all" - the sum of the bars left out (never an "Other" bar), with its `~` and `*` marks, and how many of them had no
- * figure (the sum leaves them out). Empty when nothing was left out. A sum nobody could work out is a dash.
- */
-export function moreText(breakdown: WidgetBreakdown, unit: string | null): string {
+/** The CARD face (the line under the chart, w27): the sum in a scale of its own, "~262.07 MWh", "275.43k* QAR". `source` decides the family (a cost scales in k and M). */
+export function moreCard(breakdown: WidgetBreakdown, unit: string | null, source: WidgetData["source"]): MoreFigure {
+  const { more } = breakdown;
+  if (more.value === null) return noneLeft();
+  return { text: cardText(more.value, pickScale(familyOf(unit, source), unit, [more.value]), more), without: withoutOf(more) };
+}
+
+/** The sentence around a figure: "and 107 more Racks: <figure> in all (3 with no data)". Empty when nothing was left out; a sum nobody could work out is a dash. */
+function moreSentence(breakdown: WidgetBreakdown, figure: MoreFigure): string {
   const { more } = breakdown;
   if (more.count <= 0) return "";
   const head = `and ${more.count} more ${kindNoun(breakdown.kind, more.count)}:`;
-  const { text, without } = moreFigure(breakdown, unit);
-  if (more.value === null) return `${head} ${text}`;
-  return `${head} ${text} in all${without > 0 ? ` (${without} with no data)` : ""}`;
+  if (more.value === null) return `${head} ${figure.text}`;
+  return `${head} ${figure.text} in all${figure.without > 0 ? ` (${figure.without} with no data)` : ""}`;
 }
+
+/** "and 107 more Racks: 1,234.50 kWh in all" on the EXACT face - the sum of the bars left out (never an "Other" bar), with its `~` and `*` marks, and how many of them had no figure. */
+export const moreText = (breakdown: WidgetBreakdown, unit: string | null): string => moreSentence(breakdown, moreFigure(breakdown, unit));
+
+/** The same sentence on the CARD face: "and 219 more Circuits: ~262.07 MWh in all (12 with no data)". */
+export const moreCardText = (breakdown: WidgetBreakdown, unit: string | null, source: WidgetData["source"]): string =>
+  moreSentence(breakdown, moreCard(breakdown, unit, source));
 
 /** "3 Racks are inside other Racks and are counted there." Empty when none is. */
 export function insideOthersText(breakdown: WidgetBreakdown): string {
@@ -44,9 +61,13 @@ export function insideOthersText(breakdown: WidgetBreakdown): string {
     : `${n} ${noun} are inside other ${pluralKind(breakdown.kind)} and are counted there.`;
 }
 
-/** The card's ONE line under the chart: the "more" sentence, then the "inside others" one. Empty when neither applies. */
+/** The exact face of the card's ONE line under the chart (its `title`): the "more" sentence, then the "inside others" one. Empty when neither applies. */
 export const breakdownLine = (breakdown: WidgetBreakdown, unit: string | null): string =>
   [moreText(breakdown, unit), insideOthersText(breakdown)].filter(Boolean).join(" ");
+
+/** The line as the card draws it: the card face of the sum, then the "inside others" sentence. Its `title` is `breakdownLine`. */
+export const breakdownCardLine = (breakdown: WidgetBreakdown, unit: string | null, source: WidgetData["source"]): string =>
+  [moreCardText(breakdown, unit, source), insideOthersText(breakdown)].filter(Boolean).join(" ");
 
 /**
  * A bar of a breakdown that recorded nothing: no figure, or the zero of a meter that was silent for the whole range, both flagged `no_data`. It is drawn as

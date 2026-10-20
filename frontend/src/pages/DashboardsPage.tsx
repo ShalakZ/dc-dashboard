@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { useDashboards, useDefaultDashboard, useDeleteDashboard, usePutDefaultDashboard, useSite } from "../api/queries";
+import { useCopyDashboard, useDashboards, useDashboardTemplates, useDefaultDashboard, useDeleteDashboard, usePutDefaultDashboard, useSite } from "../api/queries";
 import type { DashboardListItem } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
-import { CreateDashboardDialog, type StartFrom } from "../components/dashboard/CreateDashboardDialog";
+import { CreateDashboardDialog } from "../components/dashboard/CreateDashboardDialog";
+import { TemplateGallery, type TemplateChoice } from "../components/dashboard/TemplateGallery";
 import { PageHeader } from "../components/PageHeader";
-import { RowActions } from "../components/RowActions";
+import { RowActions, type RowAction } from "../components/RowActions";
 import { TableSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
@@ -15,18 +16,22 @@ import { formatSiteDateTime } from "../lib/siteTime";
 
 export function DashboardsPage() {
   const { can } = useAuth();
-  const canEdit = can("dashboards.edit"); // New dashboard and the trash
-  const canDefault = can("dashboards.default"); // the Make default menu
-  const hasActions = canEdit || canDefault;
+  const canEdit = can("dashboards.edit"); // New dashboard, Make a copy and the trash
+  const canDefault = can("dashboards.default"); // Make default and Clear default
+  const hasActions = canEdit || canDefault; // the Actions column: the menu holds what the role may do, the trash is the editor's
   const list = useDashboards();
   const site = useSite();
   const remove = useDeleteDashboard();
+  const copy = useCopyDashboard();
   const defaultId = useDefaultDashboard().data?.dashboard_id ?? null;
   const setDefault = usePutDefaultDashboard();
   const { run, error: actionError } = useAction();
   const [ask, confirmDialog] = useConfirm();
   const toast = useToast();
-  const [creating, setCreating] = useState<StartFrom | null>(null); // what the open New dashboard dialog starts from
+  // The server's templates, for editors only (the route is theirs): the empty page draws them inline and the dialog reads the same answer.
+  const templates = useDashboardTemplates(canEdit);
+  // The open New dashboard dialog: null = closed; `choice` null = on its first step, a card = straight on its second (a card of the empty page was clicked).
+  const [creating, setCreating] = useState<{ choice: TemplateChoice | null } | null>(null);
 
   const failure = list.error ?? site.error;
   const timezone = site.data?.timezone;
@@ -36,6 +41,12 @@ export function DashboardsPage() {
     if (!(await ask({ title: `Delete dashboard "${d.name}"?`, message: `Its widgets go with it.${warning}` }))) return;
     await remove.mutateAsync(d.id);
     toast.success(`Dashboard "${d.name}" deleted`);
+  });
+
+  // The list is read again by the hook (a refusal too), so the copy appears in its place by name order; a toast names it and nobody is taken away from the list.
+  const makeCopy = (d: DashboardListItem) => run(async () => {
+    const made = await copy.mutateAsync(d.id);
+    toast.success(`Copied to ${made.name}`);
   });
 
   // The menu closes when an item is chosen and the badge moves only after the list is read again: the toast says what just happened.
@@ -48,30 +59,38 @@ export function DashboardsPage() {
     toast.success("Default dashboard cleared");
   });
 
+  // The row's menu holds what the role may do: Make a copy first (editors), then the default item (dashboards.default). Make a copy waits while a copy is on its way.
+  const rowItems = (d: DashboardListItem): RowAction[] => [
+    ...(canEdit ? [{ label: "Make a copy", onSelect: () => makeCopy(d), disabled: copy.isPending }] : []),
+    ...(canDefault ? [d.id === defaultId ? { label: "Clear default", onSelect: clearDefault } : { label: "Make default", onSelect: () => makeDefault(d) }] : []),
+  ];
+
   // The heading is always there (App.test.tsx finds the page by it); the body waits for the list and the site zone.
   return (
     <>
       <PageHeader
         title="Dashboards"
-        actions={canEdit ? <button type="button" className="primary" onClick={() => setCreating("blank")}>New dashboard</button> : undefined}
+        actions={canEdit ? <button type="button" className="primary" onClick={() => setCreating({ choice: null })}>New dashboard</button> : undefined}
       />
       {actionError && <p className="error" role="alert">{actionError}</p>}
       {confirmDialog}
       {failure && <p className="error" role="alert">{failure.message}</p>}
       {!failure && (!list.data || timezone === undefined) && <TableSkeleton columns={hasActions ? 4 : 3} rows={4} label="Loading dashboards" />}
       {list.data && timezone !== undefined && list.data.length === 0 && (
-        <div className="empty">
-          <span className="empty-icon" aria-hidden="true">
-            <svg className="i" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="9" rx="1.5" /><rect x="13.5" y="3" width="7.5" height="5" rx="1.5" /><rect x="13.5" y="11" width="7.5" height="10" rx="1.5" /><rect x="3" y="15" width="7.5" height="6" rx="1.5" /></svg>
-          </span>
-          <p>No dashboards yet.{canEdit ? " Create one to get started." : ""}</p>
+        <>
+          <div className="empty">
+            <span className="empty-icon" aria-hidden="true">
+              <svg className="i" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="9" rx="1.5" /><rect x="13.5" y="3" width="7.5" height="5" rx="1.5" /><rect x="13.5" y="11" width="7.5" height="10" rx="1.5" /><rect x="3" y="15" width="7.5" height="6" rx="1.5" /></svg>
+            </span>
+            <p>No dashboards yet.{canEdit ? " Create one to get started." : ""}</p>
+          </div>
+          {/* A card opens the second step of the dialog; a viewer has the sentence above and nothing to press. */}
           {canEdit && (
-            <div className="row start-from-buttons">
-              <button type="button" onClick={() => setCreating("blank")}>Start blank</button>
-              <button type="button" onClick={() => setCreating("power")}>Start from Power</button>
+            <div className="tpl-inline">
+              <TemplateGallery data={templates.data} error={templates.error} onPick={(choice) => setCreating({ choice })} />
             </div>
           )}
-        </div>
+        </>
       )}
       {list.data && timezone !== undefined && list.data.length > 0 && (
         <div className="table-wrap">
@@ -91,14 +110,7 @@ export function DashboardsPage() {
                   {hasActions && (
                     <td className="act">
                       <div className="act-row">
-                        {canDefault && (
-                          <RowActions
-                            label={`Actions for ${d.name}`}
-                            items={[d.id === defaultId
-                              ? { label: "Clear default", onSelect: clearDefault }
-                              : { label: "Make default", onSelect: () => makeDefault(d) }]}
-                          />
-                        )}
+                        <RowActions label={`Actions for ${d.name}`} items={rowItems(d)} />
                         {canEdit && <TrashButton label={`Delete ${d.name}`} onClick={() => confirmDelete(d)} />}
                       </div>
                     </td>
@@ -109,7 +121,7 @@ export function DashboardsPage() {
           </table>
         </div>
       )}
-      {creating && <CreateDashboardDialog initialStart={creating} onClose={() => setCreating(null)} />}
+      {creating && <CreateDashboardDialog initialChoice={creating.choice} onClose={() => setCreating(null)} />}
     </>
   );
 }

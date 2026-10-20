@@ -1,5 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
+import { markGuideSeen } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // W24 (the power dashboard, part 3a): a stat and a daily chart that set this month so far against the same days of last month, and a bar chart with one bar per asset of a kind ("Split by" on the
 // card). Admin `admin` / `correct-horse`, as in the earlier projects. The contract is the plan docs/superpowers/plans/2026-10-19-w24-power-compare-and-breakdown.md ("API contract" and the last section).
@@ -16,7 +19,7 @@ import { expect, test, type APIRequestContext, type Browser, type Locator, type 
 //       the `last_state` texts (not in the closed figures, another zone), no readings last month, another currency, and "Nothing to compare yet" on the 1st.
 //   3   the compare DAILY CHART: read through its text alternative (the legend is canvas) and the hover tooltip, which names both dates of a day and leaves out a day with no readings; light and
 //       dark; the Details table.
-//   4   the BREAKDOWN: "and 107 more Racks: 1234.50 kWh in all", the marks (`~`, "with no data", "inside other Racks"), "Split by" (accessible name, "Rack (117)"), a choice sends a request whose
+//   4   the BREAKDOWN: "and 107 more Racks: 1,234.50 kWh in all", the marks (`~`, "with no data", "inside other Racks"), "Split by" (accessible name, "Rack (117)"), a choice sends a request whose
 //       config has that kind, keeps the focus, saves nothing; "None of the 8 Panels under W24 Hall 1 has energy readings."; "No Racks under W24 Hall 1. Choose another kind in Split by.".
 //   5   the EDITOR: the comparison box locks Widget range and turns the picker single; Bars gains "One bar per asset of a kind" with Look under, One bar for each, Bars to show and Whole site; the
 //       saved configs hold compare, kind, root and top only when they are not the default (read back with GET /api/dashboards/<id>); keyboard only; Escape closes the innermost layer.
@@ -495,11 +498,11 @@ function expectGeometry(now: Geometry, base: Geometry, what: string): void {
 async function expectEnergyStat(page: Page, where: string): Promise<void> {
   const card = frameOf(page, T_KWH);
   const s = statOf(card);
-  await expect(s.big, `${where}: the headline is the figure of days 1 to 17`).toHaveText("1124.00 kWh");
+  await expect(s.big, `${where}: the headline is the figure of days 1 to 17`).toHaveText("1,124.00 kWh");
   await expect(s.name).toHaveText(RACKS[0]);
   await expect(s.windows, `${where}: this month's window, then last month's`).toHaveText(["1 to 17 Oct", "1 to 17 Sep"]);
   await expect(s.lastLabel).toHaveText("Same days last month");
-  await expect(s.lastFig).toHaveText("1000.00 kWh");
+  await expect(s.lastFig).toHaveText("1,000.00 kWh");
   await expect(s.change, `${where}: the change in words and sign`).toHaveText("up 12.4 % (+124.00 kWh)");
   await expect(s.note, `${where}: no note, and the line is still there`).toHaveText("");
   await expect(card.locator(".widget-hint"), `${where}: nothing is estimated`).toHaveCount(0);
@@ -577,8 +580,8 @@ test("1. an estimated side keeps its ~ (and the footer says what it means); a fa
   await openCards(page);
   const card = frameOf(page, T_KWH);
   const s = statOf(card);
-  await expect(s.big).toHaveText("~1124.00 kWh");
-  await expect(s.lastFig).toHaveText("~1000.00 kWh");
+  await expect(s.big).toHaveText("~1,124.00 kWh");
+  await expect(s.lastFig).toHaveText("~1,000.00 kWh");
   await expect(card.locator(".widget-hint")).toHaveText("~ estimated");
 
   stub.compare = () => {
@@ -614,8 +617,8 @@ test("1. Details lists both measures for both windows by date, with the change o
   const table = drawer.locator("table.wd-table").filter({ has: page.locator("caption", { hasText: RACKS[0] }) });
   await expect(table.locator("thead th")).toHaveText(["Period", "Dates", "Energy (kWh)", `Cost (${CURRENCY})`]);
   await expect(table.locator("tbody tr")).toHaveCount(3);
-  await expect(table.locator("tbody tr").nth(0).locator("td")).toHaveText(["This month so far", "2026-10-01 to 2026-10-17", "1124.00", "168.60"]);
-  await expect(table.locator("tbody tr").nth(1).locator("td")).toHaveText(["Same days last month", "2026-09-01 to 2026-09-17", "1000.00", "150.00"]);
+  await expect(table.locator("tbody tr").nth(0).locator("td")).toHaveText(["This month so far", "2026-10-01 to 2026-10-17", "1,124.00", "168.60"]);
+  await expect(table.locator("tbody tr").nth(1).locator("td")).toHaveText(["Same days last month", "2026-09-01 to 2026-09-17", "1,000.00", "150.00"]);
   await expect(table.locator("tbody tr").nth(2).locator("td")).toHaveText(["Change", "", "up 12.4 % (+124.00 kWh)", `up 12.4 % (+18.60 ${CURRENCY})`]);
   await page.keyboard.press("Escape");
   await expect(drawer).toBeHidden();
@@ -831,15 +834,15 @@ test("3. Details of the chart lists the windows by date and the change of both m
   await expect(drawer).toBeVisible();
   await expect(drawer.getByRole("heading", { level: 3, name: "Comparison", exact: true })).toBeVisible();
   const rows = drawer.locator("table.wd-table").filter({ has: page.locator("caption", { hasText: RACKS[0] }) }).locator("tbody tr");
-  await expect(rows.nth(0).locator("td")).toHaveText(["This month so far", "2026-10-01 to 2026-10-17", "1124.00", "168.60"]);
-  await expect(rows.nth(1).locator("td")).toHaveText(["Same days last month", "2026-09-01 to 2026-09-17", "1000.00", "150.00"]);
+  await expect(rows.nth(0).locator("td")).toHaveText(["This month so far", "2026-10-01 to 2026-10-17", "1,124.00", "168.60"]);
+  await expect(rows.nth(1).locator("td")).toHaveText(["Same days last month", "2026-09-01 to 2026-09-17", "1,000.00", "150.00"]);
   await page.keyboard.press("Escape");
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // 4. The breakdown by kind
 
-const MORE_LINE = "and 107 more Racks: 1234.50 kWh in all";
+const MORE_LINE = "and 107 more Racks: 1,234.50 kWh in all";
 
 test("4. a breakdown by Rack: the line under the chart, Split by with its kinds, a choice sends that kind, keeps the focus and saves nothing", async ({ page }) => {
   test.setTimeout(150_000);
@@ -912,7 +915,7 @@ test("4. the marks travel: ~ on the sum of the rest, how many of them had no fig
     block: breakdownBlock({ more: { count: 107, with_value: 104, value: 1234.5, estimated: false, partial: false }, inside_others: 3 }), noData: false,
   });
   await openCards(page);
-  const long = "and 107 more Racks: 1234.50 kWh in all (3 with no data) 3 Racks are inside other Racks and are counted there.";
+  const long = "and 107 more Racks: 1,234.50 kWh in all (3 with no data) 3 Racks are inside other Racks and are counted there.";
   await expect(b.note).toHaveText(long);
   await expect(b.note).toHaveAttribute("title", long);
   await expect(b.note, "one line, not two").toHaveCSS("white-space", "nowrap");
@@ -925,7 +928,7 @@ test("4. the marks travel: ~ on the sum of the rest, how many of them had no fig
     block: breakdownBlock({ more: { count: 107, with_value: 107, value: 1234.5, estimated: true, partial: false } }), noData: false,
   });
   await openCards(page);
-  await expect(b.note).toHaveText("and 107 more Racks: ~1234.50 kWh in all");
+  await expect(b.note).toHaveText("and 107 more Racks: ~1,234.50 kWh in all");
   await expect(card.locator(".widget-hint"), "the footer explains the ~").toHaveText("~ estimated");
   const marked = { note: await boxOf(b.note, "the line"), row: await boxOf(b.row, "the select's row") };
   expect(marked.note.height, "the line keeps its height").toBeCloseTo(plain.note.height, 0);
@@ -1207,14 +1210,14 @@ test("5. by keyboard: Tab runs through the comparison box and its tip, Space tic
   await fieldOf(dialog, "Source").selectOption("energy");
   await settled(page);
 
-  // Tab from Title through the fields to the comparison box, its tip, the scope radios (one stop: the checked one) and the picker.
+  // Tab from Title through the fields to the comparison box, its tip, the tip of the Show group (w27), the scope radios (one stop: the checked one) and the picker.
   await fieldOf(dialog, "Title").focus();
   const seen: string[] = [];
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 8; i++) {
     await page.keyboard.press("Tab");
     seen.push(await focusedName(page));
   }
-  expect(seen, "the Tab order").toEqual(["Source", "Aggregation", "Widget range", COMPARE_LABEL, "What does this mean?", "Assets chosen here", "Search assets"]);
+  expect(seen, "the Tab order").toEqual(["Source", "Aggregation", "Widget range", COMPARE_LABEL, "What does this mean?", "What does this mean?", "Assets chosen here", "Search assets"]);
 
   // Space on the box ticks it; the focus stays on the box; unticking by Space restores the range.
   await compareBox(dialog).focus();
@@ -1335,7 +1338,7 @@ for (const size of SIZES) {
       await expectBoxBesideWords(dialog, `${where}: the stat dialog`);
       await expectApart([
         ["Widget range", fieldOf(dialog, "Widget range")], ["its sentence", dialog.locator("p.field-help")], ["the comparison box and its words", dialog.locator("label.inline"), true],
-        ["its tip", dialog.getByRole("button", { name: "What does this mean?", exact: true })], ["the picker", pickerOf(dialog, "Asset")],
+        ["its tip", dialog.locator(".compare-field").getByRole("button", { name: "What does this mean?", exact: true })], ["the picker", pickerOf(dialog, "Asset")],
       ], `${where}: the stat dialog`);
       await expectDialogFits(dialog, where);
       await fieldOf(dialog, "Type").selectOption("bar");
@@ -1473,16 +1476,32 @@ const rowOf = (costs: Costs, assetId: number): CostsAsset => {
   return row!;
 };
 
-/** The first number in a figure's text ("~1124.00 kWh", "168.60* USD"). */
-const numberIn = (text: string): number => Number(/-?\d+(?:\.\d+)?/.exec(text)?.[0] ?? "NaN");
-/** The card shows the figure to two decimals: it equals the expected one to within half a unit of the last digit (plus rounding noise in the sum). */
+/**
+ * The first figure in the text of a card or a cell ("~1,124.00 kWh", "275.43 MWh", "33,052 kWh", "168.60* USD", "275.43k* QAR", "-562.82"), read back in the BASE unit (kWh, or the
+ * currency), with `half`: half a unit of its last printed digit in that same unit. A card prints a figure in the scale it shares with its neighbour (kWh, MWh or GWh after the
+ * number; a cost with k or M right behind the digits), grouped, with two decimals and none from 10,000 up; a table cell is the exact face (grouped, two decimals, no unit).
+ * Null when the text holds no digit.
+ */
+function figureIn(text: string): { value: number; half: number } | null {
+  const found = /(-?)(\d[\d,]*)(?:\.(\d+))?([kM])?\*?(?:\s*(kWh|MWh|GWh))?/.exec(text);
+  if (!found) return null;
+  const [, sign, whole, fraction = "", letter = "", unit = ""] = found;
+  const times = (letter === "k" ? 1_000 : letter === "M" ? 1_000_000 : 1) * (unit === "MWh" ? 1_000 : unit === "GWh" ? 1_000_000 : 1);
+  const value = Number(`${whole.replace(/,/g, "")}${fraction ? `.${fraction}` : ""}`) * times * (sign ? -1 : 1);
+  return { value, half: (0.5 / 10 ** fraction.length) * times };
+}
+/** The figure shown equals the expected one to within half a unit of its last digit, in the scale the card chose (plus rounding noise in the sum). */
 function expectFigure(text: string, expected: number | null, what: string): void {
   if (expected === null) {
     expect(text.trim(), `${what}: no figure is a dash`).toBe("—");
     return;
   }
-  expect(Math.abs(numberIn(text) - expected), `${what}: the card says ${text}, Billing's day cells add up to ${expected}`).toBeLessThanOrEqual(0.0051);
+  const shown = figureIn(text);
+  expect(shown, `${what}: "${text}" holds no figure`).not.toBeNull();
+  expect(Math.abs(shown!.value - expected), `${what}: the card says ${text}, Billing's day cells add up to ${expected}`).toBeLessThanOrEqual(shown!.half + 0.0001);
 }
+/** A number as the card prints it: a comma every three digits of the whole part ("1,234.6"). */
+const grouped = (digits: string): string => digits.replace(/^(-?\d+)/, (whole) => whole.replace(/\B(?=(\d{3})+$)/g, ","));
 
 async function widgetCompare(request: APIRequestContext, assetId: number, source: string): Promise<ApiCompare> {
   const response = await request.post("/api/widget-data", { data: { type: "stat", config: config({ assets: [assetId], source, range: "this_month", compare: COMPARE }), range: "this_month" } });
@@ -1622,8 +1641,12 @@ test.describe("W24 case R: the real comparison and breakdown on the seeded pilot
     for (const [s, block, expectedAbs] of [[kwh, compare.assets[0].kwh, thisSum.kwh - lastSum.kwh], [cost, compare.assets[0].cost, (thisSum.cost ?? 0) - (lastSum.cost ?? 0)]] as const) {
       expect(block.abs, "the server's amount is this minus last").not.toBeNull();
       expect(Math.abs(block.abs! - expectedAbs), "and equals the difference of Billing's sums").toBeLessThanOrEqual(0.0051);
-      await expect(s.change).toContainText(Math.abs(Math.round(block.abs! * 100) / 100).toFixed(2));
-      if (block.percent !== null) await expect(s.change).toContainText(`${Math.abs(block.percent).toFixed(1)} %`);
+      // The amount is printed in a scale of its own (kWh or MWh, a cost with k or M), so it is read back the way a card figure is: the part in brackets, or the one after up/down.
+      const changeText = (await s.change.textContent()) ?? "";
+      const amount = figureIn(/\(([^)]*)\)/.exec(changeText)?.[1] ?? changeText.replace(/^(?:up|down)\s+/, ""));
+      expect(amount, `the change line "${changeText}" holds an amount`).not.toBeNull();
+      expect(Math.abs(Math.abs(amount!.value) - Math.abs(block.abs!)), `the change line says ${changeText}; the server's amount is ${block.abs}`).toBeLessThanOrEqual(amount!.half + 0.0001);
+      if (block.percent !== null) await expect(s.change).toContainText(`${grouped(Math.abs(block.percent).toFixed(1))} %`);
     }
     // Details shows both measures for both windows, with their dates.
     await detailsButton(cards.kwh, R_KWH).click();
@@ -1649,7 +1672,7 @@ test.describe("W24 case R: the real comparison and breakdown on the seeded pilot
     const ranked = real.racksHall.map((r) => ({ id: r.id, sum: sumDays(rowOf(last, r.id), last.days.length) })).filter((r) => !r.sum.noData).sort((a, b) => b.sum.kwh - a.sum.kwh);
     const rest = ranked.slice(TOP).reduce((total, r) => total + r.sum.kwh, 0);
     const left = real.racksHall.length - TOP; // 59 - top
-    await expect(hall.note).toHaveText(new RegExp(`^and ${left} more Racks: ~?\\d+\\.\\d\\d kWh in all(?: \\(\\d+ with no data\\))?$`));
+    await expect(hall.note).toHaveText(new RegExp(`^and ${left} more Racks: ~?[\\d,]+(?:\\.\\d\\d)? (?:kWh|MWh|GWh) in all(?: \\(\\d+ with no data\\))?$`));
     expectFigure(((await hall.note.textContent()) ?? "").replace(/^.*Racks: /, ""), rest, "the sum of the Racks left out");
     await expect(hall.chart).toHaveAttribute("aria-label", `Bar chart of ${TOP} of ${real.racksHall.length} Racks under Hall 1. Energy in kWh. Open Details for the figures.`);
     await expect(hall.split.locator("option").filter({ hasText: `Rack (${real.racksHall.length})` })).toHaveCount(1);

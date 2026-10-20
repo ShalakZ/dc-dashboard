@@ -18,5 +18,7 @@ export function useAction() {
       setBusy(false);
     }
   }, []);
-  return { run, busy, error };
+  /** Forget the error without running anything (a form that moves to another step has no use for the last attempt's message). */
+  const clear = useCallback(() => setError(null), []);
+  return { run, busy, error, clear };
 }

@@ -376,7 +376,7 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   by kind, uses Pick all under a row within and over the maximum of 20 (over it nothing is picked and the live line says so), clears the
   search with Escape without closing the dialog, and walks the chips by keyboard (the focus never falls to the page). It checks that a
   stat and a gauge pick one asset, that the list does not move at 1024 x 640 and 800 x 600, and the chips in the dark look.
-- `w24.spec.ts` (its own project, last in the list, after `w23`) checks the month-to-date comparison and the breakdown by kind. Its
+- `w24.spec.ts` (its own project, after `w23`) checks the month-to-date comparison and the breakdown by kind. Its
   first cases never depend on today's date: they create their own assets (`W24 Site` with a hall and three racks) and two dashboards
   (`w24 <run>` with a comparing stat of energy, one of cost, a comparing daily chart and a breakdown by Rack, which they only open, and
   `w24 <run> edit`, which the editor cases save), answer every `POST /api/widget-data` and its CSV in the page from fixtures with a
@@ -404,7 +404,7 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   readings."). They then close last month through the API, change the rack's rate and check, after a reload, that the card's last side
   did not move and says "Last month is closed". Last month must be open when they start (the earlier projects leave it so); afterwards
   they reopen it, delete the rack's and the site rate, the dashboard, the seeded subtree and its source, and put the retention back.
-- `w25.spec.ts` (its own project, last in the list, after `w24`) checks the dashboard's focus asset, the drill-through and the Power
+- `w25.spec.ts` (its own project, after `w24`) checks the dashboard's focus asset, the drill-through and the Power
   starter. It creates its own assets through the API (`W25 Site` with `W25 Hall 1` > `W25 Row 1` > three racks, `W25 Hall 2` and a Panel
   beside them) and the dashboards it needs, sets the look through `PUT /api/me/preferences`, and removes the assets, the dashboards, the
   role and the user it made in `afterAll`, also after a failed case, and puts the look back. No case needs the scratch stack. The cases
@@ -419,7 +419,7 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   removed in it; where the stack already holds one other root, the case first removes `W25 Site`) a card that follows the focus says "This site has N top-level assets: choose a focus to see this figure." (N read from the API) through the
   real server, a children card lists the two roots and a breakdown looks at the whole site; with one top-level asset the sole root is
   the focus without being chosen (that case runs only when the stack has at most one root besides `W25 Site` and is skipped on a stack with
-  several leftover roots, as the suite's own stack has). **New dashboard** with **Start from** Power makes the five widgets and opens in view mode, an empty name
+  several leftover roots, as the suite's own stack has). **New dashboard** with the **Power** template card makes the five widgets and opens in view mode, an empty name
   becomes "Power", a second one shows the name-taken line in the dialog, and the compare stats and the breakdown carry the focus when it
   is opened with `?asset=`. The drill-through cases answer the breakdown's `POST /api/widget-data` from a fixture whose bars are real ids
   and click the chart's canvas (the bar is found by its pixels): a bar of an asset with children narrows the focus (the address and the
@@ -433,6 +433,21 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   Focus, Open page and Edit (none clips or overlaps, with a long dashboard name) in light and dark at 1440 and at 1024 with the sidebar
   minimised and expanded, the Focus dialog at 1440 x 900, 1024 x 640 and 800 x 600 (Show and Cancel stay in the window, the picker
   scrolls inside), and the dimmed, busy card while its answer is held. It puts no timing in an assertion.
+- `w27.spec.ts` (its own project, last in the list, after `w25`) checks the dashboard experience on the seeded pilot hall. It runs only
+  on the scratch stack (`COMPOSE_PROJECT_NAME` starts with `dcdash_e2e_`, like w11, w21 and w24 case R): `beforeAll` raises the raw
+  retention to 90 days, seeds the pilot hall inside the stack, makes a site-wide rate when there is none and makes the starter dashboards
+  it needs; `afterAll` puts the stack back (dashboards, the role and account it made, the rate, the seeded subtree, the retention and the
+  look). The expected figures are never fixed numbers: they come from the API's `POST /api/widget-data` answer (the same body the page
+  sent) through `lib/figures.ts`. Cases: the Energy and Cost cards show the card face of the API's figure with the exact face as their
+  title, both sides of a comparison share one unit, and the two months sit side by side at 1920 and stacked at 1024; no card clips,
+  splits a figure or changes size when its answer lands, in light and dark at three widths; **New dashboard** by mouse (Choose a
+  template, Recommended for this site as the server says, More templates, Back to templates, Create from Cost and from Energy by area with
+  the widgets the server previewed position by position, Blank in edit mode) and by keyboard alone (focus lands on a named control,
+  Tab wraps, Escape closes and focus returns); the first-run guide in fresh browser contexts (Got it, a reload, the header button, storage
+  blocked); "Updated HH:MM" and Refresh (and that the header does not move at 1024 with a 60 character name and a focus link); Make a copy
+  ("(copy)", "(copy 2)", the widgets equal the source's); and a role with only `dashboards.view` (no gallery, no row menu, no request for
+  the templates, 403 from the server). Every other spec that opens a dashboard calls `markGuideSeen` (`e2e/shell.ts`) so the guide panel
+  does not move its cards.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

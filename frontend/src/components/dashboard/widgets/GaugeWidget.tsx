@@ -1,15 +1,21 @@
 import type { WidgetConfig, WidgetData } from "../../../api/types";
+import type { Scale } from "../../../lib/figures";
+import { cardFigure, exactText, familyOf, pickScale, tickText } from "../../../lib/figures";
 import { liveOrFetched } from "../../../lib/live";
-import { figureText, hasNoReading, NO_DATA, unitSuffix } from "../../../lib/widgetFormat";
+import { hasNoReading, NO_DATA, unitSuffix } from "../../../lib/widgetFormat";
 import { Age } from "../Age";
 import { useLiveValue } from "../LiveValuesContext";
+import { figureFit } from "./figureFit";
 
 /** The half circle, left end to right end, in the 100 x 52 box of the svg (radius 44, centre at the bottom middle). */
 const ARC = "M 6 50 A 44 44 0 0 1 94 50";
 const round = (n: number): number => Math.round(n * 1000) / 1000;
 
-/** An end of the scale as the config states it: "0", "100", "0.5" (at most two decimals, none when whole). It is a setting, not a reading, and "100.00" would not fit the ends of the smallest card. */
-export const scaleText = (end: number): string => String(+end.toFixed(2));
+/**
+ * An end of the scale as the config states it, in the gauge's unit (`divisor` is the scale's): "0", "100", "0.5", "1,000" (the tick face: at most two decimals, none
+ * when whole, separators). It is a setting, not a reading, and "100.00" would not fit the ends of the smallest card.
+ */
+export const scaleText = (end: number, divisor = 1): string => tickText(end, divisor);
 
 /**
  * The filled part of the arc: the same circle from the left end to the point `share` (0 to 1) of the way round. It is a path
@@ -34,11 +40,19 @@ interface FigureArgs {
   estimated?: boolean; partial?: boolean;
   /** A missing value says "no data" (a metric that recorded nothing) instead of the dash, which means a missing rate. */
   noData?: boolean;
+  /** The scale the gauge reads in (one over its value, min and max); the figure's own size picks one when it is left out. */
+  scale?: Scale;
 }
 
-/** The two texts of the figure: the number (with its markers, "no data", or the dash) and the unit after it, which only a number has. */
-export function gaugeFigure({ value, unit, estimated = false, partial = false, noData = false }: FigureArgs): { num: string; unit: string } {
-  if (value !== null) return { num: figureText(value, { estimated, partial }), unit: unitSuffix(unit) };
+/**
+ * The two texts of the figure on the card face: the number (with its markers and scale letter, "no data", or the dash) and the unit after it, which only a number has.
+ * A figure that is not a finite number (NaN, infinite) is the dash, with no unit.
+ */
+export function gaugeFigure({ value, unit, estimated = false, partial = false, noData = false, scale }: FigureArgs): { num: string; unit: string } {
+  if (value !== null && Number.isFinite(value)) {
+    const at = scale ?? pickScale(familyOf(unit, "metric"), unit, [value]);
+    return { num: cardFigure(value, at, { estimated, partial }), unit: unitSuffix(at.unit) };
+  }
   return { num: noData ? NO_DATA : "—", unit: "" };
 }
 
@@ -53,23 +67,29 @@ export function GaugeWidget({ data, config, live }: { data: WidgetData; config: 
   const reading = row ? liveOrFetched(stream, row) : null;
   const { min } = config;
   const max = config.max ?? config.min + 100;
-  const value = reading?.value ?? null;
+  const fetched = reading?.value ?? null;
+  const value = fetched !== null && Number.isFinite(fetched) ? fetched : null; // NaN or infinite is a missing figure: the dash, no fill
   const muted = reading ? reading.stale || reading.noData : false;
   const noData = hasNoReading(value, reading?.noData ?? false, data.source);
   const name = row?.name ?? "";
-  const { num, unit } = gaugeFigure({ value, unit: data.unit, estimated: row?.estimated, partial: row?.partial, noData });
+  // ONE scale over the value, min and max, so the figure, the two ends of the scale and the spoken values all read in the same unit.
+  const scale = pickScale(familyOf(data.unit, data.source), data.unit, [value, min, max]);
+  const { num, unit } = gaugeFigure({ value, unit: data.unit, estimated: row?.estimated, partial: row?.partial, noData, scale });
   const share = value === null ? 0 : gaugeShare(value, min, max);
   const out = value === null ? "" : value > max ? ", above the scale" : value < min ? ", below the scale" : "";
   // A meter needs a scale with a width: with max <= min its aria-valuemax would sit below its aria-valuemin, so the figure is spoken as an image instead.
+  // The numbers of a meter are in the scale's unit (like the ends drawn on the dial), the spoken text says the figure with its unit.
   const meaning = value === null
     ? { role: "img", "aria-label": `${name || "Gauge"}: ${noData ? NO_DATA : "no value"}` }
     : !(max > min)
     ? { role: "img", "aria-label": `${name || "Gauge"}: ${num}${unit}` }
     : {
-      role: "meter", "aria-label": name || "Gauge", "aria-valuemin": min, "aria-valuemax": max,
-      "aria-valuenow": Math.min(Math.max(value, min), max), "aria-valuetext": `${num}${unit}${out}`,
+      role: "meter", "aria-label": name || "Gauge", "aria-valuemin": min / scale.divisor, "aria-valuemax": max / scale.divisor,
+      "aria-valuenow": Math.min(Math.max(value, min), max) / scale.divisor, "aria-valuetext": `${num}${unit}${out}`,
     };
   const figureClasses = ["gauge-figure", ...(muted ? ["muted"] : []), ...(num === NO_DATA ? ["none"] : [])];
+  // The card shows the figure compactly; its title is the exact value with its marks and unit (a figure that recorded nothing says "no data").
+  const title = noData ? NO_DATA : value !== null ? exactText(value, data.unit, { estimated: row?.estimated ?? false, partial: row?.partial ?? false }) : undefined;
   return (
     <div className="gauge" {...meaning}>
       <div className="gauge-arc">
@@ -77,9 +97,9 @@ export function GaugeWidget({ data, config, live }: { data: WidgetData; config: 
           <path className="gauge-track" d={ARC} />
           {value !== null && <path className="gauge-fill" d={gaugeFillPath(share)} />}
         </svg>
-        <div className="gauge-scale"><span>{scaleText(min)}</span><span>{scaleText(max)}{unitSuffix(data.unit)}</span></div>
+        <div className="gauge-scale"><span>{scaleText(min, scale.divisor)}</span><span>{scaleText(max, scale.divisor)}{unitSuffix(scale.unit)}</span></div>
       </div>
-      <div className={figureClasses.join(" ")} title={noData ? NO_DATA : undefined}>
+      <div className={figureClasses.join(" ")} title={title} style={figureFit(num, unit)}>
         <span className="stat-num">{num}</span>{unit && <small className="stat-unit">{unit}</small>}
       </div>
       <div className="gauge-name" title={name || undefined}>

@@ -3,14 +3,17 @@
 A dashboard is saved as a whole: PUT replaces the name, the range and every widget in one transaction.
 Two editors are told apart by `updated_at`: the row is locked, the request's stamp must equal the stored
 one, and a later save sees the newer stamp and gets 409. A create takes an advisory lock before it counts, so
-the 50-dashboard cap holds when creates race. Dashboard changes never notify the collector.
+the 50-dashboard cap holds when creates race; a copy takes the same lock, then the source row. Dashboard changes never notify the
+collector.
 """
 import hashlib
 import json
 import math
 from collections.abc import Sequence
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import (
@@ -21,10 +24,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import current_user, get_db, require_permission
+from dcdash.api.settings import current_timezone
 from dcdash.core.audit import audit, audit_change
+from dcdash.core.cost import load_tariffs
 from dcdash.core.energy import load_meters
 from dcdash.core.models import Asset, Dashboard, User, Widget
-from dcdash.core.recipes import power_widgets
+from dcdash.core.recipes import RecipeId, recipe_range, recipe_widgets, template_catalog
 from dcdash.core.settings_store import DEFAULT_DASHBOARD_KEY, get_setting, set_setting
 from dcdash.core.timeutil import RANGE_PRESETS
 from dcdash.core.tree import AssetTree
@@ -34,13 +39,13 @@ router = APIRouter(prefix="/api", tags=["dashboards"])
 
 MAX_WIDGETS = 24
 MAX_DASHBOARDS = 50
+MAX_NAME = 100  # characters in a dashboard's name
 DASHBOARD_CAP_LOCK = 7_306_001  # advisory-lock key serializing "count the dashboards" with "insert one"
 DEFAULT_LOCK = 7_310_001  # advisory-lock key: one change to the default dashboard at a time
 MAX_ID = 2_147_483_647  # dashboards.id is a 4-byte SERIAL; the driver raises on a bigger one
 GRID_COLUMNS = 12
 MAX_ROWS = 1000
 DEFAULT_RANGE = "24h"
-RECIPE_RANGE = "this_month"  # a recipe's dashboard starts here unless the body names a range: its comparisons are of this month
 NAME_TAKEN = "a dashboard with this name already exists"
 STALE = "dashboard changed since you loaded it"
 
@@ -51,14 +56,14 @@ def _preset(value: str) -> str:
     return value
 
 
-Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_NAME)]
 Preset = Annotated[str, AfterValidator(_preset)]
 
 
 class DashboardIn(BaseModel):
     name: Name
     range: Preset = DEFAULT_RANGE
-    recipe: Literal["power"] | None = None  # w25: a starter dashboard with its widgets; left out, the dashboard is blank
+    recipe: RecipeId | None = None  # w25, w27: a template dashboard with its widgets (core/recipes.py); left out, the dashboard is blank
 
 
 class WidgetIn(BaseModel):
@@ -209,13 +214,56 @@ async def list_dashboards(db: AsyncSession = Depends(get_db)) -> list[DashboardL
     ]
 
 
-async def _recipe_widgets(db: AsyncSession) -> list[dict[str, Any]]:
-    """The widgets of the "power" starter, built from the site as it is now: its asset tree, each asset's kind and which
-    assets have a meter of their own (what decides the kind of the breakdown)."""
+async def _site_for_recipes(db: AsyncSession) -> tuple[AssetTree, dict[int, str], set[int]]:
+    """What a recipe is built from: the asset tree, each asset's kind and which assets have a meter of their own (what decides
+    the kind of a breakdown and which templates are recommended)."""
     tree = await AssetTree.load(db)
     rows = (await db.execute(select(Asset.id, Asset.kind))).all()
     kinds = {asset_id: kind for asset_id, kind in rows if asset_id in tree.nodes}  # an asset made since the tree was read is left out
-    return power_widgets(tree, kinds, set(await load_meters(db, tree)))
+    return tree, kinds, set(await load_meters(db, tree))
+
+
+async def _recipe_widgets(db: AsyncSession, recipe: str) -> list[dict[str, Any]]:
+    """The widgets of a template, built from the site as it is now."""
+    return recipe_widgets(recipe, *await _site_for_recipes(db))
+
+
+class TemplateWidgetOut(BaseModel):
+    type: str
+    x: int
+    y: int
+    w: int
+    h: int
+    source: Literal["metric", "energy", "cost"] | None  # None for a text widget
+    compare: Literal["none", "same_days_last_month"]
+    bars: Literal["asset", "time", "kind"]
+    scope: Literal["fixed", "focus", "children"]
+
+
+class TemplateOut(BaseModel):
+    id: RecipeId
+    title: str
+    description: str
+    range: str  # what a new dashboard of this template starts on
+    recommended: bool
+    needs: str | None  # why it is not recommended for this site, in a sentence; None when nothing is missing
+    widgets: list[TemplateWidgetOut]  # exactly the widgets POST /api/dashboards creates for this recipe, in that order
+
+
+class TemplatesOut(BaseModel):
+    nothing_metered: bool
+    templates: list[TemplateOut]
+
+
+@router.get(
+    "/dashboard-templates", response_model=TemplatesOut, dependencies=[Depends(require_permission("dashboards.edit"))]
+)
+async def list_dashboard_templates(db: AsyncSession = Depends(get_db)) -> TemplatesOut:
+    """The templates the New dashboard gallery offers, with what each would create and whether it suits this site. A rate
+    counts from the site's own date (the zone `POST /api/widget-data` uses for its days)."""
+    tree, kinds, metered = await _site_for_recipes(db)
+    today = datetime.now(UTC).astimezone(ZoneInfo(await current_timezone(db))).date()
+    return TemplatesOut(**template_catalog(tree, kinds, metered, await load_tariffs(db), today))
 
 
 @router.post(
@@ -230,10 +278,10 @@ async def create_dashboard(
         raise HTTPException(422, f"at most {MAX_DASHBOARDS} dashboards")
     if await name_taken(db, body.name):
         raise HTTPException(409, NAME_TAKEN)
-    recipe_widgets = await _recipe_widgets(db) if body.recipe == "power" else []
-    configs = checked_configs([WidgetIn(**widget) for widget in recipe_widgets])  # the checks a save runs, before any write
-    # A recipe that is given a range the body does not name starts on this month; a body that names one keeps it.
-    range_ = RECIPE_RANGE if body.recipe and "range" not in body.model_fields_set else body.range
+    starter = await _recipe_widgets(db, body.recipe) if body.recipe else []
+    configs = checked_configs([WidgetIn(**widget) for widget in starter])  # the checks a save runs, before any write
+    # A recipe starts on its own range (this month, or 24 hours for "day") unless the body names one; a body that names one keeps it.
+    range_ = recipe_range(body.recipe) if body.recipe and "range" not in body.model_fields_set else body.range
     now = datetime.now(UTC)
     dashboard = Dashboard(name=body.name, range=range_, created_by=user.id, created_at=now, updated_at=now)
     try:
@@ -243,7 +291,7 @@ async def create_dashboard(
             Widget(
                 dashboard_id=dashboard.id, type=w["type"], title=w["title"], config=config, x=w["x"], y=w["y"], w=w["w"], h=w["h"]
             )
-            for w, config in zip(recipe_widgets, configs, strict=True)
+            for w, config in zip(starter, configs, strict=True)
         ]
         db.add_all(widgets)
         await db.flush()
@@ -253,6 +301,65 @@ async def create_dashboard(
         await audit(db, user.id, "dashboard.created", detail)
         await db.commit()
     except IntegrityError:  # two creates with the same name raced; the UNIQUE constraint decided
+        await db.rollback()
+        raise HTTPException(409, NAME_TAKEN) from None
+    return dashboard_out(dashboard, widgets)
+
+
+async def _free_copy_name(db: AsyncSession, name: str) -> str:
+    """"<name> (copy)", else "<name> (copy 2)", "(copy 3)"...: the first one nobody has. The base is cut so the result is at
+    most 100 characters (the limit of a name), and trimmed after the cut so a cut after a space leaves no double space. At most
+    50 dashboards exist, so a free number is found by the 51st."""
+    number = 1
+    while True:
+        suffix = " (copy)" if number == 1 else f" (copy {number})"
+        candidate = name[: MAX_NAME - len(suffix)].strip() + suffix
+        if not await name_taken(db, candidate):
+            return candidate
+        number += 1
+
+
+@router.post(
+    "/dashboards/{dashboard_id}/copy", response_model=DashboardOut, status_code=201,
+    dependencies=[Depends(require_permission("dashboards.edit"))],
+)
+async def copy_dashboard(
+    dashboard_id: int, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
+) -> DashboardOut:
+    """A new dashboard with the source's range and widgets (their stored configs, as they are); the default is not touched.
+
+    Locks are taken in one order, the cap lock and then the source row, which no other path reverses: create takes the cap lock
+    only, save and delete the row only, and the default takes its own lock and then the row."""
+    if not 1 <= dashboard_id <= MAX_ID:  # no such row can exist; the driver would raise (a 500) on an id past 4 bytes
+        raise HTTPException(404, "dashboard not found")
+    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": DASHBOARD_CAP_LOCK})
+    # Read under the row lock: a save in progress finishes first, so the copy has the widgets that save stored.
+    source = await load_dashboard(db, dashboard_id, lock=True)
+    if (await db.scalar(select(func.count()).select_from(Dashboard)) or 0) >= MAX_DASHBOARDS:
+        raise HTTPException(422, f"at most {MAX_DASHBOARDS} dashboards")
+    stored = (await db.scalars(select(Widget).where(Widget.dashboard_id == source.id))).all()
+    originals = sorted(stored, key=lambda w: (w.y, w.x, w.id))
+    now = datetime.now(UTC)
+    dashboard = Dashboard(
+        name=await _free_copy_name(db, source.name), range=source.range, created_by=user.id, created_at=now, updated_at=now
+    )
+    try:
+        db.add(dashboard)
+        await db.flush()
+        widgets = [
+            Widget(
+                dashboard_id=dashboard.id, type=w.type, title=w.title, config=deepcopy(w.config), x=w.x, y=w.y, w=w.w, h=w.h
+            )
+            for w in originals
+        ]
+        db.add_all(widgets)
+        await db.flush()
+        await audit(
+            db, user.id, "dashboard.created",
+            {"dashboard_id": dashboard.id, "name": dashboard.name, "widgets": len(widgets), "copied_from": source.id},
+        )
+        await db.commit()
+    except IntegrityError:  # another request took the name between the check and the insert; the UNIQUE constraint decided
         await db.rollback()
         raise HTTPException(409, NAME_TAKEN) from None
     return dashboard_out(dashboard, widgets)

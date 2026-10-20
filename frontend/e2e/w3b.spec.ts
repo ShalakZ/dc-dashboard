@@ -1,6 +1,8 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
-import { userBlock } from "./shell";
+import { markGuideSeen, userBlock } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // W3b (dashboards close up vertically, a parent's live power, the Trend says when it was updated, long names in charts) on the state
 // the earlier projects leave behind: admin `admin` / `correct-horse`; the manual source `sim` (60 simulator points, LVP01..LVP10 with

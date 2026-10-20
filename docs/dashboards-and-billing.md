@@ -14,7 +14,7 @@ Roles are enforced by the API; the screens only hide what you cannot use. The ta
 |---|---|---|---|
 | Open dashboards and Billing, export CSV, open Check month ([Checking a month](#checking-a-month)) | yes | yes | yes |
 | Close and reopen a billing month (`billing.close`, [Closing a month](#closing-a-month)) | no | no | yes |
-| Create, edit and delete dashboards | no | yes | yes |
+| Create (from a template), edit, copy and delete dashboards | no | yes | yes |
 | Choose the default dashboard (Dashboards list, row menu) | no | no | yes |
 | Read tariffs and the currency (Tariffs screen, read-only for an Operator) | no | yes | yes |
 | Set tariffs and the currency (Tariffs screen) | no | no | yes |
@@ -123,7 +123,7 @@ Dashboards are shared by everyone.
     built. The pilot-hall demo data has its meters on the feeds by default, so a breakdown by Rack, Row or Hall draws figures and one by
     Panel shows no data; `--metering panels` is the other way round (see [Developing](developing.md#the-pilot-hall-a-demo-tree-with-racks)).
   - **How the bars are made.** The server adds up each asset's figure for the widget's range with the same calculation every other bar
-    widget uses, highest first. The card draws the top bars and one line under the chart: "and 107 more Racks: 1234.50 kWh in all", the
+    widget uses, highest first. The card draws the top bars and one line under the chart: "and 107 more Racks: 1,234.50 kWh in all", the
     sum of the others with its `~` and `*` marks and, when some of them have no figure, "(N with no data)". There is never an "Other" bar.
   - **No data is not zero.** An asset of the kind with no figure is a dash on the axis, never a zero bar, and comes after the ones with
     figures. When none has a figure the card says so ("None of the 8 Panels under Seeded pilot hall has energy readings.").
@@ -181,7 +181,7 @@ Dashboards are shared by everyone.
     one: "This site has 3 top-level assets, so this figure needs a focus asset, and your role cannot choose one."), a children card
     lists the top-level assets, and a breakdown by kind looks at the whole site. A month or a comparison added up over several
     top-level assets is not built yet. A demo seed sits beside your own assets as one more top-level asset, so on such a stack the
-    Power starter asks for a focus until you choose one.
+    Power template asks for a focus until you choose one.
   - **API.** A widget's config has the key `scope` (`"fixed"` by default, `"focus"` or `"children"`); a stored config leaves it out
     while it is `fixed`, so every widget saved earlier is stored and fingerprinted as before. A following widget must have `assets`
     empty (422 "assets: leave the assets empty; the focus chooses them"). `POST /api/widget-data` and `/csv` take the optional `focus`
@@ -195,19 +195,33 @@ Dashboards are shared by everyone.
   (**Narrow to Rack 05** for a screen reader) when the asset has children; it narrows the dashboard, closes the panel and puts you back
   on that card's Details button, and an asset without children keeps its name link. There is nothing of this in edit mode or in a
   preview, and none for a role that may not see the Assets Tree.
-- **The Power starter.** **New dashboard**, then **Start from** Power, makes a dashboard with its widgets already on it; **Blank** is
-  the empty dashboard it was before, and opens in the editor as before. Choosing Power sets the range to **This month**, an empty name
-  becomes "Power" (a second one needs another name: the dialog shows the server's "a dashboard with this name already exists"), and the
-  dashboard opens in view mode, not in the editor. On the Dashboards page with no dashboards yet, a role that may build them also
-  sees **Start blank** and **Start from Power**; a viewer sees only the line "No dashboards yet.". The server makes the dashboard and its widgets in
-  one step and writes one `dashboard.created` audit row, which adds `"recipe": "power"` and the real widget count.
-  - **The five widgets.** A heading, "Power use and cost"; the stats "Energy" and "Cost", each for this month so far against the same
+- **Templates.** **New dashboard** opens a gallery in two steps: **Choose a template** (Power, Cost, Energy by area, Last 24 hours or
+  **Blank**; the ones true of this site are tagged **Recommended**), then a name and a range. A template opens in view mode already
+  filled; **Blank** opens in the editor, empty. An empty name becomes the template's title (a second one needs another name: the
+  dialog shows the server's "a dashboard with this name already exists"). On the Dashboards page with no dashboards yet, a role that
+  may build them sees the same cards; a viewer sees only the line "No dashboards yet.". What each template holds and needs, and
+  **Make a copy** in the row menu, are in [Starting a dashboard from a template](dashboard-figures-and-templates.md#starting-a-dashboard-from-a-template).
+  The server makes the dashboard and its widgets in one step and writes one `dashboard.created` audit row with the real widget count
+  and `"recipe"` (`power`, `cost`, `areas` or `day`); a copy writes the same row with `"copied_from"`. The routes are
+  `GET /api/dashboard-templates`, `POST /api/dashboards` with a `recipe` and `POST /api/dashboards/{id}/copy`.
+  - **The Power template: five widgets.** A heading, "Power use and cost"; the stats "Energy" and "Cost", each for this month so far against the same
     days of last month (**Comparing with last month**); "Energy by <kind>", a breakdown of energy by the kind that has meters; and the
     daily chart "Energy by day, against last month". All but the heading follow the focus, so the whole dashboard answers for the site,
     a hall or a rack depending on the focus (choose it with **Focus**, a click on a bar or a link). Edit it like any other dashboard.
   - **Which kind.** Panel as soon as any Panel has a meter of its own; else the kind with the most assets that have one (a tie goes to
     the name that comes first); a site with nothing metered gets Panel. A meter here is a kWh counter or, failing that, power in kW,
-    so the starter is the same whether the panels report kWh or kW. A site with no assets still gets the dashboard.
+    so the template is the same whether the panels report kWh or kW (the Cost template uses the same kind). A site with no assets still gets the dashboard.
+- **How figures are shown.** A card writes a figure short and with separators (275,430.26 kWh reads "275.43 MWh"; a cost goes to "k" and
+  "M"), and the exact value with its unit is one hover away: in the figure's title, in Details, in tables and in chart tooltips. A chart
+  axis writes ticks and names its unit once, and the two sides of a comparison, or all the values of a chart, share one unit. Nothing
+  about the values or the CSV changed; Billing and the asset page keep their own formats. The rules are in
+  [How figures are shown](dashboard-figures-and-templates.md#how-figures-are-shown).
+- **Reading a dashboard.** A panel **How to read this dashboard** shows once for each browser and account on a dashboard with
+  something to explain, and the header's **How to read this** (only on such a dashboard) opens it again. A dashboard with a data card also says
+  **Updated 20:09** in the header (when the oldest figure on screen was read, site time) and has **Refresh**. When several bars have the same name, a role that may see the Assets
+  Tree sees the parent too ("Hall 2 / Rack 04"). A card that fails says "This card could not be loaded. It tries again in 30
+  seconds." See [How to read this dashboard](dashboard-figures-and-templates.md#how-to-read-this-dashboard) and
+  [The header](dashboard-figures-and-templates.md#the-header-updated-and-refresh).
 - **Look.** Widgets follow the theme like the rest of the app: Light, Dark or Match my device, and each Theme colour, in the profile
   panel. A card in dark mode is a dark card, and the chart text, grid lines, legend and tooltip are drawn in the same colours, so an
   open chart repaints in the new look as soon as you switch, without a reload. A **gauge** is a half-circle arc filled from its minimum
@@ -295,7 +309,7 @@ dashboard, or the Quick find entry. With no default set, the entry opens the lis
 Deleting the default dashboard clears the choice (the audit row says so); choosing, switching and clearing it are audited as
 `dashboard.default_changed`. An open page learns of a change within a minute or when you return to its window.
 
-**Make default** works on a Power dashboard ([The Power starter](#dashboards)) like on any other, and the default always opens on the
+**Make default** works on a dashboard made from a template ([Templates](#dashboards)) like on any other, and the default always opens on the
 whole site, with no focus (the sidebar and the first page after signing in open it without `?asset`).
 
 ## Billing
@@ -727,8 +741,9 @@ Billing.
 - A comparison is month to date only. It does not include today so far, draw the whole of last month as a faint line or give per-day
   averages; a stat compares one measure (two stats give kWh and cost); it compares one asset; and a plain **Last month** widget still
   reads live figures for a closed month (see **Comparing with last month**).
-- A breakdown by kind assumes one measured level (meter roles do not exist yet), and a click on a bar goes nowhere yet (no
-  drill-through). The focus asset and the starter dashboard come later.
+- A breakdown by kind assumes one measured level (meter roles do not exist yet).
+- No template shows live power (kW): a live-power card reads only an asset's own meter and never adds up what is below it, so a site
+  or a hall cannot show its power. The Power template shows energy.
 - A widget's Details panel says only what the widget's own answer proves. It does not show the source point's address, how many
   readings a figure rests on or alarm limits, nor the width of a time series bucket, nor an average over buckets.
 - Closing a month has limits of its own (one snapshot per close, what a restore does to closed months, a close that lands during an
@@ -736,4 +751,4 @@ Billing.
 - Check month lists what its rules find and certifies nothing; what it cannot see is in
   [What the check cannot see](#what-the-check-cannot-see).
 
-Related: [Screens](screens.md), [Roles and permissions](roles-and-permissions.md), [Assets and kinds](assets-and-kinds.md), [Storage](storage.md)
+Related: [Screens](screens.md), [Roles and permissions](roles-and-permissions.md), [Dashboard figures and templates](dashboard-figures-and-templates.md), [Assets and kinds](assets-and-kinds.md), [Storage](storage.md)

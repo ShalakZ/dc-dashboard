@@ -1,6 +1,8 @@
 import { expect, test, type APIRequestContext, type Browser, type Page, type Route } from "@playwright/test";
 import { roleLabel } from "./roles";
-import { navLink, userBlock } from "./shell";
+import { markGuideSeen, navLink, userBlock } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // W7e (the content accent follows the theme colour; Mode and Theme colour are dropdowns; a loading bar along the top edge in the theme's
 // marker colour; kind icons in the Assets workspace) on the state the earlier projects leave behind: admin `admin` / `correct-horse` and

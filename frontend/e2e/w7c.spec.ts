@@ -1,6 +1,8 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
-import { expectNoRowAction, navLink, rowAction, signOut, userBlock } from "./shell";
+import { expectNoRowAction, markGuideSeen, navLink, rowAction, signOut, userBlock } from "./shell";
+
+test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide is not what this spec looks at
 
 // W7c (the default dashboard and the Billing year/month picker) on the state the earlier projects leave behind: admin `admin` /
 // `correct-horse` and the metered assets the collector has been polling. The spec makes its own two dashboards (with a run suffix, so a
@@ -54,6 +56,7 @@ async function asUser(browser: Browser, who: Account, use: (page: Page) => Promi
   const context = await browser.newContext({ baseURL: BASE_URL, viewport: { width: 1600, height: 1000 } });
   try {
     const page = await context.newPage();
+    await markGuideSeen(page); // not the `page` fixture: the beforeEach above did not reach it
     await signIn(page, who);
     await use(page);
   } finally {
@@ -185,7 +188,7 @@ test.describe("W7c: the default dashboard", () => {
       await expect(page).toHaveURL(onPath("/billing"));
     });
 
-    await test.step("an operator sees the badge and the trash button but no Actions menu; a viewer sees the badge and no Actions column", async () => {
+    await test.step("an operator sees the badge and the trash button and an Actions menu with Make a copy but no default item; a viewer sees the badge and no Actions column", async () => {
       await asUser(browser, OPERATOR, async (operator) => {
         await expect(navLink(operator, "Dashboards")).toHaveAttribute("href", `/dashboards/${main}`);
         await operator.goto("/dashboards");
@@ -193,7 +196,11 @@ test.describe("W7c: the default dashboard", () => {
         await expect(badge(operator, MAIN)).toBeVisible();
         await expect(badge(operator, OTHER)).toHaveCount(0);
         await expect(dashRow(operator, MAIN).getByRole("button", { name: `Delete ${MAIN}`, exact: true })).toBeVisible();
-        await expect(operator.getByRole("button", { name: /^Actions for / })).toHaveCount(0);
+        // The row menu is the operator's too (Make a copy, w27); Make default and Clear default are dashboards.default's.
+        await expectNoRowAction(operator, dashRow(operator, MAIN), "Clear default");
+        await expectNoRowAction(operator, dashRow(operator, OTHER), "Make default");
+        await expect(await rowAction(operator, dashRow(operator, OTHER), "Make a copy")).toBeVisible();
+        await operator.keyboard.press("Escape");
       });
       await asUser(browser, VIEWER, async (viewer) => {
         await expect(navLink(viewer, "Dashboards")).toHaveAttribute("href", `/dashboards/${main}`);

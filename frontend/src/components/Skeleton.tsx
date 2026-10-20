@@ -17,12 +17,13 @@ export const CTL_H = 34;
 /**
  * One placeholder. A line is an inline-block set in the text's own line box and sits in a plain span of its own: a bare inline-block that is a
  * direct child of a flex or grid parent (`.tile-label`, `.crumbs li`, `.page-head`) becomes a flex or grid item and loses the text's line height.
- * Numbers are px, strings pass through; a circle given one size is as high as it is wide.
+ * Numbers are px, strings pass through; a circle given one size is as high as it is wide. `className` adds a class the stylesheet knows the shape by (a comparing stat's skeleton
+ * is placed by it, widgets.css).
  */
-export function Skeleton({ variant = "line", width, height }: { variant?: Variant; width?: Size; height?: Size }) {
+export function Skeleton({ variant = "line", width, height, className }: { variant?: Variant; width?: Size; height?: Size; className?: string }) {
   const style: CSSProperties = variant === "circle" ? { width: width ?? height, height: height ?? width } : { width, height };
-  if (variant === "line") return <span aria-hidden="true"><span className="sk sk-line" style={style} /></span>;
-  return <span className={`sk sk-${variant}`} style={style} aria-hidden="true" />;
+  if (variant === "line") return <span aria-hidden="true"><span className={className ? `sk sk-line ${className}` : "sk sk-line"} style={style} /></span>;
+  return <span className={className ? `sk sk-${variant} ${className}` : `sk sk-${variant}`} style={style} aria-hidden="true" />;
 }
 
 // A region that follows a skeleton somebody SAW skips the fade-in delay: a chain of skeletons (the tree and then the page, a lazy route's
@@ -406,8 +407,14 @@ export function CanvasSkeleton({ label }: { label: string }) {
   );
 }
 
+/** The size of the help button of an InfoTip (`.tip-btn` in app.css, which Skeleton.test.tsx reads to keep the two equal). */
+const TIP_PX = 24;
+/** The width of the words "Split by" at the size of `.bars-split label` (12px: measured at 45px in Chromium), so the tip's slot and the select start where the loaded row's do. */
+const SPLIT_LABEL_PX = 45;
 /** The height of a line of the small text (--fs-sm at the document's 1.4), as the comparing stat's name, "Same days last month" and change rows are. */
 const SM_LINE = "calc(var(--fs-sm) * 1.4)";
+/** The height of the figure row of a stat or a gauge (w27): the 1.15 line of the figure at the size of a TYPICAL figure (`--fig-size` of `.widget-sk` in widgets.css, the clamp the real figure uses). */
+const FIGURE_ROW = "calc(var(--fig-size) * 1.15)";
 
 /**
  * A widget's body while its data loads, in the shapes the data will have: a stat is a figure and a name, a gauge the dial and two lines, a table a head and
@@ -417,40 +424,43 @@ const SM_LINE = "calc(var(--fs-sm) * 1.4)";
  * `shape` (w24) is for the card that draws more rows than its type's plain shape, so it does not move when the data lands: a stat that compares with last month
  * (the figure, the name, the window, "Same days last month" with its figure, the window, the change and the one reserved note line: seven rows) and a breakdown
  * by kind (the bars, the one reserved line under them and the "Split by" row). A comparing chart is the plain chart box.
+ * `tip` (w27 P1): the loaded card is a live one, whose "Split by" row has the help button between the label and the select; the row draws a button-sized
+ * placeholder there, so the select does not move 32 px (the button's 24 and the row's 8 gap) when the data lands.
  */
-export function WidgetSkeleton({ type, label, shape }: { type?: DataWidgetType; label?: string; shape?: SkeletonShape }) {
+export function WidgetSkeleton({ type, label, shape, tip = false }: { type?: DataWidgetType; label?: string; shape?: SkeletonShape; tip?: boolean }) {
   const className = shape === "compare-stat" ? "widget-sk widget-sk-compare" : shape === "kind-bars" ? "widget-sk widget-sk-kind" : "widget-sk";
   const shapes = shape === "compare-stat" ? (
     <>
-      <Skeleton variant="block" width="60%" height="calc(var(--widget-figure) * 1.15)" />
-      <Skeleton variant="block" width="40%" height={SM_LINE} />
-      <Skeleton variant="block" width="25%" height={16} />
+      <Skeleton variant="block" className="sk-fig" width="60%" height={FIGURE_ROW} />
+      <Skeleton variant="block" className="sk-name" width="40%" height={SM_LINE} />
+      <Skeleton variant="block" className="sk-win" width="25%" height={16} />
       <div className="sk-compare-last">
         <Skeleton variant="block" width="50%" height={SM_LINE} />
         <Skeleton variant="block" width="25%" height={SM_LINE} />
       </div>
-      <Skeleton variant="block" width="25%" height={16} />
-      <Skeleton variant="block" width="55%" height={SM_LINE} />
-      <Skeleton variant="block" width="85%" height={16} />
+      <Skeleton variant="block" className="sk-lastwin" width="25%" height={16} />
+      <Skeleton variant="block" className="sk-change" width="55%" height={SM_LINE} />
+      <Skeleton variant="block" className="sk-note" width="85%" height={16} />
     </>
   ) : shape === "kind-bars" ? (
     <>
       <Skeleton variant="block" />
       <Skeleton variant="block" width="70%" height={16} />
       <div className="sk-split">
-        <Skeleton variant="block" width={56} height={16} />
+        <Skeleton variant="block" width={SPLIT_LABEL_PX} height={16} />
+        {tip && <Skeleton variant="block" className="sk-tip" width={TIP_PX} height={TIP_PX} />}
         <Skeleton variant="block" width={120} height={28} />
       </div>
     </>
   ) : type === "stat" ? (
     <>
-      <Skeleton variant="block" width="60%" height="var(--widget-figure)" />
+      <Skeleton variant="block" width="60%" height={FIGURE_ROW} />
       <Skeleton variant="block" width="40%" height={14} />
     </>
   ) : type === "gauge" ? (
     <>
       <Skeleton variant="block" width="70%" />
-      <Skeleton width="8ch" height={20} />
+      <Skeleton width="8ch" height={FIGURE_ROW} />
       <Skeleton width="12ch" />
     </>
   ) : type === "table" ? (

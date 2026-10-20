@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useWidgetData } from "../../api/queries";
+import { useWidgetData, widgetRefetchMs } from "../../api/queries";
 import type { RangePreset, WidgetConfig, DataWidgetType } from "../../api/types";
 import { hasNoBars } from "../../lib/breakdown";
 import { withoutEnergyStars } from "../../lib/compare";
 import { childrenNote, chooseText, isFollowing, leafText, NO_ASSETS_TEXT, ownAssetsNote } from "../../lib/focus";
+import { useParentNames } from "../../hooks/useParentNames";
 import { isLiveWidget, pointIdsOf } from "../../lib/live";
 import { isRolling } from "../../lib/ranges";
 import { flagsOf, markerHint, sinceText, skeletonShape } from "../../lib/widgetFormat";
@@ -52,6 +53,9 @@ export function WidgetView({ widgetKey, type, title, config, dashboardRange, tim
   // A comparison of energy draws no `*` (a cost mark), whatever flag its answer carries: cleared once here, for the card, the footer and the Details panel alike.
   const answer = query.data;
   const data = useMemo(() => (answer ? withoutEnergyStars(answer) : undefined), [answer]);
+  // w27 R6: the parent names that tell two assets of one name apart, one lookup for the card and its Details panel (so a table never says "Rack 04 (#12)" next to a bar
+  // labelled "Hall 2 / Rack 04"). Only with `assets.view`, only when the answer repeats a name, and from the list the top bar already holds.
+  const parents = useParentNames(data, ctx.allowed);
   // The focus of the last real answer this card drew. A placeholder (the previous answer, kept while the next loads) is dimmed only when it was fetched for another
   // focus: a change of range, or of the breakdown's "Split by", keeps the plain placeholder it always had (R13).
   const drawnFor = useRef<number | null>(null);
@@ -101,16 +105,21 @@ export function WidgetView({ widgetKey, type, title, config, dashboardRange, tim
   // The footer line's room is held on the focus, not on the words: the note about the asset's name waits for the asset list, and a children card's count comes and goes
   // with its answer, but the body must not move when either arrives.
   const footKeep = follows ? shown.scope === "children" : ctx.focus !== null;
+  // A breakdown by kind keeps its "Split by" row at the bottom of the body, and its loaded card nearly always has the marker hint ("~ estimated") under it (the bars are many), so the
+  // loading card holds that line's room as well: the row would otherwise be drawn 22 px lower than where it lands (w27 FA).
   return (
     <>
       <WidgetFrame
         title={title}
         type={type}
         shape={skeletonShape(type, config)}
-        footSpace={sinceExpected || footKeep || note !== ""}
+        footSpace={sinceExpected || footKeep || note !== "" || shown.bars === "kind"}
         footKeep={footKeep}
         loading={query.isLoading}
         error={query.error}
+        retryMs={widgetRefetchMs(shown)}
+        drawn={data !== undefined}
+        showReason={!details}
         missing={gone ? 0 : (data?.missing.length ?? 0)}
         noMetric={data?.no_metric.length ?? 0}
         // The footer explains the markers for every type: a chart's legend may be off, and a figure carries only its mark.
@@ -123,11 +132,11 @@ export function WidgetView({ widgetKey, type, title, config, dashboardRange, tim
         actions={actions}
         dragHandle={dragHandle}
       >
-        {sentence !== null ? <p className="widget-empty">{sentence}</p> : data && !bare && !oldSentence ? <WidgetBody type={type} data={data} config={shown} timezone={timezone} live={following} onKind={onKind} splitDisabled={!details} /> : null}
+        {sentence !== null ? <p className="widget-empty">{sentence}</p> : data && !bare && !oldSentence ? <WidgetBody type={type} data={data} config={shown} timezone={timezone} live={following} onKind={onKind} splitDisabled={!details} parents={parents} /> : null}
       </WidgetFrame>
       {open && canOpen && data && !stale && (
         <WidgetDetails
-          title={title} type={type} data={data} config={shown} timezone={timezone} following={following} csv={csvSource}
+          title={title} type={type} data={data} config={shown} timezone={timezone} following={following} csv={csvSource} parentNames={parents}
           onClose={() => setOpen(false)} returnFocus={() => opener.current}
         />
       )}
