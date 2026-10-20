@@ -12,12 +12,14 @@ fingerprint, `now()` and the value, then `ledger.write`.
 """
 import asyncio
 import dataclasses
+import json
 import logging
 import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo
 
@@ -25,11 +27,12 @@ import pytest
 from sqlalchemy import event, text
 from sqlalchemy.exc import ProgrammingError
 
+import test_api_billing_close as closing  # the close-test helpers (a close of a month through the real route)
 from billing_helpers import add_counter, add_tariff, set_currency, set_zone
 from dcdash.core import figure_cache, figures, ledger, ledger_codec
 from dcdash.core.db import get_engine, get_sessionmaker
 from dcdash.core.timeutil import month_bounds
-from helpers import insert_readings, make_asset, settle_rollups
+from helpers import insert_readings, login_as, make_asset, settle_rollups
 
 UTC = timezone.utc
 HOUR = timedelta(hours=1)
@@ -549,6 +552,64 @@ async def test_require_fresh_never_consults_the_ledger_even_for_a_row_whose_data
     assert the_entry()[1].data_at is None and not the_entry()[1].from_row  # its entry knows no data time: the ledger was not asked
 
 
+# ---- 9b: a close never trusts a cache ENTRY that was made from a row (whole-wave review C1) ------------------------------------------
+
+
+@pytest.mark.parametrize("settled", [True, False], ids=["exact hit", "open hit"])
+async def test_require_fresh_does_not_trust_an_entry_made_from_a_row_even_when_nothing_moved(db, engine_calls, settled):
+    # The entry's data fingerprint is the ROW's, and nothing moved, so the old revalidation passed it and a close froze the worker's
+    # decoded bytes. Now the close runs the engine and its result replaces the entry.
+    case = await window_case(db, settled=settled)
+    published = await case.publish()
+    row_value = await case.ask()
+    assert same(row_value, published)
+    assert ledger.stats() == {"hits_exact": int(settled), "hits_open": int(not settled), "misses": 0, "errors": 0}
+    row_entry = the_entry()[1]
+    assert row_entry.from_ledger and row_entry.from_row is (not settled) and row_entry.value is row_value
+    live = await case.off()
+    engine_calls.clear()
+    stats_before = ledger.stats()
+    with statements() as seen:
+        with figure_cache.require_fresh():
+            value = await case.ask()
+    assert engine_calls, "the close must run the engine, not trust the entry the row made"
+    assert value is not row_value and same(value, live)
+    assert ledger.stats() == stats_before
+    assert not [s for s in seen if "figure_ledger" in s or "SAVEPOINT" in s.upper()]
+    entry = the_entry()[1]
+    assert entry is not row_entry and entry.value is value and not entry.from_ledger and not entry.from_row
+
+
+async def test_a_normal_request_after_a_close_gets_the_close_value(db, engine_calls):
+    case = await window_case(db, settled=False)
+    published = await case.publish()
+    assert same(await case.ask(), published)  # an open row: the entry holds the worker's figure
+    await case.move(db)
+    live = await case.off()
+    assert not same(live, published)
+    with figure_cache.require_fresh():
+        closed = await case.ask()
+    assert same(closed, live) and not same(closed, published)
+    engine_calls.clear()
+    stats_before = ledger.stats()
+    value = await case.ask()  # TTL 0: the check finds the engine entry's fingerprint equal to the readings' and renews it
+    assert value is closed and engine_calls == [] and ledger.stats() == stats_before
+
+
+async def test_an_entry_made_by_the_engine_still_passes_the_require_fresh_revalidation(db, engine_calls):
+    # w26's behaviour is unchanged for an entry the engine made: the close compares the data fingerprint on the spot and, equal,
+    # serves the entry (no row exists here, so the lookup misses and the engine makes the entry).
+    case = await window_case(db, settled=False)
+    first = await case.ask()
+    assert not the_entry()[1].from_ledger
+    computes = figure_cache.stats()["computes"]
+    engine_calls.clear()
+    with figure_cache.require_fresh():
+        second = await case.ask()
+    assert second is first and engine_calls == [] and figure_cache.stats()["computes"] == computes
+    assert figure_cache.stats()["revalidations"] >= 1
+
+
 # ---- 10: a row older than the entry it would replace -----------------------------------------------------------------------------------
 
 
@@ -670,7 +731,7 @@ async def test_the_engine_that_began_first_and_finished_last_replaces_the_row_th
     release_engine.set()
     engine_value = await engine_task
     entry = figure_cache._store[key]
-    assert entry.value is engine_value and not entry.from_row, "the figure of the newer data lost to the row because of a stamp"
+    assert entry.value is engine_value and not entry.from_row and not entry.from_ledger, "the figure of the newer data lost to the row because of a stamp"
     assert entry.data_at > row["checked_at"] and entry.stamp < row_entry.stamp  # (the stamp really is the older one)
     assert not same(engine_value, row_value) and same(engine_value, await case.off())
     assert figure_cache.stats()["replaced"] == 1
@@ -703,8 +764,8 @@ async def test_an_engine_figure_of_older_data_does_not_replace_a_row_entry_of_ne
     assert figure_cache.stats()["replaced"] == 0
 
 
-def _entry(name, stamp, data_at, *, from_row=False):
-    return figure_cache._Entry(name, "d", 1.0, stamp, None, 1.0, data_at=data_at, from_row=from_row)
+def _entry(name, stamp, data_at, *, from_row=False, from_ledger=False):
+    return figure_cache._Entry(name, "d", 1.0, stamp, None, 1.0, data_at=data_at, from_row=from_row, from_ledger=from_ledger)
 
 
 KEY = ("k", datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC), (), "fp")
@@ -765,6 +826,32 @@ async def test_put_lets_an_engine_entry_of_newer_data_replace_a_row_entry_even_w
     assert put_value(_entry("engine, older data, older stamp", 5, T2)) == "row 2"
     assert put_value(_entry("engine, equal data, older stamp", 5, T2 + timedelta(minutes=2))) == "row 2"
     assert put_value(_entry("engine, unknown data, older stamp", 5, None)) == "row 2"
+
+
+async def test_put_replaces_an_entry_made_from_a_row_by_the_engine_entry_of_a_close_by_stamp():
+    # C1: a close's private engine run (under `require_fresh` it reads no ledger, so its entry knows no data time) replaces the
+    # entry a row made, open or exact, because its snapshot is later; the stored entry then no longer comes from the ledger.
+    assert put_value(_entry("exact row", 5, T2, from_ledger=True)) == "exact row"
+    assert put_value(_entry("engine of the close", 6, None)) == "engine of the close"
+    assert not figure_cache._store[KEY].from_ledger
+    assert put_value(_entry("open row", 7, T1, from_row=True, from_ledger=True)) == "engine of the close"  # data time unknown: kept
+    figure_cache._store.clear()
+    assert put_value(_entry("open row", 7, T1, from_row=True, from_ledger=True)) == "open row"
+    assert put_value(_entry("engine of the close", 8, None)) == "engine of the close"
+    assert not figure_cache._store[KEY].from_ledger
+    assert figure_cache.stats()["replaced"] == 2
+
+
+async def test_put_replaces_an_entry_made_from_a_row_by_an_engine_entry_of_newer_data_with_an_older_stamp():
+    # The close began first (older stamp) but its snapshot saw newer data than the row: a row entry that a request stored in the
+    # meantime gives way when both data times are known; an EXACT row's entry is ordered by stamp alone, as an engine entry is.
+    assert put_value(_entry("open row", 9, T1, from_row=True, from_ledger=True)) == "open row"
+    assert put_value(_entry("engine, newer data, older stamp", 3, T2)) == "engine, newer data, older stamp"
+    assert not figure_cache._store[KEY].from_ledger
+    figure_cache._store.clear()
+    assert put_value(_entry("exact row", 9, T1, from_ledger=True)) == "exact row"
+    assert put_value(_entry("engine, older stamp", 3, T2)) == "exact row"
+    assert figure_cache._store[KEY].from_ledger
 
 
 # ---- 11: a deleted asset, a zone change -----------------------------------------------------------------------------------------------
@@ -1246,3 +1333,50 @@ async def test_a_month_that_belongs_to_another_zone_or_month_than_its_key_is_not
     value = await case.ask()
     assert same(value, live) and engine_calls
     assert ledger.stats()["errors"] == 1 and ledger.stats()["hits_exact"] == 0
+
+
+# ---- a close through Billing (whole-wave review C1, end to end) ------------------------------------------------------------------------
+
+
+def _doubled(value):
+    """A row that is WRONG in a way no fingerprint can see (a codec or labelling bug): every day's energy doubled."""
+    entries = {
+        asset: [None if day is None else {**day, "kwh": day["kwh"] * 2.0} for day in days] for asset, days in value.entries.items()
+    }
+    return dataclasses.replace(value, entries=entries)
+
+
+@pytest.mark.parametrize("open_rule", [False, True], ids=["exact row", "open row"])
+async def test_a_close_freezes_the_engines_figures_when_the_months_cache_entry_came_from_a_row(client, db, monkeypatch, open_rule):
+    async def nothing(db) -> None:  # the real-time aggregate holds the same hourly rows as a refreshed one, and a refresh is slow
+        pass
+
+    monkeypatch.setattr(closing, "settle_rollups", nothing)
+    monkeypatch.setattr("dcdash.api.billing._now", lambda: closing.NOW)
+    monkeypatch.setenv("DCDASH_FIGURE_CACHE_TTL", "30")  # the entry the Billing page made is still trusted when the owner clicks Close
+    if open_rule:  # March 2026 is settled for the database clock: widen the open window so the row is taken on the open rule
+        monkeypatch.setattr(ledger, "OPEN_DAYS_PLUS", timedelta(days=3650))
+    await closing.build(db)
+    await login_as(client, db)
+    start, end = month_bounds(closing.MONTH, TZ)
+    start_utc, end_utc = start.astimezone(UTC), end.astimezone(UTC)
+    worker_row = SimpleNamespace(
+        kind="month-days", start=start_utc, end=end_utc, spec=figures.month_days_spec(TZ, end_utc),
+        build=lambda session: figures.compute_month_days(session, TZ, start, end),
+    )
+    await publish(worker_row, transform=_doubled)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("DCDASH_FIGURE_CACHE", "0")
+        live = closing.figures_of(await closing.costs(client))  # what the engine says: nothing is stored, no row is read
+    served = closing.figures_of(await closing.costs(client))  # the Billing page of the open month: the row's (wrong) figures
+    hits = "hits_open" if open_rule else "hits_exact"
+    assert ledger.stats()[hits] == 1 and served != live
+    ((_, entry),) = [item for item in figure_cache._store.items() if item[0][0] == "month-days"]
+    assert entry.from_ledger
+    response = await closing.close(client)
+    assert response.status_code == 201, response.text
+    [stored] = await closing.rows(db)
+    assert json.loads(json.dumps(stored["figures"])) == live, "the close froze the worker's figures instead of the engine's"
+    assert ledger.stats()[hits] == 1  # the close read no row
+    ((_, entry),) = [item for item in figure_cache._store.items() if item[0][0] == "month-days"]
+    assert not entry.from_ledger

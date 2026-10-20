@@ -69,7 +69,10 @@ entry such a lookup stores remembers the database time of its data (`data_at`), 
 data check (`from_row`) and the spec, so `_put` never replaces an entry by an older figure and keep-warm recomputes through the
 ledger too. A row taken without a data check is at most 55 seconds old and its entry is back-dated by that age (keeping at least
 5 s of life), so no figure is trusted past `max(TTL, 60 s)` after the moment its data was checked. A request under
-`require_fresh` (a Billing close) never consults the ledger. The ledger has its own counters (`ledger.stats()`).
+`require_fresh` (a Billing close) neither consults the ledger nor trusts a cache entry that came from it (`from_ledger`, set for
+every row taken, open or exact: the entry's data fingerprint is the row's, so it would pass the revalidation although its value is
+the worker's decoded bytes): it computes privately with the engine, and that result replaces the entry. The ledger has its own
+counters (`ledger.stats()`).
 """
 import asyncio
 import itertools
@@ -136,6 +139,10 @@ class _Entry:
     # True for a value taken from a row WITHOUT a data check (an open hit): its stamp is the later snapshot's but its data is the
     # row's, so `_put` orders it by `data_at`, never by stamp (see there).
     from_row: bool = False
+    # True for EVERY value taken from a ledger row, open or exact (`from_row` is only the open rule): the bytes are the worker's
+    # decoded payload, not this process's engine result. A request under `require_fresh` (a Billing close) never trusts such an
+    # entry, however equal its data fingerprint is: it computes privately instead (see `get_or_compute`).
+    from_ledger: bool = False
 
 
 _store: OrderedDict[tuple, _Entry] = OrderedDict()  # least recently used first
@@ -519,7 +526,8 @@ async def _run(
                 raise _StaleSnapshot
             hit, data_fp, data_at, from_row = None, None, None, False
             # A request under `require_fresh` (a Billing close: the frozen money of record) never consults the ledger: it computes,
-            # as in w26, so a close can never depend on what the worker wrote.
+            # as in w26, so a close can never depend on what the worker wrote. (Nor does it trust a cache ENTRY that an earlier
+            # request made from a row: `get_or_compute` sends it here, to a private computation, instead of revalidating it.)
             if ledger is not None and not fresh and ledger_module.enabled():
                 # The row is judged against the SNAPSHOT's configuration (what the engine below would compute with), and against
                 # the entry it would replace (whether there is one, when its data is from and what it holds): a row older than
@@ -556,7 +564,7 @@ async def _run(
             key,
             _Entry(
                 value, data_fp, checked_at, stamp, compute, _monotonic() if idle_since is None else idle_since,
-                data_at=data_at, ledger=ledger, from_row=from_row,
+                data_at=data_at, ledger=ledger, from_row=from_row, from_ledger=hit is not None,
             ),
         )
     return value
@@ -731,7 +739,10 @@ async def get_or_compute(
     for attempt in range(1, MAX_ATTEMPTS + 1):
         key = (kind, start, end, params, await _config_for(db))
         entry = _store.get(key)
-        if entry is not None:
+        # A close (`fresh`) does not trust an entry made from a ledger row: its data fingerprint is the ROW's, so it would pass the
+        # revalidation below although its value is the worker's decoded bytes, and a close freezes the money of record. It goes
+        # straight to the private computation, whose engine result then replaces the entry (see `_put`).
+        if entry is not None and not (fresh and entry.from_ledger):
             if not fresh and _monotonic() - entry.checked_at < ttl_seconds():
                 _store.move_to_end(key)
                 entry.last_used = _monotonic()
