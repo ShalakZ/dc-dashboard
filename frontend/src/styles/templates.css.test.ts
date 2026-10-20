@@ -22,14 +22,16 @@ describe("styles/templates.css", () => {
     expect(radiusPx("--radius-sm")).toBeLessThanOrEqual(4);
   });
 
-  it("every picture is the same 2 to 1 box, and the tag is pinned to its top-right corner, out of the flow, on one line (w27 P1)", () => {
+  it("every picture is the same 2 to 1 box, and the tag stands on a strip of its own above it, at the right, on one line, never over the picture (w27 P1, FA)", () => {
     expect(prop(body(".tpl-preview"), "aspect-ratio")).toBe("2 / 1");
     expect(prop(body(".tpl-preview"), "width")).toBe("100%");
-    expect(prop(body(".tpl-shot"), "position")).toBe("relative");
+    // The tag covered the top-right glyph of the picture when it was drawn over it (review finding 10): it is in the flow now, above the picture.
+    expect(prop(body(".tpl-shot"), "display")).toBe("grid");
+    expect(prop(body(".tpl-shot"), "gap")).toBe("6px");
     const tag = body(".tpl-tag");
-    expect(prop(tag, "position")).toBe("absolute");
-    expect(prop(tag, "top")).toBe("6px");
-    expect(prop(tag, "right")).toBe("6px");
+    expect(prop(tag, "position"), "not drawn over the picture").toBeUndefined();
+    expect(prop(tag, "order")).toBe("-1"); // first in the column, though it follows the picture in the markup
+    expect(prop(tag, "justify-self")).toBe("end");
     expect(prop(tag, "white-space")).toBe("nowrap");
     expect(css).not.toMatch(/\.tpl-title-row/); // the title has a row of its own no more: nothing can wrap under it
   });

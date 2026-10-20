@@ -30,9 +30,10 @@
   .tpl-card:hover { border-color: var(--accent); }
   .tpl-text { display: grid; align-content: start; gap: 4px; min-width: 0; }
   .tpl-title { min-width: 0; overflow-wrap: anywhere; color: var(--text); font-size: var(--fs-base); font-weight: 600; }
-  /* The picture and the tag: the tag is in the picture's top-right corner, out of the flow, so it never wraps under a title or moves it (w27 P1). */
-  .tpl-shot { position: relative; display: block; min-width: 0; }
-  .tpl-tag { position: absolute; top: 6px; right: 6px; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent-ink); font-size: var(--fs-xs); font-weight: 600; line-height: 1.4; white-space: nowrap; }
+  /* The picture and the tag: the tag stands on a strip of its own above the picture, at the right, on one line, so it never wraps under a title or covers a glyph of the picture (w27 P1, FA). Only the
+     recommended cards carry it, and they share a row, so their pictures line up; it follows the picture in the markup and `order` puts it first. */
+  .tpl-shot { display: grid; gap: 6px; min-width: 0; }
+  .tpl-tag { order: -1; justify-self: end; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent-ink); font-size: var(--fs-xs); font-weight: 600; line-height: 1.4; white-space: nowrap; }
   .tpl-desc { color: var(--text-2); font-size: var(--fs-sm); }
   .tpl-needs { color: var(--text-2); font-size: var(--fs-xs); }
 
