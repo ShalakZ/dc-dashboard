@@ -32,7 +32,7 @@
     align-items: center;
     column-gap: var(--wall-pad);
     height: 4.5vh;
-    padding: 0 var(--wall-pad);
+    padding: 0 1.5vh; /* the dashboard's own side gutter (fit.ts): the title lines up with the cards */
     font-size: var(--wall-size);
     line-height: 1;
   }
@@ -68,6 +68,9 @@
     --fs-xs: clamp(12px, calc(24px * var(--wall-unit) / var(--wall-s)), 19.2px);
     --fs-sm: clamp(13px, calc(24px * var(--wall-unit) / var(--wall-s)), 20.8px);
     --fs-base: clamp(14px, calc(24px * var(--wall-unit) / var(--wall-s)), 22.4px);
+    --fs-md: clamp(16px, calc(24px * var(--wall-unit) / var(--wall-s)), 25.6px);
+    --fs-lg: clamp(18px, calc(24px * var(--wall-unit) / var(--wall-s)), 28.8px); /* a text widget's heading */
+    --widget-unit-fs: clamp(13px, calc(24px * var(--wall-unit) / var(--wall-s)), 20.8px); /* the unit beside a figure */
   }
   .wall .wall-canvas .widget-title { font-size: clamp(13px, calc(32px * var(--wall-unit) / var(--wall-s)), 26px); }
   /* The breakdown's "Split by" row (a label and a select that does nothing here) has no place on a wall; it is the only box in a card with a select as its child. */

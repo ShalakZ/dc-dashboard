@@ -20,14 +20,16 @@ export function naturalHeight(widgets: readonly { x: number; y: number; w: numbe
 }
 
 export interface Fit {
-  /** s = min(availableHeight / natural, width / MIN_LOGICAL_WIDTH); with no natural height, width / MIN_LOGICAL_WIDTH. */
+  /** s = min(availableHeight / natural, (width - 2 * gutter) / MIN_LOGICAL_WIDTH); with no natural height, the second. */
   scale: number;
-  /** width / scale: the width the grid is laid out at (never under MIN_LOGICAL_WIDTH). */
+  /** (width - 2 * gutter) / scale: the width the grid is laid out at (never under MIN_LOGICAL_WIDTH). */
   logicalWidth: number;
   /** HEADER_SHARE * height, in window pixels. */
   headerHeight: number;
-  /** GUTTER_SHARE * height. */
+  /** GUTTER_SHARE * height: above and below the dashboard, and at both sides (so a TV that crops its edges a little never cuts a card). */
   gutter: number;
+  /** Window pixels from the left edge to the scaled box: one gutter. */
+  left: number;
   /** height - headerHeight - 2 * gutter. */
   availableHeight: number;
   /** Window pixels from the top of the window to the top of the scaled box: the header, a gutter and half of the leftover height. */
@@ -36,7 +38,7 @@ export interface Fit {
   unit: number;
 }
 
-const NOT_LAID_OUT: Fit = { scale: 1, logicalWidth: 0, headerHeight: 0, gutter: 0, availableHeight: 0, top: 0, unit: 1 };
+const NOT_LAID_OUT: Fit = { scale: 1, logicalWidth: 0, headerHeight: 0, gutter: 0, left: 0, availableHeight: 0, top: 0, unit: 1 };
 
 /**
  * One scale for the whole dashboard (R5): the header and two gutters come off the window height, the dashboard is made to fit what is left
@@ -50,8 +52,9 @@ export function fitWall(win: { width: number; height: number }, natural: number)
   const headerHeight = HEADER_SHARE * height;
   const gutter = GUTTER_SHARE * height;
   const availableHeight = height - headerHeight - 2 * gutter;
-  const byWidth = width / MIN_LOGICAL_WIDTH;
+  const usableWidth = Math.max(0, width - 2 * gutter);
+  const byWidth = usableWidth / MIN_LOGICAL_WIDTH;
   const scale = grid > 0 ? Math.min(availableHeight / grid, byWidth) : byWidth;
   const leftover = Math.max(0, availableHeight - grid * scale);
-  return { scale, logicalWidth: width / scale, headerHeight, gutter, availableHeight, top: headerHeight + gutter + leftover / 2, unit: height / REFERENCE_HEIGHT };
+  return { scale, logicalWidth: usableWidth / scale, headerHeight, gutter, left: gutter, availableHeight, top: headerHeight + gutter + leftover / 2, unit: height / REFERENCE_HEIGHT };
 }

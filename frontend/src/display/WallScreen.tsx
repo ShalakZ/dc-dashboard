@@ -141,7 +141,7 @@ function WallView({ snap, dashboard, focus, timers, viewport }: ViewProps) {
         </div>
       </header>
       <div className="wall-stage" style={{ top: fit.top, height: natural * fit.scale }}>
-        <div className="wall-canvas" data-phase={snap.phase} style={{ width: fit.logicalWidth, transform: `scale(${fit.scale})`, transformOrigin: "0 0" }}>
+        <div className="wall-canvas" data-phase={snap.phase} style={{ left: fit.left, width: fit.logicalWidth, transform: `scale(${fit.scale})`, transformOrigin: "0 0" }}>
           <ChartPixelRatioContext.Provider value={win.dpr * fit.scale}>
             <WallGrid widgets={widgets} render={(widget) => <WallCard widget={widget} card={snap.cards[widget.id]} timezone={timezone} focus={focus} />} />
           </ChartPixelRatioContext.Provider>

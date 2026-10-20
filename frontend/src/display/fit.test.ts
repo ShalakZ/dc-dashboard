@@ -49,10 +49,11 @@ describe("naturalHeight", () => {
 });
 
 describe("fitWall", () => {
-  it("Power (8 rows) at 1920x1080: scale 1.407, laid out about 1364.6 px wide, header 48.6 px", () => {
+  it("Power (8 rows) at 1920x1080: scale 1.407, laid out about 1341.5 px wide (a gutter at each side), header 48.6 px", () => {
     const fit = fitWall(HD, POWER);
     expect(fit.scale).toBeCloseTo(1.407, 2);
-    expect(fit.logicalWidth).toBeCloseTo(1364.6, 0);
+    expect(fit.logicalWidth).toBeCloseTo(1341.5, 0);
+    expect(fit.left).toBeCloseTo(16.2, 6);
     expect(fit.headerHeight).toBeCloseTo(48.6, 6);
     expect(fit.gutter).toBeCloseTo(16.2, 6);
     expect(fit.availableHeight).toBeCloseTo(999, 6);
@@ -86,9 +87,9 @@ describe("fitWall", () => {
     expect(fit.logicalWidth).toBeGreaterThanOrEqual(MIN_LOGICAL_WIDTH);
   });
 
-  it("a 2-row dashboard (170 px) at 1920x1080 is limited by the width: scale 1.5, laid out 1280 wide, the spare height shared above and below", () => {
+  it("a 2-row dashboard (170 px) at 1920x1080 is limited by the width (less a gutter at each side): scale 1.4747, laid out 1280 wide, the spare height shared above and below", () => {
     const fit = fitWall(HD, naturalHeight(dash(2)));
-    expect(fit.scale).toBeCloseTo(1.5, 9);
+    expect(fit.scale).toBeCloseTo((1920 - 2 * 16.2) / 1280, 9);
     expect(fit.logicalWidth).toBeCloseTo(1280, 9);
     const leftover = fit.availableHeight - 170 * fit.scale;
     expect(leftover).toBeGreaterThan(0);
@@ -100,14 +101,14 @@ describe("fitWall", () => {
       for (const natural of [0, 80, 170, 710, 1070, 3000]) {
         const fit = fitWall(win, natural);
         expect(fit.logicalWidth).toBeGreaterThanOrEqual(MIN_LOGICAL_WIDTH - 1e-9);
-        expect(fit.logicalWidth * fit.scale).toBeCloseTo(win.width, 6);
+        expect(fit.logicalWidth * fit.scale).toBeCloseTo(win.width - 2 * fit.gutter, 6);
       }
     }
   });
 
   it("a dashboard with nothing in it is scaled by the width alone", () => {
     const fit = fitWall(HD, 0);
-    expect(fit.scale).toBeCloseTo(1.5, 9);
+    expect(fit.scale).toBeCloseTo((1920 - 2 * 16.2) / 1280, 9);
     expect(fit.logicalWidth).toBeCloseTo(1280, 9);
     expect(fit.top).toBeCloseTo(fit.headerHeight + fit.gutter + fit.availableHeight / 2, 9);
   });
