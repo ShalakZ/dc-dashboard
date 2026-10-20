@@ -39,11 +39,24 @@ export function parsePlaylist(data: unknown): DisplayPlaylist | null {
   return { display: { name: display.name }, playlist: { name: playlist.name, items }, site: data.site, build: data.build, status: data.status };
 }
 
+/** The `Retry-After` of an answer in whole seconds, or null when it is missing or not a plain number (an HTTP date, text, a sign). */
+export function retryAfterSeconds(response: Response): number | null {
+  const value = response.headers.get("Retry-After")?.trim() ?? "";
+  return /^\d+$/.test(value) ? Number(value) : null;
+}
+
+export interface ClaimReply {
+  status: number;
+  /** The seconds the server asked to wait (a 429 sends them), else null. */
+  retryAfter: number | null;
+}
+
 /**
  * Trades the secret for the display cookie. The secret goes in the JSON body only, never in a URL, a header or the query, and this function
- * is the only place that holds it. Resolves with the HTTP status (204 on success); rejects when the request never completed.
+ * is the only place that holds it. Resolves with the HTTP status (204 on success) and the `Retry-After` seconds; rejects when the request
+ * never completed.
  */
-export async function claim(secret: string): Promise<number> {
+export async function claim(secret: string): Promise<ClaimReply> {
   const response = await fetch("/api/display/claim", {
     method: "POST",
     credentials: "same-origin",
@@ -51,13 +64,15 @@ export async function claim(secret: string): Promise<number> {
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify({ secret }),
   });
-  return response.status;
+  return { status: response.status, retryAfter: retryAfterSeconds(response) };
 }
 
 export interface PlaylistReply {
   status: number;
   /** Set for a 200 whose body is a playlist; a 200 that is not one has `playlist: null`. */
   playlist: DisplayPlaylist | null;
+  /** The seconds the server asked to wait (a 429 sends them), else null. */
+  retryAfter: number | null;
 }
 
 /** Reads the connected display's playlist (the cookie is the credential). Rejects when the request never completed. */
@@ -68,10 +83,11 @@ export async function getPlaylist(): Promise<PlaylistReply> {
     cache: "no-store",
     headers: { Accept: "application/json" },
   });
-  if (response.status !== 200) return { status: response.status, playlist: null };
+  const retryAfter = retryAfterSeconds(response);
+  if (response.status !== 200) return { status: response.status, playlist: null, retryAfter };
   try {
-    return { status: 200, playlist: parsePlaylist(await response.json()) };
+    return { status: 200, playlist: parsePlaylist(await response.json()), retryAfter };
   } catch {
-    return { status: 200, playlist: null };
+    return { status: 200, playlist: null, retryAfter };
   }
 }

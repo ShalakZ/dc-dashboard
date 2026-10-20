@@ -26,15 +26,17 @@ const CLAIM = "POST /api/display/claim";
 const PLAYLIST = "GET /api/display/playlist";
 const FIVE_MINUTES = 300_000;
 
-type Reply = number | "network" | { status: number; body: unknown };
+type Reply = number | "network" | { status: number; body: unknown; headers?: Record<string, string> };
 type Call = { key: string; url: string; init: RequestInit };
 const events: string[] = [];
 let calls: Call[] = [];
 
 function answer(reply: Exclude<Reply, "network">): Response {
   if (typeof reply === "number") return new Response(reply === 204 ? null : JSON.stringify({ detail: "x" }), { status: reply });
-  return new Response(JSON.stringify(reply.body), { status: reply.status, headers: { "content-type": "application/json" } });
+  return new Response(JSON.stringify(reply.body), { status: reply.status, headers: { "content-type": "application/json", ...reply.headers } });
 }
+/** A 429 as the server sends it: with a `Retry-After` in seconds (or without one, or with text that is not a number). */
+const tooMany = (retryAfter?: string): Reply => ({ status: 429, body: { detail: "x" }, headers: retryAfter === undefined ? {} : { "Retry-After": retryAfter } });
 
 /** One queue of replies per route; the last one repeats. */
 function stubFetch(script: Partial<Record<string, Reply[]>>) {
@@ -247,14 +249,72 @@ describe("the states", () => {
     expect(await screen.findByText(BLOCKED)).toBeInTheDocument();
   });
 
-  it("a 429 on the playlist says it too, and asks again in a minute (its own limit lifts within one)", async () => {
-    stubFetch({ [PLAYLIST]: [429, three] });
+  it("a 429 on the playlist is busy, not blocked: it keeps the last good text and asks again after the Retry-After", async () => {
+    stubFetch({ [PLAYLIST]: [three, tooMany("1"), playlist([null, null, null, null])] });
     const c = clock();
     render(<DisplayApp handle={null} timers={c.timers} />);
-    expect(await screen.findByText(BLOCKED)).toBeInTheDocument();
-    expect(c.delays).toEqual([60_000]);
-    await advance(c, 60_000);
     expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    await advance(c, 60_000);
+    await waitFor(() => expect(count(PLAYLIST)).toBe(2));
+    await settle();
+    expect(text()).toBe(connected("3 dashboards"));
+    expect(screen.queryByText(BLOCKED)).toBeNull();
+    expect(c.delays).toEqual([60_000, 1_000]);
+    await advance(c, 999);
+    await settle();
+    expect(count(PLAYLIST)).toBe(2);
+    await advance(c, 1);
+    expect(await screen.findByText(connected("4 dashboards"))).toBeInTheDocument();
+    expect(count(PLAYLIST)).toBe(3);
+  });
+
+  it("a 429 on the very first playlist read keeps 'Connecting...' and asks again after 60 seconds when there is no Retry-After", async () => {
+    stubFetch({ [PLAYLIST]: [tooMany(), three] });
+    const c = clock();
+    render(<DisplayApp handle={null} timers={c.timers} />);
+    await waitFor(() => expect(count(PLAYLIST)).toBe(1));
+    await settle();
+    expect(text()).toBe("Connecting...");
+    expect(screen.queryByText(BLOCKED)).toBeNull();
+    expect(c.delays).toEqual([60_000]);
+    await advance(c, 59_999);
+    await settle();
+    expect(count(PLAYLIST)).toBe(1);
+    await advance(c, 1);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+  });
+
+  it.each([
+    ["0", 1_000],
+    ["1", 1_000],
+    ["30", 30_000],
+    ["60", 60_000],
+    ["9999", 60_000],
+    ["soon", 60_000],
+    ["", 60_000],
+    ["-5", 60_000],
+    ["Wed, 21 Oct 2026 07:28:00 GMT", 60_000],
+  ])("a playlist 429 with Retry-After %j waits %i ms (clamped to 1..60 seconds, 60 when it is not a number)", async (header, wait) => {
+    stubFetch({ [PLAYLIST]: [tooMany(header), three] });
+    const c = clock();
+    render(<DisplayApp handle={null} timers={c.timers} />);
+    await waitFor(() => expect(c.delays).toEqual([wait]));
+    await advance(c, wait);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+  });
+
+  it("a 429 on the playlist after a good claim retries the playlist only: the claim is never made again", async () => {
+    stubFetch({ [CLAIM]: [204], [PLAYLIST]: [tooMany("1"), three] });
+    const c = clock();
+    const handle = holdSecret(SECRET)!;
+    render(<DisplayApp handle={handle} timers={c.timers} />);
+    await waitFor(() => expect(c.delays).toEqual([1_000]));
+    await settle();
+    expect(text()).toBe("Connecting...");
+    expect(handle.secret()).toBeNull();
+    await advance(c, 1_000);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    expect(count(CLAIM)).toBe(1);
   });
 
   it("a network error, then success, clears the message", async () => {
@@ -371,6 +431,48 @@ describe("polling", () => {
     expect(await screen.findByText(BLOCKED)).toBeInTheDocument();
     expect(c.delays).toEqual([900_000]);
     await advance(c, 900_000);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    expect(count(CLAIM)).toBe(2);
+  });
+
+  it("a 429 on the claim keeps the blocked sentence and claims again after its Retry-After, the secret still in the handle", async () => {
+    stubFetch({ [CLAIM]: [tooMany("120"), 204], [PLAYLIST]: [three] });
+    const c = clock();
+    const handle = holdSecret(SECRET)!;
+    const release = vi.spyOn(handle, "release");
+    render(<DisplayApp handle={handle} timers={c.timers} />);
+    expect(await screen.findByText(BLOCKED)).toBeInTheDocument();
+    expect(c.delays).toEqual([120_000]);
+    expect(release).not.toHaveBeenCalled();
+    expect(handle.secret() === SECRET).toBe(true);
+    await advance(c, 119_999);
+    await settle();
+    expect(count(CLAIM)).toBe(1);
+    expect(text()).toBe(BLOCKED);
+    await advance(c, 1);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    expect(count(CLAIM)).toBe(2);
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({ secret: SECRET });
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(handle.secret()).toBeNull();
+  });
+
+  it.each([
+    ["1", 5_000],
+    ["5", 5_000],
+    ["300", 300_000],
+    ["900", 900_000],
+    ["99999", 900_000],
+    ["soon", 900_000],
+    ["", 900_000],
+    ["-1", 900_000],
+  ])("a claim 429 with Retry-After %j waits %i ms (clamped to 5..900 seconds, 900 when it is not a number)", async (header, wait) => {
+    stubFetch({ [CLAIM]: [tooMany(header), 204], [PLAYLIST]: [three] });
+    const c = clock();
+    render(<DisplayApp handle={holdSecret(SECRET)} timers={c.timers} />);
+    expect(await screen.findByText(BLOCKED)).toBeInTheDocument();
+    expect(c.delays).toEqual([wait]);
+    await advance(c, wait);
     expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
     expect(count(CLAIM)).toBe(2);
   });

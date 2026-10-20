@@ -18,8 +18,17 @@ export const realTimers: Timers = {
 export const POLL_MS = 60_000;
 /** A revoked or unknown link: ask again this rarely (an administrator may have made the link valid again by restoring a backup). */
 export const REVOKED_RECHECK_MS = 300_000;
-/** A blocked address stays blocked for 15 minutes. */
+/** A blocked address stays blocked for 15 minutes: the claim's own `Retry-After` is used, within 5 seconds to 15 minutes, and 15 minutes without one. */
 export const BLOCKED_RETRY_MS = 900_000;
+export const BLOCKED_RETRY_MIN_MS = 5_000;
+/** A playlist 429 means "busy" or "a few reads too many": ask again after its `Retry-After`, within 1 to 60 seconds, and 60 without one. */
+export const BUSY_RETRY_MIN_MS = 1_000;
+export const BUSY_RETRY_MAX_MS = 60_000;
+
+/** The wait in milliseconds for a `Retry-After` in seconds (null: missing or not a number), kept between `min` and `max`; `max` when null. */
+function retryWait(retryAfter: number | null, min: number, max: number): number {
+  return retryAfter === null ? max : Math.min(Math.max(retryAfter * 1000, min), max);
+}
 /** The wait after the first failure to reach the server; it doubles each time up to the cap and starts again after any answer. */
 export const BACKOFF_START_MS = 5_000;
 export const BACKOFF_CAP_MS = 60_000;
@@ -32,7 +41,8 @@ export type DisplayState =
   | { kind: "blocked" }
   | { kind: "offline" };
 
-export type ClaimOutcome = "ok" | "refused" | "blocked" | "unreachable";
+/** `blocked` carries how long the address stays blocked (milliseconds, from the claim's `Retry-After`); the other three are plain answers. */
+export type ClaimOutcome = "ok" | "refused" | "unreachable" | { kind: "blocked"; waitMs: number };
 
 /**
  * The one claim of this page load. The address was cleared before anything ran, so the secret exists only in the page's memory, and only
@@ -50,17 +60,18 @@ function claimOnce(handle: SecretHandle): Promise<ClaimOutcome> {
   if (secret === null) return Promise.resolve("refused"); // already released with no answer kept: only a reset memo (a test) gets here
   const entry = {
     outcome: claim(secret).then(
-      (status): ClaimOutcome => {
+      ({ status, retryAfter }): ClaimOutcome => {
         if (status >= 200 && status < 300) return answered(handle, "ok");
         if (status === 401 || status === 403 || status === 422) return answered(handle, "refused");
-        return status === 429 ? "blocked" : "unreachable";
+        // A 429 is never a definite answer: the secret stays in the handle for the retry.
+        return status === 429 ? { kind: "blocked", waitMs: retryWait(retryAfter, BLOCKED_RETRY_MIN_MS, BLOCKED_RETRY_MS) } : "unreachable";
       },
       (): ClaimOutcome => "unreachable",
     ),
   };
   claimed = entry;
   void entry.outcome.then((outcome) => {
-    if ((outcome === "blocked" || outcome === "unreachable") && claimed === entry) claimed = null;
+    if (outcome !== "ok" && outcome !== "refused" && claimed === entry) claimed = null;
   });
   return entry.outcome;
 }
@@ -142,9 +153,10 @@ export function startDisplay(link: SecretHandle | null, onState: (state: Display
       emit({ kind: revoked ? "revoked" : "notConnected" });
       later(revoked ? REVOKED_RECHECK_MS : POLL_MS, checkPlaylist);
     } else if (reply.status === 429) {
+      // Busy, or a few reads a minute too many: not a blocked address (only the claim says that). The page keeps what it shows, the last
+      // good "Connected as ..." or "Connecting...", and asks again when the server said it may.
       backoff = BACKOFF_START_MS;
-      emit({ kind: "blocked" });
-      later(POLL_MS, checkPlaylist); // the playlist's own limit (a few reads a minute too many) lifts within a minute
+      later(retryWait(reply.retryAfter, BUSY_RETRY_MIN_MS, BUSY_RETRY_MAX_MS), checkPlaylist);
     } else {
       unreachable(checkPlaylist); // a 5xx, a proxy's page, an answer that is not a playlist
     }
@@ -161,10 +173,10 @@ export function startDisplay(link: SecretHandle | null, onState: (state: Display
       backoff = BACKOFF_START_MS;
       emit({ kind: "revoked" });
       later(REVOKED_RECHECK_MS, checkPlaylist); // an older cookie may still be good, or a restored backup may have brought the link back
-    } else if (outcome === "blocked") {
+    } else if (outcome !== "unreachable") {
       backoff = BACKOFF_START_MS;
       emit({ kind: "blocked" });
-      later(BLOCKED_RETRY_MS, makeClaim); // the link is still in memory: try it once the block has run out
+      later(outcome.waitMs, makeClaim); // the link is still in memory: try it once the block has run out
     } else {
       unreachable(makeClaim); // no answer: the claim is made again, the playlist would only say 401
     }
