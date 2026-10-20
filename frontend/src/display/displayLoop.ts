@@ -26,9 +26,14 @@ export const BLOCKED_RETRY_MIN_MS = 5_000;
 export const BUSY_RETRY_MIN_MS = 1_000;
 export const BUSY_RETRY_MAX_MS = 60_000;
 
-/** The wait in milliseconds for a `Retry-After` in seconds (null: missing or not a number), kept between `min` and `max`; `max` when null. */
-function retryWait(retryAfter: number | null, min: number, max: number): number {
-  return retryAfter === null ? max : Math.min(Math.max(retryAfter * 1000, min), max);
+/** A claim 429 that says "busy, try again" (one display claiming too often) is no block: ask again after its `Retry-After`, within 5 to 120 seconds, and 60 without one. */
+export const CLAIM_BUSY_RETRY_MIN_MS = 5_000;
+export const CLAIM_BUSY_RETRY_MAX_MS = 120_000;
+export const CLAIM_BUSY_RETRY_DEFAULT_MS = 60_000;
+
+/** The wait in milliseconds for a `Retry-After` in seconds (null: missing or not a number), kept between `min` and `max`; `fallback` (`max` unless given) when null. */
+function retryWait(retryAfter: number | null, min: number, max: number, fallback: number = max): number {
+  return retryAfter === null ? fallback : Math.min(Math.max(retryAfter * 1000, min), max);
 }
 /** The wait after the first failure to reach the server; it doubles each time up to the cap and starts again after any answer. */
 export const BACKOFF_START_MS = 5_000;
@@ -42,13 +47,16 @@ export type DisplayState =
   | { kind: "blocked" }
   | { kind: "offline" };
 
-/** `blocked` carries how long the address stays blocked (milliseconds, from the claim's `Retry-After`); the other three are plain answers. */
-export type ClaimOutcome = "ok" | "refused" | "unreachable" | { kind: "blocked"; waitMs: number };
+/**
+ * `blocked` carries how long the address stays blocked and `busy` how long to wait before claiming again (both milliseconds, from the
+ * claim's `Retry-After`); the other three are plain answers. Neither `blocked` nor `busy` is a definite answer.
+ */
+export type ClaimOutcome = "ok" | "refused" | "unreachable" | { kind: "blocked"; waitMs: number } | { kind: "busy"; waitMs: number };
 
 /**
  * The one claim of this page load. The address was cleared before anything ran, so the secret exists only in the page's memory, and only
  * until the claim has had a definite answer. A second start of the screen (StrictMode runs an effect twice; an error boundary mounts the
- * screen again) shares the first claim, and a claim that had no answer (no network, a 5xx, a block) is forgotten so the next try can be
+ * screen again) shares the first claim, and a claim that had no answer (no network, a 5xx, a block, a busy server) is forgotten so the next try can be
  * made, with the secret still in the handle. A definite answer (accepted, or refused as wrong, revoked or malformed) is kept as the
  * answer and the secret is released at that moment: asking again would only be a wrong secret to count. The memo holds the answer, never
  * the secret and never the handle.
@@ -61,7 +69,7 @@ function claimOnce(handle: SecretHandle): Promise<ClaimOutcome> {
   if (secret === null) return Promise.resolve("refused"); // already released with no answer kept: only a reset memo (a test) gets here
   const entry = {
     outcome: claim(secret).then(
-      ({ status, retryAfter }): ClaimOutcome => {
+      ({ status, retryAfter, busy }): ClaimOutcome => {
         if (status >= 200 && status < 300) {
           // The cookie is set. The browser keeps this document's first address (with the secret) in its navigation entry for as long as the
           // document lives, so the page is loaded again without it. Only an accepted claim does this: after a refusal the page must keep
@@ -72,7 +80,11 @@ function claimOnce(handle: SecretHandle): Promise<ClaimOutcome> {
           return outcome;
         }
         if (status === 401 || status === 403 || status === 422) return answered(handle, "refused");
-        // A 429 is never a definite answer: the secret stays in the handle for the retry.
+        // A 429 is never a definite answer: the secret stays in the handle for the retry. "Busy" (this display claims too often) is a short
+        // wait; any other 429 is the blocked address.
+        if (status === 429 && busy) {
+          return { kind: "busy", waitMs: retryWait(retryAfter, CLAIM_BUSY_RETRY_MIN_MS, CLAIM_BUSY_RETRY_MAX_MS, CLAIM_BUSY_RETRY_DEFAULT_MS) };
+        }
         return status === 429 ? { kind: "blocked", waitMs: retryWait(retryAfter, BLOCKED_RETRY_MIN_MS, BLOCKED_RETRY_MS) } : "unreachable";
       },
       (): ClaimOutcome => "unreachable",
@@ -184,6 +196,10 @@ export function startDisplay(link: SecretHandle | null, onState: (state: Display
       backoff = BACKOFF_START_MS;
       emit({ kind: "revoked" });
       later(REVOKED_RECHECK_MS, checkPlaylist); // an older cookie may still be good, or a restored backup may have brought the link back
+    } else if (outcome !== "unreachable" && outcome.kind === "busy") {
+      // Busy, not blocked: the page keeps what it shows ("Connecting..." before the first answer) and the link stays in memory.
+      backoff = BACKOFF_START_MS;
+      later(outcome.waitMs, makeClaim);
     } else if (outcome !== "unreachable") {
       backoff = BACKOFF_START_MS;
       emit({ kind: "blocked" });

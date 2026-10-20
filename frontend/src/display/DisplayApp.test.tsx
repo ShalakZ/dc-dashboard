@@ -41,6 +41,8 @@ function answer(reply: Exclude<Reply, "network">): Response {
 }
 /** A 429 as the server sends it: with a `Retry-After` in seconds (or without one, or with text that is not a number). */
 const tooMany = (retryAfter?: string): Reply => ({ status: 429, body: { detail: "x" }, headers: retryAfter === undefined ? {} : { "Retry-After": retryAfter } });
+/** The claim's other 429, the server's "busy" (one display claiming too often): its detail is exactly the server's text, and it is not a block. */
+const busy = (retryAfter?: string): Reply => ({ status: 429, body: { detail: "busy, try again" }, headers: retryAfter === undefined ? {} : { "Retry-After": retryAfter } });
 
 /** One queue of replies per route; the last one repeats. */
 function stubFetch(script: Partial<Record<string, Reply[]>>) {
@@ -521,6 +523,97 @@ describe("polling", () => {
     await advance(c, wait);
     expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
     expect(count(CLAIM)).toBe(2);
+  });
+
+  it("a busy 429 on the claim is not a block: the page keeps 'Connecting...', the secret stays, and the claim is made again after 60 seconds", async () => {
+    stubFetch({ [CLAIM]: [busy("60"), 204], [PLAYLIST]: [three] });
+    const c = clock();
+    const handle = holdSecret(SECRET)!;
+    const release = vi.spyOn(handle, "release");
+    render(<DisplayApp handle={handle} timers={c.timers} />);
+    await waitFor(() => expect(count(CLAIM)).toBe(1));
+    await settle();
+    expect(text()).toBe("Connecting...");
+    expect(screen.queryByText(BLOCKED)).toBeNull();
+    expect(c.delays).toEqual([60_000]);
+    expect(release).not.toHaveBeenCalled();
+    expect(handle.secret() === SECRET).toBe(true);
+    await advance(c, 59_999);
+    await settle();
+    expect(count(CLAIM)).toBe(1);
+    expect(text()).toBe("Connecting...");
+    await advance(c, 1);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    expect(count(CLAIM)).toBe(2);
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({ secret: SECRET });
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(handle.secret()).toBeNull();
+  });
+
+  it.each([
+    ["0", 5_000],
+    ["1", 5_000],
+    ["5", 5_000],
+    ["30", 30_000],
+    ["120", 120_000],
+    ["9999", 120_000],
+    ["soon", 60_000],
+    ["", 60_000],
+    ["-5", 60_000],
+  ])("a busy claim 429 with Retry-After %j waits %i ms (clamped to 5..120 seconds, 60 when it is not a number)", async (header, wait) => {
+    stubFetch({ [CLAIM]: [busy(header), 204], [PLAYLIST]: [three] });
+    const c = clock();
+    render(<DisplayApp handle={holdSecret(SECRET)} timers={c.timers} />);
+    await waitFor(() => expect(c.delays).toEqual([wait]));
+    expect(text()).toBe("Connecting...");
+    await advance(c, wait);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    expect(count(CLAIM)).toBe(2);
+  });
+
+  it("a busy claim 429 with no Retry-After at all waits 60 seconds and never shows the blocked sentence", async () => {
+    stubFetch({ [CLAIM]: [busy(), 204], [PLAYLIST]: [three] });
+    const c = clock();
+    render(<DisplayApp handle={holdSecret(SECRET)} timers={c.timers} />);
+    await waitFor(() => expect(c.delays).toEqual([60_000]));
+    expect(screen.queryByText(BLOCKED)).toBeNull();
+    await advance(c, 60_000);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+  });
+
+  it.each([
+    ["another detail", { status: 429, body: { detail: "too many wrong links from this address" }, headers: { "Retry-After": "120" } }],
+    ["a body that is not JSON (a proxy's page)", { status: 429, body: "<html>slow down</html>", headers: { "Retry-After": "120" } }],
+    ["a body with no detail", { status: 429, body: {}, headers: { "Retry-After": "120" } }],
+    ["a busy text that only contains the server's", { status: 429, body: { detail: "busy, try again later" }, headers: { "Retry-After": "120" } }],
+  ] as const)("a claim 429 with %s is still the blocked address: the blocked sentence and the existing retry rule", async (_name, reply) => {
+    stubFetch({ [CLAIM]: [reply, 204], [PLAYLIST]: [three] });
+    const c = clock();
+    render(<DisplayApp handle={holdSecret(SECRET)} timers={c.timers} />);
+    expect(await screen.findByText(BLOCKED)).toBeInTheDocument();
+    expect(c.delays).toEqual([120_000]);
+    await advance(c, 120_000);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+  });
+
+  it("a busy claim 429 never ends in the memo: the next try of the page can claim again, with the secret still held", async () => {
+    stubFetch({ [CLAIM]: [busy("60"), busy("60"), 204], [PLAYLIST]: [three] });
+    const c = clock();
+    const handle = holdSecret(SECRET)!;
+    render(<DisplayApp handle={handle} timers={c.timers} />);
+    await waitFor(() => expect(count(CLAIM)).toBe(1));
+    await settle();
+    expect(claimMemoSnapshot(), "a busy answer is no definite answer, so it is forgotten").toBeNull();
+    await advance(c, 60_000);
+    await waitFor(() => expect(count(CLAIM)).toBe(2));
+    await settle();
+    expect(claimMemoSnapshot()).toBeNull();
+    expect(text()).toBe("Connecting...");
+    expect(handle.secret() === SECRET).toBe(true);
+    await advance(c, 60_000);
+    expect(await screen.findByText(connected("3 dashboards"))).toBeInTheDocument();
+    expect(count(CLAIM)).toBe(3);
+    expect(handle.secret()).toBeNull();
   });
 
   it("unmounting stops every timer and ignores a late answer", async () => {

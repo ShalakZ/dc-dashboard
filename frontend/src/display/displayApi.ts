@@ -49,12 +49,17 @@ export interface ClaimReply {
   status: number;
   /** The seconds the server asked to wait (a 429 sends them), else null. */
   retryAfter: number | null;
+  /** True for a 429 whose detail is exactly `CLAIM_BUSY`: this display claimed too often, which says nothing about the address being blocked. */
+  busy: boolean;
 }
+
+/** The detail of the claim's "busy" 429 (one display claiming more than 30 times a minute); the same text as the server's, keep them identical. */
+export const CLAIM_BUSY = "busy, try again";
 
 /**
  * Trades the secret for the display cookie. The secret goes in the JSON body only, never in a URL, a header or the query, and this function
- * is the only place that holds it. Resolves with the HTTP status (204 on success) and the `Retry-After` seconds; rejects when the request
- * never completed.
+ * is the only place that holds it. Resolves with the HTTP status (204 on success), the `Retry-After` seconds and, for a 429, whether its
+ * detail says "busy" (any other 429, or one with no readable body, is the blocked address); rejects when the request never completed.
  */
 export async function claim(secret: string): Promise<ClaimReply> {
   const response = await fetch("/api/display/claim", {
@@ -64,7 +69,16 @@ export async function claim(secret: string): Promise<ClaimReply> {
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify({ secret }),
   });
-  return { status: response.status, retryAfter: retryAfterSeconds(response) };
+  let busy = false;
+  if (response.status === 429) {
+    try {
+      const body: unknown = await response.json();
+      busy = record(body) && body.detail === CLAIM_BUSY;
+    } catch {
+      // not JSON (a proxy's page): the blocked address, as before
+    }
+  }
+  return { status: response.status, retryAfter: retryAfterSeconds(response), busy };
 }
 
 export interface PlaylistReply {

@@ -21,9 +21,9 @@ import { navLink, rowAction } from "./shell";
 //   4   A DELETED DASHBOARD. Deleting one dashboard of a playlist in use: the Displays page says "The dashboard ... was deleted" and "1 item is skipped", the display page "(1 skipped)".
 //   5   KEYBOARD ONLY, 1440 x 900 and 1024 x 640, light and dark. Tab and Enter reach New playlist and New display; the playlist is made with Move up, Move down and Remove; the row menu and Revoke work
 //       from the keyboard; focus returns to the opener when each dialog closes; the page never scrolls sideways and the dialogs' buttons stay inside the window.
-//   6   LAST: the claim's block. Ten wrong secrets answer 401 with one body, the eleventh 429 with Retry-After. It blocks the stack's client address for 15 minutes (every claim from it, a right
-//       one too), which is why it is the last case of the last project; W28_SKIP_BLOCK skips it (single-spec loops on a stack that already ran it; run it again only after the api container of the
-//       scratch project was restarted, never `dcdash`). No earlier case makes a wrong claim, so the limiter is empty when this one starts.
+//   6   LAST: the claim's block. Ten wrong secrets answer 401 with one body, the eleventh 429 with Retry-After, and a claim with a RIGHT secret from the same address still answers 204 (the block
+//       refuses wrong secrets only). It blocks the stack's client address for 15 minutes for wrong secrets, which is why it is the last case of the last project; W28_SKIP_BLOCK skips it (single-spec
+//       loops on a stack that already ran it; run it again only after the api container of the scratch project was restarted, never `dcdash`). No earlier case makes a wrong claim, so the limiter is empty when this one starts.
 // Names are matched by SUBSTRING, so every lookup is `exact: true`. Assertions that depend on timing or on the browser, which nobody could check while writing this, are listed in the commit's status block.
 
 const ADMIN = { username: "admin", password: "correct-horse" };
@@ -668,10 +668,12 @@ test.describe("W28: display screens", () => {
   // -------------------------------------------------------------------------------------------------------------------------------
   // Case 6
 
-  // LAST, on purpose: ten wrong secrets block the stack's one client address for 15 minutes, and the block also refuses a RIGHT secret, so no claim that follows would connect. It
-  // also needs the limiter to be empty, which holds because no earlier case makes a wrong claim. W28_SKIP_BLOCK skips it when a stack has run it already.
-  test("6. the eleventh wrong claim from one address is refused with Retry-After", async ({ request }) => {
+  // LAST, on purpose: ten wrong secrets block the stack's one client address for 15 minutes (for WRONG secrets only: a RIGHT secret is never refused, which the last assertion checks), so any later
+  // wrong claim would be refused. It also needs the limiter to be empty, which holds because no earlier case makes a wrong claim. W28_SKIP_BLOCK skips it when a stack has run it already.
+  test("6. the eleventh wrong claim from one address is refused with Retry-After, and a right one still connects", async ({ browser, request }) => {
     test.skip(SKIP_BLOCK, "W28_SKIP_BLOCK is set: this case blocks the stack's client address for 15 minutes");
+    // The display with the RIGHT secret is made first (through the API, as the administrator), so nothing is made after the block.
+    const right = await asAdmin(browser, async (api) => createDisplay(api, name("block tv"), (await createPlaylist(api, name("block list"), [real.dashA])).id));
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     const wrong = (): string => Array.from({ length: 43 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
     const claim = (secret: string) => request.post("/api/display/claim", { data: { secret } });
@@ -684,5 +686,7 @@ test.describe("W28: display screens", () => {
     expect(blocked.status(), "the eleventh claim is refused as blocked").toBe(429);
     const retryAfter = Number(blocked.headers()["retry-after"]);
     expect(Number.isFinite(retryAfter) && retryAfter > 0 && retryAfter <= 900, `Retry-After is a number of seconds up to 15 minutes (got ${blocked.headers()["retry-after"]})`).toBe(true);
+    // The block refuses wrong secrets only: the right one, from the same blocked address, is accepted.
+    expect((await claim(right.secret)).status(), "a claim with the right secret from the blocked address answers 204").toBe(204);
   });
 });
