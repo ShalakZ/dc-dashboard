@@ -10,6 +10,7 @@ gone, the dashboard has no widgets). A skipped item is an honest answer, never a
 import hashlib
 import secrets
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -69,17 +70,22 @@ class ItemView:
     skipped: Skip | None
 
 
-async def resolve_items(db: AsyncSession, playlist_id: int) -> list[ItemView]:
-    """The items of a playlist in order (position, id), each resolved against the dashboards and assets that exist now. One
-    statement for the items, one for all their dashboards and one for all their widgets; the asset tree is loaded (once) only when
-    some item has a focus.
+async def resolve_playlists(db: AsyncSession, playlist_ids: Sequence[int]) -> dict[int, list[ItemView]]:
+    """The items of each playlist in order (position, id), each resolved against the dashboards and assets that exist now. One
+    statement for all the items, one for all their dashboards and one for all their widgets, whatever the number of playlists;
+    the asset tree is loaded (once) only when some item has a focus. Every id asked for is a key of the answer (an empty list for
+    a playlist without items or one that does not exist).
 
     Why an item is skipped, first match wins: no dashboard (deleted) -> `dashboard_deleted`; else a focus that is not in the asset
     tree -> `focus_gone`; else a dashboard with no widgets -> `no_widgets`."""
+    result: dict[int, list[ItemView]] = {playlist_id: [] for playlist_id in playlist_ids}
+    if not result:
+        return result
     items = list(await db.scalars(
-        select(PlaylistItem).where(PlaylistItem.playlist_id == playlist_id).order_by(PlaylistItem.position, PlaylistItem.id)))
+        select(PlaylistItem).where(PlaylistItem.playlist_id.in_(list(result)))
+        .order_by(PlaylistItem.playlist_id, PlaylistItem.position, PlaylistItem.id)))
     if not items:
-        return []
+        return result
     wanted = {item.dashboard_id for item in items if item.dashboard_id is not None}
     dashboards: dict[int, Dashboard] = {}
     widgets: dict[int, list[Widget]] = defaultdict(list)
@@ -91,7 +97,6 @@ async def resolve_items(db: AsyncSession, playlist_id: int) -> list[ItemView]:
             widgets[widget.dashboard_id].append(widget)
     tree = await AssetTree.load(db) if any(item.focus_asset_id is not None for item in items) else None
 
-    views: list[ItemView] = []
     for item in items:
         # A dashboard deleted after the items were read is also "deleted" (the id is set but the row is gone).
         dashboard = dashboards.get(item.dashboard_id) if item.dashboard_id is not None else None
@@ -114,9 +119,14 @@ async def resolve_items(db: AsyncSession, playlist_id: int) -> list[ItemView]:
             skipped = "no_widgets"
         else:
             skipped = None
-        views.append(ItemView(
+        result[item.playlist_id].append(ItemView(
             id=item.id, position=item.position, seconds=item.seconds, dashboard=dashboard, widgets=item_widgets,
             dashboard_name=dashboard.name if dashboard is not None else item.dashboard_name,
             focus_asset_id=focus_id, focus_name=focus_name, trail=trail, skipped=skipped,
         ))
-    return views
+    return result
+
+
+async def resolve_items(db: AsyncSession, playlist_id: int) -> list[ItemView]:
+    """The items of ONE playlist, resolved as `resolve_playlists` does."""
+    return (await resolve_playlists(db, [playlist_id]))[playlist_id]

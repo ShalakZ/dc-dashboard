@@ -49,14 +49,18 @@ COLUMNS = {
 CONSTRAINTS = {
     "playlists_pkey": ("playlists", "p", "PRIMARY KEY (id)"),
     "playlists_name_uq": ("playlists", "u", "UNIQUE (name)"),
+    "playlists_name_ck": ("playlists", "c", "CHECK ((name ~ '\\S'::text))"),
     "playlists_created_by_fk": ("playlists", "f", "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL"),
     "playlist_items_pkey": ("playlist_items", "p", "PRIMARY KEY (id)"),
     "playlist_items_playlist_fk": ("playlist_items", "f", "FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE"),
     "playlist_items_dashboard_fk": ("playlist_items", "f", "FOREIGN KEY (dashboard_id) REFERENCES dashboards(id) ON DELETE SET NULL"),
     "playlist_items_seconds_ck": ("playlist_items", "c", "CHECK (((seconds >= 10) AND (seconds <= 3600)))"),
+    "playlist_items_position_ck": ("playlist_items", "c", "CHECK ((\"position\" >= 0))"),
     "displays_pkey": ("displays", "p", "PRIMARY KEY (id)"),
     "displays_name_uq": ("displays", "u", "UNIQUE (name)"),
     "displays_secret_hash_uq": ("displays", "u", "UNIQUE (secret_hash)"),
+    "displays_secret_hash_ck": ("displays", "c", "CHECK ((secret_hash ~ '^[0-9a-f]{64}$'::text))"),
+    "displays_name_ck": ("displays", "c", "CHECK ((name ~ '\\S'::text))"),
     "displays_playlist_fk": ("displays", "f", "FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE RESTRICT"),
     "displays_created_by_fk": ("displays", "f", "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL"),
     "displays_revoked_by_fk": ("displays", "f", "FOREIGN KEY (revoked_by) REFERENCES users(id) ON DELETE SET NULL"),
@@ -64,6 +68,7 @@ CONSTRAINTS = {
 INDEXES = {
     "playlist_items_order_ix": ("playlist_items", "(playlist_id, \"position\", id)"),
     "displays_playlist_ix": ("displays", "(playlist_id)"),
+    "playlist_items_dashboard_ix": ("playlist_items", "(dashboard_id)"),
 }
 ASSETS = "SELECT id, parent_id, name, kind, sort_order, icon FROM assets ORDER BY id"
 USERS = "SELECT id, username, password_hash, role_id, active FROM users ORDER BY id"
@@ -137,7 +142,7 @@ async def add_item(db, playlist_id: int, position: int = 0, **columns) -> int:
     return await db.fetchval(f"INSERT INTO playlist_items ({names}) VALUES ({marks}) RETURNING id", *values.values())
 
 
-async def add_display(db, playlist_id: int | None, name: str = "Hall TV", secret_hash: str | None = "h" * 64, **columns) -> int:
+async def add_display(db, playlist_id: int | None, name: str = "Hall TV", secret_hash: str | None = "a" * 64, **columns) -> int:
     values = {"name": name, "playlist_id": playlist_id, "secret_hash": secret_hash, **columns}
     marks = ", ".join(f"${n}" for n in range(1, len(values) + 1))
     return await db.fetchval(f"INSERT INTO displays ({', '.join(values)}) VALUES ({marks}) RETURNING id", *values.values())
@@ -263,9 +268,9 @@ async def test_a_missing_required_value_is_refused(db):
     with pytest.raises(asyncpg.NotNullViolationError):
         await add_display(db, playlist, secret_hash=None)
     with pytest.raises(asyncpg.NotNullViolationError):
-        await add_display(db, playlist, name=None, secret_hash="x")
+        await add_display(db, playlist, name=None, secret_hash="c" * 64)
     with pytest.raises(asyncpg.NotNullViolationError):
-        await add_display(db, None, secret_hash="y")  # a display always has a playlist
+        await add_display(db, None, secret_hash="d" * 64)  # a display always has a playlist
 
 
 async def test_a_duplicate_playlist_name_is_refused(db):
@@ -503,3 +508,41 @@ async def test_down_runs_where_a_table_was_already_dropped_by_hand(db):
         run_alembic("upgrade", "head")
     for table in NEW_TABLES:
         assert await db.fetchval(f"SELECT count(*) FROM {table}") == 0
+
+
+# ---- the defensive CHECKs (review of T1, M2) ---------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad", ["x", "a" * 63, "a" * 65, "A" * 64, "g" * 64, "k3J" * 14 + "ab", "-" * 43])
+async def test_a_secret_hash_must_be_64_lowercase_hex_so_a_plaintext_secret_cannot_be_stored(db, bad):
+    playlist = await add_playlist(db)
+    with pytest.raises(asyncpg.CheckViolationError) as caught:
+        await add_display(db, playlist, secret_hash=bad)
+    assert caught.value.constraint_name == "displays_secret_hash_ck"
+    assert await db.fetchval("SELECT count(*) FROM displays") == 0
+
+
+async def test_a_real_hash_passes_the_secret_hash_check(db):
+    from dcdash.core.displays import new_secret
+
+    playlist = await add_playlist(db)
+    _, hashed = new_secret()
+    assert await add_display(db, playlist, secret_hash=hashed)
+
+
+@pytest.mark.parametrize("name", ["", "   ", "\t"])
+async def test_blank_names_are_refused(db, name):
+    playlist = await add_playlist(db, "Wall A")
+    with pytest.raises(asyncpg.CheckViolationError) as caught:
+        await add_playlist(db, name)
+    assert caught.value.constraint_name == "playlists_name_ck"
+    with pytest.raises(asyncpg.CheckViolationError) as caught:
+        await add_display(db, playlist, name=name)
+    assert caught.value.constraint_name == "displays_name_ck"
+
+
+async def test_a_negative_position_is_refused(db):
+    playlist = await add_playlist(db)
+    with pytest.raises(asyncpg.CheckViolationError) as caught:
+        await add_item(db, playlist, position=-1)
+    assert caught.value.constraint_name == "playlist_items_position_ck"
+    assert await add_item(db, playlist, position=0)

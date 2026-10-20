@@ -15,7 +15,7 @@ from dcdash.core import displays
 from dcdash.core.db import get_engine, get_sessionmaker
 from dcdash.core.displays import (
     DASHBOARD_MAX_WIDGETS, DISPLAY_WIDGET_BUDGET_PER_MINUTE, MAX_DISPLAYS, MAX_ITEMS, MAX_NAME, MAX_PLAYLISTS, MAX_SECONDS, MIN_SECONDS,
-    hash_secret, new_secret, resolve_items,
+    hash_secret, new_secret, resolve_items, resolve_playlists,
 )
 from dcdash.core.tree import AssetTree
 
@@ -334,3 +334,74 @@ async def test_a_dashboard_deleted_while_the_playlist_is_being_resolved_is_skipp
 
     (view,) = await resolve_items(Racing(session), playlist.id)
     assert (view.skipped, view.dashboard, view.widgets, view.dashboard_name) == ("dashboard_deleted", None, [], "Ops")
+
+
+# ---- resolve_playlists: the admin list resolves every playlist in one go (review of T1, I1) ----------------------------------
+
+async def test_many_playlists_resolve_in_four_statements_and_one_tree_load(db, session, monkeypatch):
+    hall = await make_asset(db, "Hall 1")
+    ops = await add_dashboard(db, "Ops")
+    await add_widget(db, ops)
+    plain = await make_playlist(db, "Wall A", items=[{"dashboard_id": ops}])
+    focused = await make_playlist(db, "Wall B", items=[{"dashboard_id": ops, "focus_asset_id": hall}, {"dashboard_id": ops}])
+    other = await make_playlist(db, "Wall C", items=[{"dashboard_id": ops, "focus_asset_id": hall}])
+    empty = await make_playlist(db, "Wall D")
+    loads = []
+    real = AssetTree.load
+
+    async def spy(db):
+        loads.append(1)
+        return await real(db)
+
+    monkeypatch.setattr(AssetTree, "load", spy)
+    with statements() as sql:
+        got = await resolve_playlists(session, [plain.id, focused.id, other.id, empty.id, 987654])
+    assert loads == [1]
+    assert len(reading(sql, "playlist_items")) == 1 and len(reading(sql, "dashboards")) == 1 and len(reading(sql, "widgets")) == 1
+    assert set(got) == {plain.id, focused.id, other.id, empty.id, 987654}
+    assert [len(got[p.id]) for p in (plain, focused, other, empty)] == [1, 2, 1, 0] and got[987654] == []
+    assert all(v.skipped is None for views in got.values() for v in views)
+    assert [v.focus_asset_id for v in got[focused.id]] == [hall, None]
+
+
+async def test_resolve_playlists_answers_the_same_as_resolve_items_for_each_playlist(db, session):
+    ops = await add_dashboard(db, "Ops")
+    await add_widget(db, ops)
+    gone = await add_dashboard(db, "Gone")
+    first = await make_playlist(db, "Wall A", items=[{"dashboard_id": ops}, {"dashboard_id": gone}])
+    second = await make_playlist(db, "Wall B", items=[{"dashboard_id": gone}, {"dashboard_id": ops, "focus_asset_id": 123456, "focus_name": "Old hall"}])
+    await db.execute("DELETE FROM dashboards WHERE id = $1", gone)
+    batch = await resolve_playlists(session, [first.id, second.id])
+    for playlist in (first, second):
+        single = await resolve_items(session, playlist.id)
+        assert [(v.id, v.skipped, v.dashboard_name, v.focus_name) for v in batch[playlist.id]] == [
+            (v.id, v.skipped, v.dashboard_name, v.focus_name) for v in single]
+    assert resolve_playlists.__doc__ and await resolve_playlists(session, []) == {}
+
+
+# ---- the ORM write path (review of T1, M1): what T3/T4 will actually do --------------------------------------------------------
+
+async def test_the_orm_writes_and_updates_the_three_tables(db):
+    """Every other test inserts raw SQL. This one goes through the models the way the routes do: a default seconds, an explicit
+    created_at/updated_at (the house pattern: a server default is not readable after a flush in async SQLAlchemy), an UPDATE of an item's
+    position, then the rows read back with asyncpg."""
+    from datetime import UTC, datetime
+
+    from dcdash.core.models import Display, Playlist, PlaylistItem
+
+    now = datetime.now(UTC)
+    async with get_sessionmaker()() as s:
+        playlist = Playlist(name="Wall A", created_at=now, updated_at=now)
+        s.add(playlist)
+        await s.flush()
+        item = PlaylistItem(playlist_id=playlist.id, position=0)
+        display = Display(name="Hall TV", playlist_id=playlist.id, secret_hash=hash_secret("a-secret"), created_at=now)
+        s.add_all([item, display])
+        await s.commit()
+        item.position = 3
+        await s.commit()
+        ids = (playlist.id, item.id, display.id)
+    row = await db.fetchrow('SELECT "position", seconds, dashboard_id FROM playlist_items WHERE id = $1', ids[1])
+    assert (row["position"], row["seconds"], row["dashboard_id"]) == (3, 60, None)
+    assert await db.fetchval("SELECT secret_hash FROM displays WHERE id = $1", ids[2]) == hash_secret("a-secret")
+    assert await db.fetchval("SELECT revoked_at FROM displays WHERE id = $1", ids[2]) is None

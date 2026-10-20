@@ -20,10 +20,13 @@ the application finds the asset gone and skips the item, and `focus_name` keeps 
 say when and from where a screen last asked for its playlist.
 
 Every constraint has a name that the application and the tests refer to: playlists_name_uq, playlist_items_seconds_ck,
-displays_name_uq, displays_secret_hash_uq, displays_playlist_fk and the other foreign keys.
+displays_name_uq, displays_secret_hash_uq, displays_playlist_fk and the other foreign keys. CHECKs guard what the application must never
+store: secret_hash is 64 lowercase hex characters (a slip that stored the plaintext secret fails loudly instead of leaking the
+credential at rest), the names are not blank and position is not negative.
 
-Up, in one transaction: creates the three tables and their two indexes (playlist_items (playlist_id, position, id) and
-displays (playlist_id)). No other table is touched, no row is written and no role is given the new permission displays.manage
+Up, in one transaction: creates the three tables and their three indexes (playlist_items (playlist_id, position, id), playlist_items (dashboard_id)
+(a dashboard delete finds its items) and
+displays (playlist_id); the created_by and revoked_by keys have no index on purpose: the tables hold at most 50, 30 and 600 rows). No other table is touched, no row is written and no role is given the new permission displays.manage
 (nothing changes on upgrade: the built-in Admin holds it from the code, any other role gets it when an administrator ticks it).
 
 Down, in one transaction: drops `displays`, then `playlist_items`, then `playlists`. The playlists and every display link are
@@ -47,6 +50,7 @@ UP = [
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         CONSTRAINT playlists_name_uq UNIQUE (name),
+        CONSTRAINT playlists_name_ck CHECK (name ~ '\\S'),
         CONSTRAINT playlists_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
     )
     """,
@@ -62,7 +66,8 @@ UP = [
         seconds INTEGER NOT NULL DEFAULT 60,
         CONSTRAINT playlist_items_playlist_fk FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
         CONSTRAINT playlist_items_dashboard_fk FOREIGN KEY (dashboard_id) REFERENCES dashboards(id) ON DELETE SET NULL,
-        CONSTRAINT playlist_items_seconds_ck CHECK (seconds BETWEEN 10 AND 3600)
+        CONSTRAINT playlist_items_seconds_ck CHECK (seconds BETWEEN 10 AND 3600),
+        CONSTRAINT playlist_items_position_ck CHECK ("position" >= 0)
     )
     """,
     """
@@ -79,6 +84,8 @@ UP = [
         revoked_by INTEGER,
         CONSTRAINT displays_name_uq UNIQUE (name),
         CONSTRAINT displays_secret_hash_uq UNIQUE (secret_hash),
+        CONSTRAINT displays_secret_hash_ck CHECK (secret_hash ~ '^[0-9a-f]{64}$'),
+        CONSTRAINT displays_name_ck CHECK (name ~ '\\S'),
         CONSTRAINT displays_playlist_fk FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE RESTRICT,
         CONSTRAINT displays_created_by_fk FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
         CONSTRAINT displays_revoked_by_fk FOREIGN KEY (revoked_by) REFERENCES users(id) ON DELETE SET NULL
@@ -86,6 +93,7 @@ UP = [
     """,
     "CREATE INDEX playlist_items_order_ix ON playlist_items (playlist_id, position, id)",
     "CREATE INDEX displays_playlist_ix ON displays (playlist_id)",
+    "CREATE INDEX playlist_items_dashboard_ix ON playlist_items (dashboard_id)",
 ]
 
 DOWN = [

@@ -123,7 +123,7 @@ async def make_playlist(db, name: str = "Wall A", items: Iterable[dict] = ()) ->
     """A playlist named `name` with `items`, saved the way a real save writes them. Each item is a dict with the optional keys
     `dashboard_id`, `focus_asset_id` and `seconds` (default 60); `dashboard_name` and `focus_name` are the stored snapshot names and,
     when the key is left out, default to the LIVE name of that dashboard or asset right now (pass None to store no snapshot).
-    Positions are 0, 1, 2 ... in the order given. Returns a detached `Playlist` (id, name, created_by, created_at, updated_at)."""
+    Positions are 0, 1, 2 ... in the order given. Returns a plain transient `Playlist` object (id, name, created_by, created_at, updated_at): read its fields, never `session.add()` it."""
     row = await db.fetchrow("INSERT INTO playlists (name) VALUES ($1) RETURNING *", name)
     for position, item in enumerate(items):
         dashboard_id, focus_id = item.get("dashboard_id"), item.get("focus_asset_id")
@@ -146,7 +146,7 @@ async def make_playlist(db, name: str = "Wall A", items: Iterable[dict] = ()) ->
 async def make_display(db, name: str = "Hall TV", playlist: Playlist | None = None, revoked: bool = False) -> tuple[Display, str]:
     """A display named `name` showing `playlist`, and its secret (only the hash is stored). With no `playlist` it shows the
     playlist named "Wall A", which is made if it does not exist yet (so two displays made with the defaults share one playlist and
-    a later `make_playlist(db)` is not a second "Wall A"). `revoked=True` stores `revoked_at = now()`. Returns a detached `Display`."""
+    a later `make_playlist(db)` is not a second "Wall A"). `revoked=True` stores `revoked_at = now()`. Returns a plain transient `Display` object: read its fields, never `session.add()` it (that would INSERT a second row)."""
     if playlist is None:
         found = await db.fetchrow("SELECT * FROM playlists WHERE name = 'Wall A'")
         playlist = Playlist(**dict(found)) if found is not None else await make_playlist(db)
