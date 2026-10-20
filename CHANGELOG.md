@@ -16,7 +16,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w29 (2026-10-21, pending)
+## w29 (2026-10-21, 5380bbe)
 
 The rotating wall screen (display mode, part 2; display links are w28). No migration, no new permission, no change to the server. A connected display now shows the dashboards of its playlist in turn, fitted to the screen with type that reads from across a room, under a header with the dashboard name, "2 of 3", the key to the marks, "Updated hh:mm" (on the server's clock) and the clock. Two calm notices say when readings stopped arriving or the screen has not been updated, and a card that cannot refresh is dimmed and tagged. The screen recovers by itself after a network cut, a server restart (a rebuild showed as a 9 second outage, no notice), sleep and wake, and a new version (it reloads). The Displays page re-reads every minute. [Display screens](docs/display-screens.md) has the device guide (Edge and Chrome kiosk, Linux auto-start). Nothing to do on upgrade beyond the usual steps of [Upgrading and going back](docs/upgrading.md).
 
