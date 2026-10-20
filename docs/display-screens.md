@@ -45,6 +45,9 @@ and the browser keeps a cookie (for up to 400 days) that only the display pages 
 - The link stays in the history of any normal browser it was opened in. Open it only on the screen, not on your own computer.
 - A kiosk browser that runs in a private session (Microsoft Edge in kiosk mode does) forgets the cookie when it closes. Start it with the
   full link every time.
+- The cookie holds the link itself, never expires on its own and goes out with every request the screen makes. On a site served over
+  plain http, anyone who can watch the network between the screen and the server can read it from that traffic. Use the HTTPS setup
+  (the TLS Caddyfile) for display screens where that matters, and revoke a link you suspect.
 
 ## What the page says
 
