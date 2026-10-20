@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { useDashboards, useDefaultDashboard, useDeleteDashboard, usePutDefaultDashboard, useSite } from "../api/queries";
+import { useDashboards, useDashboardTemplates, useDefaultDashboard, useDeleteDashboard, usePutDefaultDashboard, useSite } from "../api/queries";
 import type { DashboardListItem } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
-import { CreateDashboardDialog, type StartFrom } from "../components/dashboard/CreateDashboardDialog";
+import { CreateDashboardDialog } from "../components/dashboard/CreateDashboardDialog";
+import { TemplateGallery, type TemplateChoice } from "../components/dashboard/TemplateGallery";
 import { PageHeader } from "../components/PageHeader";
 import { RowActions } from "../components/RowActions";
 import { TableSkeleton } from "../components/Skeleton";
@@ -26,7 +27,10 @@ export function DashboardsPage() {
   const { run, error: actionError } = useAction();
   const [ask, confirmDialog] = useConfirm();
   const toast = useToast();
-  const [creating, setCreating] = useState<StartFrom | null>(null); // what the open New dashboard dialog starts from
+  // The server's templates, for editors only (the route is theirs): the empty page draws them inline and the dialog reads the same answer.
+  const templates = useDashboardTemplates(canEdit);
+  // The open New dashboard dialog: null = closed; `choice` null = on its first step, a card = straight on its second (a card of the empty page was clicked).
+  const [creating, setCreating] = useState<{ choice: TemplateChoice | null } | null>(null);
 
   const failure = list.error ?? site.error;
   const timezone = site.data?.timezone;
@@ -53,25 +57,27 @@ export function DashboardsPage() {
     <>
       <PageHeader
         title="Dashboards"
-        actions={canEdit ? <button type="button" className="primary" onClick={() => setCreating("blank")}>New dashboard</button> : undefined}
+        actions={canEdit ? <button type="button" className="primary" onClick={() => setCreating({ choice: null })}>New dashboard</button> : undefined}
       />
       {actionError && <p className="error" role="alert">{actionError}</p>}
       {confirmDialog}
       {failure && <p className="error" role="alert">{failure.message}</p>}
       {!failure && (!list.data || timezone === undefined) && <TableSkeleton columns={hasActions ? 4 : 3} rows={4} label="Loading dashboards" />}
       {list.data && timezone !== undefined && list.data.length === 0 && (
-        <div className="empty">
-          <span className="empty-icon" aria-hidden="true">
-            <svg className="i" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="9" rx="1.5" /><rect x="13.5" y="3" width="7.5" height="5" rx="1.5" /><rect x="13.5" y="11" width="7.5" height="10" rx="1.5" /><rect x="3" y="15" width="7.5" height="6" rx="1.5" /></svg>
-          </span>
-          <p>No dashboards yet.{canEdit ? " Create one to get started." : ""}</p>
+        <>
+          <div className="empty">
+            <span className="empty-icon" aria-hidden="true">
+              <svg className="i" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="9" rx="1.5" /><rect x="13.5" y="3" width="7.5" height="5" rx="1.5" /><rect x="13.5" y="11" width="7.5" height="10" rx="1.5" /><rect x="3" y="15" width="7.5" height="6" rx="1.5" /></svg>
+            </span>
+            <p>No dashboards yet.{canEdit ? " Create one to get started." : ""}</p>
+          </div>
+          {/* A card opens the second step of the dialog; a viewer has the sentence above and nothing to press. */}
           {canEdit && (
-            <div className="row start-from-buttons">
-              <button type="button" onClick={() => setCreating("blank")}>Start blank</button>
-              <button type="button" onClick={() => setCreating("power")}>Start from Power</button>
+            <div className="tpl-inline">
+              <TemplateGallery data={templates.data} error={templates.error} onPick={(choice) => setCreating({ choice })} />
             </div>
           )}
-        </div>
+        </>
       )}
       {list.data && timezone !== undefined && list.data.length > 0 && (
         <div className="table-wrap">
@@ -109,7 +115,7 @@ export function DashboardsPage() {
           </table>
         </div>
       )}
-      {creating && <CreateDashboardDialog initialStart={creating} onClose={() => setCreating(null)} />}
+      {creating && <CreateDashboardDialog initialChoice={creating.choice} onClose={() => setCreating(null)} />}
     </>
   );
 }

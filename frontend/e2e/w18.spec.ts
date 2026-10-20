@@ -491,7 +491,7 @@ const PAGES: readonly PageCase[] = [
   { name: "an asset page", open: goTo(() => `/assets/${assetId}`), floor: 6, named: (p) => [p.locator(".page-head .actions > .chip"), btn(p.locator(".page-head .actions"), "Edit"), btn(p.locator(".page-head .actions"), "Add asset")] },
   // 6: the four filter chips (All, Starter, Yours, Unused) on one line (7 with the page header's two buttons).
   { name: "Asset kinds", open: goTo("/assets/kinds"), floor: 6, named: (p) => [btn(p, "New kind"), p.getByRole("button", { name: /^All \d+$/ })] },
-  // floor 0: New dashboard is the only control on the page with an edge at rest.
+  // floor 0: New dashboard is the only bar control on the page. (An empty list adds the template cards of w27: edged buttons as tall as their picture and line, all the same height within a row, so their pairs pass.)
   { name: "Dashboards", open: goTo("/dashboards"), floor: 0, named: (p) => [btn(p, "New dashboard")] },
   // 1: the range select beside Focus (w25: a role with the Assets Tree has it) and Edit.
   { name: "a dashboard", open: goTo(() => `/dashboards/${dashboardId}`), floor: 1, named: (p) => [btn(p, "Edit"), btn(p, "Focus"), p.getByLabel("Dashboard range")] },

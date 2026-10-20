@@ -209,6 +209,7 @@ test("phase 3 journey: currency and tariff, billing, cost tile, an operator's da
     await expect(page.getByRole("heading", { name: "Dashboards", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "New dashboard" }).click();
     const create = page.getByRole("dialog", { name: "New dashboard" });
+    await create.getByRole("button", { name: "Blank", exact: true }).click(); // w27: the first step is the template gallery
     await create.getByLabel("Name", { exact: true }).fill(DASHBOARD);
     await create.getByRole("button", { name: "Create", exact: true }).click();
     await expect(page).toHaveURL(/\/dashboards\/\d+$/);

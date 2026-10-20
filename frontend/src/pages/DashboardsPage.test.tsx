@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router";
 import { formatSiteDateTime } from "../lib/siteTime";
-import { authed, dashboard } from "../test/dashboardFixtures";
+import { authed, dashboard, templateCards, templatesBody } from "../test/dashboardFixtures";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
@@ -80,8 +80,9 @@ describe("DashboardsPage", () => {
     const calls = open("operator", { "POST /api/dashboards": { status: 201, body: dashboard({ id: 9, name: "Hall C", range: "7d" }) } }, undefined, toasts.api);
     await userEvent.click(await screen.findByRole("button", { name: "New dashboard" }));
     const dialog = screen.getByRole("dialog", { name: "New dashboard" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Blank" })); // the first step is the gallery
     expect(screen.getByLabelText("Name")).toHaveFocus();
-    expect(within(dialog).getByRole("button", { name: "Create" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Create" })).toHaveAttribute("aria-disabled", "true");
     await userEvent.type(screen.getByLabelText("Name"), "Hall C");
     await userEvent.selectOptions(screen.getByLabelText("Range"), "7d");
     await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
@@ -94,6 +95,7 @@ describe("DashboardsPage", () => {
     const toasts = spyToasts();
     open("operator", { "POST /api/dashboards": { status: 409, body: { detail: "a dashboard with this name already exists" } } }, undefined, toasts.api);
     await userEvent.click(await screen.findByRole("button", { name: "New dashboard" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "New dashboard" })).getByRole("button", { name: "Blank" }));
     await userEvent.type(screen.getByLabelText("Name"), "Hall A");
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("already exists");
@@ -278,63 +280,103 @@ describe("DashboardsPage", () => {
     expect(screen.getByRole("button", { name: "New dashboard" })).toBeInTheDocument();
   });
 
-  describe("the empty page offers a start (w25)", () => {
+  describe("the empty page shows the template gallery (w27)", () => {
     const empty = { "GET /api/dashboards": { body: [] } };
-    const POWER_BODY = { "POST /api/dashboards": { status: 201, body: dashboard({ id: 9, name: "Power", range: "this_month" }) } };
+    const CREATED = { "POST /api/dashboards": { status: 201, body: dashboard({ id: 9, name: "Created", range: "this_month" }) } };
+    const asked = (calls: ReturnType<typeof mockFetch>) => calls.filter((c) => c.path === "/api/dashboard-templates");
+    /** The inline gallery's own cards (the dialog, when it is open, holds another set). */
+    const inline = () => document.querySelector<HTMLElement>(".tpl-inline")!;
+    const cardsOf = (scope: HTMLElement) => within(scope).getAllByRole("button").map((b) => b.getAttribute("data-template"));
 
-    it("gives an editor Start blank and Start from Power under the sentence, and a viewer today's text only", async () => {
-      open("viewer", empty);
+    it("gives a viewer today's text only: no card, no button and no request for the templates", async () => {
+      const calls = open("viewer", empty);
       expect(await screen.findByText("No dashboards yet.")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /start/i })).not.toBeInTheDocument();
       expect(screen.queryByRole("button")).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "More templates" })).not.toBeInTheDocument();
+      await accountKnown();
+      expect(asked(calls)).toEqual([]);
     });
 
-    it("an editor's page has the two buttons beside the header's New dashboard, which stays", async () => {
+    it("an editor's page shows the cards under the sentence, Recommended first and Blank last, beside the header's New dashboard, which stays", async () => {
       open("operator", empty);
-      const empties = (await screen.findByText("No dashboards yet. Create one to get started.")).closest(".empty") as HTMLElement;
-      expect(within(empties).getAllByRole("button").map((b) => b.textContent)).toEqual(["Start blank", "Start from Power"]);
-      expect(within(empties).getAllByRole("button").map((b) => b.getAttribute("type"))).toEqual(["button", "button"]);
+      expect(await screen.findByText("No dashboards yet. Create one to get started.")).toBeInTheDocument();
+      await screen.findByRole("button", { name: "Power" });
+      expect(cardsOf(inline())).toEqual(["power", "cost", "areas", "day", "blank"]);
+      expect(within(within(inline()).getByRole("region", { name: "Recommended for this site" })).getAllByRole("button")).toHaveLength(3);
+      expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Recommended for this site", "More templates"]);
       expect(screen.getByRole("button", { name: "New dashboard" })).toBeInTheDocument();
-      expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["New dashboard", "Start blank", "Start from Power"]);
+      expect(screen.getAllByRole("button").map((b) => b.getAttribute("data-template") ?? b.textContent)).toEqual(["New dashboard", "power", "cost", "areas", "day", "blank"]);
+      expect(screen.queryByRole("button", { name: /^Start/ })).not.toBeInTheDocument();
     });
 
-    it("dashboards.edit alone sees the buttons, dashboards.default alone does not", async () => {
-      open("custom", { "GET /api/me": { body: userFor("custom", { permissions: ["dashboards.view", "dashboards.default"] }) }, ...empty });
+    it("dashboards.edit alone sees the cards, dashboards.default alone does not and asks for nothing", async () => {
+      const calls = open("custom", { "GET /api/me": { body: userFor("custom", { permissions: ["dashboards.view", "dashboards.default"] }) }, ...empty });
       expect(await screen.findByText("No dashboards yet.")).toBeInTheDocument();
       await accountKnown();
-      expect(screen.queryByRole("button", { name: "Start blank" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Start from Power" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Blank" })).not.toBeInTheDocument();
+      expect(asked(calls)).toEqual([]);
     });
 
-    it("Start from Power opens the dialog with Power and This month chosen, and Create sends the recipe", async () => {
-      const calls = open("operator", { ...empty, ...POWER_BODY });
-      await userEvent.click(await screen.findByRole("button", { name: "Start from Power" }));
+    it("a card opens step 2 of the dialog with its range, Create sends the recipe, and the page opens in view mode", async () => {
+      const calls = open("operator", { ...empty, ...CREATED });
+      await userEvent.click(await screen.findByRole("button", { name: "Power" }));
       const dialog = screen.getByRole("dialog", { name: "New dashboard" });
-      expect(within(dialog).getByRole("radio", { name: "Power" })).toBeChecked();
+      expect(within(dialog).queryByRole("heading", { name: "Choose a template" })).not.toBeInTheDocument();
       expect(within(dialog).getByLabelText("Range")).toHaveValue("this_month");
       expect(within(dialog).getByLabelText("Name")).toHaveFocus();
+      expect(within(dialog).getByLabelText("Name")).toHaveAttribute("placeholder", "Power");
       await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
       await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/dashboards/9|null"));
       expect(calls.find((c) => c.method === "POST")?.body).toEqual({ name: "Power", range: "this_month", recipe: "power" });
     });
 
-    it("Start blank and the header's New dashboard open the dialog on Blank, and Escape puts the focus back on the button", async () => {
-      open("operator", empty);
-      await userEvent.click(await screen.findByRole("button", { name: "Start blank" }));
-      expect(within(screen.getByRole("dialog", { name: "New dashboard" })).getByRole("radio", { name: "Blank" })).toBeChecked();
-      await userEvent.keyboard("{Escape}");
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Start blank" })).toHaveFocus();
-      await userEvent.click(screen.getByRole("button", { name: "New dashboard" }));
-      expect(within(screen.getByRole("dialog", { name: "New dashboard" })).getByRole("radio", { name: "Blank" })).toBeChecked();
-      expect(within(screen.getByRole("dialog")).getByLabelText("Range")).toHaveValue("24h");
+    it("the Blank card opens step 2 and, with a name, makes a blank dashboard in edit mode", async () => {
+      const calls = open("operator", { ...empty, ...CREATED });
+      await userEvent.click(await screen.findByRole("button", { name: "Blank" }));
+      const dialog = screen.getByRole("dialog", { name: "New dashboard" });
+      expect(within(dialog).getByLabelText("Range")).toHaveValue("24h");
+      await userEvent.type(within(dialog).getByLabelText("Name"), "Hall D");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+      await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent('/dashboards/9|{"edit":true}'));
+      expect(calls.find((c) => c.method === "POST")?.body).toEqual({ name: "Hall D", range: "24h" });
     });
 
-    it("a page that lists dashboards gets no start buttons", async () => {
+    it("Escape puts the focus back on the card, Back to templates shows the dialog's own gallery, and the header's New dashboard opens on that step", async () => {
+      open("operator", empty);
+      const power = await screen.findByRole("button", { name: "Power" });
+      await userEvent.click(power);
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(power).toHaveFocus();
+      await userEvent.click(power);
+      await userEvent.click(within(screen.getByRole("dialog", { name: "New dashboard" })).getByRole("button", { name: "Back to templates" }));
+      const dialog = screen.getByRole("dialog", { name: "New dashboard" });
+      expect(within(dialog).getByRole("heading", { name: "Choose a template" })).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Power" })).toHaveFocus();
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(screen.getByRole("button", { name: "New dashboard" }));
+      expect(within(screen.getByRole("dialog", { name: "New dashboard" })).getByRole("heading", { name: "Choose a template" })).toBeInTheDocument();
+    });
+
+    it("tells an editor that nothing is metered, with no tag, when the server says so", async () => {
+      open("operator", { ...empty, "GET /api/dashboard-templates": { body: templatesBody({ nothing_metered: true, templates: templateCards().map((t) => ({ ...t, recommended: false })) }) } });
+      expect(await screen.findByText("Nothing is metered yet, so every template shows no data until a meter is mapped.")).toBeInTheDocument();
+      expect(screen.queryByText("Recommended")).not.toBeInTheDocument();
+    });
+
+    it("when the templates cannot be read, says so in a sentence and the Blank card still works", async () => {
+      open("operator", { ...empty, "GET /api/dashboard-templates": { status: 500, body: { detail: "boom" } } });
+      expect(await screen.findByText("The templates could not be loaded. A blank dashboard still works.")).toBeInTheDocument();
+      expect(cardsOf(inline())).toEqual(["blank"]);
+      await userEvent.click(screen.getByRole("button", { name: "Blank" }));
+      expect(within(screen.getByRole("dialog", { name: "New dashboard" })).getByLabelText("Name")).toHaveFocus();
+    });
+
+    it("a page that lists dashboards gets no inline cards", async () => {
       open("operator");
       await screen.findByRole("link", { name: "Hall A" });
-      expect(screen.queryByRole("button", { name: "Start blank" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Start from Power" })).not.toBeInTheDocument();
+      expect(document.querySelector(".tpl-inline")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Blank" })).not.toBeInTheDocument();
     });
   });
 });

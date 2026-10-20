@@ -562,12 +562,13 @@ test("4. a role with dashboards.view only: no Focus, no Open page, ?asset ignore
     expect((await page.request.post("/api/widget-data/csv", { data: { ...body, focus: ids.hall1 } })).status(), "the CSV route says the same").toBe(403);
     expect((await page.request.post("/api/widget-data/csv", { data: body })).status(), "and answers a body without a focus").toBe(200);
 
-    // A viewer sees the empty Dashboards page as it always was: no buttons to start one.
+    // A viewer sees the empty Dashboards page as it always was: no template cards (w27) and no buttons to start one.
     await page.route((url) => url.pathname === "/api/dashboards", (route) => (route.request().method() === "GET" ? route.fulfill({ status: 200, contentType: "application/json", body: "[]" }) : route.fallback()));
     await page.goto("/dashboards");
     await expect(page.getByText("No dashboards yet.", { exact: true })).toBeVisible();
-    await expect(button(page, "Start blank")).toHaveCount(0);
-    await expect(button(page, "Start from Power")).toHaveCount(0);
+    await expect(button(page, "Blank")).toHaveCount(0);
+    await expect(button(page, "Power")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "More templates", exact: true })).toHaveCount(0);
   } finally {
     await asAdmin(browser, removeAccounts);
   }
@@ -630,10 +631,9 @@ test("6. New dashboard, Start from Power: five widgets in view mode, the name Po
   await button(page, "New dashboard").click();
   const dialog = dialogNew(page);
   await expect(dialog).toBeVisible();
-  const start = dialog.getByRole("group", { name: "Start from", exact: true });
-  await expect(start.getByRole("radio", { name: "Blank", exact: true }), "Blank is what a new dashboard starts from").toBeChecked();
-  await expect(dialog.getByLabel("Range", { exact: true })).toHaveValue("24h");
-  await start.getByRole("radio", { name: "Power", exact: true }).check();
+  // w27: the first step is the template gallery; a card opens the second step.
+  await expect(dialog.getByRole("button", { name: "Blank", exact: true }), "Blank is the last card").toBeVisible();
+  await dialog.getByRole("button", { name: "Power", exact: true }).click();
   await expect(dialog.getByLabel("Range", { exact: true }), "Power compares with last month, so it starts on this month").toHaveValue("this_month");
   await expect(dialog.getByLabel("Name", { exact: true }), "the name field offers the starter's name").toHaveAttribute("placeholder", "Power");
   await expect(dialog.getByText("Enter a name.", { exact: true }), "an empty name is fine for Power").toHaveCount(0);
@@ -667,7 +667,7 @@ test("6. New dashboard, Start from Power: five widgets in view mode, the name Po
     // A second one under the same (empty) name is refused, in the dialog, with the server's words.
     await page.goto("/dashboards");
     await button(page, "New dashboard").click();
-    await dialogNew(page).getByRole("group", { name: "Start from", exact: true }).getByRole("radio", { name: "Power", exact: true }).check();
+    await dialogNew(page).getByRole("button", { name: "Power", exact: true }).click();
     await dialogNew(page).getByRole("button", { name: "Create", exact: true }).click();
     await expect(dialogNew(page).getByRole("alert"), "the name is taken").toContainText(/already exists/i);
     await expect(dialogNew(page), "and the dialog stays").toBeVisible();
@@ -691,20 +691,19 @@ test("6. New dashboard, Start from Power: five widgets in view mode, the name Po
   }
 });
 
-test("6. on the empty Dashboards page the two buttons open the same dialog, on Blank and on Power", async ({ page }) => {
+test("6. on the empty Dashboards page the template cards open the dialog on its second step, with the template's range (w27)", async ({ page }) => {
   test.setTimeout(120_000);
   await prepare(page);
   await page.route((url) => url.pathname === "/api/dashboards", (route) => (route.request().method() === "GET" ? route.fulfill({ status: 200, contentType: "application/json", body: "[]" }) : route.fallback()));
   await page.goto("/dashboards");
   await expect(page.getByText("No dashboards yet. Create one to get started.", { exact: true })).toBeVisible();
-  await button(page, "Start from Power").click();
+  await button(page, "Power").click(); // the inline card, the dialog is not open yet
   const dialog = dialogNew(page);
-  await expect(dialog.getByRole("group", { name: "Start from", exact: true }).getByRole("radio", { name: "Power", exact: true })).toBeChecked();
+  await expect(dialog.getByLabel("Name", { exact: true })).toBeFocused();
   await expect(dialog.getByLabel("Range", { exact: true })).toHaveValue("this_month");
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(dialog).toBeHidden();
-  await button(page, "Start blank").click();
-  await expect(dialog.getByRole("group", { name: "Start from", exact: true }).getByRole("radio", { name: "Blank", exact: true })).toBeChecked();
+  await button(page, "Blank").click();
   await expect(dialog.getByLabel("Range", { exact: true })).toHaveValue("24h");
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(dialog).toBeHidden();
