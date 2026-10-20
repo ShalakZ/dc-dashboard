@@ -672,6 +672,19 @@ export function useCreateDashboard() {
   });
 }
 
+/**
+ * Makes a copy of a dashboard on the server (no body; the new name is the server's: "<name> (copy)"). `onSettled`, not `onSuccess`: a refused copy
+ * (409 the name was taken in the meantime, 422 the 50-dashboard cap, 404 the source is gone) means the list on screen is out of date. The copy writes
+ * an audit row (`dashboard.created`), so the audit queries are read again too.
+ */
+export function useCopyDashboard() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (id: number) => api.post<Dashboard>(`/api/dashboards/${id}/copy`),
+    onSettled: () => invalidate(keys.dashboardList, keys.auditAll),
+  });
+}
+
 /** The editor's single PUT. The saved dashboard (with its new updated_at) replaces the cached one, so no refetch is needed. */
 export function useSaveDashboard() {
   const client = useQueryClient();

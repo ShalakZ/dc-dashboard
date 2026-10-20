@@ -8,7 +8,7 @@ import { mockFetch } from "../test/fetchMock";
 import {
   auditPageOptions, auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDashboardTemplates, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData, widgetRefetchMs,
-  useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
+  useCopyDashboard, useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
   useAddStarterKinds, useAssetKinds, useAssets, useBulkDeleteAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
   loadMovePreview, useMoveAssets, useRemoveDiscoveredSources, useTidyLayout, useBillingMonths, useBillingMonthCheck, useCloseBillingMonth, useReopenBillingMonth, monthCheckRefetchMs,
 } from "./queries";
@@ -1620,5 +1620,28 @@ describe("dashboard templates (w27)", () => {
     expect(result.current.data).toBeUndefined();
     expect(result.current.fetchStatus).toBe("idle");
     expect(calls).toEqual([]);
+  });
+});
+
+describe("copying a dashboard (w27)", () => {
+  const listItem = { id: 3, name: "Hall A", range: "24h", widget_count: 2, updated_at: "2026-10-08T06:00:00+00:00" };
+
+  it.each([
+    ["a copy", 201, { id: 9, name: "Hall A (copy)", range: "24h", updated_at: "2026-10-08T06:00:00+00:00", widgets: [] }],
+    ["a refused copy (the name is taken)", 409, { detail: "a dashboard with this name already exists" }],
+    ["a copy of a dashboard that is gone", 404, { detail: "dashboard not found" }],
+  ])("posts to the dashboard's copy route with no body, and after %s the dashboard list is read again (onSettled)", async (_name, status, reply) => {
+    const calls = mockFetch({
+      "GET /api/dashboards": { body: [listItem] },
+      "POST /api/dashboards/3/copy": { status, body: reply },
+    });
+    const { result } = renderHook(() => ({ list: useDashboards(), copy: useCopyDashboard() }), { wrapper: stableWrapper() });
+    const reads = () => calls.filter((c) => c.method === "GET" && c.path === "/api/dashboards").length;
+    await waitFor(() => expect(reads()).toBe(1));
+    await act(async () => { await result.current.copy.mutateAsync(3).catch(() => undefined); });
+    expect(calls.filter((c) => c.method === "POST").map((c) => [c.path, c.body])).toEqual([["/api/dashboards/3/copy", undefined]]);
+    await waitFor(() => expect(reads()).toBe(2));
+    if (status === 201) expect(result.current.copy.data).toMatchObject({ id: 9, name: "Hall A (copy)" });
+    else expect(result.current.copy.error).toBeInstanceOf(ApiError);
   });
 });

@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { useDashboards, useDashboardTemplates, useDefaultDashboard, useDeleteDashboard, usePutDefaultDashboard, useSite } from "../api/queries";
+import { useCopyDashboard, useDashboards, useDashboardTemplates, useDefaultDashboard, useDeleteDashboard, usePutDefaultDashboard, useSite } from "../api/queries";
 import type { DashboardListItem } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { CreateDashboardDialog } from "../components/dashboard/CreateDashboardDialog";
 import { TemplateGallery, type TemplateChoice } from "../components/dashboard/TemplateGallery";
 import { PageHeader } from "../components/PageHeader";
-import { RowActions } from "../components/RowActions";
+import { RowActions, type RowAction } from "../components/RowActions";
 import { TableSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
@@ -16,12 +16,13 @@ import { formatSiteDateTime } from "../lib/siteTime";
 
 export function DashboardsPage() {
   const { can } = useAuth();
-  const canEdit = can("dashboards.edit"); // New dashboard and the trash
-  const canDefault = can("dashboards.default"); // the Make default menu
-  const hasActions = canEdit || canDefault;
+  const canEdit = can("dashboards.edit"); // New dashboard, Make a copy and the trash
+  const canDefault = can("dashboards.default"); // Make default and Clear default
+  const hasActions = canEdit || canDefault; // the Actions column: the menu holds what the role may do, the trash is the editor's
   const list = useDashboards();
   const site = useSite();
   const remove = useDeleteDashboard();
+  const copy = useCopyDashboard();
   const defaultId = useDefaultDashboard().data?.dashboard_id ?? null;
   const setDefault = usePutDefaultDashboard();
   const { run, error: actionError } = useAction();
@@ -42,6 +43,12 @@ export function DashboardsPage() {
     toast.success(`Dashboard "${d.name}" deleted`);
   });
 
+  // The list is read again by the hook (a refusal too), so the copy appears in its place by name order; a toast names it and nobody is taken away from the list.
+  const makeCopy = (d: DashboardListItem) => run(async () => {
+    const made = await copy.mutateAsync(d.id);
+    toast.success(`Copied to ${made.name}`);
+  });
+
   // The menu closes when an item is chosen and the badge moves only after the list is read again: the toast says what just happened.
   const makeDefault = (d: DashboardListItem) => run(async () => {
     await setDefault.mutateAsync({ dashboard_id: d.id });
@@ -51,6 +58,12 @@ export function DashboardsPage() {
     await setDefault.mutateAsync({ dashboard_id: null });
     toast.success("Default dashboard cleared");
   });
+
+  // The row's menu holds what the role may do: Make a copy first (editors), then the default item (dashboards.default). Make a copy waits while a copy is on its way.
+  const rowItems = (d: DashboardListItem): RowAction[] => [
+    ...(canEdit ? [{ label: "Make a copy", onSelect: () => makeCopy(d), disabled: copy.isPending }] : []),
+    ...(canDefault ? [d.id === defaultId ? { label: "Clear default", onSelect: clearDefault } : { label: "Make default", onSelect: () => makeDefault(d) }] : []),
+  ];
 
   // The heading is always there (App.test.tsx finds the page by it); the body waits for the list and the site zone.
   return (
@@ -97,14 +110,7 @@ export function DashboardsPage() {
                   {hasActions && (
                     <td className="act">
                       <div className="act-row">
-                        {canDefault && (
-                          <RowActions
-                            label={`Actions for ${d.name}`}
-                            items={[d.id === defaultId
-                              ? { label: "Clear default", onSelect: clearDefault }
-                              : { label: "Make default", onSelect: () => makeDefault(d) }]}
-                          />
-                        )}
+                        <RowActions label={`Actions for ${d.name}`} items={rowItems(d)} />
                         {canEdit && <TrashButton label={`Delete ${d.name}`} onClick={() => confirmDelete(d)} />}
                       </div>
                     </td>

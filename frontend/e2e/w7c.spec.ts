@@ -185,7 +185,7 @@ test.describe("W7c: the default dashboard", () => {
       await expect(page).toHaveURL(onPath("/billing"));
     });
 
-    await test.step("an operator sees the badge and the trash button but no Actions menu; a viewer sees the badge and no Actions column", async () => {
+    await test.step("an operator sees the badge and the trash button and an Actions menu with Make a copy but no default item; a viewer sees the badge and no Actions column", async () => {
       await asUser(browser, OPERATOR, async (operator) => {
         await expect(navLink(operator, "Dashboards")).toHaveAttribute("href", `/dashboards/${main}`);
         await operator.goto("/dashboards");
@@ -193,7 +193,11 @@ test.describe("W7c: the default dashboard", () => {
         await expect(badge(operator, MAIN)).toBeVisible();
         await expect(badge(operator, OTHER)).toHaveCount(0);
         await expect(dashRow(operator, MAIN).getByRole("button", { name: `Delete ${MAIN}`, exact: true })).toBeVisible();
-        await expect(operator.getByRole("button", { name: /^Actions for / })).toHaveCount(0);
+        // The row menu is the operator's too (Make a copy, w27); Make default and Clear default are dashboards.default's.
+        await expectNoRowAction(operator, dashRow(operator, MAIN), "Clear default");
+        await expectNoRowAction(operator, dashRow(operator, OTHER), "Make default");
+        await expect(await rowAction(operator, dashRow(operator, OTHER), "Make a copy")).toBeVisible();
+        await operator.keyboard.press("Escape");
       });
       await asUser(browser, VIEWER, async (viewer) => {
         await expect(navLink(viewer, "Dashboards")).toHaveAttribute("href", `/dashboards/${main}`);
