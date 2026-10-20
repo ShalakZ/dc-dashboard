@@ -81,7 +81,7 @@ async def test_the_display_routes_answer_per_the_contract_for_each_kind_of_cooki
         for secret in (revoked, deleted):
             answers = await sweep(client, requests, cookie(secret))
             assert answers[PLAYLIST].status_code == answers[WIDGET_DATA].status_code == 401
-            assert answers[PLAYLIST].json() == {"detail": "not connected"}
+            assert answers[PLAYLIST].json() == {"detail": "this display link is not valid"}
             assert answers[DISPLAY_CLAIM].status_code == 422
         assert (await sweep(client, requests, {}))[PLAYLIST].status_code == 401
 

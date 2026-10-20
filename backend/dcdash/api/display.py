@@ -182,7 +182,7 @@ async def current_display(request: Request, db: AsyncSession = Depends(get_db)) 
             select(Display).where(Display.secret_hash == hash_secret(token), Display.revoked_at.is_(None))
         )
     if display is None:
-        raise HTTPException(401, NOT_CONNECTED)
+        raise HTTPException(401, INVALID_LINK if token else NOT_CONNECTED)  # a cookie that was sent but matches no active display says so: a revoked screen can show "revoked"
     display_id = display.id  # (read before the route commits: a committed row is expired and cannot be read in an async session)
     if not in_flight.enter(display_id):
         raise HTTPException(429, BUSY, headers={"Retry-After": "1"})

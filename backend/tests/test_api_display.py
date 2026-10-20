@@ -685,9 +685,12 @@ async def test_a_wrong_or_refused_claim_writes_no_connected_row(client, db):
 
 async def test_without_a_cookie_or_with_a_wrong_one_the_display_routes_answer_401(client, db):
     await make_display(db)
-    for headers in ({}, cookie("w" * 43), cookie("x"), {"Cookie": "dcdash_display="}, {"Cookie": "other=1"}):
+    for headers in ({}, {"Cookie": "dcdash_display="}, {"Cookie": "other=1"}):
         assert (await client.get(PLAYLIST, headers=headers)).json() == NOT_CONNECTED
         assert (await client.post(WIDGET_DATA, json={"item": 1, "widget": 1}, headers=headers)).json() == NOT_CONNECTED
+    for headers in (cookie("w" * 43), cookie("x")):  # a cookie that was sent but matches no active display says so
+        assert (await client.get(PLAYLIST, headers=headers)).json() == INVALID
+        assert (await client.post(WIDGET_DATA, json={"item": 1, "widget": 1}, headers=headers)).json() == INVALID
 
 
 async def test_a_cookie_longer_than_a_secret_is_a_401_that_is_never_hashed(client, db, monkeypatch):
@@ -705,8 +708,8 @@ async def test_revoking_cuts_the_very_next_request_off(client, db):
     row, secret = await make_display(db)
     assert (await client.get(PLAYLIST, headers=cookie(secret))).status_code == 200
     await db.execute("UPDATE displays SET revoked_at = now() WHERE id = $1", row.id)
-    assert (await client.get(PLAYLIST, headers=cookie(secret))).json() == NOT_CONNECTED
-    assert (await client.post(WIDGET_DATA, json={"item": 1, "widget": 1}, headers=cookie(secret))).json() == NOT_CONNECTED
+    assert (await client.get(PLAYLIST, headers=cookie(secret))).json() == INVALID
+    assert (await client.post(WIDGET_DATA, json={"item": 1, "widget": 1}, headers=cookie(secret))).json() == INVALID
     assert (await claim(client, secret)).json() == INVALID  # and the link no longer claims
 
 
@@ -714,7 +717,7 @@ async def test_deleting_cuts_the_very_next_request_off(client, db):
     row, secret = await make_display(db)
     assert (await client.get(PLAYLIST, headers=cookie(secret))).status_code == 200
     await db.execute("DELETE FROM displays WHERE id = $1", row.id)
-    assert (await client.get(PLAYLIST, headers=cookie(secret))).json() == NOT_CONNECTED
+    assert (await client.get(PLAYLIST, headers=cookie(secret))).json() == INVALID
     assert (await claim(client, secret)).json() == INVALID
 
 
@@ -1289,7 +1292,7 @@ async def test_the_caps_do_not_reach_the_claim_or_hide_a_bad_cookie(client, db):
     display.in_flight.by_display[row.id] = 6
     assert (await claim(client, secret)).status_code == 204  # a screen must always be able to connect
     assert (await client.get(PLAYLIST, headers=cookie(secret))).json() == {"detail": "busy, try again"}
-    assert (await client.get(PLAYLIST, headers=cookie("w" * 43))).json() == NOT_CONNECTED  # busy says nothing to a stranger
+    assert (await client.get(PLAYLIST, headers=cookie("w" * 43))).json() == INVALID  # busy says nothing to a stranger
     client.cookies.clear()  # (the claim put the cookie in the client's jar)
     assert (await client.get(PLAYLIST)).json() == NOT_CONNECTED
     display.reset_display_state()
