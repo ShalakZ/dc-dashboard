@@ -11,9 +11,10 @@ import {
   useCopyDashboard, useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
   useAddStarterKinds, useAssetKinds, useAssets, useBulkDeleteAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
   loadMovePreview, useMoveAssets, useRemoveDiscoveredSources, useTidyLayout, useBillingMonths, useBillingMonthCheck, useCloseBillingMonth, useReopenBillingMonth, monthCheckRefetchMs, useDisplays,
+  useDeleteImportProfile, useImportProfiles, useSaveImportProfile,
 } from "./queries";
 import { ApiError } from "./client";
-import type { MoveBody, RangePreset, WidgetConfig } from "./types";
+import type { ImportProfile, MoveBody, RangePreset, WidgetConfig } from "./types";
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -1688,5 +1689,53 @@ describe("the Displays list (w29)", () => {
     expect(asked()).toBe(1);
     await advance(2_000); // 61 s
     expect(asked()).toBe(2);
+  });
+});
+
+describe("import profiles (w31)", () => {
+  const profile = (name: string): ImportProfile => ({
+    name, tag: "tag", time: "timestamp", value: "value", unit: null, quality: null, delimiter: null, decimal: ".", time_format: "iso",
+    zone: null, reading: "counter", period_seconds: null, stamp: null, good_codes: ["good"],
+  });
+
+  it("makes no request for a role without readings.import, and gives the list itself (not the wrapper object) for one with it", async () => {
+    const calls = mockFetch({ "GET /api/import-profiles": { body: { profiles: [profile("hourly")] } } });
+    const off = renderHook(() => useImportProfiles(false), { wrapper: stableWrapper() });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls).toEqual([]);
+    expect(off.result.current.data).toBeUndefined();
+    const on = renderHook(() => useImportProfiles(true), { wrapper: stableWrapper() });
+    await waitFor(() => expect(on.result.current.data?.map((p) => p.name)).toEqual(["hourly"]));
+  });
+
+  it("saves with PUT under the encoded name, deletes with DELETE, and reads the list and the audit log again after each", async () => {
+    let profiles = [profile("hourly")];
+    const calls = mockFetch({
+      "GET /api/import-profiles": () => ({ body: { profiles } }),
+      "PUT /api/import-profiles/Night%20export": ({ body }) => { profiles = [...profiles, body as ImportProfile]; return { body }; },
+      "DELETE /api/import-profiles/hourly": () => { profiles = profiles.filter((p) => p.name !== "hourly"); return { status: 204 }; },
+      "GET /api/audit": { body: { total: 0, offset: 0, limit: 25, items: [] } },
+    });
+    const { result } = renderHook(() => ({ list: useImportProfiles(true), audit: useAudit(NO_FILTERS, 25, 0), save: useSaveImportProfile(), del: useDeleteImportProfile() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.list.data).toHaveLength(1));
+    const reads = (path: string) => calls.filter((c) => c.method === "GET" && c.path === path).length;
+    await act(async () => { await result.current.save.mutateAsync(profile("Night export")); });
+    await waitFor(() => expect(result.current.list.data?.map((p) => p.name)).toEqual(["hourly", "Night export"]));
+    expect(reads("/api/audit")).toBe(2);
+    await act(async () => { await result.current.del.mutateAsync("hourly"); });
+    await waitFor(() => expect(result.current.list.data?.map((p) => p.name)).toEqual(["Night export"]));
+    expect(reads("/api/audit")).toBe(3);
+  });
+
+  it("reads the list again after a refused save too (a 409 over 20 profiles means the list on screen is out of date)", async () => {
+    const calls = mockFetch({
+      "GET /api/import-profiles": { body: { profiles: [] } },
+      "PUT /api/import-profiles/hourly": { status: 409, body: { detail: "there are 20 profiles already" } },
+    });
+    const { result } = renderHook(() => ({ list: useImportProfiles(true), save: useSaveImportProfile() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.list.isSuccess).toBe(true));
+    await act(async () => { await result.current.save.mutateAsync(profile("hourly")).catch(() => undefined); });
+    await waitFor(() => expect(calls.filter((c) => c.method === "GET" && c.path === "/api/import-profiles")).toHaveLength(2));
+    expect(result.current.save.error).toBeInstanceOf(ApiError);
   });
 });

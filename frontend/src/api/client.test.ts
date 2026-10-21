@@ -151,3 +151,73 @@ describe("api client", () => {
     expect(err.message).toBe("config.url: Input should be a valid URL");
   });
 });
+
+describe("api.postRaw (a body that is not JSON)", () => {
+  // Not mockFetch: it parses every body as JSON, and a file is not.
+  const stub = (response: () => Response) => {
+    const fetchStub = vi.fn(async (_path: string, _init?: RequestInit) => response());
+    vi.stubGlobal("fetch", fetchStub);
+    return fetchStub;
+  };
+  const json = (status: number, body: unknown) => () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const sent = (fetchStub: ReturnType<typeof stub>) => fetchStub.mock.calls[0][1] as RequestInit;
+  const headers = (fetchStub: ReturnType<typeof stub>) => sent(fetchStub).headers as Record<string, string>;
+
+  it("sends the very same Blob, with credentials, text/csv and no JSON encoding, and reads the JSON reply", async () => {
+    const fetchStub = stub(json(200, { new: 12 }));
+    const file = new Blob(["tag,time,value\n"], { type: "" }); // a file of an unknown extension has no type of its own
+    await expect(api.postRaw<{ new: number }>("/api/sources/3/import?dry_run=1", file)).resolves.toEqual({ new: 12 });
+    expect(fetchStub.mock.calls[0][0]).toBe("/api/sources/3/import?dry_run=1");
+    expect(sent(fetchStub).method).toBe("POST");
+    expect(sent(fetchStub).body).toBe(file);
+    expect(sent(fetchStub).credentials).toBe("same-origin");
+    expect(headers(fetchStub)["content-type"]).toBe("text/csv");
+  });
+
+  it("sends a string as it is (not quoted by JSON) and takes another content type when asked", async () => {
+    const fetchStub = stub(json(200, {}));
+    await api.postRaw("/api/sources/3/tag-list", "tag;asset\nA;B\n");
+    expect(sent(fetchStub).body).toBe("tag;asset\nA;B\n");
+    expect(headers(fetchStub)["content-type"]).toBe("text/csv");
+    const other = stub(json(200, {}));
+    await api.postRaw("/api/x", "a", "text/plain");
+    expect(headers(other)["content-type"]).toBe("text/plain");
+  });
+
+  it("does not change what post, put, get and del send", async () => {
+    const fetchStub = stub(json(200, {}));
+    await api.post("/api/a", { x: 1 });
+    expect(sent(fetchStub).body).toBe('{"x":1}');
+    expect(headers(fetchStub)["content-type"]).toBe("application/json");
+    const bare = stub(json(200, {}));
+    await api.get("/api/a");
+    expect(sent(bare).body).toBeUndefined();
+    expect(headers(bare)).toEqual({});
+  });
+
+  it("refuses like post: the server's sentence is the error's message and the whole body stays on it", async () => {
+    stub(json(422, { detail: "the file is not UTF-8; save it as CSV UTF-8" }));
+    await expect(api.postRaw("/api/sources/3/import", "x")).rejects.toMatchObject({ status: 422, message: "the file is not UTF-8; save it as CSV UTF-8" });
+    stub(json(409, { detail: "an import is running", job_id: 7 }));
+    await expect(api.postRaw("/api/sources/3/import", "x")).rejects.toMatchObject({ status: 409, body: { detail: "an import is running", job_id: 7 } });
+  });
+
+  it("tells the app about a lost session (401) and a refused role (403), and turns a failed fetch into an ApiError", async () => {
+    const unauthorized = vi.fn();
+    const forbidden = vi.fn();
+    setUnauthorizedHandler(unauthorized);
+    setForbiddenHandler(forbidden);
+    try {
+      stub(json(401, { detail: "not authenticated" }));
+      await expect(api.postRaw("/api/sources/3/import", "x")).rejects.toMatchObject({ status: 401 });
+      stub(json(403, { detail: "insufficient permission" }));
+      await expect(api.postRaw("/api/sources/3/import", "x")).rejects.toMatchObject({ status: 403, message: "Your role does not allow this." });
+      expect([unauthorized.mock.calls.length, forbidden.mock.calls.length]).toEqual([1, 1]);
+    } finally {
+      setUnauthorizedHandler(null);
+      setForbiddenHandler(null);
+    }
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch"); }));
+    await expect(api.postRaw("/api/sources/3/import", "x")).rejects.toMatchObject({ status: 0 });
+  });
+});

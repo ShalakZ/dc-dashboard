@@ -8,7 +8,7 @@ import type {
   FleetSummary, GeneralSettings, GraphModel, Metric, MoveBody, MovePreview, MoveResult, PermissionRow, PointRow, RangePreset, RemoveSourcesResult, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, SourceImpact, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, DataWidgetType, DashboardTemplates, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
-  DisplayCreated, DisplayIn, DisplayPatch, DisplayRow, DisplaysList, PlaylistIn, PlaylistRow,
+  DisplayCreated, DisplayIn, DisplayPatch, DisplayRow, DisplaysList, PlaylistIn, PlaylistRow, ImportProfile,
 } from "./types";
 
 export const keys = {
@@ -20,6 +20,8 @@ export const keys = {
     ["assets", id, "series", metric, range, mappingId ?? null] as const,
   sources: ["sources"] as const,
   connectors: ["connectors"] as const,
+  /** w31: the saved layouts of CSV exports (`GET /api/import-profiles`, readings.import only). */
+  importProfiles: ["import-profiles"] as const,
   points: (sourceId: number) => ["sources", sourceId, "points"] as const,
   users: ["users"] as const,
   roles: ["roles"] as const,
@@ -268,6 +270,28 @@ export const useConnectors = (enabled: boolean) =>
 
 export const usePoints = (sourceId: number) =>
   useQuery({ queryKey: keys.points(sourceId), queryFn: () => api.get<PointRow[]>(`/api/sources/${sourceId}/points`) });
+
+/**
+ * The saved import profiles, sorted by name by the server. Needs readings.import: `enabled` is false for a role without it (callers pass
+ * `can("readings.import")`), so the request is never made and the data stays undefined.
+ */
+export const useImportProfiles = (enabled: boolean) =>
+  useQuery({
+    queryKey: keys.importProfiles,
+    queryFn: async () => (await api.get<{ profiles: ImportProfile[] }>("/api/import-profiles")).profiles,
+    enabled,
+  });
+
+/** Saving a profile (PUT; the name in the path wins over the one in the body) or deleting one: the list and the audit log (both are audited) are read again, on a refusal too (a 409 over 20 profiles means the list is out of date). */
+function useProfileMutation<Variables, Result>(mutationFn: (variables: Variables) => Promise<Result>) {
+  const invalidate = useInvalidate();
+  return useMutation({ mutationFn, onSettled: () => invalidate(keys.importProfiles, keys.auditAll) });
+}
+
+export const useSaveImportProfile = () =>
+  useProfileMutation((profile: ImportProfile) => api.put<ImportProfile>(`/api/import-profiles/${encodeURIComponent(profile.name)}`, profile));
+export const useDeleteImportProfile = () =>
+  useProfileMutation((name: string) => api.del(`/api/import-profiles/${encodeURIComponent(name)}`));
 
 export function useInvalidate() {
   const client = useQueryClient();
