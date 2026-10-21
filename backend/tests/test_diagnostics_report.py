@@ -6,6 +6,7 @@ import threading
 import time
 from dataclasses import fields, replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select, text
@@ -19,8 +20,8 @@ from dcdash.core.db import get_sessionmaker
 from dcdash.diagnostics import report
 from dcdash.diagnostics.redact import Masker, finalize, scrub, verify_paste
 from dcdash.diagnostics.report import (
-    AuditEntry, CheckInfo, CheckStep, DnsLookup, Environment, Event, PointRow, PointsInfo, PolicyJob, ReportData, ScanInfo,
-    SettingsInfo, SourceHealth, SourceInfo, StorageInfo, Unavailable, gather, load_known, mask_names, render,
+    AuditEntry, CheckInfo, CheckStep, DnsLookup, Environment, Event, HistoryInfo, PointRow, PointsInfo, PolicyJob, ReportData,
+    ScanInfo, SettingsInfo, SourceHealth, SourceInfo, StorageInfo, Unavailable, gather, load_known, mask_names, render,
 )
 from helpers import make_asset, make_mapping, make_point, make_source
 
@@ -1325,3 +1326,141 @@ def test_a_busy_summary_with_eight_failing_lookups_is_still_one_part():
     parts = finalize(body, "abc1234-dirty", NOW)
     assert len(parts.parts) == 1 and len(parts.parts[0].text) <= 12_000 and verify_paste(parts.text()).ok
     assert sum(1 for line in body.split("\n") if line.startswith("dns lookup scada")) == 8 and CLUSTER_NAMES_HINT in body
+
+
+# --- the history line in SOURCE HEALTH (w30 D11) ---------------------------------------------------------------------------------
+
+THROUGH = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
+
+
+def history(state="idle", **kw) -> HistoryInfo:
+    base = dict(answered_through=THROUGH, short_hours=3, rows_new=14_200, rows_already=480, rows_differing=0, rows_rejected=2,
+                requests=12, failures=0)
+    return HistoryInfo(state, **{**base, **kw})
+
+
+def health_lines(item: SourceHealth, detail="summary", transform=ident, **kw) -> list[str]:
+    return lines_of(render(ReportData(generated_at=NOW, sources=(source(**kw),), health=(item,)), detail, transform), "SOURCE HEALTH")
+
+
+def test_a_source_with_a_history_row_gets_one_line_under_its_health_line():
+    for detail in ("summary", "full"):
+        lines = health_lines(SourceHealth(3, 120, 3, 2.0, history()), detail)
+        assert len(lines) == 2 and lines[0].startswith('#3 "Main SCADA": ')
+        assert lines[1] == (
+            "   history: idle, answered through 2026-10-21 12:00 UTC, since restart 14,200 new / 480 already / 0 differing / "
+            "2 rejected, 3 hours short, 12 requests, 0 failed"
+        )
+
+
+def test_the_history_line_says_the_next_try_and_the_last_error_when_there_are_some_and_the_state_in_plain_words():
+    failing = history(
+        "backing_off", failures=4, next_try_at=datetime(2026, 10, 21, 12, 30, tzinfo=timezone.utc), last_error="unreachable: no route to host",
+    )
+    (_, line) = health_lines(SourceHealth(3, 120, 3, 2.0, failing))
+    assert line.startswith("   history: backing off, answered through 2026-10-21 12:00 UTC, ")
+    assert line.endswith(", 4 failed, next try 2026-10-21 12:30 UTC, last error: unreachable: no route to host")
+    (_, line) = health_lines(SourceHealth(3, 120, 3, 2.0, history("not_supported", last_error=None)))
+    assert line.startswith("   history: not supported, ") and "next try" not in line and "last error" not in line
+
+
+def test_a_source_nothing_was_answered_for_yet_and_one_hour_or_request_read_in_the_singular():
+    (_, line) = health_lines(SourceHealth(3, 120, 3, 2.0, history("filling", answered_through=None, short_hours=1, requests=1)))
+    assert line.startswith("   history: filling, nothing answered yet, since restart ") and line.endswith(", 1 hour short, 1 request, 0 failed")
+
+
+def test_a_source_without_a_history_row_prints_nothing_extra_and_the_old_output_is_unchanged():
+    lines = health_lines(SourceHealth(3, 120, 3, 2.0))
+    assert lines ==['#3 "Main SCADA": 12.0 reads/min, 2.5% bad, newest reading 2 s ago']
+    # the stored example of a healthy stack: the same facts render to exactly the lines the example holds
+    example = (Path(__file__).resolve().parents[2] / "docs" / "field-debugging-examples" / "01-healthy.txt").read_text(encoding="utf-8")
+    stored = lines_of(example, "SOURCE HEALTH")
+    data = ReportData(generated_at=NOW, sources=(source(1, "SCADA main"),), health=(SourceHealth(1, 424, 0, 4.0),))
+    assert stored and lines_of(render(data, "summary", ident), "SOURCE HEALTH") == stored
+    assert "history" not in render(data, "full", ident)
+
+
+def test_the_history_line_is_scrubbed_and_clipped_like_every_text_of_the_report():
+    error = "unreachable: " + "Zq9-secret-pw and a very long reason " * 20
+    (_, line) = health_lines(SourceHealth(3, 120, 3, 2.0, history("backing_off", last_error=error)), "full", lambda s: s.replace("Zq9-secret-pw", "[hidden]"))
+    assert "Zq9-secret-pw" not in line and "[hidden]" in line and line.endswith("…") and len(line) <= report.LINE_LIMIT
+    body = render(ReportData(generated_at=NOW, sources=(source(),), health=(SourceHealth(3, 120, 3, 2.0, history("backing_off", last_error=error)),)), "full", ident)
+    assert all(len(line) <= report.LINE_LIMIT for line in body.split("\n"))
+
+
+def test_a_history_that_could_not_be_read_is_one_line_and_the_health_lines_stay():
+    lines = health_lines(SourceHealth(3, 120, 3, 2.0, Unavailable("ProgrammingError (UndefinedTableError)")))
+    assert lines[0].startswith('#3 "Main SCADA": 12.0 reads/min') and lines[1] == "   history: unavailable (ProgrammingError (UndefinedTableError))"
+
+
+def test_the_history_line_is_dropped_with_the_health_block_of_a_source_that_has_no_problem():
+    base = busy(200, 500, failing=133)
+    data = replace(base, health=tuple(SourceHealth(i, 120, 3, 2.0, history()) for i in range(1, 201)))
+    lines = lines_of(render(data, "summary", ident), "SOURCE HEALTH")
+    heads = [i for i, line in enumerate(lines) if line.startswith("#")]
+    assert 0 < len(heads) < 200  # the sources that look healthy were left out of a report that did not fit
+    assert [line for line in lines if "history:" in line] == [lines[i + 1] for i in heads]  # one under each kept health line, none left over
+
+
+def test_the_history_line_keeps_a_source_that_has_no_row_out_of_the_pair_of_lines():
+    data = ReportData(
+        generated_at=NOW, sources=(source(3), source(4, "Spare")),
+        health=(SourceHealth(3, 120, 3, 2.0, history()), SourceHealth(4, 0, 0, None)),
+    )
+    lines = lines_of(render(data, "summary", ident), "SOURCE HEALTH")
+    assert [line[:12] for line in lines] == ['#3 "Main SCA', "   history: ", '#4 "Spare": ']
+
+
+async def history_row(db, source_id: int, state="idle", **columns) -> None:
+    columns = {
+        "answered_through": THROUGH, "short_hours": 3, "rows_new": 14_200, "rows_already": 480, "rows_differing": 0, "rows_rejected": 2,
+        "requests": 12, "failures": 0, **columns,
+    }
+    names = ", ".join(columns)
+    marks = ", ".join(f"${n}" for n in range(3, 3 + len(columns)))
+    await db.execute(f"INSERT INTO history_status (source_id, state, {names}) VALUES ($1, $2, {marks})", source_id, state, *columns.values())
+
+
+async def test_gather_reads_the_history_row_of_each_source_that_has_one(db, session):
+    ids = await seed(db)
+    await history_row(
+        db, ids["b"], "backing_off", next_try_at=THROUGH + timedelta(minutes=30), last_error="unreachable: no route", failures=4,
+    )
+    data = await gather(session, detail="summary")
+    health = {h.source_id: h for h in data.health}
+    assert health[ids["a"]].history is None
+    assert health[ids["b"]].history == HistoryInfo(
+        "backing_off", THROUGH, 3, 14_200, 480, 0, 2, 12, 4, THROUGH + timedelta(minutes=30), "unreachable: no route",
+    )
+    lines = lines_of(render(data, "summary", ident), "SOURCE HEALTH")
+    mine = [line for line in lines if line.startswith("   history:")]
+    assert len(mine) == 1 and mine[0].endswith("next try 2026-10-21 12:30 UTC, last error: unreachable: no route")
+    assert lines[lines.index(mine[0]) - 1].startswith('#' + str(ids["b"]))
+    only = await gather(session, detail="summary", source_id=ids["a"])
+    assert [h.history for h in only.health] == [None]
+    assert [h.history for h in (await gather(session, detail="summary", source_id=ids["b"])).health] == [health[ids["b"]].history]
+
+
+async def test_a_failing_history_read_leaves_the_health_lines_and_marks_each_source(db, session, monkeypatch):
+    ids = await seed(db)
+
+    async def broken(db_, *args):
+        raise RuntimeError("secret message: Zq9-secret-pw")
+
+    monkeypatch.setattr(report, "_history", broken)
+    data = await gather(session, detail="summary")
+    assert not isinstance(data.health, Unavailable) and {h.source_id for h in data.health} == set(ids.values())
+    assert {h.history for h in data.health} == {Unavailable("RuntimeError")} and "Zq9-secret-pw" not in repr(data)
+    assert await session.scalar(select(1)) == 1  # the transaction is usable
+    assert "   history: unavailable (RuntimeError)" in render(data, "summary", ident)
+
+
+async def test_a_database_without_the_history_table_still_gives_the_health_section(db, session):
+    ids = await seed(db)
+    await session.execute(text("ALTER TABLE history_status RENAME TO history_status_away"))  # undone with the session's transaction
+    data = await gather(session, detail="summary")
+    assert not isinstance(data.health, Unavailable) and len(data.health) == 2
+    assert {h.history for h in data.health} == {Unavailable("ProgrammingError (UndefinedTableError)")}
+    assert not isinstance(data.points, Unavailable) and not isinstance(data.journal, Unavailable)  # the other sections never noticed
+    lines = lines_of(render(data, "summary", ident), "SOURCE HEALTH")
+    assert any(line.startswith(f'#{ids["a"]} "Main SCADA": ') for line in lines)

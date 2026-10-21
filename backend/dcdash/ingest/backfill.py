@@ -1033,3 +1033,8 @@ async def backfill_loop(
             await engine.run_all()
         except Exception:
             log.exception("history backfill cycle failed")
+
+
+if __name__ == "__main__":
+    from dcdash.ingest.fill_command import main
+    raise SystemExit(main())

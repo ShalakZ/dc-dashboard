@@ -183,11 +183,30 @@ class SourceInfo:
 
 
 @dataclass(frozen=True)
+class HistoryInfo:
+    """The history backfill's status row of one source (w30). The counters are totals since the collector started."""
+
+    state: str  # idle | filling | backing_off | not_supported
+    answered_through: datetime | None = None
+    short_hours: int = 0
+    rows_new: int = 0
+    rows_already: int = 0
+    rows_differing: int = 0
+    rows_rejected: int = 0
+    requests: int = 0
+    failures: int = 0
+    next_try_at: datetime | None = None
+    last_error: str | None = None  # scrubbed by the backfill when it stored it; the report scrubs it again like every text
+
+
+@dataclass(frozen=True)
 class SourceHealth:
     source_id: int
     reads: int = 0  # readings in the last HEALTH_WINDOW_MINUTES
     bad: int = 0
     newest_age_seconds: float | None = None  # by the database clock; None: no reading on record
+    # None: the source has no history_status row (the report then says nothing about history); Unavailable: the read failed.
+    history: HistoryInfo | Unavailable | None = None
 
 
 @dataclass(frozen=True)
@@ -707,7 +726,39 @@ async def _health(db: AsyncSession, source_id: int | None) -> tuple[SourceHealth
             {"minutes": HEALTH_WINDOW_MINUTES, **({} if source_id is None else {"sid": source_id})},
         )
     ).all()
-    return tuple(SourceHealth(r.id, int(r.reads), int(r.bad), _float(r.age)) for r in rows)
+    # Its own savepoint: a database without the table (an older schema) still gets its health lines.
+    history = await _guard(db, lambda: _history(db, source_id))
+    return tuple(
+        SourceHealth(
+            r.id, int(r.reads), int(r.bad), _float(r.age), history if isinstance(history, Unavailable) else history.get(r.id)
+        )
+        for r in rows
+    )
+
+
+async def _history(db: AsyncSession, source_id: int | None) -> dict[int, HistoryInfo]:
+    """The backfill's status row of every source that has one, by source id. Plain SQL: the table has no model."""
+    where = "" if source_id is None else "WHERE source_id = :sid"
+    rows = (
+        await db.execute(
+            text(
+                f"""
+                SELECT source_id, state, answered_through, short_hours, rows_new, rows_already, rows_differing, rows_rejected,
+                       requests, failures, next_try_at, last_error
+                FROM history_status {where}
+                """
+            ),
+            {} if source_id is None else {"sid": source_id},
+        )
+    ).all()
+    return {
+        r.source_id: HistoryInfo(
+            state=str(r.state), answered_through=r.answered_through, short_hours=int(r.short_hours), rows_new=int(r.rows_new),
+            rows_already=int(r.rows_already), rows_differing=int(r.rows_differing), rows_rejected=int(r.rows_rejected),
+            requests=int(r.requests), failures=int(r.failures), next_try_at=r.next_try_at, last_error=r.last_error,
+        )
+        for r in rows
+    }
 
 
 _POINT_STATES = """
@@ -924,6 +975,13 @@ def _iso(moment: datetime | None) -> str:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _utc_minute(moment: datetime) -> str:
+    """"2026-10-21 12:00 UTC": the form the history line (and the fill command) use for a time."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return f"{moment.astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC"
 
 
 def _utc_text(stamp: str | None) -> str:
@@ -1295,6 +1353,8 @@ class _Renderer:
                 bad = f", {item.bad / item.reads:.1%} bad" if item.reads else ""
                 reads = f"{item.reads / HEALTH_WINDOW_MINUTES:.1f} reads/min"
             lines.append(f"{self.src(item.source_id)}: {reads}{bad}, {newest}")
+            if item.history is not None:  # a source the backfill never ran for says nothing: every older report stays as it was
+                lines.append(self._history_line(item.history))
             if isinstance(events, Unavailable):
                 lines.append(f"   errors: journal unavailable ({events.error})")
                 continue
@@ -1310,6 +1370,24 @@ class _Renderer:
         if healthy_left_out:
             lines.append(f"... health of {healthy_left_out} sources without a problem omitted to fit one part")
         return lines or ["no sources"]
+
+    def _history_line(self, info: HistoryInfo | Unavailable) -> str:
+        """One line under a source's health: where the history backfill stands, in plain words and UTC."""
+        if isinstance(info, Unavailable):
+            return f"   history: unavailable ({self.text(info.error, 80)})"
+        through = f"answered through {_utc_minute(info.answered_through)}" if info.answered_through else "nothing answered yet"
+        line = (
+            f"   history: {self.text(info.state.replace('_', ' '), 20)}, {through}, since restart {info.rows_new:,} new / "
+            f"{info.rows_already:,} already / {info.rows_differing:,} differing / {info.rows_rejected:,} rejected, "
+            f"{info.short_hours:,} hour{'' if info.short_hours == 1 else 's'} short, "
+            f"{info.requests:,} request{'' if info.requests == 1 else 's'}, {info.failures:,} failed"
+        )
+        if info.next_try_at is not None:
+            line += f", next try {_utc_minute(info.next_try_at)}"
+        if info.last_error:
+            tail = ", last error: "
+            line += tail + self.text(info.last_error, max(LINE_LIMIT - len(line) - len(tail), 20))
+        return line
 
     @staticmethod
     def _error_groups(events: Sequence[Event], source_id: int) -> list[tuple[datetime, datetime, int, Event]]:

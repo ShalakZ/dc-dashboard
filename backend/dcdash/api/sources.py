@@ -15,7 +15,7 @@ from dcdash.api.deps import current_user, get_db, notify, require_permission
 from dcdash.api.jobs import enqueue
 from dcdash.connectors.base import connector_types
 from dcdash.core.audit import (
-    audit, audit_change, hidden_parts, reconcile_config, safe_config, scrub_url_credentials,
+    audit, audit_change, hidden_parts, hidden_values, reconcile_config, safe_config, scrub_url_credentials,
 )
 from dcdash.core.crypto import encrypt
 from dcdash.core.models import Mapping, Point, Source, User
@@ -77,6 +77,27 @@ class SourceOut(BaseModel):
 class SourceListOut(SourceOut):
     last_reading_age_seconds: float | None = None  # newest stored reading of any of its points; None = none yet
     mapped_points: int = 0  # points of this source that have a mapping
+
+
+class SourceHistoryOut(BaseModel):
+    """How far the history backfill got with one source (the `history_status` row, or "never_run" when it has none yet)."""
+
+    supports_history: bool  # the connector class's flag: false means the backfill never asks this source for history
+    state: str  # never_run | idle | filling | backing_off | not_supported
+    answered_through: datetime | None = None  # everything before this was asked once
+    reread_through: datetime | None = None  # everything before this was asked a second time, for values stored late
+    last_cycle_at: datetime | None = None
+    last_success_at: datetime | None = None
+    next_try_at: datetime | None = None  # while backing off: the source is not asked again before this
+    short_hours: int = 0
+    # Since the collector started (the totals restart with it).
+    rows_new: int = 0
+    rows_already: int = 0
+    rows_differing: int = 0
+    rows_rejected: int = 0
+    requests: int = 0
+    failures: int = 0
+    last_error: str | None = None
 
 
 def validated_config(connector_type: str, config: dict[str, Any]) -> dict[str, Any]:
@@ -413,6 +434,33 @@ async def browse_source(
     await audit(db, user.id, "source.browsed", {"source_id": source.id, "name": source.name, "job_id": job_id})
     await db.commit()
     return {"job_id": job_id}
+
+
+@router.get(
+    "/sources/{source_id}/history", response_model=SourceHistoryOut, dependencies=[Depends(require_permission("sources.view"))]
+)
+async def source_history(source_id: int, db: AsyncSession = Depends(get_db)) -> SourceHistoryOut:
+    """The state of the history backfill for one source. A read: no audit row, and nothing is changed. The table is read with
+    plain SQL: the models live in core/, whose files are hashed into the figure engine's id, so the table has none."""
+    source = await get_source(db, source_id)  # 404
+    kind = connector_types().get(source.connector_type)
+    supports = bool(kind is not None and kind.supports_history)
+    row = (
+        await db.execute(
+            text(
+                "SELECT state, answered_through, reread_through, last_cycle_at, last_success_at, next_try_at, short_hours, "
+                "rows_new, rows_already, rows_differing, rows_rejected, requests, failures, last_error "
+                "FROM history_status WHERE source_id = :sid"
+            ),
+            {"sid": source_id},
+        )
+    ).mappings().first()
+    if row is None:
+        return SourceHistoryOut(supports_history=supports, state="never_run")
+    values = dict(row)
+    if values["last_error"] is not None:  # the engine scrubbed it when it stored it; scrub once more, as SourceOut does
+        values["last_error"] = scrub_url_credentials(values["last_error"], hidden_values(source.config))
+    return SourceHistoryOut(supports_history=supports, **values)
 
 
 @router.get("/sources/{source_id}/points", dependencies=[Depends(require_permission("sources.view"))])
