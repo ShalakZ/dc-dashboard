@@ -503,7 +503,8 @@ async def test_a_power_mapping_next_to_a_counter_does_not_matter_but_a_counter_d
     await make_mapping(db, spare, world.alpha, "active_power_kw", 60)  # a config change: a new key, the same figure
     second = await ask()
     assert second == first and figure_cache.stats()["computes"] == 2
-    await insert_readings(db, spare, START + 3 * HOUR, 600, [9.0] * 3)  # readings the counter makes unused: still a hit
+    # readings the counter makes unused: still a hit (from START + 4h: the first batch already holds START + 3h and 3h10m, and a pair is stored once)
+    await insert_readings(db, spare, START + 4 * HOUR, 600, [9.0] * 3)
     await settle_rollups(db)
     assert await ask() is second and figure_cache.stats()["computes"] == 2
 
