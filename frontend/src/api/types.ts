@@ -624,7 +624,7 @@ export interface ImportProfile {
 export interface ImportProblem { line: number; reason: string }
 /** A reading the file sent again with another value than the one stored (the stored one is kept). `tag` is clipped by the server; React shows it as text. */
 export interface ImportDifference { tag: string; ts: string; stored: number | null; file: number | null }
-/** An energy counter value that went down, or jumped by a lot, against the one before it in the file (`tag` is clipped by the server; React shows it as text). The reading is stored all the same. */
+/** An energy counter value that went down, or jumped by a lot, against the one before it in the file (`tag` is clipped by the server; React shows it as text). A check says it will be stored all the same, an import that it was. */
 export interface ImportCounterWarning { tag: string; ts: string; previous: number; value: number }
 export type ImportRefreshState = "not_needed" | "done" | "failed";
 /**

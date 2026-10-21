@@ -15,7 +15,7 @@ const REJECTED: Record<string, string> = {
   unit_differs_from_mapping: "The unit differs from the unit the point is mapped with",
   unit_not_valid_for_metric: "The unit is not valid for the point's metric",
   interval_energy_in_counter_point: "Energy per period cannot go into a point read as a running counter or as a power",
-  malformed_line: "The line is not a well-formed row (an unbalanced quote, a line break inside a cell, or too few or too many cells)",
+  malformed_line: "The line is not a well-formed row (an unbalanced quote, a line break inside a cell, too few cells, or a filled cell beyond the header's columns)",
   bad_tag: "The tag is empty or too long",
   point_deleted: "The point was deleted while the file was being read",
   duplicate_in_file: "The same reading is in the file more than once",

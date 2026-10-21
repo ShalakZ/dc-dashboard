@@ -140,8 +140,8 @@ async def pending_drop_range(pool: asyncpg.Pool, lo: datetime, hi: datetime, *, 
     """Why a refresh over [hour_floor(lo), hi] would be unsafe, as a sentence without a full stop at its end, or None.
 
     `floor` is for a caller that WRITES raw readings before it asks (an import): the rows it stored have lowered `min(ts)`, which
-    hides the minutes that lie below the raw data it found. It passes the oldest raw reading it saw before its first write (None:
-    there was no raw reading at all)."""
+    hides the minutes that lie below the raw data it found. It passes the instant it read before its first write, from which on
+    no minute has lost its raw readings (the import's end of the lost stretch; None: no raw reading at all, every minute counts)."""
     if floor is _READ_NOW:
         oldest = await pool.fetchval(_MINUTES_WITHOUT_RAW, hour_floor(lo), hi)
     else:
