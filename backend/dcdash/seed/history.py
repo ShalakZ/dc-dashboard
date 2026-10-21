@@ -383,7 +383,7 @@ async def write_batches(pool: asyncpg.Pool, batches: Iterable[tuple[date, list[R
     """Each batch (a UTC day and its rows) through the collector's own `Writer`, one flush per batch, in the order given. Returns
     how many rows were written. A batch must fit the Writer's buffer; the checks on the buffer and on flush() are described in
     write_readings."""
-    writer = Writer(pool)
+    writer = Writer(pool, notify=False)
     total = 0
     for day, rows in batches:
         writer.add(rows)

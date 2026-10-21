@@ -1,46 +1,22 @@
 import asyncio
-import json
 import logging
-import math
-from datetime import datetime
 
 import asyncpg
 
-from dcdash.connectors.base import BAD
-from dcdash.core.pg import LATEST_CHANNEL
+from dcdash.ingest.store import Row, finite_or_bad, insert_readings, journal_conflicts
 
 log = logging.getLogger(__name__)
 
-Row = tuple[int, datetime, float | None, int]  # point_id, ts, value, quality
-NOTIFY_CHUNK = 100
-
-_INSERT_READING = "INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)"
-# The EXISTS guard skips points deleted while their readings were buffered.
-_UPSERT_LATEST = """
-    INSERT INTO point_latest (point_id, ts, value, quality)
-    SELECT $1::int, $2::timestamptz, $3::float8, $4::smallint
-    WHERE EXISTS (SELECT 1 FROM points WHERE id = $1::int)
-    ON CONFLICT (point_id) DO UPDATE
-        SET ts = EXCLUDED.ts, value = EXCLUDED.value, quality = EXCLUDED.quality
-        WHERE point_latest.ts <= EXCLUDED.ts
-"""
-
-
-def _finite_or_bad(row: Row) -> Row:
-    """A NaN or infinite value is not a measurement. Stored as GOOD it makes the average, sum and maximum of its minute and
-    its hour NaN for good (the hourly tier is kept forever), and the API writes NaN as null, which the UI reads as "no rate"."""
-    point_id, ts, value, quality = row
-    if value is not None and not math.isfinite(value):
-        return (point_id, ts, None, BAD)
-    return row
-
 
 class Writer:
-    """Buffers readings in memory and writes them to the database in batches."""
+    """Buffers readings in memory and writes them to the database in batches, through `ingest.store.insert_readings`.
 
-    def __init__(self, pool: asyncpg.Pool, max_buffer: int = 100_000) -> None:
+    `notify=False` is for bulk writers (the seeder): they never tell the live widgets about a value."""
+
+    def __init__(self, pool: asyncpg.Pool, max_buffer: int = 100_000, notify: bool = True) -> None:
         self._pool = pool
         self._max = max_buffer
+        self._notify = notify
         self._buffer: list[Row] = []
 
     @property
@@ -48,7 +24,7 @@ class Writer:
         return len(self._buffer)
 
     def add(self, rows: list[Row]) -> None:
-        self._buffer.extend(_finite_or_bad(row) for row in rows)
+        self._buffer.extend(finite_or_bad(row) for row in rows)
         self._trim()
 
     def _trim(self) -> None:
@@ -61,24 +37,18 @@ class Writer:
         if not self._buffer:
             return 0
         rows, self._buffer = self._buffer, []
-        latest: dict[int, Row] = {}
-        for row in sorted(rows, key=lambda r: r[1]):
-            latest[row[0]] = row
-        payload = [[r[0], r[1].timestamp(), r[2], r[3]] for r in latest.values()]
         try:
             async with self._pool.acquire() as conn, conn.transaction():
-                await conn.executemany(_INSERT_READING, rows)
-                await conn.executemany(_UPSERT_LATEST, list(latest.values()))
-                for start in range(0, len(payload), NOTIFY_CHUNK):
-                    chunk = json.dumps(payload[start : start + NOTIFY_CHUNK])
-                    await conn.execute("SELECT pg_notify($1, $2)", LATEST_CHANNEL, chunk)
-        except BaseException as exc:  # database unavailable or cancelled: keep the rows
+                result = await insert_readings(conn, rows, notify=self._notify)
+        except BaseException as exc:  # database unavailable, a deadlock, or cancelled: keep the rows
             self._buffer = rows + self._buffer
             self._trim()
             if isinstance(exc, Exception):
                 log.warning("flush failed, keeping %d readings: %s", len(rows), exc)
                 return 0
             raise
+        # After the commit and outside the try: the rows are stored, so a failure here must not put them back in the buffer
+        await journal_conflicts(self._pool, result)
         return len(rows)
 
     async def run(self, interval: float = 1.0) -> None:

@@ -3,13 +3,26 @@ import json
 import math
 from datetime import datetime, timedelta, timezone
 
+import asyncpg
 import pytest
 
+from dcdash.collector import writer as writer_module
 from dcdash.collector.writer import Writer
+from dcdash.core import journal
 from dcdash.core.pg import LATEST_CHANNEL, create_pool
-from helpers import listening, make_point, make_source
+from dcdash.ingest import store
+from dcdash.ingest.kinds import READINGS_CONFLICT
+from helpers import listening, make_point, make_source, wait_for
 
 T0 = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _conflict_state():
+    """The counts held back for the next readings.conflict event are process-wide, like the journal's own gates."""
+    store.forget_conflicts()
+    yield
+    store.forget_conflicts()
 
 
 async def _point(db) -> int:
@@ -159,3 +172,114 @@ async def test_a_non_finite_reading_is_notified_as_null_not_nan(db, database_url
     assert "NaN" not in payload and "Infinity" not in payload  # a bare NaN is not valid JSON for the browser
     (item,) = json.loads(payload)
     assert item[0] == pid and item[2] is None and item[3] == 1
+
+
+# w30: every reading goes through ingest.store.insert_readings; a time that is stored once is never written again.
+
+
+async def test_a_second_flush_of_the_same_rows_returns_the_count_and_stores_nothing_new(db, database_url):
+    point = await _point(db)
+    rows = [(point, T0, 10.0, 0), (point, T0 + timedelta(seconds=5), 12.0, 0)]
+    writer = Writer(db)
+    writer.add(rows)
+    assert await writer.flush() == 2
+    async with listening(database_url, LATEST_CHANNEL) as received:
+        writer.add(rows)
+        assert await writer.flush() == 2  # handled: both were stored already
+        await db.execute("SELECT pg_notify($1, 'marker')", LATEST_CHANNEL)
+        assert await asyncio.wait_for(received.get(), 5) == "marker"  # and nobody was told about them
+    assert await db.fetchval("SELECT count(*) FROM readings") == 2
+    assert writer.pending == 0
+
+
+async def test_a_pair_twice_in_one_flush_counts_as_handled_and_is_stored_once(db):
+    point = await _point(db)
+    writer = Writer(db)
+    writer.add([(point, T0, 1.0, 0), (point, T0, 2.0, 0)])
+    assert await writer.flush() == 2
+    assert await db.fetchval("SELECT value FROM readings WHERE point_id = $1", point) == 1.0
+
+
+async def test_a_resend_with_a_different_value_keeps_the_stored_value_and_is_journaled(db):
+    # Before w30 a same-time re-send overwrote nothing but was stored as a second row; now the first value wins.
+    source = await make_source(db)
+    point = await make_point(db, source, "LVP01_kW")
+    writer = Writer(db)
+    writer.add([(point, T0, 10.0, 0)])
+    await writer.flush()
+    writer.add([(point, T0, 99.0, 0)])
+    assert await writer.flush() == 1
+    assert await db.fetchval("SELECT count(*) FROM readings") == 1
+    assert await db.fetchval("SELECT value FROM readings WHERE point_id = $1", point) == 10.0
+    assert await db.fetchval("SELECT value FROM point_latest WHERE point_id = $1", point) == 10.0
+    await wait_for(lambda: db.fetchval("SELECT count(*) FROM diag_events WHERE kind = $1", READINGS_CONFLICT), 1)
+    event = await db.fetchrow("SELECT source_id, level, detail FROM diag_events WHERE kind = $1", READINGS_CONFLICT)
+    assert event["source_id"] == source and event["level"] == "warning"
+    assert event["detail"]["differing"] == 1 and event["detail"]["samples"][0]["resent"] == 99.0
+
+
+async def test_a_flush_does_not_fail_when_the_journal_does(db, monkeypatch):
+    point = await _point(db)
+    writer = Writer(db)
+    writer.add([(point, T0, 10.0, 0)])
+    await writer.flush()
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("the journal is broken")
+
+    monkeypatch.setattr(journal, "record_soon", broken)
+    writer.add([(point, T0, 99.0, 0)])
+    assert await writer.flush() == 1  # the readings were committed; the failed journal write puts nothing back
+    assert writer.pending == 0
+
+
+async def test_a_writer_that_does_not_notify_still_sets_the_latest(db, database_url):
+    point = await _point(db)
+    async with listening(database_url, LATEST_CHANNEL) as received:
+        writer = Writer(db, notify=False)
+        writer.add([(point, T0, 10.0, 0)])
+        assert await writer.flush() == 1
+        await db.execute("SELECT pg_notify($1, 'marker')", LATEST_CHANNEL)
+        assert await asyncio.wait_for(received.get(), 5) == "marker"
+    assert await db.fetchval("SELECT value FROM point_latest WHERE point_id = $1", point) == 10.0
+
+
+async def test_a_deadlock_is_an_exception_and_the_rows_are_kept(db, monkeypatch):
+    point = await _point(db)
+    real = writer_module.insert_readings
+
+    async def deadlocked(conn, rows, *, notify):
+        raise asyncpg.exceptions.DeadlockDetectedError("deadlock detected")
+
+    monkeypatch.setattr(writer_module, "insert_readings", deadlocked)
+    writer = Writer(db)
+    writer.add([(point, T0, 10.0, 0)])
+    assert await writer.flush() == 0
+    assert writer.pending == 1
+    monkeypatch.setattr(writer_module, "insert_readings", real)
+    assert await writer.flush() == 1
+    assert await db.fetchval("SELECT count(*) FROM readings") == 1
+
+
+async def test_two_writers_with_overlapping_batches_in_opposite_orders_both_finish(db):
+    source = await make_source(db)
+    points = [await make_point(db, source, f"p{i}") for i in range(20)]
+    first = [(p, T0 + timedelta(seconds=s), float(s), 0) for p in points[:15] for s in range(20)]
+    second = list(reversed([(p, T0 + timedelta(seconds=s), float(s), 0) for p in points[5:] for s in range(20)]))
+    # each also writes its own newest row for the points they share, so point_latest overlaps too
+    first += [(p, T0 + timedelta(seconds=61), 1.0, 0) for p in points[5:15]]
+    second += [(p, T0 + timedelta(seconds=60), 2.0, 0) for p in reversed(points[5:15])]
+    one, two = Writer(db), Writer(db)
+    one.add(first)
+    two.add(second)
+    barrier = asyncio.Barrier(2)
+
+    async def flush(writer):
+        await barrier.wait()
+        return await writer.flush()
+
+    handled = await asyncio.wait_for(asyncio.gather(flush(one), flush(two)), 60)
+    assert handled == [len(first), len(second)]
+    assert one.pending == two.pending == 0
+    assert await db.fetchval("SELECT count(*) FROM readings") == 20 * 20 + 10 * 2
+    assert await db.fetchval("SELECT ts FROM point_latest WHERE point_id = $1", points[7]) == T0 + timedelta(seconds=61)
