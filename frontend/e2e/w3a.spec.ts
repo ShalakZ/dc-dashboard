@@ -190,7 +190,7 @@ test("W3a: child assets and a picked Kind, sortable and filterable points, a map
   await test.step("sources: an unmapped source reads not polled, and Edit renames it", async () => {
     await page.goto("/sources");
     await expect(page.getByRole("heading", { name: "Sources", exact: true })).toBeVisible();
-    const sourceRow = (name: string) => page.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) });
+    const sourceRow = (name: string) => page.getByRole("row").filter({ has: page.locator(`.cell-name[title="${name}"]`) });
 
     // A source with mapped points is polled, so its status is the stored one
     await expect(sourceRow("sim")).toBeVisible();
@@ -226,7 +226,7 @@ test("W3a: child assets and a picked Kind, sortable and filterable points, a map
     await expect(edit).toBeHidden();
     await expect(sourceRow("idle-renamed")).toBeVisible();
     await expect(sourceRow("idle-renamed")).toContainText("not polled (no mapped points)");
-    await expect(page.getByRole("cell", { name: "idle", exact: true })).toHaveCount(0);
+    await expect(page.locator(".cell-name[title=\"idle\"]")).toHaveCount(0);
 
     const renamed = (await getJson<ApiSource[]>(page, "/api/sources")).filter((s) => s.id === idle.id);
     expect(renamed).toHaveLength(1);
