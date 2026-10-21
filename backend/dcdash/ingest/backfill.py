@@ -738,19 +738,19 @@ class Backfill:
             # A page that holds as many rows as were asked for was cut at the limit: the source has more, so the rest is asked right away.
             cut = len(page.values) + page.rejected >= limit
             newest = hi >= run.now
-            if newest and not cut and not run.strict and (not (page.values or page.rejected) or until <= start):
+            if newest and not cut and (hi - until <= SKEW or (not run.strict and (not (page.values or page.rejected) or until <= start))):
                 # The newest part of the window: a source whose clock is behind ours (a historian that buffers is often a quarter of
                 # an hour behind) is complete only up to its own "now", which is no failure and no cut. Its answer to a request
                 # that starts there is empty or complete up to where it started: vouch for that much, however little it is, and ask
                 # the rest next cycle, because asking again now would meet the same answer. An answer that holds rows and gained
                 # something is NOT that: a source may cut at a row cap of its own, smaller than ours, so it continues from where it
-                # was complete like anywhere else, and every request advances or comes back empty (it cannot spin). (A fill ignores
-                # what a window vouched for, so there the rules below stay: a request that gains nothing is a failure it can report.)
+                # was complete like anywhere else, and every request advances or comes back empty (it cannot spin). A fill ignores
+                # what a window vouched for, so there only the tail within the clock skew of its end counts as done (the source
+                # cannot be asked about a few minutes ahead of its own clock); any other request that gains nothing is a failure
+                # the fill can report.
                 return max(until, start)
             if until <= start:
                 raise _NoProgress(f"the source answered up to {until.isoformat()} for a request that started at {start.isoformat()}")
-            if newest and not cut and hi - until <= SKEW:
-                return until
             cursor[0] = until
 
     async def _ask(

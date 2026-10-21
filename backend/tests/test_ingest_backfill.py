@@ -1383,6 +1383,16 @@ async def test_a_fill_whose_rollup_refresh_fails_still_tells_the_journal_and_kee
     assert event["detail"]["new"] == len(await world.stored("M001_kWh")) - 1  # both slices were stored before the second refresh failed
 
 
+async def test_a_fill_that_ends_within_the_clock_skew_of_a_source_that_lags_is_done_and_not_set_aside(db):
+    clock = Clock(NOW + 2 * MINUTE)
+    behind = create_historian_app(HistorianConfig(meters=2), clock=lambda: clock.now - 2 * MINUTE, api_key=KEY)  # complete up to 12:00 at 12:02
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 6 * HOUR + timedelta(seconds=17)}, clock=clock, app=behind)
+    report = await world.engine.fill_range(world.source, NOW - 6 * HOUR, NOW + 2 * MINUTE, dry_run=False, yes=True)
+    # the second slice is only the two minutes after 12:00: the source has nothing more to say about them, which is no failure
+    assert (report.new, report.already, report.set_aside, len(world.calls)) == (361, 1, 0, 2)
+    assert report.text == "362 rows read, 361 new, 1 already there, 0 differing, 0 rejected"
+
+
 async def test_a_fill_says_no_in_plain_words(db):
     world = await make_world(db, {"M001_kWh": KWH})
     fill = world.engine.fill_range
