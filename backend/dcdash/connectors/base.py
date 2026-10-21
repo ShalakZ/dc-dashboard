@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlparse
 
@@ -29,6 +29,16 @@ class PointValue:
     value: float | None
     quality: int = GOOD
     status: str | None = None  # why a reading is bad, when the source says (OPC UA: "BadNodeIdUnknown (0x80340000)")
+
+
+@dataclass(frozen=True)
+class HistoryPage:
+    """One answer to `Connector.read_history`."""
+
+    values: list[PointValue]
+    complete_until: datetime  # aware UTC: complete for EVERY requested address before this instant (a row AT it may be missing)
+    rejected: int = 0  # items whose time the normalisation rules refused (dropped, only counted)
+    unknown: tuple[str, ...] = ()  # addresses the source does not have
 
 
 @dataclass(frozen=True)
@@ -66,10 +76,11 @@ def url_host_port(url: object) -> tuple[str, int | None, str] | None:
 
 
 class ConnectorError(Exception):
-    def __init__(self, status: str, message: str) -> None:
+    def __init__(self, status: str, message: str, *, retry_after: float | None = None) -> None:
         super().__init__(message)
         self.status = status
         self.message = message
+        self.retry_after = retry_after  # seconds the source asked to wait (Retry-After), when it did
 
 
 class Connector(ABC):
@@ -78,6 +89,7 @@ class Connector(ABC):
     type: ClassVar[str]
     config_schema: ClassVar[type[BaseModel]]
     default_ports: ClassVar[tuple[int, ...]] = ()
+    supports_history: ClassVar[bool] = False
 
     @classmethod
     async def probe(cls, host: str, port: int, timeout: float = 3.0) -> Claim | None:
@@ -105,6 +117,33 @@ class Connector(ABC):
 
     @abstractmethod
     async def read(self, addresses: list[str]) -> list[PointValue]: ...
+
+    async def read_history(
+        self,
+        addresses: list[str],
+        start: datetime,
+        end: datetime,
+        resolution: timedelta | None = None,
+        *,
+        after: Mapping[str, datetime] | None = None,
+    ) -> HistoryPage:
+        """The samples the source stored for `addresses` between `start` and `end` (aware, both inclusive), for the backfill.
+
+        The contract every implementation keeps:
+        - read-only: GET requests only, and this interface has no write method;
+        - a value carries the SOURCE's time as an aware UTC instant, never ours, and its quality is mapped by the normalisation
+          rules (GOOD only for a good code, BAD otherwise, the label kept in `PointValue.status`);
+        - `resolution=None` means the raw samples, the only value the backfill asks for;
+        - the answer may be cut at the source's row limit: `HistoryPage.complete_until` says up to where it is complete for EVERY
+          requested address, and the caller continues from it (the next window starts AT it, because a row at that instant may be
+          missing, even when it equals `end`). `after` maps an address to the last instant already received for it,
+          so a page cut inside the repeated autumn hour still tells the first pass from the second;
+        - a connector that sets `supports_history` must stamp the values of `read()` with the source's time too, so a live value and
+          its history twin are one `(point, time)` pair and a re-read of a polled window adds nothing.
+
+        The default is for source types that keep no history.
+        """
+        raise ConnectorError("not_supported", "this source type cannot read history")
 
     async def check(self, points: list[str], publish: "Publish | None" = None) -> "CheckResult":
         """The step-by-step connection check of this source. `points` are the addresses mapped to it (at most 200), `publish`
