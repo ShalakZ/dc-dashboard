@@ -4,7 +4,7 @@ Database tests; the engine is driven with a factory that hands out `SimulatorCon
 plain simulator app, which keeps no history) through `httpx.ASGITransport`, with one fake clock shared by the stand-in and the engine
 and a fake `sleep` that only records, so no test waits."""
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -12,7 +12,6 @@ import pytest
 
 from dcdash.connectors.base import ConnectorError, HistoryPage, PointValue
 from dcdash.connectors.simulator import SimulatorConfig, SimulatorConnector
-from dcdash.core import journal
 from dcdash.core.db import get_sessionmaker
 from dcdash.core.energy import hourly_energy
 from dcdash.core.pg import LATEST_CHANNEL

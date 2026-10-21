@@ -573,6 +573,7 @@ class Backfill:
     ) -> datetime:
         """Ask [lo, hi] slice by slice, ascending, saving the mark after each slice. Returns the instant the source vouched for:
         `hi`, or earlier when it said it was complete only up to there (then nothing after that is asked)."""
+        run.received.clear()  # the instants received belong to ONE ascending series: a window that goes back in time starts a new one
         cursor = lo
         while cursor < hi:
             end = self._slice_end(run.points, cursor, hi)
