@@ -321,7 +321,7 @@ async def test_slices_keep_the_frontier_so_an_interruption_continues_where_it_st
     assert (await world.status())["answered_through"] == NOW
 
 
-async def test_a_first_run_that_halted_still_gets_the_late_pass_for_what_it_asked_while_that_was_young(db):
+async def test_a_first_run_that_halted_does_not_re_read_what_it_asked_when_that_was_already_old(db):
     async def break_in_the_third_slice(call, number):
         if number == 3:
             raise RuntimeError("the connection dropped")
@@ -329,15 +329,34 @@ async def test_a_first_run_that_halted_still_gets_the_late_pass_for_what_it_aske
     world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 20 * HOUR + timedelta(seconds=17)}, script=break_in_the_third_slice)
     result = await world.cycle()
     row = await world.status()
-    assert (row["answered_through"], row["reread_through"]) == (NOW - 8 * HOUR, None)  # two slices were asked, the late pass never began
-    world.clock.now = result.next_try_at
+    # Two slices were asked, all of it more than three hours old when asked: nothing is owed a second look from before three hours ago,
+    # and that is saved before the frontier runs, so the halt cannot leave the late pass to start from the lookback.
+    assert (row["answered_through"], row["reread_through"]) == (NOW - 8 * HOUR, NOW - 3 * HOUR)
+    world.clock.now = second = result.next_try_at
+    done = len(world.calls)
     assert (await world.cycle()).state == "idle"
-    # Not "three hours before this cycle": the slices asked in the first cycle were young then, and their second look is still owed.
-    assert (await world.status())["reread_through"] == NOW - 8 * HOUR - 3 * HOUR
+    assert world.requests(done) == [(NOW - 8 * HOUR, NOW - 2 * HOUR), (NOW - 2 * HOUR, second)]  # the frontier alone: no late pass over what was asked
+    assert (await world.status())["reread_through"] == second - 3 * HOUR
     done = len(world.calls)
     world.clock.now += 10 * MINUTE
     await world.cycle()
-    assert world.requests(done)[1][0] == NOW - 11 * HOUR  # the late pass of the next cycle starts there
+    assert world.requests(done)[1][0] == second - 3 * HOUR  # the late pass of the next cycle starts where the second one left off
+
+
+async def test_a_first_run_that_halted_owes_a_second_look_for_what_it_asked_while_that_was_young(db):
+    async def break_in_the_second_slice(call, number):
+        if number == 2:
+            raise RuntimeError("the connection dropped")
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 8 * HOUR + timedelta(seconds=17)}, script=break_in_the_second_slice)
+    result = await world.cycle()
+    row = await world.status()
+    # one slice was asked (6 to 2 hours back), and of it only the last hour was younger than three hours when it was asked
+    assert (row["answered_through"], row["reread_through"]) == (NOW - 2 * HOUR, NOW - 3 * HOUR)
+    world.clock.now = result.next_try_at
+    done = len(world.calls)
+    assert (await world.cycle()).state == "idle"
+    assert world.requests(done) == [(NOW - 2 * HOUR, world.clock.now), (NOW - 3 * HOUR, world.clock.now - 3 * HOUR)]  # and its second look comes at once
 
 
 async def test_a_slice_whose_rollups_could_not_be_refreshed_does_not_move_the_mark_and_is_refreshed_with_the_next_try(db, monkeypatch):

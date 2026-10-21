@@ -542,6 +542,12 @@ class Backfill:
         unsafe = await rollups.pending_drop_range(self._pool, late_from if late else start, now)
         if unsafe is not None:
             raise _Halt("backing_off", "pending_drop", unsafe, FAILED_REPEAT_SECONDS)
+        if mark is None and reread is None:
+            # A first run saves its late-pass mark BEFORE it asks anything, so that a run that halts leaves it right: what the run asks
+            # that is older than `reread_hours` now needs no second look, and what is younger, from the window's start or from
+            # `reread_hours` ago, whichever is later, is owed one once it is old enough. (After the run it would be too late: a halted
+            # run would leave the mark empty and its next cycle would have to guess, and re-ask a stretch of the lookback.)
+            await self._save(sid, "reread_through", max(now - reread_after, start))
         through = start
         if start < now:
             through = await self._window(run, start, now, self._saver(sid, "answered_through"))
