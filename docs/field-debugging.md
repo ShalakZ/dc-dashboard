@@ -214,10 +214,15 @@ number, `M01.kWh` the tag as in the file):
       AND r.ts >= '2026-10-01 00:00+00' AND r.ts < '2026-10-02 00:00+00'
     ORDER BY r.ts;
 
-Delete the wrong row by its point and time, one row at a time (this changes data):
+Delete the wrong row by its point and time, one row at a time (this changes data). Look the point's number up first and write it into the
+statement as a plain number: a sub-select in the `WHERE` makes the database unpack every compressed block of the chunk, and a chunk
+older than a week is compressed, so that form stops with "tuple decompression limit exceeded". This form was tried on a compressed
+chunk and deleted exactly one row (type `BEGIN;` first and `ROLLBACK;` after the count if you only want to see it):
+
+    SELECT id FROM points WHERE source_id = 3 AND address = 'M01.kWh';
 
     DELETE FROM readings
-    WHERE point_id = (SELECT id FROM points WHERE source_id = 3 AND address = 'M01.kWh')
+    WHERE point_id = 41   -- the number the SELECT printed
       AND ts = '2026-10-01 05:00+00';
 
 Then import the corrected file: it stores the deleted row again and refreshes the hourly and minute summaries over the hours of its new
