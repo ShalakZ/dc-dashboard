@@ -446,7 +446,64 @@ async def test_what_a_failed_refresh_left_owed_is_refreshed_on_its_own_and_not_m
     assert len(ranges) == 2 and max(hi - lo for lo, hi in ranges) <= 2 * HOUR  # ... then the frontier's own: never one from three hours back
 
 
-async def test_a_range_owed_by_a_failed_refresh_is_checked_for_rollup_minutes_without_raw_readings_before_anything_is_asked(db):
+async def test_the_range_of_a_slice_is_owed_before_the_owed_ranges_are_refreshed_so_a_second_failure_cannot_lose_it(db, monkeypatch):
+    real, ranges, broken = rollups.refresh_range, [], {"mode": "off"}
+
+    async def flaky(pool, lo, hi, now):
+        ranges.append((lo, hi))
+        if broken["mode"] == "all" or (broken["mode"] == "late" and lo < NOW - HOUR):  # "late": the range of the late pass, not the frontier's
+            raise RuntimeError("the refresh timed out")
+        return await real(pool, lo, hi, now)
+
+    monkeypatch.setattr(rollups, "refresh_range", flaky)
+    world = await make_world(db, {"M001_kWh": KWH})
+    assert (await world.cycle()).state == "idle"
+    await db.execute(
+        "DELETE FROM readings WHERE point_id = $1 AND ts BETWEEN $2 AND $3", world.points["M001_kWh"], NOW - 3 * HOUR, NOW - 3 * HOUR + 10 * MINUTE
+    )
+    broken["mode"] = "late"
+    world.clock.now = NOW + 10 * MINUTE
+    first = await world.cycle()  # the frontier's refresh works; the late pass stores the missing rows, and its refresh fails: owed
+    assert first.state == "backing_off" and "the rollups could not be refreshed" in first.reason
+    [late] = world.engine._owed[world.source]
+    broken["mode"] = "all"
+    world.clock.now = NOW + 55 * MINUTE
+    again = await world.cycle()  # the frontier stores 45 new minutes, and the refresh of the owed range fails again before it gets to them
+    assert again.state == "backing_off" and "the rollups could not be refreshed" in again.reason
+    owed = world.engine._owed[world.source]
+    assert late in owed and any(lo <= NOW + 9 * MINUTE and hi >= NOW + 53 * MINUTE for lo, hi in owed), owed  # the rows just stored are owed too
+    broken["mode"] = "off"
+    ranges.clear()
+    world.clock.now = NOW + 70 * MINUTE
+    assert (await world.cycle()).state == "idle"
+    assert ranges[0] == late and world.engine._owed == {}  # the old range first and alone, then the others
+
+
+async def test_a_slice_older_than_the_refresh_window_is_refreshed_whole_even_when_a_stop_came_between_its_store_and_its_refresh(db, monkeypatch):
+    # The policies refresh the last seven days by themselves, so a lost refresh heals there; older than that, only the engine refreshes.
+    first = NOW - 7 * 24 * HOUR - 6 * HOUR  # the first slice starts 7 days and 6 hours back, the next one 7 days back
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": first}, settings=settings_with(lookback_days=8))
+    await settle_rollups(db)  # the first reading is in the hourly rollup (the engine asks from there); the watermark is past the old hours
+    real, stop = rollups.refresh_range, {"on": True}
+
+    async def stopped(pool, lo, hi, now):
+        if stop["on"]:
+            stop["on"] = False
+            raise asyncio.CancelledError  # the collector is stopped after the rows were committed and before they were refreshed
+        return await real(pool, lo, hi, now)
+
+    monkeypatch.setattr(rollups, "refresh_range", stopped)
+    with pytest.raises(asyncio.CancelledError):
+        await world.cycle()
+    point = world.points["M001_kWh"]
+    stored = await db.fetchval("SELECT count(*) FROM readings WHERE point_id = $1 AND ts >= $2 AND ts < $3", point, first, first + HOUR)
+    assert stored > 50 and await db.fetchval("SELECT n FROM readings_1h WHERE point_id = $1 AND bucket = $2", point, first) == 1  # not refreshed
+    restart = Backfill(db, factory_for(world.app, world.calls), settings_with(lookback_days=8), clock=world.clock, sleep=world.sleeper)
+    assert (await restart.run_cycle(world.source)).state == "idle"  # every row of that slice is "already there": nothing new, refreshed all the same
+    assert await db.fetchval("SELECT n FROM readings_1h WHERE point_id = $1 AND bucket = $2", point, first) == stored
+
+
+async def test_a_range_owed_by_a_failed_refresh_that_would_delete_history_is_dropped_with_one_journal_line_and_does_not_hold_the_source(db):
     await db.execute("UPDATE settings SET value = jsonb_set(value, '{raw_retention_days}', '40') WHERE key = 'storage'")
     old = datetime(2026, 2, 23, 12, 0, 17, tzinfo=UTC)  # outside the two-day lookback, in a chunk the next step drops
     world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": None})
@@ -455,10 +512,14 @@ async def test_a_range_owed_by_a_failed_refresh_is_checked_for_rollup_minutes_wi
     await db.execute("SELECT drop_chunks('readings', older_than => TIMESTAMPTZ '2026-03-02')")  # what the retention policy does
     world.engine._owed[world.source] = [(old, old + 3 * HOUR)]  # a refresh of that stretch failed long ago and is still owed
     result = await world.cycle()
-    assert (result.state, world.calls) == ("backing_off", [])
-    assert "(readings_1m)" in result.reason and "so nothing is written" in result.reason
+    assert result.state == "idle" and world.calls  # the source is asked: a range that can never be refreshed does not hold it
+    assert world.engine._owed == {}
     [event] = await world.events(HISTORY_FAILED)
-    assert event["code"] == "pending_drop"
+    assert (event["code"], event["level"], event["source_id"]) == ("owed_range_dropped", "warning", world.source)
+    assert "(readings_1m)" in event["message"] and "2026-02-23 12:00 UTC" in event["message"]
+    minute = old.replace(second=0)
+    assert await db.fetchval("SELECT count(*) FROM readings_1m WHERE bucket >= $1 AND bucket < $2", minute, minute + 3 * HOUR) == 180  # kept
+    assert (await world.cycle()).state == "idle" and len(await world.events(HISTORY_FAILED)) == 1  # told once
 
 
 async def test_values_the_source_was_not_asked_for_are_not_stored_and_do_not_count_as_received(db):
