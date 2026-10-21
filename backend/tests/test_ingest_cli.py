@@ -125,9 +125,10 @@ async def test_before_first_reading_with_yes_stores_the_earlier_samples(db, caps
     world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 3 * HOUR + timedelta(seconds=17)})
     argv = ("--start", "2026-03-10T06:00:00Z", "--end", CLOCK, "--yes")
     assert await command(world, *argv) == 0
-    assert capsys.readouterr().out == "181 rows read, 181 new, 0 already there, 0 differing, 0 rejected\n"  # from the first hour only
+    # from the first hour only; the two samples around the live row at 09:00:17 are less than an interval from it (a counter is thinned too)
+    assert capsys.readouterr().out == "181 rows read, 179 new, 0 already there, 0 differing, 2 rejected\n"
     assert await command(world, *argv, "--before-first-reading") == 0
-    assert capsys.readouterr().out == "361 rows read, 180 new, 181 already there, 0 differing, 0 rejected\n"
+    assert capsys.readouterr().out == "361 rows read, 180 new, 179 already there, 0 differing, 2 rejected\n"
 
 
 # ---- what it refuses -------------------------------------------------------------------------------------------------------------
