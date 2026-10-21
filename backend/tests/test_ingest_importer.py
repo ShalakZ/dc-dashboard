@@ -95,9 +95,10 @@ async def test_the_sample_file_checks_and_imports_to_the_same_counts_and_a_secon
         (298, "not_a_number"), (299, "value_out_of_range"),
     ]
     assert dry.unknown_names == ["M98.kWh", "../../etc/passwd", '=HYPERLINK("http://example.invalid")']
-    assert dry.bad_quality == {"uncertain": 1}
+    assert dry.bad_quality == {"uncertain": 1}  # stored, so part of "new"; the sentence adds up without a clause of its own
+    assert "1 row stored with bad quality (uncertain: 1)" in importer.report_lines(dry)
     assert dry.summary() == (
-        '299 rows read, 289 new, 0 already there, 0 differing, 6 rejected, 1 stored with bad quality, 3 unknown tags (M98.kWh, '
+        '299 rows read, 289 new, 0 already there, 0 differing, 6 rejected, 3 unknown tags (M98.kWh, '
         '../../etc/passwd, =HYPERLINK("http://example.invalid")), 4 rows for unknown tags'
     )
     assert await stored(db) == 0 and await db.fetchval("SELECT count(*) FROM point_latest") == 0  # a dry run writes nothing

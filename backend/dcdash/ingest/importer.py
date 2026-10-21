@@ -489,8 +489,6 @@ class ImportReport:
             f"{_plural(self.rows_read, 'row')} read", f"{self.new:,} new", f"{self.already:,} already there",
             f"{self.differing:,} differing", f"{self.rejected:,} rejected",
         ]
-        if (bad := sum(self.bad_quality.values())) > 0:
-            parts.append(f"{bad:,} stored with bad quality")
         if self.unknown_total > 0:
             shown = ""
             if names:
@@ -535,6 +533,9 @@ def report_lines(report: ImportReport) -> list[str]:
         f"{_plural(rows, 'row')} in the closed month {month}: the rows are stored, its frozen figures do not change"
         for month, rows in sorted(report.closed_months.items())
     ]
+    if report.bad_quality:  # stored (they are part of "new"), marked BAD: the sentence of the report adds up without them
+        labels = ", ".join(f"{label}: {count:,}" for label, count in sorted(report.bad_quality.items()))
+        lines.append(f"{_plural(sum(report.bad_quality.values()), 'row')} stored with bad quality ({labels})")
     if report.refresh_note:
         lines.append(report.refresh_note)
     if report.problems:
