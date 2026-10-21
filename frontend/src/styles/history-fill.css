@@ -1,3 +1,28 @@
 @layer w6 {
-  /* w31: the rules of the Fill an older range dialog (components/HistoryFillDialog.tsx) go here, under the page class .history-fill. Tokens only. */
+  /* w31: the rules of the Fill an older range dialog (components/HistoryFillDialog.tsx), under the page class .history-fill. Tokens only. The dialog carries .dialog (app.css's)
+     beside its own class and never names it: other page files write .dialog bare and app.css.test.ts refuses a second file that names it. */
+  .history-fill { width: min(40rem, 100%); }
+  .history-fill h2 { overflow-wrap: anywhere; }
+
+  /* The two days side by side; one under the other in a narrow window. */
+  .history-fill .history-fill-dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+  .history-fill .history-fill-option { display: flex; align-items: center; gap: 6px; min-height: var(--ctl-h); }
+
+  /* The room for what the check and the job say: it is there from the start, so a plan (a long sentence) or a result arriving does not move the buttons under it;
+     a longer text scrolls inside it. */
+  .history-fill .history-fill-report { display: grid; gap: 8px; align-content: start; min-height: 9lh; max-height: 36vh; overflow: auto; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+  .history-fill .history-fill-report p { margin: 0; }
+  .history-fill .history-fill-summary { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .history-fill .history-fill-note { font-weight: 600; }
+  .history-fill .history-fill-done { display: flex; align-items: flex-start; gap: 8px; }
+  .history-fill .history-fill-done svg.i { flex: none; margin-top: 1px; color: var(--ok); }
+
+  .history-fill .history-fill-go { min-width: 8em; }
+  /* The buttons wait with aria-disabled, never disabled: the one that was pressed holds the focus. They look the way a disabled button does (app.css). */
+  .history-fill .history-fill-go[aria-disabled="true"], .history-fill .history-fill-go[aria-disabled="true"]:hover { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); cursor: not-allowed; }
+  .history-fill .history-fill-close[aria-disabled="true"], .history-fill .history-fill-check[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+
+  @media (max-width: 640px) {
+    .history-fill .history-fill-dates { grid-template-columns: minmax(0, 1fr); }
+  }
 }

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api } from "../api/client";
 import { keys } from "../api/queries";
@@ -59,6 +59,61 @@ describe("SourceForm, adding a source", () => {
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(onDone).not.toHaveBeenCalled();
     expect(toasts.calls).toEqual([]);
+  });
+});
+
+describe("SourceForm, the connector that is filled by files (w31)", () => {
+  const FILE_SENTENCE = "Readings are loaded from CSV files; nothing is polled.";
+  // As GET /api/connectors answers: the types that poll first, the one that does not last, each with `polls` and `description`.
+  const withFile = [
+    { ...connectors[0], polls: true, description: "" },
+    { ...connectors[1], polls: true, description: "" },
+    { type: "file", config_schema: { type: "object", title: "FileConfig", properties: {} }, polls: false, description: FILE_SENTENCE },
+  ];
+  const authWithFile = { ...auth, "GET /api/connectors": { body: withFile } };
+
+  it("starts on the first type the server lists (one that polls), lists the file type last, and shows no description for a type without one", async () => {
+    mockFetch(authWithFile);
+    renderWithProviders(<SourceForm onDone={() => {}} />);
+    const select = await screen.findByLabelText("Connector");
+    expect(select).toHaveValue("simulator");
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["simulator", "other", "file"]);
+    expect(screen.queryByText(FILE_SENTENCE)).not.toBeInTheDocument();
+    expect(select).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("shows the description under the select when the type has one, tied to the select, and takes it away for another type", async () => {
+    mockFetch(authWithFile);
+    renderWithProviders(<SourceForm onDone={() => {}} />);
+    const select = await screen.findByLabelText("Connector");
+    await userEvent.selectOptions(select, "file");
+    const note = screen.getByText(FILE_SENTENCE);
+    expect(select).toHaveAccessibleDescription(FILE_SENTENCE);
+    expect(note.closest("label")).toBeNull(); // outside the label: the select's name stays exactly "Connector"
+    await userEvent.selectOptions(select, "other");
+    expect(screen.queryByText(FILE_SENTENCE)).not.toBeInTheDocument();
+  });
+
+  it("has no config field for a file source, and saves it with an empty config", async () => {
+    const calls = mockFetch({ ...authWithFile, "POST /api/sources": { status: 201, body: { id: 5 } } });
+    const onDone = vi.fn();
+    renderWithProviders(<SourceForm onDone={onDone} />, { toasts: spyToasts().api });
+    await userEvent.selectOptions(await screen.findByLabelText("Connector"), "file");
+    expect(screen.queryByLabelText("Url")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Host")).not.toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Name"), "from files");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/sources")?.body).toEqual({
+      name: "from files", connector_type: "file", config: {}, secret: null, enabled: true,
+    });
+  });
+
+  it("copes with an answer that has no description or polls at all (an older server)", async () => {
+    mockFetch(auth); // `connectors` above carries neither field
+    renderWithProviders(<SourceForm onDone={() => {}} />);
+    expect(await screen.findByLabelText("Connector")).toHaveValue("simulator");
+    expect(document.querySelector("small.muted")).toBeNull();
   });
 });
 

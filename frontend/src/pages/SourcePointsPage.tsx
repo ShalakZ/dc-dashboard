@@ -37,7 +37,10 @@ export function SourcePointsPage() {
   const points = data ?? NO_POINTS;
   const { data: assets = [] } = useAssets(can("assets.view")); // without it the asset names are the ids
   const { data: sources } = useSources();
-  const sourceName = sources?.find((s) => s.id === sourceId)?.name ?? `source ${sourceId}`;
+  const source = sources?.find((s) => s.id === sourceId);
+  const sourceName = source?.name ?? `source ${sourceId}`;
+  // A source that is filled by importing files has nothing to browse. Until the list has answered (or when it cannot) the source counts as polled, as a row without the field does.
+  const canBrowse = source?.polls !== false;
   const invalidate = useInvalidate();
   const client = useQueryClient();
   const maps = useMappingActions({ assets });
@@ -94,9 +97,9 @@ export function SourcePointsPage() {
       <PageHeader
         title="Points"
         crumbs={[{ label: "Sources", to: "/sources" }, { label: sourceName }]}
-        actions={<button className="primary" onClick={browse}>Browse points</button>}
+        actions={canBrowse ? <button className="primary" onClick={browse}>Browse points</button> : undefined}
       />
-      {browseJob !== null && (
+      {canBrowse && browseJob !== null && (
         <div className="row job-line">
           <JobStatus jobId={browseJob} />
           <button onClick={() => invalidate(keys.points(sourceId))}>Refresh list</button>
@@ -105,7 +108,7 @@ export function SourcePointsPage() {
       {error && <p className="error" role="alert">{error.message}</p>}
       {actionError && <p className="error" role="alert">{actionError}</p>}
       {points.length === 0 && (
-        <div className="empty"><div className="empty-icon"><PointsIcon /></div><p className="muted">No points yet. Browse the source to discover them.</p></div>
+        <div className="empty"><div className="empty-icon"><PointsIcon /></div><p className="muted">{canBrowse ? "No points yet. Browse the source to discover them." : "No points yet. They are created by mapping a tag list, from the source's menu on the Sources page."}</p></div>
       )}
       {points.length > 0 && (
         <div className="row toolbar">

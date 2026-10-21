@@ -16,6 +16,7 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
   const queryClient = useQueryClient();
   const toast = useToast();
   const secretHintId = useId();
+  const connectorHintId = useId();
   const hiddenNoteId = useId();
   const [name, setName] = useState(source?.name ?? "");
   const [type, setType] = useState("");
@@ -90,11 +91,16 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
       {source ? (
         <p className="muted">Connector: {source.connector_type}</p>
       ) : (
-        <label>Connector
-          <select value={connector.type} onChange={(e) => setType(e.target.value)}>
-            {connectors.map((c) => <option key={c.type} value={c.type}>{c.type}</option>)}
-          </select>
-        </label>
+        <>
+          {/* The server sorts the types (a type that is filled by files comes last), so the first one, which the form starts on, is one that polls. */}
+          <label>Connector
+            <select value={connector.type} aria-describedby={connector.description ? connectorHintId : undefined} onChange={(e) => setType(e.target.value)}>
+              {connectors.map((c) => <option key={c.type} value={c.type}>{c.type}</option>)}
+            </select>
+          </label>
+          {/* A reply from an older server has no description */}
+          {connector.description ? <small id={connectorHintId} className="muted">{connector.description}</small> : null}
+        </>
       )}
       <SchemaForm fields={fields} values={values} onChange={setValues} />
       {hiddenKeys.map((key) => (

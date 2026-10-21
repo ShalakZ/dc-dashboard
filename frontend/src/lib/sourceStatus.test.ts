@@ -30,4 +30,14 @@ describe("sourceStatusText", () => {
   it("treats a missing mapped_points as polled (an older API, or a reply that does not carry it)", () => {
     expect(sourceStatusText({ enabled: true, status: "offline" })).toEqual({ text: "offline", polled: true });
   });
+
+  it("says a source that is filled by importing files is filled by file import, whatever else it is (not 'not polled')", () => {
+    expect(sourceStatusText({ enabled: true, status: "unknown", mapped_points: 0, polls: false })).toEqual({ text: "filled by file import", polled: false });
+    expect(sourceStatusText({ enabled: false, status: "unknown", mapped_points: 3, polls: false })).toEqual({ text: "filled by file import", polled: false });
+    expect(sourceStatusText({ enabled: true, status: "offline", mapped_points: 2, polls: false }).text).toBe("filled by file import");
+  });
+
+  it("counts a missing or true polls as polling", () => {
+    expect(sourceStatusText({ enabled: true, status: "online", mapped_points: 4, polls: true })).toEqual({ text: "online", polled: true });
+  });
 });
