@@ -121,7 +121,9 @@ at the stand-in Historian (dev profile) can answer; for every other source the l
   lookback.
 - **A few minutes behind now.** The automatic fill asks up to one mapping interval and a minute before now (the longest interval of the
   source's mapped points), so the live poll stores its own sample of the newest minutes first. `answered_through` therefore shows a
-  time a few minutes in the past (2 minutes for a 1-minute mapping, 6 for a 5-minute one): that is normal, not a lag.
+  time a few minutes in the past (2 minutes for a 1-minute mapping, 6 for a 5-minute one): that is normal, not a lag. In the newest
+  window a batch is asked at most five further pages per cycle and the rest is asked in the next cycle, so a source that lags and is
+  dense can trail by up to a slice and then catches up; nothing is lost.
 - **One run per source.** A cycle takes a lock on the source for as long as it works on it. A second collector, or the fill command
   ([Field debugging](field-debugging.md#history-fill)), finds the lock taken: the loop skips that source for that cycle, and the
   command refuses with a sentence and does nothing.

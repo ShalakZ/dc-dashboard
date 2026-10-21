@@ -111,8 +111,10 @@ minutes, `not_supported` waits a day, and `timeout`, `unreachable`, `rate_limite
 seconds inside a cycle, then 4, 8 and 15 minutes between cycles). `retry_after` is the number of seconds the source asked to wait
 (`Retry-After`, as seconds or as an HTTP date; ignore a value you cannot read); a longer wait than the back-off wins, up to 15 minutes
 inside a cycle. A wait above 15 minutes ends the cycle at once and goes into the time of the next try (up to a day): it is not slept,
-because a cycle holds the source's lease and a database connection. An exception that is not a `ConnectorError` counts as a
-`protocol_error`. `rate_limited` and `not_supported` belong to `read_history`. The simulator connector maps an HTTP 404 to
+because a cycle holds the source's lease and a database connection. An exception that is not a `ConnectorError` is treated as a
+`protocol_error` (struck, and the batch is set aside after three cycles in a row), except `TimeoutError` and `OSError` (a dropped
+connection), which are transient like `timeout` and `unreachable`: raise `ConnectorError` yourself rather than let an exception
+escape. `rate_limited` and `not_supported` belong to `read_history`. The simulator connector maps an HTTP 404 to
 `not_supported`, 429 to `rate_limited` and 503 to `unreachable` inside `read_history` only; `read()` and `test()` keep reporting any
 other answer than 200 as `protocol_error`.
 
