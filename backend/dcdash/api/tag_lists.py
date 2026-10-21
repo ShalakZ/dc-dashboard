@@ -42,7 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import ClientDisconnect
 
 from dcdash.api.asset_names import _KEY, lock_asset_names
-from dcdash.api.deps import current_user, get_db, notify, require_permission
+from dcdash.api.deps import current_user, get_db, notify, refuse_another_site, require_permission
 from dcdash.api.mappings import try_again
 from dcdash.core.audit import audit
 from dcdash.core.models import Asset, AuditLog, Mapping, Point, Source, User
@@ -230,7 +230,10 @@ async def _insert(db: AsyncSession, source_id: int, plan_: Plan) -> dict[str, An
     }
 
 
-@router.post("/sources/{source_id}/tag-list", response_model=None, dependencies=[Depends(require_permission("discovery.accept"))])
+@router.post(
+    "/sources/{source_id}/tag-list", response_model=None,
+    dependencies=[Depends(require_permission("discovery.accept")), Depends(refuse_another_site)],
+)
 async def map_tag_list(
     source_id: SourceId,
     request: Request,
@@ -473,7 +476,8 @@ async def _take_back(db: AsyncSession, rec: _Recorded, source_exists: bool) -> d
 
 
 @router.post(
-    "/tag-lists/{audit_id}/undo", response_model=None, dependencies=[Depends(require_permission("discovery.accept"))]
+    "/tag-lists/{audit_id}/undo", response_model=None,
+    dependencies=[Depends(require_permission("discovery.accept")), Depends(refuse_another_site)],
 )
 async def undo_tag_list(
     audit_id: AuditId, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)

@@ -192,3 +192,21 @@ def test_an_echoed_cell_is_at_most_80_characters_with_control_characters_replace
 
 def test_the_header_constant_the_helpers_use_is_the_sample_files():
     assert HEADER.split(",") == ["tag", "timestamp", "value", "unit", "quality"]
+
+
+def test_a_short_file_with_old_mac_line_endings_is_told_so_when_a_column_is_missing():
+    """The whole file arrives as one header line (the pre-scan cuts at line feeds only), so the column sentence gets the hint."""
+    scan = pre_scan(b"tag,timestamp,value,unit,quality\rA,2026-10-20T10:00:00Z,1,kW,good\rB,2026-10-20T11:00:00Z,2,kW,good\r")
+    with pytest.raises(ImportRefused) as caught:
+        resolve_layout(scan, make_profile())
+    sentence = str(caught.value)
+    assert 'no column named "quality"' in sentence and "old Mac line endings" in sentence
+    with pytest.raises(ImportRefused, match="old Mac line endings"):  # and for the column that is there twice
+        resolve_layout(pre_scan(b"tag,tag,timestamp,value\rA,B,1,2\r"), make_profile(unit=None, quality=None))
+    with pytest.raises(ImportRefused) as plain:
+        resolve_layout(pre_scan(b"a,b,c\n1,2,3\n"), make_profile(unit=None, quality=None))
+    assert "old Mac" not in str(plain.value)  # an ordinary file does not get it
+
+
+def test_the_layout_remembers_how_many_cells_the_header_has():
+    assert resolve_layout(pre_scan(b"tag,timestamp,value,x,y,z\nA,1,2,3,4,5\n"), make_profile(unit=None, quality=None)).columns == 6

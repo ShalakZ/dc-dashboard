@@ -137,7 +137,7 @@ async def test_the_report_dict_has_the_shape_of_the_contract(db):
     assert sorted(shape) == sorted([
         "dry_run", "source_id", "profile", "sha256", "size", "rows_read", "new", "already", "differing", "rejected", "unknown_rows",
         "unknown_tags", "rejected_by", "closed_months", "bad_quality", "differing_samples", "problems", "problems_total", "refresh",
-        "complete", "error", "text",
+        "complete", "error", "text", "counter_warnings", "counter_warnings_total", "raw_floor",
     ])
     assert shape["unknown_tags"] == {"count": 3, "names": ["M98.kWh", "../../etc/passwd", '=HYPERLINK("http://example.invalid")']}
     assert shape["problems"][0] == {"line": 290, "reason": "duplicate_in_file"} and shape["problems_total"] == 6
@@ -164,16 +164,16 @@ async def test_a_ct_ratio_scale_on_a_live_source_never_rejects_a_row_for_its_uni
     assert (report.new, report.rejected) == (4, 0)
 
 
-async def test_an_interval_profile_stores_energy_per_period_at_the_period_start_and_refuses_it_for_a_cumulative_counter(db):
+async def test_an_interval_profile_stores_energy_per_period_at_the_period_start_and_refuses_it_for_a_counter_and_for_a_power(db):
     source, ids = await make_world(db, {"E": ("energy_kwh", 1.0), "P": ("active_power_kw", 1.0), "U": (None, 1.0)})
     profile = make_profile(reading="interval", period_seconds=3600, stamp="end")
     body = text("E,2026-10-20T11:00:00Z,5,kWh,good", "P,2026-10-20T11:00:00Z,6,kW,good", "U,2026-10-20T11:00:00Z,7,kWh,good")
     dry = await run(db, source, body, profile=profile)
     real = await run(db, source, body, profile=profile, dry=False)
     assert same_but_for_the_flag(dry, real)
-    assert real.rejected_by == {"interval_energy_in_counter_point": 1} and real.new == 2
+    assert real.rejected_by == {"interval_energy_in_counter_point": 2} and real.new == 1  # the counter and the power point
     ts = await db.fetch("SELECT point_id, ts FROM readings ORDER BY point_id")
-    assert {row["point_id"]: row["ts"] for row in ts} == {ids["P"]: datetime(2026, 10, 20, 10, tzinfo=UTC), ids["U"]: datetime(2026, 10, 20, 10, tzinfo=UTC)}
+    assert {row["point_id"]: row["ts"] for row in ts} == {ids["U"]: datetime(2026, 10, 20, 10, tzinfo=UTC)}
 
 
 # ---- the same pair twice, a value that differs ------------------------------------------------------------------------------------------
@@ -360,15 +360,130 @@ async def test_recent_hours_are_left_to_the_policies(db):
     assert (report.new, report.refresh_state, report.refresh_days, report.refresh_note) == (1, "not_needed", 0, None)
 
 
+async def history_whose_raw_readings_were_dropped(db, *, newer_raw: bool) -> tuple[int, dict[str, int], datetime]:
+    """Three points. P0 has raw readings for 01:00 to 01:29 on October 1st, settled into the minute and hour rollups; then the raw
+    retention drops the chunk (what the policy does). With `newer_raw` P2 has raw readings from October 12th on, so the oldest raw
+    reading (the floor) is a real instant; without, no raw reading is left at all. Returns the source, the points and the floor."""
+    source, ids = await make_world(db, {"P0": ("active_power_kw", 1.0), "P1": ("active_power_kw", 1.0), "P2": ("active_power_kw", 1.0)})
+    await insert_readings(db, ids["P0"], datetime(2026, 10, 1, 1, tzinfo=UTC), 60, [float(i) for i in range(30)])
+    floor = datetime(2026, 10, 12, tzinfo=UTC)
+    if newer_raw:
+        await insert_readings(db, ids["P2"], floor, 60, [1.0] * 5)
+    await settle_rollups(db)
+    await db.execute("SELECT drop_chunks('readings', older_than => TIMESTAMPTZ '2026-10-10')")
+    assert await db.fetchval("SELECT min(ts) FROM readings") == (floor if newer_raw else None)
+    return source, ids, floor
+
+
+async def summaries_of(db, point: int) -> tuple[list, list]:
+    return (
+        await db.fetch("SELECT bucket, n FROM readings_1m WHERE point_id = $1 ORDER BY bucket", point),
+        await db.fetch("SELECT bucket, n FROM readings_1h WHERE point_id = $1 ORDER BY bucket", point),
+    )
+
+
+@pytest.mark.parametrize("first", ["01:45", "01:00", "00:59"])
+async def test_rows_before_the_oldest_raw_reading_are_refused_when_the_rollups_keep_minutes_there_and_nothing_is_deleted(db, first):
+    """C1 of the adversarial pass: the rollup guard was judged AFTER the import had written, so rows at or before the dropped minutes
+    hid them, and the refresh deleted every other meter's minutes and hours there. The floor is read before the first write, rows
+    before it are refused (also in the check), and the refresh is judged against that floor."""
+    now = datetime(2026, 10, 14, 12, tzinfo=UTC)
+    source, ids, floor = await history_whose_raw_readings_were_dropped(db, newer_raw=True)
+    before = await summaries_of(db, ids["P0"])
+    assert before[0] and before[1]
+    body = text(f"P1,2026-10-01T{first}:00Z,1,kW,good", "P1,2026-10-01T01:50:00Z,2,kW,good", "P1,2026-10-12T00:10:00Z,3,kW,good")
+    dry = await run(db, source, body, now=now)
+    real = await run(db, source, body, dry=False, now=now)
+    assert same_but_for_the_flag(dry, real) and identity(real)
+    assert real.rejected_by == {importer.OLDER_THAN_RAW: 2} and real.new == 1 and real.raw_floor == floor  # the row after the floor is stored
+    assert [row["ts"] for row in await db.fetch("SELECT ts FROM readings WHERE point_id = $1", ids["P1"])] == [datetime(2026, 10, 12, 0, 10, tzinfo=UTC)]
+    assert await summaries_of(db, ids["P0"]) == before  # no history was deleted
+    assert real.as_dict()["raw_floor"] == floor.isoformat()
+    assert any("lie before the oldest raw reading stored (2026-10-12 00:00 UTC)" in line for line in importer.report_lines(real))
+
+
+async def test_with_no_raw_reading_left_and_summaries_kept_every_row_is_refused_in_the_check_and_the_import(db):
+    now = datetime(2026, 10, 14, 12, tzinfo=UTC)
+    source, ids, _ = await history_whose_raw_readings_were_dropped(db, newer_raw=False)
+    before = await summaries_of(db, ids["P0"])
+    body = text("P1,2026-10-01T00:59:00Z,1,kW,good", "P1,2026-10-01T01:45:00Z,2,kW,good", "P1,2026-10-13T00:00:00Z,3,kW,good")
+    dry = await run(db, source, body, now=now)
+    real = await run(db, source, body, dry=False, now=now)
+    assert same_but_for_the_flag(dry, real)
+    assert (real.new, real.rejected_by, real.raw_floor) == (0, {importer.OLDER_THAN_RAW: 3}, None) and real.refresh_state == "not_needed"
+    assert await stored(db) == 0 and await summaries_of(db, ids["P0"]) == before
+    assert any("before any raw reading stored (there is none)" in line for line in importer.report_lines(real))
+
+
+async def test_nothing_changes_for_a_database_whose_rollups_hold_nothing_below_the_raw_readings(db):
+    """The ordinary case (a fresh database, or raw data back to the oldest summary): no row is refused for this reason."""
+    now = datetime(2026, 10, 14, 12, tzinfo=UTC)
+    source, ids = await make_world(db, {"A": ("active_power_kw", 1.0), "B": ("active_power_kw", 1.0)})
+    await insert_readings(db, ids["A"], datetime(2026, 10, 10, 1, tzinfo=UTC), 60, [1.0] * 30)
+    await settle_rollups(db)
+    report = await run(db, source, text("B,2026-10-10T00:10:00Z,1,kW,good", "B,2026-10-10T01:10:00Z,2,kW,good"), dry=False, now=now)
+    assert (report.new, report.rejected_by, report.raw_floor) == (2, {}, None)
+    fresh = await run(db, source, text("B,2026-10-09T00:10:00Z,1,kW,good"), now=now)
+    assert fresh.rejected_by == {} and fresh.raw_floor is None
+
+
+async def test_the_guard_of_the_refresh_can_be_given_the_floor_the_caller_saw_before_it_wrote(db):
+    """`pending_drop_range(floor=...)`: rows written since lower `min(ts)`, which is what hid the dropped minutes in C1."""
+    source, ids, _ = await history_whose_raw_readings_were_dropped(db, newer_raw=True)
+    lo, hi = datetime(2026, 10, 1, 1, tzinfo=UTC), datetime(2026, 10, 1, 2, tzinfo=UTC)
+    assert await rollups.pending_drop_range(db, lo, hi) is not None
+    await insert_readings(db, ids["P1"], datetime(2026, 10, 1, 0, 59, tzinfo=UTC), 60, [1.0] * 5)  # what the import used to leave behind
+    assert await rollups.pending_drop_range(db, lo, hi) is None  # the hole: the minimum is now 00:59
+    assert await rollups.pending_drop_range(db, lo, hi, floor=datetime(2026, 10, 12, tzinfo=UTC)) is not None
+    assert await rollups.pending_drop_range(db, lo, hi, floor=None) is not None  # no raw reading at all: every minute lacks its raw data
+    assert await rollups.pending_drop_range(db, lo, hi, floor=datetime(2026, 10, 1, 0, 59, tzinfo=UTC)) is None
+    assert await rollups.pending_drop_range(db, lo, hi, floor=datetime(2026, 10, 1, 1, 0, 30, tzinfo=UTC)) is None  # 01:00 is not below 01:00:30's minute
+
+
+async def test_the_refresh_is_judged_against_the_floor_taken_before_the_first_write_when_the_summaries_reach_below_it(db, monkeypatch):
+    now = datetime(2026, 10, 21, 12, tzinfo=UTC)
+    source, ids, floor = await history_whose_raw_readings_were_dropped(db, newer_raw=True)
+    asked: list = []
+    real = rollups.pending_drop_range
+
+    async def spy(pool, lo, hi, **kwargs):
+        asked.append(kwargs)
+        return await real(pool, lo, hi, **kwargs)
+
+    monkeypatch.setattr(rollups, "pending_drop_range", spy)
+    report = await run(db, source, text("P1,2026-10-12T00:10:00Z,3,kW,good", "P1,2026-10-12T05:10:00Z,3,kW,good"), dry=False, now=now)
+    assert report.new == 2 and report.refresh_state == "done"
+    assert asked and all(kwargs == {"floor": floor} for kwargs in asked)  # the floor of before the run, not the run's own minimum
+
+
+async def test_without_summaries_below_the_floor_the_guard_reads_the_minimum_itself(db, monkeypatch):
+    """The rows such a run stores below the floor are backed by raw readings of their own, and the view's real-time part shows their
+    minutes (the watermark of a database that was never refreshed): a floor given to the guard would take them for lost ones."""
+    now = datetime(2026, 10, 21, 12, tzinfo=UTC)
+    source, ids = await make_world(db, {"A": ("active_power_kw", 1.0), "B": ("active_power_kw", 1.0)})
+    await insert_readings(db, ids["A"], datetime(2026, 10, 12, tzinfo=UTC), 60, [1.0] * 5)
+    asked: list = []
+    real = rollups.pending_drop_range
+
+    async def spy(pool, lo, hi, **kwargs):
+        asked.append(kwargs)
+        return await real(pool, lo, hi, **kwargs)
+
+    monkeypatch.setattr(rollups, "pending_drop_range", spy)
+    report = await run(db, source, text("B,2026-09-24T10:20:00Z,1,kW,good"), dry=False, now=now)
+    assert (report.new, report.refresh_state, report.raw_floor) == (1, "done", None) and asked == [{}]
+
+
 async def test_a_refresh_that_would_delete_history_is_not_run_and_the_report_says_so_in_true_words(db):
+    """The second layer: a row at or after the floor is stored, but the hour it lies in reaches minutes below the floor, so the
+    refresh is refused (the rows stay)."""
     now = datetime(2026, 10, 14, 12, tzinfo=UTC)
     source, ids = await make_world(db, {"P0": ("active_power_kw", 1.0), "P1": ("active_power_kw", 1.0)})
     await insert_readings(db, ids["P0"], datetime(2026, 10, 1, 1, tzinfo=UTC), 60, [float(i) for i in range(30)])
     await settle_rollups(db)
-    await db.execute("SELECT drop_chunks('readings', older_than => TIMESTAMPTZ '2026-10-10')")  # what the retention policy does
-    assert await stored(db) == 0
+    await db.execute("DELETE FROM readings WHERE ts < TIMESTAMPTZ '2026-10-01 01:20+00'")  # the oldest minutes lose their raw readings
     minutes = await db.fetchval("SELECT count(*) FROM readings_1m WHERE point_id = $1", ids["P0"])
-    assert minutes > 0
+    assert minutes == 30
 
     report = await run(db, source, text("P1,2026-10-01T01:45:00Z,1,kW,good"), dry=False, now=now)
     assert report.new == 1 and report.complete  # the row is stored
@@ -882,3 +997,124 @@ def test_the_module_runs_as_a_command_and_prints_its_help():
 def test_every_tag_of_the_sample_world_is_a_tag_of_the_sample_file():
     names = {line.split(",")[0] for line in SAMPLE.read_text().splitlines()[1:]}
     assert set(SAMPLE_TAGS) <= names
+
+
+# ---- energy counters that look wrong (I2): a warning in the check and in the import, never a refusal --------------------------------------
+
+
+def counter_file(tag: str, values: list[float]) -> bytes:
+    return text(*[f"{tag},2026-10-20T{hour:02d}:00:00Z,{value!r},kWh,good" for hour, value in enumerate(values)])
+
+
+async def test_a_counter_reading_far_too_big_is_a_warning_with_the_same_words_in_the_check_and_the_import_and_the_row_is_stored(db):
+    source, ids = await make_world(db, {"E": ("energy_kwh", 1.0), "P": ("active_power_kw", 1.0)})
+    body = counter_file("E", [100, 101, 1e15, 103, 104]) + b"P,2026-10-20T00:00:00Z,5,kW,good\nP,2026-10-20T01:00:00Z,1e15,kW,good\n"
+    dry = await run(db, source, body)
+    real = await run(db, source, body, dry=False)
+    assert same_but_for_the_flag(dry, real) and identity(real)
+    assert real.counter_warnings_total == 2 and real.rejected == 0 and real.new == 7  # nothing is blocked
+    assert real.counter_warnings == [
+        {"tag": "E", "ts": "2026-10-20T02:00:00+00:00", "previous": 101.0, "value": 1e15},
+        {"tag": "E", "ts": "2026-10-20T03:00:00+00:00", "previous": 1e15, "value": 103.0},
+    ]  # the power point's 1e15 is not a counter's
+    assert real.as_dict()["counter_warnings_total"] == 2 and len(real.as_dict()["counter_warnings"]) == 2
+    assert await stored(db) == 7
+    lines = importer.report_lines(real)
+    assert lines[0].startswith("Check these energy counter readings (2 of the file") and "E at 2026-10-20T02:00:00+00:00: 1e+15 after 101" in " ".join(lines)
+    assert "lower than the reading before it" in " ".join(lines) and "a step far bigger than the usual one" in " ".join(lines)
+
+
+async def test_a_clean_file_and_the_sample_file_have_no_counter_warning_and_the_fields_are_always_there(db):
+    source, _ = await make_world(db)
+    sample = await run(db, source, SAMPLE.read_bytes())
+    assert (sample.counter_warnings, sample.counter_warnings_total) == ([], 0)
+    assert sample.as_dict()["counter_warnings"] == [] and sample.as_dict()["counter_warnings_total"] == 0
+    assert not any("energy counter" in line for line in importer.report_lines(sample))
+
+
+async def test_the_counter_warnings_name_twenty_and_count_all_and_stay_out_of_the_audit_row_and_the_journal(db):
+    source, _ = await make_world(db, {"E": ("energy_kwh", 1.0)})
+    report = await run(db, source, counter_file("E", [float(2000 - 10 * i) for i in range(24)]), dry=False)
+    assert (len(report.counter_warnings), report.counter_warnings_total) == (importer.COUNTERS_SHOWN, 23)
+    assert "more" in importer.report_lines(report)[-1] and "3 more" in importer.report_lines(report)[-1]
+    detail = importer.audit_detail(report, "web")
+    assert "counter_warnings" not in json.dumps(detail) and "1990" not in json.dumps(detail)
+    event = (await journaled(db))[0]
+    assert "1990" not in json.dumps(dict(event), default=str)
+
+
+# ---- unknown tag names that look like known ones (M5) ---------------------------------------------------------------------------------------
+
+
+async def test_an_unknown_tag_with_a_character_outside_ascii_is_marked_in_the_list(db):
+    source, _ = await make_world(db, {"A": ("active_power_kw", 1.0)})
+    cyrillic = "".join(chr(code) for code in (0x410,))  # a Cyrillic capital A, which reads exactly like the tag "A"
+    long = "z" * 90 + chr(0xE4)
+    body = text(f"{cyrillic},2026-10-20T10:00:00Z,1,kW,good", "Plain.kWh,2026-10-20T10:00:00Z,1,kW,good", f"{long},2026-10-20T10:00:00Z,1,kW,good")
+    report = await run(db, source, body)
+    assert len(importer.clip_cell(long)) == importer.CELL_SHOWN
+    assert report.unknown_names == [cyrillic + " [non-ASCII]", "Plain.kWh", importer.clip_cell(long) + " [non-ASCII]"]  # the mark follows the clip
+
+
+# ---- the hours a batch refreshes are its own, not everything from its first row to its last (M6) -----------------------------------------------
+
+
+def test_add_hours_keeps_spans_of_touching_hours_only():
+    at = lambda d, h: datetime(2026, 10, d, h, tzinfo=UTC)  # noqa: E731
+    spans: list = []
+    importer.add_hours(spans, {at(1, 3), at(1, 4), at(1, 6)})
+    assert spans == [(at(1, 3), at(1, 4)), (at(1, 6), at(1, 6))]
+    importer.add_hours(spans, {at(1, 5), at(5, 0)})  # 05:00 touches both neighbours, October 5th stands alone
+    assert spans == [(at(1, 3), at(1, 6)), (at(5, 0), at(5, 0))]
+    importer.add_hours(spans, {at(1, 4)})
+    assert len(spans) == 2
+
+
+async def test_two_new_rows_weeks_apart_refresh_two_hours_not_the_weeks_between(db, monkeypatch):
+    source, ids = await make_world(db, {"A": ("active_power_kw", 1.0), "B": ("active_power_kw", 1.0)})
+    windows: list = []
+    real = rollups.refresh_range
+
+    async def spy(pool, lo, hi, now):
+        windows.append((lo, hi))
+        return await real(pool, lo, hi, now)
+
+    monkeypatch.setattr(rollups, "refresh_range", spy)
+    body = text("A,2026-09-24T10:20:00Z,1,kW,good", "B,2026-09-24T10:40:00Z,1,kW,good", "A,2026-10-12T10:20:00Z,2,kW,good", "A,2026-10-12T11:30:00Z,3,kW,good")
+    report = await run(db, source, body, dry=False)
+    assert report.new == 4 and report.refresh_state == "done"
+    assert windows == [
+        (datetime(2026, 9, 24, 10, tzinfo=UTC), datetime(2026, 9, 24, 11, tzinfo=UTC)),
+        (datetime(2026, 10, 12, 10, tzinfo=UTC), datetime(2026, 10, 12, 12, tzinfo=UTC)),  # two touching hours are one window
+    ]
+    assert report.refresh_days == 2
+
+
+async def test_a_batch_that_stored_nothing_new_refreshes_nothing(db, monkeypatch):
+    source, _ = await make_world(db, {"A": ("active_power_kw", 1.0)})
+    body = text("A,2026-09-24T10:20:00Z,1,kW,good")
+    await run(db, source, body, dry=False)
+    called: list = []
+
+    async def never(*args, **kwargs):
+        called.append(args)
+
+    monkeypatch.setattr(rollups, "refresh_range", never)
+    again = await run(db, source, body, dry=False)
+    assert (again.new, again.already, again.refresh_state) == (0, 1, "not_needed") and not called
+
+
+async def test_the_repair_refreshes_the_hours_of_every_accepted_row_not_the_span_between_them(db, monkeypatch):
+    source, _ = await make_world(db, {"A": ("active_power_kw", 1.0)})
+    body = text("A,2026-09-24T10:20:00Z,1,kW,good", "A,2026-10-12T10:20:00Z,2,kW,good")
+    await run(db, source, body, dry=False)
+    windows: list = []
+    real = rollups.refresh_range
+
+    async def spy(pool, lo, hi, now):
+        windows.append((lo, hi))
+        return await real(pool, lo, hi, now)
+
+    monkeypatch.setattr(rollups, "refresh_range", spy)
+    repaired = await run(db, source, body, dry=False, refresh_all=True)
+    assert repaired.new == 0 and repaired.refresh_state == "done" and len(windows) == 2 and repaired.refresh_days == 2

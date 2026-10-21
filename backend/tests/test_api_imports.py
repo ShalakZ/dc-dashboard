@@ -4,7 +4,7 @@ lifespan would set (the test client runs no lifespan), which is what proves that
 import asyncio
 import json
 import time
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -12,7 +12,7 @@ import pytest
 from auth_probe import silent_client
 from dcdash.api import imports as api_imports
 from dcdash.ingest import importer
-from helpers import login_as, make_role, wait_for
+from helpers import insert_readings, login_as, make_role, settle_rollups, wait_for
 from importer_helpers import HEADER, NOW, make_world, save_profile
 
 SAMPLE = Path(__file__).parent / "fixtures" / "sample_export.csv"
@@ -163,6 +163,37 @@ async def test_a_body_that_stalls_ends_at_the_time_limit(client, db, monkeypatch
     started = time.monotonic()
     answer = await client.post(f"/api/sources/{source}/import", params={"profile": "hourly"}, content=stalls(), headers=CSV)
     assert answer.status_code == 408 and "took too long" in answer.json()["detail"] and time.monotonic() - started < 10
+
+
+async def test_a_body_that_stops_coming_ends_at_the_idle_limit_and_gives_the_slot_back(client, db, monkeypatch):
+    """M4: one stalled upload held the one-upload slot (every other check and import got 409) for the whole 300 seconds."""
+    source, _ = await signed_in(client, db)
+    monkeypatch.setattr(importer, "READ_IDLE_SECONDS", 0.3)
+
+    async def stalls():
+        yield b"tag,timestamp,value\n"
+        await asyncio.sleep(30)
+        yield b"A,1,2\n"
+
+    started = time.monotonic()
+    answer = await client.post(f"/api/sources/{source}/import", params={"profile": "hourly"}, content=stalls(), headers=CSV)
+    assert answer.status_code == 408 and "stopped coming" in answer.json()["detail"] and time.monotonic() - started < 10
+    assert not api_imports._SLOT.locked()
+
+
+async def test_a_slow_upload_that_keeps_coming_is_not_cut_by_the_idle_limit(pooled, client, db, monkeypatch):
+    source, _ = await signed_in(client, db)
+    monkeypatch.setattr(importer, "READ_IDLE_SECONDS", 0.5)
+    lines = [(HEADER + "\n").encode(), *[f"M01.kWh,2026-10-20T0{hour}:00:00Z,{hour},kWh,good\n".encode() for hour in range(5)]]
+
+    async def trickle():
+        for line in lines:
+            await asyncio.sleep(0.2)
+            yield line
+
+    started = time.monotonic()
+    answer = await client.post(f"/api/sources/{source}/import", params={"profile": "hourly"}, content=trickle(), headers=CSV)
+    assert answer.status_code == 200 and answer.json()["rows_read"] == 5 and time.monotonic() - started > 1.0  # longer in all than the limit
 
 
 async def raw_post(app, client, source, parts, *, headers=()) -> tuple[int, dict]:
@@ -459,3 +490,41 @@ async def test_other_requests_are_answered_while_a_large_file_goes_in(pooled, cl
     assert answered >= 5, "the import held the event loop for the whole run"
     assert slowest < 1.5
     assert await db.fetchval("SELECT count(*) FROM readings") == 60_000
+
+
+async def test_after_the_retention_was_raised_an_import_of_the_dropped_days_stores_nothing_below_the_oldest_raw_reading_and_deletes_no_history(pooled, client, db):
+    """C1 through the route: the raw retention dropped the oldest chunk, the summaries are kept, the retention is then raised (the Storage
+    page allows it), and a Historian export reaches back into the dropped days. Before, it was stored and its refresh deleted every
+    other meter's minutes and hours there."""
+    await login_as(client, db, "admin")
+    await save_profile(db)
+    source, ids = await make_world(db, {"P0": ("active_power_kw", 1.0), "P1": ("active_power_kw", 1.0), "P2": ("active_power_kw", 1.0)})
+    floor = datetime(2026, 10, 12, tzinfo=UTC)
+    await insert_readings(db, ids["P0"], datetime(2026, 10, 1, 1, tzinfo=UTC), 60, [float(i) for i in range(30)])
+    await insert_readings(db, ids["P2"], floor, 60, [1.0] * 5)
+    await settle_rollups(db)
+    await db.execute("SELECT drop_chunks('readings', older_than => TIMESTAMPTZ '2026-10-10')")
+    summaries = (
+        await db.fetch("SELECT bucket, n FROM readings_1m WHERE point_id = $1 ORDER BY bucket", ids["P0"]),
+        await db.fetch("SELECT bucket, n FROM readings_1h WHERE point_id = $1 ORDER BY bucket", ids["P0"]),
+    )
+    assert summaries[0] and summaries[1]
+    body = csv(
+        "P1,2026-09-05T00:00:00Z,1,kW,good", "P1,2026-10-01T00:59:00Z,2,kW,good", "P1,2026-10-01T01:10:00Z,3,kW,good",
+        "P1,2026-10-12T00:10:00Z,4,kW,good",
+    )
+
+    control = await post(client, source, body)  # 30 days of retention: the two oldest rows are outside the window already
+    assert control.json()["rejected_by"] == {"older_than_raw_retention": 1, "older_than_stored_raw_readings": 2} and control.json()["new"] == 1
+
+    await db.execute("UPDATE settings SET value = jsonb_set(value, '{raw_retention_days}', '90') WHERE key = 'storage'")
+    dry = await post(client, source, body)
+    assert dry.status_code == 200 and dry.json()["rejected_by"] == {"older_than_stored_raw_readings": 3}  # the check says so before anything is stored
+    assert dry.json()["new"] == 1 and dry.json()["raw_floor"] == floor.isoformat() and await db.fetchval("SELECT count(*) FROM readings WHERE point_id = $1", ids["P1"]) == 0
+    real = await post(client, source, body, dry_run="0", expect=dry.json()["sha256"])
+    assert real.status_code == 200 and real.json()["rejected_by"] == {"older_than_stored_raw_readings": 3} and real.json()["new"] == 1
+    assert [row["ts"] for row in await db.fetch("SELECT ts FROM readings WHERE point_id = $1", ids["P1"])] == [datetime(2026, 10, 12, 0, 10, tzinfo=UTC)]
+    assert summaries == (
+        await db.fetch("SELECT bucket, n FROM readings_1m WHERE point_id = $1 ORDER BY bucket", ids["P0"]),
+        await db.fetch("SELECT bucket, n FROM readings_1h WHERE point_id = $1 ORDER BY bucket", ids["P0"]),
+    )

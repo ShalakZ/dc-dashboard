@@ -16,7 +16,12 @@ Every row of the file ends in exactly one place: new, already there, differing, 
 `rows_read = new + already + differing + rejected + unknown_rows`. A pair that appears twice in the file is de-duplicated here, over
 the whole file (`insert_readings` would drop the second copy silently inside a batch and count it as `already` across batches), which
 is also what makes the dry run and the real run agree. Nothing in a report, an audit row, a journal event or a log line carries a
-reading value, except the five `differing_samples` the report names for a person to look at.
+reading value, except the five `differing_samples` the report names for a person to look at, and the `counter_warnings` (a warning,
+never a refusal: the energy counter readings that fall or jump, with the value before them).
+
+A row before the oldest raw reading stored is refused (`older_than_stored_raw_readings`) when the minute rollup keeps minutes below
+that reading: the raw retention dropped the raw data and kept the summaries, and a raw row stored there would lower the floor so
+that a refresh deletes the summaries of the other meters. The floor is read once, before the first write.
 """
 import argparse
 import asyncio
@@ -26,9 +31,10 @@ import json
 import logging
 import math
 import re
+import statistics
 import sys
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -64,6 +70,7 @@ MAX_BLANK_LINES = 10_000  # blank lines allowed on top of the row limit before t
 MAX_ABS_VALUE = 1e15
 CHUNK_LINES = 10_000  # lines parsed and written together: one transaction
 READ_TIMEOUT_SECONDS = 300  # the whole upload, read by the route
+READ_IDLE_SECONDS = 30  # no byte for this long ends the upload sooner: one stalled client must not hold the one-upload slot for minutes
 PROBLEMS_SHOWN = 20
 UNKNOWN_SHOWN = 20
 SAMPLES_SHOWN = 5
@@ -73,9 +80,13 @@ QUALITY_TRACKED = 1_000  # distinct labels held while a file is read (a quality 
 OTHER_QUALITY = "other"
 PENDING_SHOWN = 20  # unrefreshed ranges an audit row or a journal event lists
 CANCEL_REFRESH_SECONDS = 30  # what the wrap-up of a cancelled run may spend on the rollup refresh before it records the ranges as pending
+COUNTERS_SHOWN = 20  # counter warnings the report names; the rest are counted
+COUNTER_JUMP_FACTOR = 100  # a step this many times the point's usual step ...
+COUNTER_JUMP_MIN = 1_000  # ... and bigger than this (kWh) is named: one reading written in Wh among kWh, or a spike
+NON_ASCII_MARK = " [non-ASCII]"  # after an unknown tag name with a character outside ASCII (a look-alike of a known tag reads the same)
 
 # The reason codes of a rejected row besides `normalise.Rejected`'s (the front end words them: lib/importReport.ts).
-MALFORMED = "malformed_line"  # an unbalanced quote, a line break inside a cell, too few or too many cells
+MALFORMED = "malformed_line"  # an unbalanced quote, a line break inside a cell, too few cells, or more cells than the header has
 BAD_TAG = "bad_tag"  # an empty tag, or one longer than MAX_TAG_CHARS
 EMPTY_VALUE = "empty_value"
 NOT_A_NUMBER = "not_a_number"
@@ -86,9 +97,10 @@ INTERVAL_ENERGY = "interval_energy_in_counter_point"
 DUPLICATE = "duplicate_in_file"
 CONFLICTING = "conflicting_duplicate_in_file"
 POINT_DELETED = "point_deleted"
+OLDER_THAN_RAW = "older_than_stored_raw_readings"
 
 REASON_TEXT = {  # for the command line; a browser words the codes itself
-    MALFORMED: "the line does not fit the header (an unbalanced quote, or too few or too many cells)",
+    MALFORMED: "the line does not fit the header (an unbalanced quote, a line break inside a cell, too few cells, or more cells than the header has)",
     BAD_TAG: f"the tag is empty or longer than {MAX_TAG_CHARS} characters",
     normalise.Rejected.NO_ZONE.value: "the time has no UTC offset and the profile names no zone",
     normalise.Rejected.NONEXISTENT.value: "this local time does not exist (the clocks went forward)",
@@ -101,10 +113,14 @@ REASON_TEXT = {  # for the command line; a browser words the codes itself
     OUT_OF_RANGE: "the value is beyond plus or minus 1e15",
     UNIT_DIFFERS: "the unit differs from the one the point's mapping converts from",
     UNIT_INVALID: "the unit is empty or not valid for the metric of the point's mapping",
-    INTERVAL_ENERGY: "energy per period cannot go into a point mapped as a running energy counter",
+    INTERVAL_ENERGY: "Energy per period cannot go into a point read as a running counter or as a power",
     DUPLICATE: "the same tag and time are earlier in the file with the same value",
     CONFLICTING: "the same tag and time are earlier in the file with another value (the first one is used)",
     POINT_DELETED: "the point was deleted while the file was being imported",
+    OLDER_THAN_RAW: (
+        "the raw readings before the oldest one stored were removed by the raw retention but their summaries are kept; storing raw "
+        "readings there would make a refresh delete the summaries of the other meters"
+    ),
 }
 
 _NUMBER = re.compile(r"[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?")
@@ -209,6 +225,7 @@ class Layout(NamedTuple):
     unit: int | None
     quality: int | None
     need: int  # the cells a data line must have to reach the tag, the time and the value
+    columns: int = MAX_COLUMNS  # the cells of the header: a data line with more is not this file's layout
 
 
 def _cells(text: str, delimiter: str) -> list[str]:
@@ -237,20 +254,24 @@ def resolve_layout(scan: PreScan, profile: ImportProfile) -> Layout:
     if len(cells) > MAX_COLUMNS:
         raise ImportRefused(f"the header line has {len(cells):,} columns; the limit is {MAX_COLUMNS}")
     names = [cell.strip().casefold() for cell in cells]
+    # A lone carriage return is a line end of an old Mac export: pre_scan cuts at line feeds only, so the whole file arrives as the header.
+    mac = " (is the file saved with old Mac line endings?)" if "\r" in header else ""
 
     def find(label: str, column: str) -> int:
         hits = [index for index, name in enumerate(names) if name == column.strip().casefold()]
         shown = ", ".join(f'"{clip_cell(cell.strip(), 40)}"' for cell in cells[:10]) + (", ..." if len(cells) > 10 else "")
         if not hits:
-            raise ImportRefused(f'the file has no column named "{clip_cell(column)}" (the {label} column of the profile); its columns are {shown}')
+            raise ImportRefused(
+                f'the file has no column named "{clip_cell(column)}" (the {label} column of the profile); its columns are {shown}{mac}'
+            )
         if len(hits) > 1:
-            raise ImportRefused(f'the file has {len(hits)} columns named "{clip_cell(column)}"; the {label} column of the profile must be one')
+            raise ImportRefused(f'the file has {len(hits)} columns named "{clip_cell(column)}"; the {label} column of the profile must be one{mac}')
         return hits[0]
 
     tag, time, value = find("tag", profile.tag), find("time", profile.time), find("value", profile.value)
     unit = find("unit", profile.unit) if profile.unit else None
     quality = find("quality", profile.quality) if profile.quality else None
-    return Layout(delimiter, tag, time, value, unit, quality, max(tag, time, value) + 1)
+    return Layout(delimiter, tag, time, value, unit, quality, max(tag, time, value) + 1, len(cells))
 
 
 # ---- the pure parser --------------------------------------------------------------------------------------------------------------
@@ -261,22 +282,21 @@ class PointInfo(NamedTuple):
     metric: str | None  # None: the point is not mapped
     scale: float | None
     check_unit: bool  # the mapping converts by one of the metric's unit factors, so a unit cell can be held against it
-    interval_energy: bool  # an interval profile against a point mapped as cumulative energy
+    interval_energy: bool  # an interval profile against a point mapped as a counter or as a power: the rows would be read as something else
 
 
 def point_info(point_id: int, metric: str | None, scale: float | None, reading: str) -> PointInfo:
     """A unit cell is only checked when the mapping's scale IS one of the unit table's factors: a live Modbus source maps a counter
-    with a CT-ratio scale (60, say) that no unit spelling gives, and its rows are not wrong for that."""
+    with a CT-ratio scale (60, say) that no unit spelling gives, and its rows are not wrong for that.
+
+    An interval profile (energy per period) is refused for every mapped metric except `custom`: a counter's maths would read each
+    period as a reset, and a power point is read as kW, so 25 kWh per quarter hour would show as 25 kW (four times too low). The
+    meter kind that sums periods is not built; an unmapped point has no metric to contradict."""
     check = False
     if metric is not None and scale is not None and metric != "custom":
         table = normalise.UNITS.get(metric)
         check = table is not None and any(math.isclose(scale, factor) for factor in table.values())
-    energy = False
-    if metric is not None and reading == "interval":
-        try:
-            normalise.refuse_interval_as_energy("interval", metric)
-        except normalise.NormaliseError:
-            energy = True
+    energy = metric is not None and metric != "custom" and reading == "interval"
     return PointInfo(point_id, metric, scale, check, energy)
 
 
@@ -289,6 +309,9 @@ class ParseContext:
     retention_days: int
     closed: frozenset[str] = frozenset()  # the closed billing months, "YYYY-MM"
     site_zone: ZoneInfo | None = None  # needed only when there are closed months
+    # Set when the rollups keep minutes older than the oldest raw reading stored before the run: a row before it is rejected, because
+    # storing it would lower that floor and let a refresh delete the summaries of the other meters (C1 of the adversarial pass).
+    reject_before: datetime | None = None
 
 
 class Kept(NamedTuple):
@@ -311,6 +334,7 @@ class ChunkResult:
     problems: list[tuple[int, str]] = field(default_factory=list)  # the first PROBLEMS_SHOWN: (line, reason)
     unknown_rows: int = 0
     unknown: dict[str, None] = field(default_factory=dict)  # the unknown tags in order of first appearance
+    echo: dict[str, tuple[str, str]] = field(default_factory=dict)  # the time and value text of each tag's last kept row (carries across chunks)
 
 
 def _read_time(cell: str, time_format: str) -> Any:
@@ -339,19 +363,28 @@ def _from_decimal_comma(cell: str) -> str | None:
     return None
 
 
-def parse_chunk(first_number: int, lines: Sequence[bytes], ctx: ParseContext, last: Mapping[str, datetime]) -> ChunkResult:
+def parse_chunk(
+    first_number: int, lines: Sequence[bytes], ctx: ParseContext, last: Mapping[str, datetime],
+    echo: Mapping[str, tuple[str, str]] | None = None,
+) -> ChunkResult:
     """Turn `lines` (the first is line `first_number` of the file) into rows. Pure, for the compute thread: it only READS its
-    arguments and returns a new object, including the new per-tag last-instant map. It does not de-duplicate (the loop does, over
-    the whole file) and it rejects a row for the first rule it breaks, in the order of the file's columns: line, tag, time, value,
-    unit. Never raises for bad input."""
+    arguments and returns a new object, including the new per-tag last-instant map (`last`) and the per-tag text of the last kept
+    row (`echo`, both carried from chunk to chunk). It does not de-duplicate (the loop does, over the whole file) and it rejects a
+    row for the first rule it breaks, in the order of the file's columns: line, tag, time, value, unit. Never raises for bad input.
+
+    A row with a zone to read its time in, whose time text and value text are those of the tag's previous kept row, is
+    `duplicate_in_file` before its time is read: the second copy of a line inside the repeated autumn hour would otherwise be read as
+    the second pass and shift every row after it by an hour. (An hourly export's own second pass of that hour, with the same value as
+    the first, is dropped the same way; it is counted, and its twin is stored.)"""
     layout, profile, points = ctx.layout, ctx.profile, ctx.points
     delimiter, tag_at, time_at, value_at = layout.delimiter, layout.tag, layout.time, layout.value
     unit_at, quality_at, need = layout.unit, layout.quality, layout.need
     interval = profile.reading == "interval"
     comma = profile.decimal == ","
     good = frozenset(profile.good_codes)
-    result = ChunkResult(last=dict(last))
+    result = ChunkResult(last=dict(last), echo=dict(echo or {}))
     resolved, kept, rejected, problems = result.last, result.kept, result.rejected, result.problems
+    repeated, zoned = result.echo, profile.zone is not None
     factors: dict[tuple[str, str], float | None] = {}  # the unit spellings seen, by (unit, metric)
 
     def reject(number: int, reason: str) -> None:
@@ -370,7 +403,7 @@ def parse_chunk(first_number: int, lines: Sequence[bytes], ctx: ParseContext, la
         except csv.Error:
             reject(number, MALFORMED)
             continue
-        if len(cells) > MAX_COLUMNS or len(cells) < need:
+        if len(cells) > layout.columns or len(cells) < need:
             reject(number, MALFORMED)
             continue
 
@@ -387,8 +420,11 @@ def parse_chunk(first_number: int, lines: Sequence[bytes], ctx: ParseContext, la
             reject(number, INTERVAL_ENERGY)
             continue
 
-        cell = cells[time_at].strip()
-        read = _read_time(cell, profile.time_format) if len(cell) <= MAX_TIME_CHARS else None
+        time_cell, value_cell = cells[time_at].strip(), cells[value_at].strip()
+        if zoned and repeated.get(tag) == (time_cell, value_cell):
+            reject(number, DUPLICATE)
+            continue
+        read = _read_time(time_cell, profile.time_format) if len(time_cell) <= MAX_TIME_CHARS else None
         if read is None:
             reject(number, normalise.Rejected.NOT_A_TIME.value)
             continue
@@ -407,12 +443,14 @@ def parse_chunk(first_number: int, lines: Sequence[bytes], ctx: ParseContext, la
         if outside is not None:
             reject(number, outside.value)
             continue
+        if ctx.reject_before is not None and moment < ctx.reject_before:
+            reject(number, OLDER_THAN_RAW)
+            continue
 
-        cell = cells[value_at].strip()
-        if not cell:
+        if not value_cell:
             reject(number, EMPTY_VALUE)
             continue
-        text_number = _from_decimal_comma(cell) if comma else cell
+        text_number = _from_decimal_comma(value_cell) if comma else value_cell
         if text_number is None or _NUMBER.fullmatch(text_number) is None:  # NaN, inf, 0x10, 1_000 and any non-ASCII digit end here
             reject(number, NOT_A_NUMBER)
             continue
@@ -445,6 +483,8 @@ def parse_chunk(first_number: int, lines: Sequence[bytes], ctx: ParseContext, la
                 label = clip_cell(normalise.quality(code)[1] or f"not_good:{code}", normalise.LABEL_MAX)
         month = moment.astimezone(ctx.site_zone).strftime("%Y-%m") if ctx.closed and ctx.site_zone is not None else None
         kept.append(Kept(number, tag, info.point_id, moment, value, quality, month, label))
+        if zoned:
+            repeated[tag] = (time_cell, value_cell)
     return result
 
 
@@ -474,6 +514,42 @@ def _dedupe(kept: list[Kept], seen: dict[int, tuple[float, int]], rejected: dict
         rejected[reason] = rejected.get(reason, 0) + 1
         problems.append((row.line, reason))
     return fresh
+
+
+_TIME_MASK = (1 << 56) - 1  # the low bits of a `_dedupe` key: the instant in whole microseconds since the epoch
+
+
+def counter_warnings(seen: Mapping[int, tuple[float, int]], energy: Mapping[int, str]) -> tuple[list[dict[str, Any]], int]:
+    """The rows of the file that look wrong in a running energy counter, from the file-wide map `_dedupe` filled: (the first
+    COUNTERS_SHOWN as {tag, ts, previous, value}, in time order, and how many there are). Pure, for the compute thread.
+
+    Per point mapped as `energy_kwh` (`energy` is point id -> tag) the rows of GOOD quality are put in time order and two things are
+    named: a value LOWER than the one before it, and a step bigger than COUNTER_JUMP_FACTOR times the point's usual step (the median
+    of its positive steps; the lower middle one, so that one spike among few steps cannot raise the bar it is measured against) and
+    bigger than COUNTER_JUMP_MIN. A reading stored once is never corrected by a second import and a counter is billed in full from
+    its first to its last value, so a spike (1e15) or one hour written in Wh among kWh would sit in the bill for good; this is only
+    a warning, because a counter does reset and a gap in the data is one big honest step. A series of one row has no step to judge,
+    and a power point is not a counter: it is never looked at."""
+    series: dict[int, list[tuple[int, float]]] = {}
+    for key, (value, quality) in seen.items():
+        point = key >> 56
+        if point in energy and quality == GOOD:
+            series.setdefault(point, []).append((key & _TIME_MASK, value))
+    found: list[tuple[int, int, float, float]] = []  # (microseconds, point, previous, value)
+    for point, rows in series.items():
+        rows.sort()
+        steps = [after[1] - before[1] for before, after in zip(rows, rows[1:])]
+        positive = [step for step in steps if step > 0]
+        usual = statistics.median_low(positive) if positive else None
+        for (_, before), (micros, value), step in zip(rows, rows[1:], steps):
+            if step < 0 or (usual is not None and step > COUNTER_JUMP_FACTOR * usual and step > COUNTER_JUMP_MIN):
+                found.append((micros, point, before, value))
+    found.sort(key=lambda item: item[:2])
+    shown = [
+        {"tag": clip_cell(energy[point]), "ts": (_EPOCH + timedelta(microseconds=micros)).isoformat(), "previous": before, "value": value}
+        for micros, point, before, value in found[:COUNTERS_SHOWN]
+    ]
+    return shown, len(found)
 
 
 # ---- the report -----------------------------------------------------------------------------------------------------------------------
@@ -510,8 +586,15 @@ class ImportReport:
     refresh_days: int = 0
     refresh_note: str | None = None
     refresh_pending: list[tuple[datetime, datetime]] = field(default_factory=list)  # UTC ranges whose rollups were not refreshed
+    counter_warnings: list[dict[str, Any]] = field(default_factory=list)  # a warning, never a refusal: see counter_warnings()
+    counter_warnings_total: int = 0
+    raw_floor: datetime | None = None  # the oldest raw reading before the run, when rows before it are refused (older_than_stored_raw_readings)
     complete: bool = True
     error: str | None = None
+    # The oldest raw reading the run saw BEFORE its first write (None: there was none), kept for the guard of the rollup refresh when
+    # the summaries reach below it: the rows a run stores lower `min(ts)`, which would hide the rollup minutes below the raw data it found.
+    floor_read: bool = False
+    floor_before: datetime | None = None
 
     @property
     def rejected(self) -> int:
@@ -551,6 +634,8 @@ class ImportReport:
             "rejected_by": dict(sorted(self.rejected_by.items())), "closed_months": dict(sorted(self.closed_months.items())),
             "bad_quality": dict(sorted(self.bad_quality.items())), "differing_samples": list(self.differing_samples),
             "problems": [{"line": line, "reason": reason} for line, reason in self.problems], "problems_total": self.rejected,
+            "counter_warnings": list(self.counter_warnings), "counter_warnings_total": self.counter_warnings_total,
+            "raw_floor": self.raw_floor.isoformat() if self.raw_floor else None,
             "refresh": {"state": self.refresh_state, "days": self.refresh_days, "note": self.refresh_note},
             "complete": self.complete, "error": self.error, "text": self.summary(),
         }
@@ -586,6 +671,23 @@ def report_lines(report: ImportReport) -> list[str]:
             f"{_plural(rows, 'row')} of the file {'has' if rows == 1 else 'have'} a quality other than good ({labels}); "
             "the new ones are stored as bad quality, which counts in no figure"
         )
+    if report.rejected_by.get(OLDER_THAN_RAW):
+        since = f"the oldest raw reading stored ({report.raw_floor:%Y-%m-%d %H:%M} UTC)" if report.raw_floor else "any raw reading stored (there is none)"
+        lines.append(
+            f"{_plural(report.rejected_by[OLDER_THAN_RAW], 'row')} of the file lie before {since}: the raw retention removed the readings "
+            "there but the minute and hourly summaries are kept, and storing raw readings there would make a refresh delete the summaries "
+            "of the other meters, so they are not stored"
+        )
+    if report.counter_warnings_total:  # a warning only: the rows are stored, and a stored reading is not corrected by a second import
+        lines.append(
+            f"Check these energy counter readings ({report.counter_warnings_total:,} of the file; they are stored as they are, "
+            "and a stored reading is not corrected by a second import):"
+        )
+        for warning in report.counter_warnings:
+            what = "lower than the reading before it" if warning["value"] < warning["previous"] else "a step far bigger than the usual one"
+            lines.append(f"  {warning['tag']} at {warning['ts']}: {warning['value']:g} after {warning['previous']:g} ({what})")
+        if report.counter_warnings_total > len(report.counter_warnings):
+            lines.append(f"  and {report.counter_warnings_total - len(report.counter_warnings):,} more")
     if report.refresh_note:
         lines.append(report.refresh_note)
     if report.problems:
@@ -600,6 +702,13 @@ def report_lines(report: ImportReport) -> list[str]:
 _TRY_LOCK = "SELECT pg_try_advisory_lock($1, 0)"
 _POINTS = "SELECT p.id, p.address, m.metric, m.scale FROM points p LEFT JOIN mappings m ON m.point_id = p.id WHERE p.source_id = $1"
 _CLOSED_MONTHS = "SELECT month FROM billing_closes WHERE reopened_at IS NULL"
+# The floor of the raw readings, read ONCE before the first write, and whether the minute rollup keeps minutes below it (the raw
+# retention dropped raw data, the summaries stay). No raw reading at all is a floor at infinity: every rollup minute lies below it.
+_RAW_FLOOR = "SELECT min(ts) FROM readings"
+_SUMMARIES_BELOW = (
+    "SELECT EXISTS (SELECT 1 FROM readings_1m WHERE bucket < coalesce(time_bucket(INTERVAL '1 minute', $1::timestamptz), 'infinity'::timestamptz))"
+)
+_NO_FLOOR = datetime.max.replace(tzinfo=UTC)
 # FOR KEY SHARE, in id order: the Undo of a tag list and the delete of a source take FOR UPDATE on the same rows, so neither can
 # remove a point under a batch. It does NOT stop a delete that commits BETWEEN two batches from leaving the earlier batches' readings
 # behind (readings have no foreign key, as for the live poll); that is the same trade the whole data path makes.
@@ -673,6 +782,19 @@ def refresh_horizon(now: datetime) -> datetime:
     return now - (timedelta(days=REFRESH_WINDOW_DAYS) - rollups.HOUR)
 
 
+def add_hours(spans: list[tuple[datetime, datetime]], hours: Iterable[datetime]) -> None:
+    """Add UTC hours (their start instants) to `spans` in place, as (first hour, last hour) spans of hours that touch. A file with
+    rows in a few hours therefore keeps a few spans however many chunks it has, and one with rows in every hour of a long range
+    keeps one."""
+    merged: list[tuple[datetime, datetime]] = []
+    for lo, hi in sorted([*spans, *((hour, hour) for hour in hours)]):
+        if merged and lo <= merged[-1][1] + rollups.HOUR:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+        else:
+            merged.append((lo, hi))
+    spans[:] = merged
+
+
 def refresh_windows(spans: Sequence[tuple[datetime, datetime]], now: datetime) -> list[tuple[datetime, datetime]]:
     """The ranges whose rollups an import has to refresh itself: the hours of the rows it changed (all the accepted rows, for a
     repair) that lie further back than the policies reach, merged where they touch and cut into pieces of at most
@@ -706,7 +828,10 @@ async def _refresh(pool: asyncpg.Pool, report: ImportReport, spans: Sequence[tup
         for at, (lo, hi) in enumerate(windows):
             where = f"{lo:%Y-%m-%d %H:%M} to {hi:%Y-%m-%d %H:%M} UTC"
             try:
-                unsafe = await rollups.pending_drop_range(pool, lo, hi)
+                unsafe = await (
+                    rollups.pending_drop_range(pool, lo, hi, floor=report.floor_before)
+                    if report.floor_read else rollups.pending_drop_range(pool, lo, hi)
+                )
                 if unsafe is not None:
                     trouble.append(f"{where}: {unsafe.removesuffix(', so nothing is written')}")
                     left.append((lo, hi))
@@ -755,9 +880,9 @@ async def _import(
     conn: asyncpg.Connection, pool: asyncpg.Pool, report: ImportReport, spans: list[tuple[datetime, datetime]], *, profile: ImportProfile,
     scan: PreScan, layout: Layout, now: datetime, refresh_all: bool,
 ) -> None:
-    """`spans` is the caller's list, so that a cancelled run's wrap-up still knows the times of the chunks that were committed: it
-    holds the times of the new rows of each chunk (of all the accepted rows older than the policies reach, for `refresh_all`), which
-    is what the rollups have to be refreshed over."""
+    """`spans` is the caller's list, so that a cancelled run's wrap-up still knows the hours of the chunks that were committed: it
+    holds, as (first hour, last hour) spans of touching hours, the hours the new rows of each chunk lie in (those of all the accepted
+    rows older than the policies reach, for `refresh_all`), which is what the rollups have to be refreshed over."""
     source_id, dry_run = report.source_id, report.dry_run
     horizon = refresh_horizon(now)
     quality: dict[str, int] = {}  # the bad-quality labels seen, folded into the report after each chunk (fold_quality)
@@ -771,15 +896,28 @@ async def _import(
             found["address"]: point_info(found["id"], found["metric"], found["scale"], profile.reading)
             for found in await conn.fetch(_POINTS, source_id)
         }
-        ctx = ParseContext(layout, profile, points, now, retention, closed, site)
+        # The floor of the raw readings BEFORE the first write: the guard of the refresh must judge the rollup minutes against the raw
+        # data that was there, not against the rows this run stores (they lower `min(ts)` and would hide the minutes below them). When
+        # the summaries reach below that floor, a row before it is refused here: stored, it would lower the floor for every later run.
+        floor = await conn.fetchval(_RAW_FLOOR)
+        reject_before = None
+        if await conn.fetchval(_SUMMARIES_BELOW, floor):
+            reject_before, report.raw_floor = floor or _NO_FLOOR, floor
+            # The guard of the refresh is then judged against this floor too (no row of the run lies below it, so the minutes below it
+            # are the summaries that lost their raw readings). Without summaries below the floor there is nothing to protect, and the
+            # rows a run stores below it are backed by raw readings of their own: the guard asks for the minimum itself, because the
+            # view's real-time part (before the policy's first refresh) shows those minutes and would have them taken for lost ones.
+            report.floor_read, report.floor_before = True, floor
+        ctx = ParseContext(layout, profile, points, now, retention, closed, site, reject_before)
         seen: dict[int, tuple[float, int]] = {}
         unknown_seen: set[str] = set()
         last: dict[str, datetime] = {}
+        echo: dict[str, tuple[str, str]] = {}
         start, total = scan.header + 1, len(scan.lines)
         while start < total:
             line = start + 1
             stop = min(start + CHUNK_LINES, total)
-            parsed = await compute.run(parse_chunk, line, scan.lines[start:stop], ctx, last)
+            parsed = await compute.run(parse_chunk, line, scan.lines[start:stop], ctx, last, echo)
             rejected, problems = dict(parsed.rejected), list(parsed.problems)
             fresh = _dedupe(parsed.kept, seen, rejected, problems)
             stored = await _store_chunk(conn, source_id, fresh, dry_run)
@@ -793,7 +931,7 @@ async def _import(
                 if tag not in unknown_seen:
                     unknown_seen.add(tag)
                     if len(report.unknown_names) < UNKNOWN_SHOWN:
-                        report.unknown_names.append(clip_cell(tag))
+                        report.unknown_names.append(clip_cell(tag) + ("" if tag.isascii() else NON_ASCII_MARK))
             report.unknown_total = len(unknown_seen)
             for reason, count in rejected.items():
                 report.rejected_by[reason] = report.rejected_by.get(reason, 0) + count
@@ -819,14 +957,23 @@ async def _import(
                     report.differing_samples.append({
                         "tag": clip_cell(tags.get(sample["point_id"], "")), "ts": sample["ts"], "stored": sample["stored"], "file": sample["resent"],
                     })
+            # The hours to refresh are the hours the batch's rows lie in, not everything from its first row to its last: two new rows
+            # a month apart are two hours of work, not a month of it. The store says only where its new rows begin and end, so a batch
+            # that stored any new row contributes the hours of its accepted rows within that range (a superset of the new rows' hours).
             if refresh_all and not dry_run:  # the repair: the rows that were already there are in the rollups' blind spot too
-                old = [row.ts for row in stored.accepted if row.ts < horizon]
-                if old:
-                    spans.append((min(old), max(old)))
+                hours = {rollups.hour_floor(row.ts) for row in stored.accepted if row.ts < horizon}
             elif stored.first_new is not None and stored.last_new is not None:
-                spans.append((stored.first_new, stored.last_new))
-            last, start, line = parsed.last, stop, None
+                low, high = rollups.hour_floor(stored.first_new), stored.last_new
+                hours = {hour for hour in (rollups.hour_floor(row.ts) for row in stored.accepted if low <= row.ts <= high) if hour < horizon}
+            else:
+                hours = set()
+            if hours:
+                add_hours(spans, hours)
+            last, echo, start, line = parsed.last, parsed.echo, stop, None
             await asyncio.sleep(0)  # let the other requests in between two chunks
+        energy = {info.point_id: tag for tag, info in points.items() if info.metric == "energy_kwh"}
+        if energy and seen:
+            report.counter_warnings, report.counter_warnings_total = await compute.run(counter_warnings, seen, energy)
     except asyncio.CancelledError:
         raise
     except Exception as exc:

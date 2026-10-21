@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import func, select, text
@@ -99,6 +100,80 @@ def require_any_permission(*ids: str, own_session: bool = False) -> Callable[...
     dependency.permissions = ids
     dependency.mode = "any"
     return dependency
+
+
+# ---- the same-site rule for a route that takes a raw body -----------------------------------------------------------------------
+
+# This is `display._comes_from_another_site` (the rule of the display claim), kept as a copy of its own: display.py may take only
+# `get_db` from this module and no other module may import display.py (tests/test_display_credential.py walls both), so the two
+# cannot share one. tests/test_api_same_site.py compares them over a table of header sets, so the copies cannot drift apart.
+_DEFAULT_PORT = {"http": 80, "https": 443}
+ANOTHER_SITE = "this can only be sent from the dashboard itself, not from another page; open the dashboard and do it there"
+
+
+def _authority(scheme: str, hostname: str | None, port: int | None) -> str | None:
+    """host[:port] in one spelling: lower case (urlsplit does that), IPv6 in brackets, the scheme's default port dropped."""
+    if not hostname:
+        return None
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    return host if port is None or port == _DEFAULT_PORT[scheme] else f"{host}:{port}"
+
+
+def _origin_parts(origin: str) -> tuple[str, str] | None:
+    """The (scheme, host:port) an Origin header names, None when it is not a plain http(s) origin (`null`, no scheme, junk)."""
+    try:
+        parts = urlsplit(origin)
+        scheme, port = parts.scheme.lower(), parts.port
+    except ValueError:
+        return None
+    if scheme not in _DEFAULT_PORT or parts.username is not None or parts.password is not None:
+        return None
+    if parts.path or parts.query or parts.fragment:
+        return None
+    authority = _authority(scheme, parts.hostname, port)
+    return None if authority is None else (scheme, authority)
+
+
+def _is_tls(request: Request) -> bool:
+    """As `auth._is_https` (auth imports this module, so it cannot be imported here): the proxy's X-Forwarded-Proto is trusted
+    because only Caddy can reach the api service."""
+    return request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").lower() == "https"
+
+
+def _host_authority(request: Request) -> str | None:
+    host = request.headers.get("host")
+    if not host:
+        return None
+    try:
+        parts = urlsplit("//" + host)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.username is not None or parts.password is not None or parts.path or parts.query or parts.fragment:
+        return None
+    return _authority("https" if _is_tls(request) else "http", parts.hostname, port)
+
+
+def comes_from_another_site(request: Request) -> bool:
+    """The CSRF rule: headers a browser sets itself are judged (`Sec-Fetch-Site` same-site or cross-site, an `Origin` that is not the
+    request's own); a request without them (curl, a script, the import command, an old browser) passes."""
+    if request.headers.get("sec-fetch-site", "").strip().lower() in ("cross-site", "same-site"):
+        return True
+    origin = request.headers.get("origin")
+    if origin is None:
+        return False
+    named, own = _origin_parts(origin), _host_authority(request)
+    # The scheme counts: https://host is another origin than http://host. The request's scheme is the one the proxy says
+    # (X-Forwarded-Proto on a TLS install), the host is the Host header the proxy passes through unchanged.
+    return named is None or own is None or named != ("https" if _is_tls(request) else "http", own)  # `Origin: null` is different
+
+
+async def refuse_another_site(request: Request) -> None:
+    """A dependency for a route that takes a raw file as its body (an import, a tag list, the undo of a tag list); put it AFTER the
+    route's permission gate. The sign-in cookie is SameSite=Strict, which keeps out another SITE only: a page on another port of this
+    host, or on a sibling subdomain, is the same site, and a plain-text (or typeless) body is sent without a preflight."""
+    if comes_from_another_site(request):
+        raise HTTPException(403, ANOTHER_SITE)
 
 
 async def notify(db: AsyncSession, channel: str, payload: str = "") -> None:

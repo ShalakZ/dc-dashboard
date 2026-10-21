@@ -10,7 +10,7 @@ import pytest
 
 from dcdash.connectors.base import BAD, GOOD
 from dcdash.ingest import importer
-from importer_helpers import HEADER, NOW, POINTS, make_profile, parse, points_for, reasons
+from importer_helpers import HEADER, NOW, POINTS, make_profile, parse, points_for, reasons, scan_of
 
 T = "2026-10-20T10:00:00Z"
 
@@ -233,7 +233,18 @@ def test_too_few_and_too_many_cells_are_problem_lines():
     assert reasons(one("P.kW")) == {importer.MALFORMED: 1}
     assert reasons(one("," * 60)) == {importer.MALFORMED: 1}
     assert reasons(one(f"P.kW,{T},1," + ",".join(["x"] * 48))) == {importer.MALFORMED: 1}  # 51 cells
-    assert one(f"P.kW,{T},1," + ",".join(["x"] * 47), profile=make_profile(unit=None, quality=None)).kept  # 50 are fine
+    wide = ",".join(["tag", "timestamp", "value", *[f"c{i}" for i in range(47)]])  # a header of 50 columns
+    assert parse([f"P.kW,{T},1," + ",".join(["x"] * 47)], header=wide, profile=make_profile(unit=None, quality=None)).kept  # 50 are fine
+
+
+def test_a_line_with_more_cells_than_the_header_is_not_this_files_layout():
+    """A row `A,...,1,kW,good,extra` used to be stored with its extra cell ignored: it is the sign of a shifted column (a comma in a
+    cell nobody quoted), so its value cannot be trusted. A header with a trailing delimiter makes the width the header's."""
+    assert reasons(one(f"P.kW,{T},1,kW,good,extra")) == {importer.MALFORMED: 1}
+    assert not one(f"P.kW,{T},1,kW,good,extra").kept
+    assert one(f"P.kW,{T},1,kW,good").kept and one(f"P.kW,{T},1,kW").kept  # the header's own width, or fewer cells down to the needed ones
+    trailing = parse([f"P.kW,{T},1,kW,good,"], header=HEADER + ",")
+    assert len(trailing.kept) == 1 and not trailing.rejected
 
 
 def test_a_line_that_stops_before_the_optional_columns_is_read_with_them_empty():
@@ -321,11 +332,13 @@ def test_an_interval_reading_is_moved_to_the_start_of_its_period_when_stamped_at
     assert one(f"P.kW,{T},5,kW,good", profile=start).kept[0].ts == datetime(2026, 10, 20, 10, 0, tzinfo=UTC)
 
 
-def test_an_interval_profile_against_a_cumulative_energy_point_rejects_every_row_of_it():
+def test_an_interval_profile_against_a_counter_or_a_power_point_rejects_every_row_of_it():
     end = make_profile(reading="interval", period_seconds=3600, stamp="end")
-    rows = [f"P.kWh,{T},5,kWh,good", f"P.Wh,{T},5,Wh,good", f"P.kW,{T},5,kW,good", f"P.raw,{T},5,kWh,good"]
+    rows = [f"P.kWh,{T},5,kWh,good", f"P.Wh,{T},5,Wh,good", f"P.kW,{T},5,kW,good", f"P.raw,{T},5,kWh,good", f"P.custom,{T},5,furlong,good"]
     result = parse(rows, profile=end, points=points_for("interval"))
-    assert reasons(result) == {importer.INTERVAL_ENERGY: 2} and len(result.kept) == 2
+    # Energy per period is read as something else by a counter (every period a reset) and by a power (25 kWh per quarter hour as 25
+    # kW): refused for every mapped metric but `custom`; a point nothing is mapped to has no metric to contradict.
+    assert reasons(result) == {importer.INTERVAL_ENERGY: 3} and [row.tag for row in result.kept] == ["P.raw", "P.custom"]
     assert reasons(parse(rows, profile=make_profile(), points=points_for("counter"))) == {}  # a counter profile has no such refusal
 
 
@@ -383,3 +396,151 @@ def test_random_text_never_raises_and_every_line_is_accounted_for():
         assert accounted(result) == result.lines == scan.rows
         assert all(isinstance(row.value, float) and abs(row.value) <= importer.MAX_ABS_VALUE for row in result.kept)
         assert all(row.ts.tzinfo is not None and row.ts.utcoffset() == timedelta(0) for row in result.kept)
+
+
+# ---- a line repeated inside the repeated autumn hour (M1) ---------------------------------------------------------------------------
+
+
+BERLIN = make_profile(unit=None, quality=None, zone="Europe/Berlin")
+AUTUMN = datetime(2026, 10, 26, 12, tzinfo=UTC)
+# 2026-10-25: at 03:00 the clocks went back to 02:00, so 02:00 to 02:59 happened twice. An export of every 15 minutes writes that hour twice.
+FOLD = [
+    "01:45,1", "02:00,2", "02:15,3", "02:30,4", "02:45,5", "02:00,6", "02:15,7", "02:30,8", "02:45,9", "03:00,10",
+]
+FOLD_UTC = [
+    datetime(2026, 10, 24, 23, 45, tzinfo=UTC), datetime(2026, 10, 25, 0, 0, tzinfo=UTC), datetime(2026, 10, 25, 0, 15, tzinfo=UTC),
+    datetime(2026, 10, 25, 0, 30, tzinfo=UTC), datetime(2026, 10, 25, 0, 45, tzinfo=UTC), datetime(2026, 10, 25, 1, 0, tzinfo=UTC),
+    datetime(2026, 10, 25, 1, 15, tzinfo=UTC), datetime(2026, 10, 25, 1, 30, tzinfo=UTC), datetime(2026, 10, 25, 1, 45, tzinfo=UTC),
+    datetime(2026, 10, 25, 2, 0, tzinfo=UTC),
+]
+
+
+def fold(lines: list[str], **kw):
+    return parse([f"P.kW,2026-10-25T{line}" for line in lines], header="tag,timestamp,value", profile=BERLIN, now=AUTUMN, **kw)
+
+
+def test_the_fold_without_a_repeated_line_reads_as_two_passes():
+    clean = fold(FOLD)
+    assert [row.ts for row in clean.kept] == FOLD_UTC and not clean.rejected
+
+
+def test_a_line_the_export_repeated_inside_the_fold_is_a_duplicate_and_shifts_nothing_after_it():
+    """Before: the copy was read as the second pass (01:30Z), then every first-pass row after it as one hour late."""
+    repeated = FOLD[:4] + [FOLD[3]] + FOLD[4:]
+    result = fold(repeated)
+    assert [row.ts for row in result.kept] == FOLD_UTC
+    assert reasons(result) == {importer.DUPLICATE: 1} and result.problems == [(6, importer.DUPLICATE)]
+    # the copy is a duplicate whether or not its first line came in the same chunk: the last time and value text of each tag are carried
+    lines = [f"P.kW,2026-10-25T{line}" for line in repeated]
+    scan = scan_of(*lines, header="tag,timestamp,value")
+    ctx = importer.ParseContext(importer.resolve_layout(scan, BERLIN), BERLIN, POINTS, AUTUMN, 30)
+    body = scan.lines[scan.header + 1:]
+    first = importer.parse_chunk(2, body[:4], ctx, {})
+    second = importer.parse_chunk(6, body[4:], ctx, first.last, first.echo)
+    assert [row.ts for row in first.kept + second.kept] == FOLD_UTC and reasons(second) == {importer.DUPLICATE: 1}
+    assert first.echo == {"P.kW": ("2026-10-25T02:30", "4")}
+    assert importer.parse_chunk(6, body[4:], ctx, first.last).rejected  # without the carried text the copy is read as a second pass and the real second pass fails
+
+
+def test_the_same_time_with_another_value_is_not_the_repeat_of_a_line():
+    result = fold(["01:45,1", "02:30,4", "02:30,5"])  # two passes through the repeated hour, one hour apart
+    assert [row.ts.hour for row in result.kept] == [23, 0, 1] and not result.rejected
+
+
+def test_an_hourly_second_pass_with_the_value_of_the_first_is_dropped_as_a_repeat_and_counted():
+    """The rule cannot tell a repeated line from a second pass at an hourly cadence when the values agree: the first is stored, the
+    other is counted as a duplicate (the report shows it). With another value, both are stored."""
+    same = fold(["01:00,1", "02:00,5", "02:00,5", "03:00,6"])
+    assert [row.ts.hour for row in same.kept] == [23, 0, 2] and reasons(same) == {importer.DUPLICATE: 1}
+    different = fold(["01:00,1", "02:00,5", "02:00,6", "03:00,7"])
+    assert [row.ts.hour for row in different.kept] == [23, 0, 1, 2] and not different.rejected
+
+
+def test_the_repeat_rule_is_for_a_profile_with_a_zone_and_leaves_the_others_to_the_dedupe_of_the_file():
+    lines = [f"P.kW,{T},5,kW,good", f"P.kW,{T},5,kW,good"]
+    kept = parse(lines).kept
+    assert len(kept) == 2  # no zone: both are kept here, and the loop's file-wide dedupe rejects the second
+    rejected: dict[str, int] = {}
+    assert len(importer._dedupe(kept, {}, rejected, [])) == 1 and rejected == {importer.DUPLICATE: 1}
+    other_tag = parse([f"P.kW,{T},5,kW,good", f"P.kWh,{T},5,kWh,good"], profile=make_profile(zone="Europe/Berlin"))
+    assert len(other_tag.kept) == 2  # the same text for another tag is no repeat
+
+
+def test_a_rejected_line_does_not_make_its_copy_a_duplicate():
+    result = parse([f"P.kW,{T},abc,kW,good", f"P.kW,{T},abc,kW,good"], profile=make_profile(zone="Europe/Berlin"))
+    assert reasons(result) == {importer.NOT_A_NUMBER: 2}  # the copy of a bad row is bad for the same reason
+
+
+# ---- energy counters that look wrong (I2) --------------------------------------------------------------------------------------------------
+
+
+def series(points: dict[int, list[float]], *, quality: int = GOOD) -> dict[int, tuple[float, int]]:
+    """A `_dedupe` map: one reading an hour for each point, from 2026-10-20 00:00."""
+    seen = {}
+    for point, values in points.items():
+        for hour, value in enumerate(values):
+            micros = (datetime(2026, 10, 20, tzinfo=UTC) + timedelta(hours=hour) - importer._EPOCH) // timedelta(microseconds=1)
+            seen[(point << 56) | micros] = (value, quality)
+    return seen
+
+
+def named(points: dict[int, list[float]], **kw):
+    return importer.counter_warnings(series(points, **kw), {point: f"E{point}" for point in points})
+
+
+def pairs(found) -> list[tuple[float, float]]:
+    return [(warning["previous"], warning["value"]) for warning in found[0]]
+
+
+def test_one_reading_far_too_big_in_a_counter_is_named_and_so_is_the_drop_after_it():
+    found = named({1: [100, 101, 1e15, 103]})
+    assert pairs(found) == [(101, 1e15), (1e15, 103)] and found[1] == 2  # the spike row itself is named, the lower row after it too
+    assert found[0][0] == {"tag": "E1", "ts": "2026-10-20T02:00:00+00:00", "previous": 101, "value": 1e15}
+
+
+def test_one_hour_written_in_wh_among_kwh_is_named():
+    found = named({1: [100, 101, 102000, 103, 104]})
+    assert pairs(found) == [(101, 102000), (102000, 103)]
+
+
+def test_a_counter_that_goes_down_is_named():
+    assert pairs(named({1: [100, 101, 99.5, 100.5, 101.5]})) == [(101, 99.5)]
+
+
+def test_a_clean_counter_and_a_flat_one_have_no_warning():
+    assert named({1: [100, 101, 103, 106, 110], 2: [5, 5, 5, 5], 3: [7]}) == ([], 0)  # a series of one row has no step to judge
+
+
+def test_a_step_is_big_only_when_it_is_over_100_times_the_usual_one_and_over_1000():
+    usual = [10 * i for i in range(10)]  # steps of 10 (the usual step)
+    assert named({1: [*usual, usual[-1] + 1000]}) == ([], 0)  # exactly 100 times the usual step and exactly 1000: not over either
+    assert named({1: [*usual, usual[-1] + 1001]})[1] == 1  # over both
+    small = [float(i) for i in range(10)]  # steps of 1: 900 is over 100 times the usual step, and under 1000
+    assert named({1: [*small, small[-1] + 900]}) == ([], 0)
+    assert named({1: [*small, small[-1] + 1000.5]})[1] == 1
+
+
+def test_one_honest_big_step_among_many_is_named_and_that_is_all_it_costs():
+    """A gap in the export (a day of consumption in one step) is a big step: the rule names it, and nothing is blocked. The check is
+    a warning for a person to look at, so a false alarm costs a look."""
+    values = [float(10 * i) for i in range(12)]
+    values += [values[-1] + 5_000, values[-1] + 5_010, values[-1] + 5_020]
+    assert pairs(named({1: values})) == [(110.0, 5110.0)]
+
+
+def test_a_counter_with_two_readings_cannot_be_compared_with_its_usual_step():
+    assert named({1: [100, 1e15]}) == ([], 0)  # one step, and it is its own median: the limit of judging a file against itself
+
+
+def test_a_reading_of_bad_quality_is_not_part_of_the_series():
+    assert named({1: [100, 1e15, 101, 102]}, quality=BAD) == ([], 0)
+
+
+def test_only_the_points_mapped_as_a_counter_are_looked_at_and_the_first_twenty_are_named_in_time_order():
+    seen = series({1: [100, 99, 98, 97], 2: [100, 101, 1e15, 3], 7: [5, 4, 3, 2]})
+    shown, total = importer.counter_warnings(seen, {1: "E1", 2: "E2"})  # point 7 is a power point: not in the map
+    assert total == 5 and [w["tag"] for w in shown] == ["E1", "E1", "E2", "E1", "E2"]  # by time, then by point
+    assert [w["ts"] for w in shown] == sorted(w["ts"] for w in shown)
+    many = series({1: [float(1000 - 10 * i) for i in range(40)]})
+    shown, total = importer.counter_warnings(many, {1: "E1"})
+    assert (len(shown), total) == (importer.COUNTERS_SHOWN, 39)

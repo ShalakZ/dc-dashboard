@@ -6,7 +6,8 @@ lose one another's change and the cap of MAX_PROFILES cannot be passed twice.
 
 The import route (`POST /api/sources/{id}/import`) takes the file itself as the request body, so no multipart parser is needed. Its
 checks run in an order that keeps the cheap and the pool-free ones first (the isolation probes, which run without a database pool,
-must stop at one of them): the content type, the query, the source and the profile (read through the request's session, which is
+must stop at one of them): the permission gate, the same-site rule (a plain-text body needs no preflight, and SameSite=Strict keeps
+out another site, not another port of this host), the content type, the query, the source and the profile (read through the request's session, which is
 then committed so that it holds no transaction during a long upload), the declared size, the capped body, the pre-scan, the SHA-256
 a real import must repeat from its dry run, and only then the pool. The work itself is `ingest/importer.py`.
 """
@@ -21,7 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import ClientDisconnect
 
-from dcdash.api.deps import current_user, get_db, require_permission
+from dcdash.api.deps import current_user, get_db, refuse_another_site, require_permission
 from dcdash.api.sources import get_source
 from dcdash.core import compute
 from dcdash.core.audit import audit, audit_change, audit_pool
@@ -122,13 +123,23 @@ def _too_large() -> HTTPException:
 
 
 async def _read_body(request: Request) -> bytes:
-    """The request body, read in a loop under a hard cap and one overall time limit: a body that goes on for ever is cut at the
-    cap, one that stalls ends at the limit, and a client that goes away mid-upload is a 400 (not an unhandled error)."""
+    """The request body, read in a loop under a hard cap, one overall time limit and a limit on the wait for each piece: a body that
+    goes on for ever is cut at the cap, a slow one ends at the overall limit, one that stops coming ends sooner (a stalled client
+    holds the one-upload slot, which every other check and import is refused for), and a client that goes away mid-upload is a 400
+    (not an unhandled error)."""
     chunks: list[bytes] = []
     total = 0
     try:
         async with asyncio.timeout(importer.READ_TIMEOUT_SECONDS):
-            async for chunk in request.stream():
+            stream = aiter(request.stream())
+            while True:
+                try:
+                    async with asyncio.timeout(importer.READ_IDLE_SECONDS):
+                        chunk = await anext(stream)
+                except StopAsyncIteration:
+                    break
+                except TimeoutError:
+                    raise HTTPException(408, "the upload stopped coming; check the connection and send the file again") from None
                 total += len(chunk)
                 if total > importer.MAX_BYTES:
                     raise _too_large()
@@ -140,7 +151,9 @@ async def _read_body(request: Request) -> bytes:
     return b"".join(chunks)
 
 
-@router.post("/sources/{source_id}/import", dependencies=[Depends(require_permission("readings.import"))])
+@router.post(
+    "/sources/{source_id}/import", dependencies=[Depends(require_permission("readings.import")), Depends(refuse_another_site)]
+)
 async def import_readings(
     source_id: int,
     request: Request,
