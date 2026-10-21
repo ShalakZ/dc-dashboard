@@ -167,13 +167,45 @@ def test_an_empty_value_is_its_own_reason():
     assert reasons(one(f"P.kW,{T},   ,kW,good")) == {importer.EMPTY_VALUE: 1}
 
 
-def test_a_decimal_comma_profile_reads_grouped_numbers():
-    european = make_profile(decimal=",", delimiter=";")
-    lines = [f'P.kW;{T};"{cell}";kW;good' for cell in ("1.234,5", "1 234,5", "1" + chr(0xA0) + "234,5", "1" + chr(0x202F) + "234,5", "12,5", "-0,25")]
-    kept = parse(lines, profile=european, header=HEADER.replace(",", ";")).kept
-    assert [row.value for row in kept] == [1234.5, 1234.5, 1234.5, 1234.5, 12.5, -0.25]
-    assert reasons(parse([f"P.kW;{T};1.2.3;kW;good"], profile=european, header=HEADER.replace(",", ";"))) == {}  # 1.2.3 is 123 here: dots are grouping
-    assert reasons(parse([f"P.kW;{T};1,2,3;kW;good"], profile=european, header=HEADER.replace(",", ";"))) == {importer.NOT_A_NUMBER: 1}
+# A decimal-comma profile cannot use the comma as its delimiter, so these files are semicolon-separated.
+EUROPEAN = dict(profile=make_profile(decimal=",", delimiter=";"), header=HEADER.replace(",", ";"))
+NO_BREAK, NARROW = chr(0xA0), chr(0x202F)
+
+
+def european(cells):
+    return parse([f'P.kW;{T};"{cell}";kW;good' for cell in cells], **EUROPEAN)
+
+
+@pytest.mark.parametrize(
+    "cell, value",
+    [
+        ("1.234,5", 1234.5), ("1 234,5", 1234.5), (f"1{NO_BREAK}234,5", 1234.5), (f"1{NARROW}234,5", 1234.5), ("12,5", 12.5), ("-0,25", -0.25),
+        ("1234,5", 1234.5), ("1.234.567,89", 1234567.89), ("-12 345,6", -12345.6), ("1.234", 1234.0), ("0,001", 0.001), ("0", 0.0),
+        (",5", 0.5), ("5,", 5.0), ("1,5e3", 1500.0), ("1e3", 1000.0),
+    ],
+)
+def test_a_decimal_comma_profile_reads_the_numbers_a_decimal_comma_export_writes(cell, value):
+    result = european([cell])
+    assert [row.value for row in result.kept] == [value] and result.rejected == {}
+
+
+@pytest.mark.parametrize(
+    "cell",
+    [
+        "1.2.3",       # not groups of three
+        "12.5", "0.001", "1,234.5", "7.25", "1234.5",  # what a dot-decimal export writes: with the dots dropped these would be wrong by powers of ten
+        "1.2345,6", "1234.567", "01.234", "1.23", "1 2", "1.234,5,6", "1,234,567", "1,2,3", "1.234e3", "1 234.5",
+    ],
+)
+def test_a_decimal_comma_profile_refuses_what_it_could_only_misread(cell):
+    result = european([cell])
+    assert result.rejected == {importer.NOT_A_NUMBER: 1} and result.kept == []
+
+
+def test_a_dot_decimal_profile_keeps_its_own_rules_and_does_not_know_groups():
+    for cell in ("1.234,5", "1 234.5", "1,234.5"):
+        assert reasons(one(f'P.kW,{T},"{cell}",kW,good')) == {importer.NOT_A_NUMBER: 1}
+    assert one(f"P.kW,{T},1234.5,kW,good").kept[0].value == 1234.5
 
 
 # ---- the shape of a line ------------------------------------------------------------------------------------------------------------------

@@ -146,9 +146,28 @@ async def test_a_bad_name_in_the_path_is_refused_in_words(client, db, name):
 
 
 @pytest.mark.parametrize("body", [[1, 2], "text", 5, None])
-async def test_a_body_that_is_not_an_object_is_a_422(client, db, body):
+async def test_a_body_that_is_not_an_object_is_a_422_with_one_sentence(client, db, body):
     await login_as(client, db)
-    assert (await client.put(f"{URL}/x", json=body)).status_code == 422
+    refused = await client.put(f"{URL}/x", json=body)
+    assert refused.status_code == 422
+    sentence = refused.json()["detail"]
+    assert isinstance(sentence, str) and sentence == "send the import profile as a JSON object, with the fields of an import profile"
+    assert await stored_names(db) == []  # not pydantic's list of errors, and nothing was saved
+
+
+async def test_a_huge_or_odd_field_name_or_zone_is_not_echoed_whole(client, db):
+    await login_as(client, db)
+    huge = await client.put(f"{URL}/x", json={**PROFILE, "k" * 100_000: 1, "zone": "z" * 5_000})
+    assert huge.status_code == 422 and len(huge.json()["detail"]) < 300 and "k" * 41 not in huge.json()["detail"]
+    odd = await client.put(f"{URL}/x", json={**PROFILE, "zone": "Mars\n" + chr(0x202E) + "/Base"})
+    assert odd.status_code == 422 and "\n" not in odd.json()["detail"] and chr(0x202E) not in odd.json()["detail"]
+    assert await stored_names(db) == []
+
+
+async def test_a_request_without_a_body_is_the_same_sentence(client, db):
+    await login_as(client, db)
+    refused = await client.put(f"{URL}/x")
+    assert refused.status_code == 422 and refused.json() == {"detail": "send the import profile as a JSON object, with the fields of an import profile"}
 
 
 # ---- the cap -----------------------------------------------------------------------------------------------------------

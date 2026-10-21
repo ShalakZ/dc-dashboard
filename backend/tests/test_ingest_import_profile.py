@@ -179,6 +179,16 @@ def test_anything_that_is_not_a_zone_name_is_a_sentence_never_an_exception(zone)
     assert "is not a time zone name" in problem(zone=zone)
 
 
+def test_a_refusal_never_repeats_more_than_forty_characters_of_the_requests_own_text_or_a_control_character_of_it():
+    rlo = chr(0x202E)  # a right-to-left override
+    long_zone = problem(zone="Mars/" + "x" * 500)
+    assert len(long_zone) < 200 and "x" * 41 not in long_zone
+    controls = problem(zone=f"Mars\n{rlo}\x1b[31m/Base")
+    assert "\n" not in controls and rlo not in controls and "\x1b" not in controls and "Mars?" in controls
+    assert problem(**{"k" * 100_000: 1}) == "k" * 40 + " is not a field of an import profile"
+    assert problem(**{f"a\nb{rlo}": 1}) == "a?b? is not a field of an import profile"
+
+
 # ---- the reading -------------------------------------------------------------------------------------------------------
 
 def test_an_interval_reading_needs_its_period_and_stamp():

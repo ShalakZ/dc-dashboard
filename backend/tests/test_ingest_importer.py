@@ -9,6 +9,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import asyncpg
 import pytest
 
 from billing_helpers import set_zone
@@ -19,6 +20,10 @@ from helpers import insert_readings, listening, make_user, settle_rollups, wait_
 from importer_helpers import HEADER, NOW, SAMPLE_TAGS, make_profile, make_world, save_profile
 
 SAMPLE = Path(__file__).parent / "fixtures" / "sample_export.csv"
+BAD_QUALITY_LINE = (
+    "1 row of the file has a quality other than good (uncertain: 1); the new ones are stored as bad quality, which counts in no figure"
+)
+CLOSED_OCTOBER_LINE = "289 rows of the file fall in the closed month 2026-10 (the new ones are stored; its frozen figures do not change)"
 BACKEND = Path(__file__).resolve().parents[1]
 
 
@@ -95,8 +100,8 @@ async def test_the_sample_file_checks_and_imports_to_the_same_counts_and_a_secon
         (298, "not_a_number"), (299, "value_out_of_range"),
     ]
     assert dry.unknown_names == ["M98.kWh", "../../etc/passwd", '=HYPERLINK("http://example.invalid")']
-    assert dry.bad_quality == {"uncertain": 1}  # stored, so part of "new"; the sentence adds up without a clause of its own
-    assert "1 row stored with bad quality (uncertain: 1)" in importer.report_lines(dry)
+    assert dry.bad_quality == {"uncertain": 1}  # a count of the file's accepted rows; the new ones of them are part of "new"
+    assert BAD_QUALITY_LINE in importer.report_lines(dry)
     assert dry.summary() == (
         '299 rows read, 289 new, 0 already there, 0 differing, 6 rejected, 3 unknown tags (M98.kWh, '
         '../../etc/passwd, =HYPERLINK("http://example.invalid")), 4 rows for unknown tags'
@@ -120,6 +125,8 @@ async def test_the_sample_file_checks_and_imports_to_the_same_counts_and_a_secon
     again = await run(db, source, body, dry=False)
     assert (again.new, again.already, again.differing, again.rejected, again.unknown_rows, again.rows_read) == (0, 289, 0, 6, 4, 299)
     assert identity(again) and await stored(db) == 289
+    assert again.bad_quality == {"uncertain": 1} and BAD_QUALITY_LINE in importer.report_lines(again)  # the row is of the file; it says "when new"
+    assert "stored with bad quality" not in " ".join(importer.report_lines(again))  # nothing was stored this time, and no line says so
     dry_again = await run(db, source, body)
     assert same_but_for_the_flag(again, dry_again)
 
@@ -291,9 +298,12 @@ async def test_rows_in_a_closed_month_are_stored_counted_and_named(db):
     assert dry.closed_months == real.closed_months == {"2026-10": 289}
     assert await stored(db) == 289
     lines = importer.report_lines(real)
-    assert "289 rows in the closed month 2026-10: the rows are stored, its frozen figures do not change" in lines
+    assert CLOSED_OCTOBER_LINE in lines
     assert real.as_dict()["closed_months"] == {"2026-10": 289}
     assert (await journaled(db))[0]["detail"]["closed_months"] == {"2026-10": 289}
+    again = await run(db, source, body, dry=False)  # nothing is new now, and the line still counts the file's rows, in words that say so
+    assert again.new == 0 and again.closed_months == {"2026-10": 289} and CLOSED_OCTOBER_LINE in importer.report_lines(again)
+    assert "the rows are stored" not in " ".join(importer.report_lines(again))
 
 
 async def test_the_month_of_a_row_is_the_month_in_the_sites_zone(db):
@@ -304,6 +314,10 @@ async def test_the_month_of_a_row_is_the_month_in_the_sites_zone(db):
     report = await run(db, source, text("P,2026-09-30T22:30:00Z,1,kW,good", "P,2026-09-30T20:00:00Z,1,kW,good", "P,2026-10-03T12:00:00Z,1,kW,good"),
                        now=datetime(2026, 10, 5, tzinfo=UTC))
     assert report.closed_months == {"2026-09": 1, "2026-10": 2}
+    assert importer.report_lines(report) == [
+        "1 row of the file falls in the closed month 2026-09 (the new ones are stored; its frozen figures do not change)",
+        "2 rows of the file fall in the closed month 2026-10 (the new ones are stored; its frozen figures do not change)",
+    ]
 
 
 async def hour_count(db, point: int, hour: datetime) -> int | None:
@@ -451,6 +465,162 @@ async def test_a_cancelled_run_leaves_its_audit_row_and_journal_event_and_gives_
     monkeypatch.setattr(importer, "insert_readings", real_insert)
     again = await run(db, source, body, dry=False)
     assert again.complete and await stored(db) == 289
+
+
+async def old_world(db, monkeypatch):
+    """A file of 10-day-old rows whose first chunk (A's six rows, in hour H) is committed and whose second (B's, in hour H+3) is stopped
+    inside the write; the rollups' watermark is past both hours, so a stored row is invisible to `readings_1h` until a refresh."""
+    monkeypatch.setattr(importer, "CHUNK_LINES", 6)
+    now = datetime.now(UTC)
+    source, ids = await make_world(db, {"A": ("active_power_kw", 1.0), "B": ("active_power_kw", 1.0), "S": (None, 1.0)})
+    await insert_readings(db, ids["S"], now - timedelta(hours=3), 60, [1.0] * 5)
+    await settle_rollups(db)
+    hour = (now - timedelta(days=10)).replace(minute=0, second=0, microsecond=0)
+    stamp = lambda base, i: (base + timedelta(minutes=10 * i)).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    body = text(
+        *[f"A,{stamp(hour, i)},{i},kW,good" for i in range(6)], *[f"B,{stamp(hour + timedelta(hours=3), i)},{i},kW,good" for i in range(6)]
+    )
+    return source, ids, now, hour, body
+
+
+async def cancel_in_the_second_chunk(db, monkeypatch, source, ids, body, now, **kwargs) -> None:
+    reached, _ = blocking(monkeypatch, at=2)
+    task = asyncio.create_task(run(db, source, body, dry=False, now=now, **kwargs))
+    await asyncio.wait_for(reached.wait(), 20)
+    assert await db.fetchval("SELECT count(*) FROM readings WHERE point_id = ANY($1)", [ids["A"], ids["B"]]) == 6  # the first chunk is committed
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def the_audit_row(db) -> dict:
+    row = await db.fetchrow("SELECT user_id, detail FROM audit_log WHERE action = 'readings.imported'")
+    return {"user_id": row["user_id"], "detail": json.loads(row["detail"]) if isinstance(row["detail"], str) else dict(row["detail"])}
+
+
+async def test_a_cancelled_run_brings_the_old_hours_it_stored_into_the_rollups_and_says_so(db, monkeypatch):
+    source, ids, now, hour, body = await old_world(db, monkeypatch)
+    await cancel_in_the_second_chunk(db, monkeypatch, source, ids, body, now)
+    assert await hour_count(db, ids["A"], hour) == 6  # refreshed inside the shielded wrap-up
+    audit_detail = (await the_audit_row(db))["detail"]
+    assert audit_detail["refresh"] == {"state": "done", "days": 1} and audit_detail["complete"] is False
+    assert "interrupted" in audit_detail["error"] and "were refreshed before it stopped" in audit_detail["error"]
+    assert "--refresh" not in audit_detail["error"]
+    (event,) = await events(db)
+    assert dict(event["detail"])["refresh"] == {"state": "done", "days": 1}
+
+
+async def test_a_cancelled_run_whose_refresh_does_not_fit_in_the_time_records_the_ranges_and_a_second_import_alone_does_not_repair_them(
+    db, monkeypatch
+):
+    source, ids, now, hour, body = await old_world(db, monkeypatch)
+    monkeypatch.setattr(importer, "CANCEL_REFRESH_SECONDS", 0.3)
+    real_refresh = rollups.refresh_range
+
+    async def too_slow(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(rollups, "refresh_range", too_slow)
+    await cancel_in_the_second_chunk(db, monkeypatch, source, ids, body, now, user_id=987_654)  # an account that is gone
+    monkeypatch.setattr(rollups, "refresh_range", real_refresh)
+    assert await hour_count(db, ids["A"], hour) is None
+    audit = await the_audit_row(db)
+    assert audit["user_id"] is None  # audit_pool records an account that no longer exists as no user
+    refresh = audit["detail"]["refresh"]
+    assert refresh == {"state": "pending", "days": 0, "pending": [[f"{hour:%Y-%m-%dT%H:%MZ}", f"{hour + timedelta(hours=1):%Y-%m-%dT%H:%MZ}"]], "pending_total": 1}
+    assert "interrupted" in audit["detail"]["error"] and "importing the file again does not refresh them" in audit["detail"]["error"]
+    assert "--refresh" in audit["detail"]["error"]
+    (event,) = await events(db)
+    assert dict(event["detail"])["refresh"] == refresh
+
+    # The same file again stores B's rows and refreshes the hours of those new rows only: A's hour was stored before the cut.
+    again = await run(db, source, body, dry=False, now=now)
+    assert (again.new, again.already, again.refresh_state) == (6, 6, "done")
+    assert await hour_count(db, ids["B"], hour + timedelta(hours=3)) == 6
+    assert await hour_count(db, ids["A"], hour) is None
+
+    check = await run(db, source, body, now=now, refresh_all=True)  # a check writes nothing, so it repairs nothing either
+    assert (check.refresh_state, check.new) == ("not_needed", 0) and await hour_count(db, ids["A"], hour) is None
+
+    repaired = await run(db, source, body, dry=False, now=now, refresh_all=True)  # the repair: the rows that were already there count too
+    assert (repaired.new, repaired.already, repaired.refresh_state) == (0, 12, "done")
+    assert await hour_count(db, ids["A"], hour) == 6 and await hour_count(db, ids["B"], hour + timedelta(hours=3)) == 6
+
+
+async def test_the_command_repairs_the_rollups_of_rows_that_are_already_stored_only_with_refresh_and_yes(db, capsys, monkeypatch):
+    now = datetime.now(UTC)
+    source, ids = await make_world(db, {"A": ("active_power_kw", 1.0), "S": (None, 1.0)})
+    await save_profile(db)
+    await insert_readings(db, ids["S"], now - timedelta(hours=3), 60, [1.0] * 5)
+    await settle_rollups(db)
+    body, hour = await old_rows("A", now)
+    with monkeypatch.context() as patch:
+        patch.setattr(importer, "_refresh", lambda *args, **kwargs: asyncio.sleep(0))
+        await run(db, source, body, dry=False, now=now)
+    assert await hour_count(db, ids["A"], hour) is None
+    args = ["--source", str(source), "--profile-name", "hourly"]
+    assert await command(db, *args, "--refresh", "-", body=body, clock=lambda: now) == 2  # --refresh belongs to a real import
+    assert "add --yes" in said(capsys)[1] and await hour_count(db, ids["A"], hour) is None
+    assert await command(db, *args, "--yes", "-", body=body, clock=lambda: now) == 0
+    assert "0 new, 6 already there" in said(capsys)[0] and await hour_count(db, ids["A"], hour) is None  # a plain second import does not
+    assert await command(db, *args, "--yes", "--refresh", "-", body=body, clock=lambda: now) == 0
+    out = said(capsys)[0]
+    assert "0 new, 6 already there" in out and "the rollups were refreshed over 1 day" in out
+    assert await hour_count(db, ids["A"], hour) == 6
+
+
+async def test_the_audit_row_of_an_interrupted_import_is_kept_with_no_user_when_the_account_goes_between_the_look_up_and_the_insert(db, monkeypatch):
+    real = importer.audit_pool
+    users = []
+
+    async def account_gone(pool, user_id, action, detail=None):
+        users.append(user_id)
+        if user_id is not None:
+            raise asyncpg.ForeignKeyViolationError("the account went")
+        return await real(pool, user_id, action, detail)
+
+    monkeypatch.setattr(importer, "audit_pool", account_gone)
+    source, _ = await make_world(db, {})
+    report = importer.ImportReport(False, source, "hourly", "0" * 64, 10)
+    report.complete, report.error = False, importer.CANCELLED_SENTENCE
+    await importer._wrap_up(db, report, "web", 12345, audit_row=True, wait=True)
+    assert users == [12345, None]
+    assert (await the_audit_row(db))["user_id"] is None
+
+
+async def test_the_bad_quality_block_names_the_twenty_commonest_labels_and_counts_the_rest_as_other_alike_in_the_check_and_the_import(db):
+    source, _ = await make_world(db, {"P": ("active_power_kw", 1.0)})
+    lines, minute = [], 0
+    for code in range(25):  # q00 once, q01 twice, ... q24 25 times: 325 rows, each with a code of its own
+        for _ in range(code + 1):
+            lines.append(f"P,{datetime(2026, 10, 20, tzinfo=UTC) + timedelta(minutes=minute):%Y-%m-%dT%H:%M:%SZ},1,kW,q{code:02d}")
+            minute += 1
+    dry = await run(db, source, text(*lines))
+    real = await run(db, source, text(*lines), dry=False)
+    assert same_but_for_the_flag(dry, real)
+    assert len(real.bad_quality) == importer.QUALITY_SHOWN + 1 and real.new == 325
+    assert real.bad_quality["other"] == 1 + 2 + 3 + 4 + 5 and sum(real.bad_quality.values()) == 325
+    assert real.bad_quality["unknown:q24"] == 25 and "unknown:q04" not in real.bad_quality and "unknown:q05" in real.bad_quality
+
+
+def test_fold_quality_breaks_a_tie_by_label_keeps_a_small_block_whole_and_counts_what_spilled_as_other():
+    assert importer.fold_quality({"uncertain": 3, "bad": 3}) == {"uncertain": 3, "bad": 3}
+    assert importer.fold_quality({}) == {}
+    many = {f"unknown:{n:02d}": 1 for n in range(30)}
+    folded = importer.fold_quality(many, spilled=7)
+    assert list(folded) == [f"unknown:{n:02d}" for n in range(20)] + ["other"] and folded["other"] == 10 + 7
+
+
+async def test_a_dot_decimal_file_read_with_a_decimal_comma_profile_is_rejected_in_the_check_and_stores_nothing(db):
+    source, _ = await make_world(db, {"P": ("active_power_kw", 1.0)})
+    european = make_profile(decimal=",", delimiter=";", time_format="iso")
+    lines = [f"P;2026-10-20T0{n}:00:00Z;{value};kW;good" for n, value in enumerate(["12.5", "0.001", "1,234.5", "7.25", "1234.5", "3,5"])]
+    body = text(*lines, header=HEADER.replace(",", ";"))
+    dry = await run(db, source, body, profile=european)
+    real = await run(db, source, body, profile=european, dry=False)
+    assert same_but_for_the_flag(dry, real)
+    assert (real.rows_read, real.new, real.rejected_by) == (6, 1, {"not_a_number": 5})  # only "3,5" is a decimal-comma number
+    assert await db.fetchval("SELECT value FROM readings") == 3.5 and await stored(db) == 1
 
 
 async def test_a_cancelled_dry_run_writes_no_audit_row(db, monkeypatch):
@@ -606,7 +776,7 @@ async def test_the_command_says_when_the_closed_month_took_rows_and_how_the_roll
     await close_month(db, "2026-10")
     assert await command(db, "--source", str(source), "--profile-name", "hourly", "-") == 0
     out, _ = said(capsys)
-    assert "289 rows in the closed month 2026-10: the rows are stored, its frozen figures do not change" in out
+    assert CLOSED_OCTOBER_LINE in out
 
 
 async def test_the_command_exit_codes(db, capsys, tmp_path):

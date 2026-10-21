@@ -14,7 +14,7 @@ import asyncio
 from typing import Any
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -46,10 +46,13 @@ async def list_import_profiles(db: AsyncSession = Depends(get_db)) -> dict[str, 
     "/import-profiles/{name}", response_model=ImportProfile, dependencies=[Depends(require_permission("readings.import"))]
 )
 async def save_import_profile(
-    name: str, body: dict[str, Any], db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
+    name: str, body: Any = Body(None), db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
 ) -> ImportProfile:
     """Save a profile under `name` (the name in the path wins over any `name` in the body). The body is read as plain JSON and
-    validated here, so a refusal is one sentence ({"detail": "..."}), not pydantic's list."""
+    validated here, so a refusal is one sentence ({"detail": "..."}), not pydantic's list; that includes a body that is not an
+    object (`dict[str, Any]` as the parameter's type would answer such a body with the list)."""
+    if not isinstance(body, dict):
+        raise HTTPException(422, "send the import profile as a JSON object, with the fields of an import profile")
     try:
         profile = parse_profile(body, name)
     except ValidationError as exc:
@@ -90,6 +93,8 @@ async def delete_import_profile(
 CSV_TYPES = frozenset({"text/csv", "text/plain", "application/csv", "application/vnd.ms-excel", "application/octet-stream"})
 _YES, _NO = frozenset({"1", "true", "yes", "on"}), frozenset({"0", "false", "no", "off"})
 INT4_MAX = 2_147_483_647  # ids are 4-byte integers
+# At most one upload (a check or an import) in this process at a time; the route takes it without waiting, so it never binds to a loop.
+_SLOT = asyncio.Semaphore(1)
 
 
 def get_pool(request: Request) -> asyncpg.Pool:
@@ -175,36 +180,46 @@ async def import_readings(
             raise HTTPException(400, "the Content-Length header is not a number") from None
         if too_big:
             raise _too_large()
-    body = await _read_body(request)
+    # One upload at a time in this process, taken before the body is read: an upload that will be refused (the run lock is taken
+    # later, after the body) would otherwise cost its 20 MB of body, its lines and a turn of the compute thread first. `locked()`
+    # then `acquire()` is one step of the event loop (an acquire that does not wait never suspends), so this never queues. The
+    # advisory lock of the run stays: it also covers the command and any other worker process.
+    if _SLOT.locked():
+        raise HTTPException(409, importer.BUSY_SENTENCE)
+    await _SLOT.acquire()
     try:
-        scan = await compute.run(importer.pre_scan, body)
-        layout = importer.resolve_layout(scan, chosen)
-    except importer.ImportRefused as refused:
-        raise HTTPException(refused.status, str(refused)) from None
-    del body
-    if not dry and (expect_sha256 or "").strip().lower() != scan.sha256:
-        raise HTTPException(409, "this is not the file that was checked; check it again before importing")
-    pool = get_pool(request)
-    try:
-        report = await importer.run_import(
-            pool, source_id=source_id, profile=chosen, scan=scan, layout=layout, dry_run=dry, via="web", user_id=user_id
-        )
-    except importer.ImportBusy as busy:
-        raise HTTPException(409, str(busy)) from None
-    except Exception as exc:  # a bug, not a refusal: rows may be stored, so the audit trail says that an import began
-        if not dry:
-            await audit(db, user_id, "readings.imported", {
-                "source_id": source_id, "profile": chosen.name, "sha256": scan.sha256, "size": scan.size, "complete": False,
-                "via": "web", "error": type(exc).__name__,
-            })
-            await db.commit()
-        raise
-    if not dry:
-        detail = importer.audit_detail(report, "web")
+        body = await _read_body(request)
         try:
-            await audit(db, user_id, "readings.imported", detail)
-            await db.commit()
-        except IntegrityError:  # the account was deleted while the file went in: the row is kept, with no user
-            await db.rollback()
-            await audit_pool(pool, None, "readings.imported", detail)
-    return report.as_dict()
+            scan = await compute.run(importer.pre_scan, body)
+            layout = importer.resolve_layout(scan, chosen)
+        except importer.ImportRefused as refused:
+            raise HTTPException(refused.status, str(refused)) from None
+        del body
+        if not dry and (expect_sha256 or "").strip().lower() != scan.sha256:
+            raise HTTPException(409, "this is not the file that was checked; check it again before importing")
+        pool = get_pool(request)
+        try:
+            report = await importer.run_import(
+                pool, source_id=source_id, profile=chosen, scan=scan, layout=layout, dry_run=dry, via="web", user_id=user_id
+            )
+        except importer.ImportBusy as busy:
+            raise HTTPException(409, str(busy)) from None
+        except Exception as exc:  # a bug, not a refusal: rows may be stored, so the audit trail says that an import began
+            if not dry:
+                await audit(db, user_id, "readings.imported", {
+                    "source_id": source_id, "profile": chosen.name, "sha256": scan.sha256, "size": scan.size, "complete": False,
+                    "via": "web", "error": type(exc).__name__,
+                })
+                await db.commit()
+            raise
+        if not dry:
+            detail = importer.audit_detail(report, "web")
+            try:
+                await audit(db, user_id, "readings.imported", detail)
+                await db.commit()
+            except IntegrityError:  # the account was deleted while the file went in: the row is kept, with no user
+                await db.rollback()
+                await audit_pool(pool, None, "readings.imported", detail)
+        return report.as_dict()
+    finally:
+        _SLOT.release()

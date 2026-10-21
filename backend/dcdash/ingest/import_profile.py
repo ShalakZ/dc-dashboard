@@ -33,6 +33,7 @@ MAX_COLUMN = 100  # characters of a column name
 MAX_GOOD_CODES = 20
 MAX_CODE = 40
 MAX_FORMAT = 40
+MAX_ECHO = 40  # characters of the request's own text (a zone, a field name) a refusal sentence repeats
 MAX_PERIOD_SECONDS = 31 * 86_400
 DELIMITERS = (",", ";", "\t")
 # The only strptime directives a time format may use: enough for every export seen so far, and none that depends on the locale of the
@@ -49,6 +50,12 @@ ColumnName = Annotated[str, Field(max_length=MAX_COLUMN)]
 def _unprintable(text: str) -> bool:
     """True when `text` holds a control, format, separator (other than a plain space) or unassigned character."""
     return not text.isprintable()
+
+
+def clip_text(text: str, limit: int) -> str:
+    """Text that came from a request, as a sentence may echo it: at most `limit` characters, each control, format or separator
+    character (a line break, a right-to-left override) replaced by `?`. The importer's `clip_cell` is this function."""
+    return "".join(ch if ch.isprintable() else "?" for ch in text[:limit])
 
 
 def _column(value: str, label: str) -> str:
@@ -139,7 +146,7 @@ class ImportProfile(BaseModel):
         if value is None:
             return None
         text = value.strip()
-        problem = f'"{text[:40]}" is not a time zone name; use a name such as Africa/Cairo or UTC'
+        problem = f'"{clip_text(text, MAX_ECHO)}" is not a time zone name; use a name such as Africa/Cairo or UTC'
         if not text or len(text) > 64 or _ZONE_KEY.fullmatch(text) is None:
             raise ValueError(problem)
         try:
@@ -187,7 +194,7 @@ def describe_problem(error: ValidationError) -> str:
     """The first problems of a refused profile as one sentence (no value is echoed except through a validator's own text)."""
     parts: list[str] = []
     for item in error.errors(include_url=False, include_input=False)[:3]:
-        where = ".".join(str(step) for step in item["loc"])
+        where = clip_text(".".join(str(step) for step in item["loc"]), MAX_ECHO)  # an extra field's name is the request's own text
         kind = item["type"]
         if kind == "value_error":  # one of the validators above: its sentence already says what it is about
             parts.append(str(item["ctx"]["error"]))

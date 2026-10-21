@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from auth_probe import silent_client
+from dcdash.api import imports as api_imports
 from dcdash.ingest import importer
 from helpers import login_as, make_role, wait_for
 from importer_helpers import HEADER, NOW, make_world, save_profile
@@ -132,8 +133,6 @@ async def test_a_declared_size_over_the_cap_is_a_413_before_the_body_is_read(cli
     source, _ = await signed_in(client, db)
     big = await post(client, source, b"a" * (21 * 1024 * 1024))
     assert big.status_code == 413 and "larger than 20 MB" in big.json()["detail"]
-    bad_length = await post(client, source, b"x", headers={**CSV, "content-length": "twelve"})
-    assert bad_length.status_code in (400, 422) or "Content-Length" in bad_length.text  # the server layer may refuse it first
 
 
 async def test_an_endless_body_is_cut_at_the_cap(client, db, monkeypatch):
@@ -166,10 +165,11 @@ async def test_a_body_that_stalls_ends_at_the_time_limit(client, db, monkeypatch
     assert answer.status_code == 408 and "took too long" in answer.json()["detail"] and time.monotonic() - started < 10
 
 
-async def test_an_upload_the_client_walks_away_from_is_a_400_not_an_error(app, client, db):
-    source, _ = await signed_in(client, db)
+async def raw_post(app, client, source, parts, *, headers=()) -> tuple[int, dict]:
+    """POST the import route straight into the ASGI app (no HTTP client in between, so nothing recomputes a header or tidies the
+    body): `parts` are the messages `receive` hands out, `headers` are added to the request's own. Returns (status, JSON body)."""
     token = client.cookies.get("dcdash_session")
-    parts = [{"type": "http.request", "body": b"tag,timestamp,value\nA,2026-10-20T10:00:00Z,1\n", "more_body": True}, {"type": "http.disconnect"}]
+    parts = list(parts)
     sent: list[dict] = []
 
     async def receive():
@@ -181,13 +181,65 @@ async def test_an_upload_the_client_walks_away_from_is_a_400_not_an_error(app, c
     scope = {
         "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http", "root_path": "",
         "path": f"/api/sources/{source}/import", "raw_path": f"/api/sources/{source}/import".encode(), "query_string": b"profile=hourly",
-        "headers": [(b"host", b"test"), (b"content-type", b"text/csv"), (b"cookie", f"dcdash_session={token}".encode())],
+        "headers": [(b"host", b"test"), (b"content-type", b"text/csv"), (b"cookie", f"dcdash_session={token}".encode()), *headers],
         "client": ("127.0.0.1", 1234), "server": ("test", 80),
     }
     await app(scope, receive, send)
     start = next(message for message in sent if message["type"] == "http.response.start")
     body = b"".join(message.get("body", b"") for message in sent if message["type"] == "http.response.body")
-    assert start["status"] == 400 and json.loads(body) == {"detail": "the upload was interrupted; send the file again"}
+    return start["status"], json.loads(body)
+
+
+async def test_an_upload_the_client_walks_away_from_is_a_400_not_an_error(app, client, db):
+    source, _ = await signed_in(client, db)
+    parts = [{"type": "http.request", "body": b"tag,timestamp,value\nA,2026-10-20T10:00:00Z,1\n", "more_body": True}, {"type": "http.disconnect"}]
+    assert await raw_post(app, client, source, parts) == (400, {"detail": "the upload was interrupted; send the file again"})
+    assert not api_imports._SLOT.locked()  # and the slot is given back
+
+
+@pytest.mark.parametrize("length", ["twelve", "9" * 5000, "1.5", "0x10", "", " "])
+async def test_a_content_length_that_is_not_a_number_is_a_400_in_words_before_any_body_is_read(app, client, db, length):
+    source, _ = await signed_in(client, db)
+    parts = [{"type": "http.request", "body": b"x", "more_body": False}]
+    status = await raw_post(app, client, source, parts, headers=[(b"content-length", length.encode())])
+    assert status == (400, {"detail": "the Content-Length header is not a number"})
+    assert not api_imports._SLOT.locked()
+
+
+async def test_a_second_upload_is_refused_at_once_while_one_is_being_read_without_reading_its_body_and_the_slot_is_given_back(pooled, client, db):
+    source, _ = await signed_in(client, db)
+    whole = SAMPLE.read_bytes()
+    gate = asyncio.Event()
+
+    async def slow_upload():
+        yield whole[:200]
+        await gate.wait()
+        yield whole[200:]
+
+    first = asyncio.create_task(client.post(f"/api/sources/{source}/import", params={"profile": "hourly"}, content=slow_upload(), headers=CSV))
+    for _ in range(500):  # until the first upload is being read
+        if api_imports._SLOT.locked():
+            break
+        await asyncio.sleep(0.02)
+    assert api_imports._SLOT.locked()
+    sent = {"bytes": 0}
+
+    async def endless():
+        while True:
+            sent["bytes"] += 1_000
+            yield b"x" * 1_000
+            await asyncio.sleep(0)
+
+    refused = await client.post(f"/api/sources/{source}/import", params={"profile": "hourly"}, content=endless(), headers=CSV)
+    assert refused.status_code == 409 and refused.json() == {"detail": importer.BUSY_SENTENCE}
+    assert sent["bytes"] <= 2_000  # its body was not read to the end, nor to the cap
+    gate.set()
+    done = await first
+    assert done.status_code == 200 and done.json()["new"] == 289  # the first upload was not disturbed
+    assert not api_imports._SLOT.locked()
+    for body, words in ((b"", "empty"), (b"a,b,c\n1,2,3\n", "no column named")):  # a refusal gives the slot back too
+        refusal = await post(client, source, body)
+        assert refusal.status_code == 422 and words in refusal.json()["detail"] and not api_imports._SLOT.locked()
 
 
 @pytest.mark.parametrize(

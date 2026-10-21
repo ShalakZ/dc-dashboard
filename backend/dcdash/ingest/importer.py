@@ -45,7 +45,7 @@ from dcdash.core.pg import create_pool
 from dcdash.core.storage import REFRESH_WINDOW_DAYS
 from dcdash.ingest import normalise, rollups
 from dcdash.ingest.backfill import _UNCAP  # the engine's own statement: the one other writer that reaches into compressed chunks
-from dcdash.ingest.import_profile import IMPORT_PROFILES_KEY, ImportProfile, describe_problem, parse_profile
+from dcdash.ingest.import_profile import IMPORT_PROFILES_KEY, ImportProfile, clip_text, describe_problem, parse_profile
 from dcdash.ingest.kinds import IMPORT_FINISHED
 from dcdash.ingest.store import Row, classify_readings, insert_readings
 
@@ -68,6 +68,11 @@ PROBLEMS_SHOWN = 20
 UNKNOWN_SHOWN = 20
 SAMPLES_SHOWN = 5
 CELL_SHOWN = 80  # characters of a cell echoed in a report
+QUALITY_SHOWN = 20  # labels the bad-quality block names; the rest of the rows are counted under OTHER_QUALITY
+QUALITY_TRACKED = 1_000  # distinct labels held while a file is read (a quality column with a new code on every row must not grow without bound)
+OTHER_QUALITY = "other"
+PENDING_SHOWN = 20  # unrefreshed ranges an audit row or a journal event lists
+CANCEL_REFRESH_SECONDS = 30  # what the wrap-up of a cancelled run may spend on the rollup refresh before it records the ranges as pending
 
 # The reason codes of a rejected row besides `normalise.Rejected`'s (the front end words them: lib/importReport.ts).
 MALFORMED = "malformed_line"  # an unbalanced quote, a line break inside a cell, too few or too many cells
@@ -104,7 +109,15 @@ REASON_TEXT = {  # for the command line; a browser words the codes itself
 
 _NUMBER = re.compile(r"[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?")
 _EPOCH_NUMBER = re.compile(r"-?[0-9]+(\.[0-9]+)?")
-_THOUSANDS = str.maketrans("", "", " " + chr(0xA0) + chr(0x202F))  # the spaces a decimal-comma export groups its digits with
+_GROUP_SPACES = " " + chr(0xA0) + chr(0x202F)  # the spaces a decimal-comma export groups its digits with (space, no-break, narrow no-break)
+_GROUP_MARKS = "." + _GROUP_SPACES
+_UNGROUP = str.maketrans("", "", _GROUP_MARKS)
+# A decimal-comma number is either grouped in threes ("1.234,5", "1 234,5": the first group is 1 to 3 digits and does not start with 0,
+# so "0.001" is no number here) or has no group mark at all ("1234,5", "-0,25", ",5", "1,5e3"). Anything else, such as "12.5" or
+# "1,234.5" (a dot-decimal value under a decimal-comma profile), is not a number: reading it with the marks dropped would store it
+# wrong by powers of ten, and a stored reading is never corrected by a second import.
+_COMMA_GROUPED = re.compile(rf"[+-]?[1-9][0-9]{{0,2}}(?:[{re.escape(_GROUP_MARKS)}][0-9]{{3}})+(?:,[0-9]*)?")
+_COMMA_PLAIN = re.compile(r"[+-]?(?:[0-9]+(?:,[0-9]*)?|,[0-9]+)(?:[eE][+-]?[0-9]+)?")
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _MICROSECOND = timedelta(microseconds=1)
 _DAY = timedelta(days=1)
@@ -128,7 +141,7 @@ class ImportBusy(Exception):
 def clip_cell(text: str, limit: int = CELL_SHOWN) -> str:
     """A cell of the file as it may be shown or stored: at most `limit` characters, every control, format or separator character
     (a line break, a tab, a right-to-left override) replaced by `?`."""
-    return "".join(ch if ch.isprintable() else "?" for ch in text[:limit])
+    return clip_text(text, limit)
 
 
 # ---- the pre-scan ---------------------------------------------------------------------------------------------------------------
@@ -317,6 +330,15 @@ def _read_time(cell: str, time_format: str) -> Any:
         return None
 
 
+def _from_decimal_comma(cell: str) -> str | None:
+    """A decimal-comma number as plain dot-decimal text, or None when it is not written the way such an export writes numbers."""
+    if _COMMA_GROUPED.fullmatch(cell):
+        return cell.translate(_UNGROUP).replace(",", ".")
+    if _COMMA_PLAIN.fullmatch(cell):
+        return cell.replace(",", ".")
+    return None
+
+
 def parse_chunk(first_number: int, lines: Sequence[bytes], ctx: ParseContext, last: Mapping[str, datetime]) -> ChunkResult:
     """Turn `lines` (the first is line `first_number` of the file) into rows. Pure, for the compute thread: it only READS its
     arguments and returns a new object, including the new per-tag last-instant map. It does not de-duplicate (the loop does, over
@@ -390,12 +412,11 @@ def parse_chunk(first_number: int, lines: Sequence[bytes], ctx: ParseContext, la
         if not cell:
             reject(number, EMPTY_VALUE)
             continue
-        if comma:  # "1.234,5": the spaces and the dots are grouping, the comma is the point
-            cell = cell.translate(_THOUSANDS).replace(".", "").replace(",", ".")
-        if _NUMBER.fullmatch(cell) is None:  # NaN, inf, 0x10, 1_000 and any non-ASCII digit end here
+        text_number = _from_decimal_comma(cell) if comma else cell
+        if text_number is None or _NUMBER.fullmatch(text_number) is None:  # NaN, inf, 0x10, 1_000 and any non-ASCII digit end here
             reject(number, NOT_A_NUMBER)
             continue
-        value = float(cell)
+        value = float(text_number)
         if not math.isfinite(value) or abs(value) > MAX_ABS_VALUE:  # 1e309 reads as inf
             reject(number, OUT_OF_RANGE)
             continue
@@ -425,6 +446,17 @@ def parse_chunk(first_number: int, lines: Sequence[bytes], ctx: ParseContext, la
         month = moment.astimezone(ctx.site_zone).strftime("%Y-%m") if ctx.closed and ctx.site_zone is not None else None
         kept.append(Kept(number, tag, info.point_id, moment, value, quality, month, label))
     return result
+
+
+def fold_quality(counts: Mapping[str, int], spilled: int = 0) -> dict[str, int]:
+    """The `bad_quality` figure of a report: the QUALITY_SHOWN labels with the most rows (a tie goes to the label that sorts first, so
+    a dry run and a real run agree), and every other row, `spilled` ones included, under OTHER_QUALITY."""
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    shown = dict(ranked[:QUALITY_SHOWN])
+    rest = spilled + sum(count for _, count in ranked[QUALITY_SHOWN:])
+    if rest:
+        shown[OTHER_QUALITY] = rest
+    return shown
 
 
 def _dedupe(kept: list[Kept], seen: dict[int, tuple[float, int]], rejected: dict[str, int], problems: list[tuple[int, str]]) -> list[Kept]:
@@ -468,19 +500,30 @@ class ImportReport:
     unknown_total: int = 0  # distinct unknown tags
     unknown_names: list[str] = field(default_factory=list)  # the first UNKNOWN_SHOWN, clipped
     rejected_by: dict[str, int] = field(default_factory=dict)
+    # Both counts are over the ACCEPTED rows of the file, the ones already stored included: a re-import of a file says the same. Only
+    # the new rows of them are written by this run.
     closed_months: dict[str, int] = field(default_factory=dict)  # accepted rows that fall in a closed billing month
-    bad_quality: dict[str, int] = field(default_factory=dict)  # accepted rows stored as BAD, by label
+    bad_quality: dict[str, int] = field(default_factory=dict)  # accepted rows whose quality is BAD, by label (see fold_quality)
     differing_samples: list[dict[str, Any]] = field(default_factory=list)
     problems: list[tuple[int, str]] = field(default_factory=list)
-    refresh_state: str = "not_needed"
+    refresh_state: str = "not_needed"  # not_needed | done | failed | pending (cut short: only a cancelled run ends so)
     refresh_days: int = 0
     refresh_note: str | None = None
+    refresh_pending: list[tuple[datetime, datetime]] = field(default_factory=list)  # UTC ranges whose rollups were not refreshed
     complete: bool = True
     error: str | None = None
 
     @property
     def rejected(self) -> int:
         return sum(self.rejected_by.values())
+
+    def refresh_detail(self) -> dict[str, Any]:
+        """How the rollup refresh went, for the audit row and the journal event: the state, the days, and the UTC ranges left over."""
+        detail: dict[str, Any] = {"state": self.refresh_state, "days": self.refresh_days}
+        if self.refresh_pending:
+            detail["pending"] = [[f"{lo:%Y-%m-%dT%H:%MZ}", f"{hi:%Y-%m-%dT%H:%MZ}"] for lo, hi in self.refresh_pending[:PENDING_SHOWN]]
+            detail["pending_total"] = len(self.refresh_pending)
+        return detail
 
     def summary(self, *, names: bool = True) -> str:
         """`12,480 rows read, 12,000 new, 480 already there, 0 differing, 0 rejected, 3 unknown tags (A, B, C), 17 rows for unknown
@@ -524,18 +567,25 @@ def audit_detail(report: ImportReport, via: str) -> dict[str, Any]:
     }
     if report.error:
         detail["error"] = report.error
+    if report.refresh_state != "not_needed":  # a refresh that did not finish is a fact the record must keep
+        detail["refresh"] = report.refresh_detail()
     return detail
 
 
 def report_lines(report: ImportReport) -> list[str]:
     """Everything the report says beyond its sentence, as lines for the command: the closed months, the rollups, the problem lines."""
     lines = [
-        f"{_plural(rows, 'row')} in the closed month {month}: the rows are stored, its frozen figures do not change"
+        f"{_plural(rows, 'row')} of the file {'falls' if rows == 1 else 'fall'} in the closed month {month} "
+        "(the new ones are stored; its frozen figures do not change)"
         for month, rows in sorted(report.closed_months.items())
     ]
-    if report.bad_quality:  # stored (they are part of "new"), marked BAD: the sentence of the report adds up without them
+    if report.bad_quality:  # the sentence of the report adds up without them: the new ones are part of its "new"
         labels = ", ".join(f"{label}: {count:,}" for label, count in sorted(report.bad_quality.items()))
-        lines.append(f"{_plural(sum(report.bad_quality.values()), 'row')} stored with bad quality ({labels})")
+        rows = sum(report.bad_quality.values())
+        lines.append(
+            f"{_plural(rows, 'row')} of the file {'has' if rows == 1 else 'have'} a quality other than good ({labels}); "
+            "the new ones are stored as bad quality, which counts in no figure"
+        )
     if report.refresh_note:
         lines.append(report.refresh_note)
     if report.problems:
@@ -562,8 +612,25 @@ def _now() -> datetime:
 
 BUSY_SENTENCE = "an import is running; try again when it has finished"
 CANCELLED_SENTENCE = (
-    "the import was interrupted (the server was stopping); what was stored stays, and importing the file again adds only the rest"
+    "the import was interrupted (the server was stopping); what was stored stays, and importing the file again stores only the rows "
+    "that are missing"
 )
+# A second import of the file refreshes the rollups over the hours of its NEW rows only: the hours that were stored before the cut
+# are not visited again by any policy, so a cut that left some unrefreshed has to say how they are repaired.
+UNREFRESHED_SENTENCE = (
+    "The rollups over some of its older hours could not be refreshed before it stopped (the ranges are in this record), and "
+    "importing the file again does not refresh them: run the file through the import command with --yes --refresh."
+)
+REFRESHED_SENTENCE = "The rollups over its older hours were refreshed before it stopped."
+
+
+def cancelled_sentence(report: ImportReport) -> str:
+    """What a cancelled run says about itself, once the outcome of its last refresh is known."""
+    if report.refresh_state == "done":
+        return f"{CANCELLED_SENTENCE}. {REFRESHED_SENTENCE}"
+    if report.refresh_state in ("failed", "pending"):
+        return f"{CANCELLED_SENTENCE}. {UNREFRESHED_SENTENCE}"
+    return CANCELLED_SENTENCE
 
 
 @dataclass
@@ -601,11 +668,16 @@ async def _store_chunk(conn: asyncpg.Connection, source_id: int, rows: list[Kept
     return _Stored(accepted, gone, written.new, written.already, written.differing, written.samples, written.first_new, written.last_new)
 
 
+def refresh_horizon(now: datetime) -> datetime:
+    """Hours before this are further back than the policies refresh by themselves (`REFRESH_WINDOW_DAYS`, less an hour)."""
+    return now - (timedelta(days=REFRESH_WINDOW_DAYS) - rollups.HOUR)
+
+
 def refresh_windows(spans: Sequence[tuple[datetime, datetime]], now: datetime) -> list[tuple[datetime, datetime]]:
-    """The ranges whose rollups an import has to refresh itself: the hours of the NEW rows that lie further back than the policies
-    reach (`REFRESH_WINDOW_DAYS`, less an hour), merged where they touch and cut into pieces of at most that many days. Newer
-    hours are refreshed by the policy and read live until then."""
-    horizon = now - (timedelta(days=REFRESH_WINDOW_DAYS) - rollups.HOUR)
+    """The ranges whose rollups an import has to refresh itself: the hours of the rows it changed (all the accepted rows, for a
+    repair) that lie further back than the policies reach, merged where they touch and cut into pieces of at most
+    `REFRESH_WINDOW_DAYS` days. Newer hours are refreshed by the policy and read live until then."""
+    horizon = refresh_horizon(now)
     spans = sorted((rollups.hour_floor(first), rollups.hour_floor(last) + rollups.HOUR) for first, last in spans if first < horizon)
     merged: list[tuple[datetime, datetime]] = []
     for lo, hi in spans:
@@ -628,29 +700,41 @@ async def _refresh(pool: asyncpg.Pool, report: ImportReport, spans: Sequence[tup
     windows = refresh_windows(spans, now)
     if not windows:
         return
-    refreshed, trouble = 0, []
-    for lo, hi in windows:
-        where = f"{lo:%Y-%m-%d %H:%M} to {hi:%Y-%m-%d %H:%M} UTC"
-        try:
-            unsafe = await rollups.pending_drop_range(pool, lo, hi)
-            if unsafe is not None:
-                trouble.append(f"{where}: {unsafe.removesuffix(', so nothing is written')}")
+    refreshed, trouble, left = 0, [], []  # `left`: the windows whose rollups are as they were
+    at = 0
+    try:
+        for at, (lo, hi) in enumerate(windows):
+            where = f"{lo:%Y-%m-%d %H:%M} to {hi:%Y-%m-%d %H:%M} UTC"
+            try:
+                unsafe = await rollups.pending_drop_range(pool, lo, hi)
+                if unsafe is not None:
+                    trouble.append(f"{where}: {unsafe.removesuffix(', so nothing is written')}")
+                    left.append((lo, hi))
+                    continue
+                await rollups.refresh_range(pool, lo, hi, now)
+            except Exception as exc:  # the class only: a database message could quote a value
+                trouble.append(f"{where}: {type(exc).__name__}")
+                left.append((lo, hi))
                 continue
-            await rollups.refresh_range(pool, lo, hi, now)
-        except Exception as exc:  # the class only: a database message could quote a value
-            trouble.append(f"{where}: {type(exc).__name__}")
-            continue
-        refreshed += max(1, math.ceil((hi - lo) / _DAY))
-    report.refresh_days = refreshed
+            refreshed += max(1, math.ceil((hi - lo) / _DAY))
+    except BaseException:  # cut short (the wrap-up of a cancelled run ran out of time): this window and the ones after it are pending
+        report.refresh_state, report.refresh_days = "pending", refreshed
+        report.refresh_pending = left + windows[at:]
+        report.refresh_note = "the readings are stored, but the refresh of the rollups did not finish over " + _ranges(report.refresh_pending)
+        raise
+    report.refresh_days, report.refresh_pending = refreshed, left
     if trouble:
         report.refresh_state = "failed"
-        report.refresh_note = (
-            "the readings are stored, but the hourly and minute rollups were left as they were over " + "; ".join(trouble[:3])
-            + (f"; and {len(trouble) - 3} more ranges" if len(trouble) > 3 else "")
-        )
+        report.refresh_note = "the readings are stored, but the hourly and minute rollups were left as they were over " + _ranges(trouble)
     else:
         report.refresh_state = "done"
         report.refresh_note = f"the rollups were refreshed over {_plural(refreshed, 'day')}"
+
+
+def _ranges(items: Sequence[Any]) -> str:
+    """The first three ranges as text (a window, or a sentence already made of one), and how many more there are."""
+    texts = [item if isinstance(item, str) else f"{item[0]:%Y-%m-%d %H:%M} to {item[1]:%Y-%m-%d %H:%M} UTC" for item in items[:3]]
+    return "; ".join(texts) + (f"; and {len(items) - 3} more ranges" if len(items) > 3 else "")
 
 
 def _failure(exc: BaseException, line: int | None) -> str:
@@ -668,11 +752,16 @@ def _log_failure(source_id: int, exc: BaseException) -> None:
 
 
 async def _import(
-    conn: asyncpg.Connection, pool: asyncpg.Pool, report: ImportReport, *, profile: ImportProfile, scan: PreScan, layout: Layout,
-    now: datetime,
+    conn: asyncpg.Connection, pool: asyncpg.Pool, report: ImportReport, spans: list[tuple[datetime, datetime]], *, profile: ImportProfile,
+    scan: PreScan, layout: Layout, now: datetime, refresh_all: bool,
 ) -> None:
+    """`spans` is the caller's list, so that a cancelled run's wrap-up still knows the times of the chunks that were committed: it
+    holds the times of the new rows of each chunk (of all the accepted rows older than the policies reach, for `refresh_all`), which
+    is what the rollups have to be refreshed over."""
     source_id, dry_run = report.source_id, report.dry_run
-    spans: list[tuple[datetime, datetime]] = []  # the times of the new rows of each chunk: what the rollups have to be refreshed over
+    horizon = refresh_horizon(now)
+    quality: dict[str, int] = {}  # the bad-quality labels seen, folded into the report after each chunk (fold_quality)
+    spilled = 0
     line = None  # the first line of the chunk being worked on, for the sentence of a failure
     try:
         retention = await rollups.raw_retention_days(pool)
@@ -716,15 +805,25 @@ async def _import(
             for row in stored.accepted:
                 if row.month in closed:
                     report.closed_months[row.month] = report.closed_months.get(row.month, 0) + 1
-                if row.label is not None:
-                    report.bad_quality[row.label] = report.bad_quality.get(row.label, 0) + 1
+                if row.label is None:
+                    continue
+                if row.label in quality or len(quality) < QUALITY_TRACKED:
+                    quality[row.label] = quality.get(row.label, 0) + 1
+                else:
+                    spilled += 1
+            if quality:
+                report.bad_quality = fold_quality(quality, spilled)
             if len(report.differing_samples) < SAMPLES_SHOWN and stored.samples:
                 tags = {row.point_id: row.tag for row in stored.accepted}
                 for sample in stored.samples[: SAMPLES_SHOWN - len(report.differing_samples)]:
                     report.differing_samples.append({
                         "tag": clip_cell(tags.get(sample["point_id"], "")), "ts": sample["ts"], "stored": sample["stored"], "file": sample["resent"],
                     })
-            if stored.first_new is not None and stored.last_new is not None:
+            if refresh_all and not dry_run:  # the repair: the rows that were already there are in the rollups' blind spot too
+                old = [row.ts for row in stored.accepted if row.ts < horizon]
+                if old:
+                    spans.append((min(old), max(old)))
+            elif stored.first_new is not None and stored.last_new is not None:
                 spans.append((stored.first_new, stored.last_new))
             last, start, line = parsed.last, stop, None
             await asyncio.sleep(0)  # let the other requests in between two chunks
@@ -743,14 +842,18 @@ async def _wrap_up(
     """The journal event of a real import and, when the route cannot write it (the handler was cancelled), its audit row. Each is
     best effort: a failure here never hides the report."""
     if audit_row:
+        row = audit_detail(report, via)
         try:
-            await audit_pool(pool, user_id, "readings.imported", audit_detail(report, via))
+            try:
+                await audit_pool(pool, user_id, "readings.imported", row)
+            except asyncpg.ForeignKeyViolationError:  # the account was deleted between audit_pool's own look-up and its insert
+                await audit_pool(pool, None, "readings.imported", row)
         except Exception as exc:
             log.warning("could not write the audit row of an interrupted import: %s", type(exc).__name__)
     detail = {
         "via": via, "profile": report.profile, "rows_read": report.rows_read, "new": report.new, "already": report.already,
         "differing": report.differing, "rejected": report.rejected, "unknown_rows": report.unknown_rows,
-        "closed_months": dict(sorted(report.closed_months.items())), "complete": report.complete, "refresh": report.refresh_state,
+        "closed_months": dict(sorted(report.closed_months.items())), "complete": report.complete, "refresh": report.refresh_detail(),
     }
     message = f"an import into the source stored {report.new:,} new readings ({report.summary(names=False)})"
     if not report.complete:
@@ -762,29 +865,54 @@ async def _wrap_up(
         journal.record_soon(pool, "api", IMPORT_FINISHED, message, **kwargs)
 
 
+async def _cancelled(
+    pool: asyncpg.Pool, report: ImportReport, spans: Sequence[tuple[datetime, datetime]], now: datetime, via: str, user_id: int | None
+) -> None:
+    """The shielded wrap-up of a cancelled real run. The chunks that were committed are stored but their old hours are not in the
+    rollups yet and no policy will visit them, so the refresh is tried here, on connections of its own, for at most
+    CANCEL_REFRESH_SECONDS. Whatever happens is recorded: `done`, `failed`, or `pending` with the UTC ranges that were not reached.
+    The timeout is inside this coroutine (a task of its own), because the cancelled task already has a cancellation pending."""
+    try:
+        async with asyncio.timeout(CANCEL_REFRESH_SECONDS):
+            await _refresh(pool, report, spans, now)
+    except TimeoutError:
+        pass  # _refresh recorded the state `pending` and the ranges it did not reach
+    except Exception as exc:  # a pool that is closing, say: record the class and leave the ranges as pending
+        report.refresh_state, report.refresh_pending = "failed", refresh_windows(spans, now)
+        report.refresh_note = f"the readings are stored, but the refresh of the rollups failed ({type(exc).__name__})"
+    report.error = cancelled_sentence(report)
+    await _wrap_up(pool, report, via, user_id, audit_row=True, wait=True)
+
+
 async def run_import(
     pool: asyncpg.Pool, *, source_id: int, profile: ImportProfile, scan: PreScan, layout: Layout, dry_run: bool, via: str = "web",
-    user_id: int | None = None, now: datetime | None = None, wait_journal: bool = False,
+    user_id: int | None = None, now: datetime | None = None, wait_journal: bool = False, refresh_all: bool = False,
 ) -> ImportReport:
     """Run (or, with `dry_run`, only plan) an import and return its report. Raises ImportBusy when another import holds the lock,
     and CancelledError when cancelled; every other failure ends in the report (`complete` false, `error` a sentence with the class
     of the exception and no message).
 
+    `refresh_all` is the repair for a run that was cut: the rollups are refreshed over the hours of ALL the accepted rows older than
+    the policies reach, also the ones that were already stored (a normal run refreshes only the hours of its new rows). It is for
+    the command; the route never offers it. A dry run writes nothing and ignores it.
+
     ONE pool connection takes the lock and runs every chunk's transaction; the rollup refresh borrows a second one at the end, so
     an import holds at most two of the pool's five. The lock goes when the connection goes back to the pool (its reset releases
-    session locks). A cancelled run writes its own audit row and journal event from a short connection of its own, shielded; on any
-    other path the caller writes the audit row (the route in its own body, the command after this returns)."""
+    session locks). A cancelled run tries the refresh once more, then writes its own audit row and journal event from connections
+    of its own, shielded; on any other path the caller writes the audit row (the route in its own body, the command after this
+    returns)."""
     now = now or _now()
     report = ImportReport(dry_run, source_id, profile.name, scan.sha256, scan.size)
+    spans: list[tuple[datetime, datetime]] = []
     async with pool.acquire() as conn:
         if not await conn.fetchval(_TRY_LOCK, LOCK_KEY):
             raise ImportBusy(BUSY_SENTENCE)
         try:
-            await _import(conn, pool, report, profile=profile, scan=scan, layout=layout, now=now)
+            await _import(conn, pool, report, spans, profile=profile, scan=scan, layout=layout, now=now, refresh_all=refresh_all)
         except asyncio.CancelledError:
             report.complete, report.error = False, CANCELLED_SENTENCE
             if not dry_run:
-                await asyncio.shield(_wrap_up(pool, report, via, user_id, audit_row=True, wait=True))
+                await asyncio.shield(_cancelled(pool, report, spans, now, via, user_id))
             raise
         except Exception as exc:  # before the first chunk: nothing was written
             report.complete, report.error = False, _failure(exc, None)
@@ -811,6 +939,12 @@ def _parser() -> argparse.ArgumentParser:
     profile.add_argument("--profile-name", help="the name of an import profile saved in the dashboard")
     profile.add_argument("--profile-file", type=Path, help="a JSON file with an import profile (the fields of the saved ones)")
     parser.add_argument("--yes", action="store_true", help="really import the file (without it: check it and write nothing)")
+    parser.add_argument(
+        "--refresh", action="store_true",
+        help="with --yes: also refresh the hourly and minute rollups over the hours of EVERY row of the file that is older than the days "
+        "the policies refresh by themselves, the rows that were already stored included. The repair for an import that was interrupted: "
+        "run the same file again with --yes --refresh. The dashboard never does this.",
+    )
     parser.add_argument("file", help="the CSV file, or - to read it from standard input")
     return parser
 
@@ -855,6 +989,9 @@ async def amain(
         args = parser.parse_args(argv)
     except SystemExit as exit_:  # argparse prints its own message and exits 2; --help exits 0
         return exit_.code if isinstance(exit_.code, int) else EXIT_USAGE
+    if args.refresh and not args.yes:
+        _say("--refresh repairs the rollups after a real import: add --yes", error=True)
+        return EXIT_USAGE
     try:
         body = _read(args.file, stdin or sys.stdin.buffer)
         scan = await compute.run(pre_scan, body)
@@ -888,7 +1025,7 @@ async def amain(
             return EXIT_REFUSED
         report = await run_import(
             pool, source_id=args.source, profile=profile, scan=scan, layout=layout, dry_run=not args.yes, via="command",
-            now=clock() if clock else None, wait_journal=True,
+            now=clock() if clock else None, wait_journal=True, refresh_all=args.refresh,
         )
         if args.yes:
             try:
@@ -920,7 +1057,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return asyncio.run(amain(argv))
     except KeyboardInterrupt:
-        _say("Stopped. What was stored stays; importing the same file again adds only what is missing.", error=True)
+        _say(
+            "Stopped. What was stored stays; importing the same file again stores only what is missing. To also refresh the rollups over "
+            "the hours that were already stored, add --refresh.", error=True,
+        )
         return 130
 
 
