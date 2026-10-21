@@ -430,6 +430,49 @@ async def test_a_batch_the_source_answers_with_a_protocol_error_in_three_cycles_
     assert [event["code"] for event in await world.events(HISTORY_FAILED)] == ["protocol_error", "set_aside"]
 
 
+async def test_a_stuck_batch_in_the_first_slice_of_a_first_run_is_set_aside_though_the_floor_moves_with_the_clock(db):
+    async def broken(call, number):
+        if call.addresses == ("M001_kWh",):
+            raise ConnectorError("protocol_error", "HTTP 500")
+
+    # A first reading far older than the lookback: the window starts at "now - lookback", which moves with the clock at every cycle.
+    first = NOW - 10 * 24 * HOUR
+    world = await make_world(
+        db, {"M001_kWh": KWH, "M002_kWh": KWH}, {"M001_kWh": first, "M002_kWh": first}, settings=settings_with(max_rows=100), script=broken
+    )  # a cap of 100 rows: one-hour slices, one address to a batch
+    for _ in range(2):
+        result = await world.cycle()
+        assert result.state == "backing_off" and (await world.status())["answered_through"] is None
+        world.clock.now = result.next_try_at  # the cycles run when the source may be asked again, a few minutes later each
+    result = await world.cycle()  # the third strike: M001 is given up in this slice and the rest of it is answered
+    assert result.set_aside == 1
+    assert (await world.status())["answered_through"] == NOW - 47 * HOUR  # the floor's hour (two days back, 12:00) plus the one-hour slice
+    assert len(await world.stored("M002_kWh")) > 40  # from the floor (12:12) to the end of the slice, and the live row
+
+
+async def test_a_stuck_batch_in_the_newest_slice_is_set_aside_though_the_window_ends_at_a_clock_that_moves(db):
+    broken = {"on": False}
+
+    async def sometimes(call, number):
+        if broken["on"] and "M001_kWh" in call.addresses:  # the short window holds both addresses in one batch
+            raise ConnectorError("protocol_error", "HTTP 500")
+
+    world = await make_world(
+        db, {"M001_kWh": KWH, "M002_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR, "M002_kWh": NOW - 2 * HOUR}, settings=settings_with(max_rows=100),
+        script=sometimes,
+    )
+    assert (await world.cycle()).state == "idle"
+    broken["on"] = True
+    world.clock.now += 10 * MINUTE
+    for _ in range(2):
+        result = await world.cycle()
+        assert result.state == "backing_off"
+        world.clock.now = result.next_try_at
+    result = await world.cycle()  # the window is [the mark, now] every time and its end moves: the mark is what identifies the batch
+    assert result.set_aside == 1
+    assert (await world.status())["answered_through"] == world.clock.now
+
+
 async def test_trouble_that_ends_resets_the_back_off_and_a_new_trouble_is_journaled_at_once(db):
     failing = {"on": True}
 
@@ -974,6 +1017,7 @@ def test_the_batches_hold_at_most_200_addresses_and_at_most_the_expected_rows():
     assert [len(batch) for batch in Backfill(None, settings=settings_with(max_rows=10**9))._batches(points, NOW, NOW + HOUR)] == [200, 200, 50]
     assert len(Backfill(None, settings=settings_with(max_rows=100))._batches(points[:3], NOW, NOW + 6 * HOUR)) == 3  # one address is a batch however big
     assert engine._batches([], NOW, NOW + HOUR) == []
+    assert engine._batches(points, NOW + 17 * MINUTE, NOW + 6 * HOUR) == batches  # sized from the whole hour: a floor that moves changes nothing
 
 
 def test_a_slice_is_whole_hours_up_to_six_and_shorter_when_the_rows_demand_it():

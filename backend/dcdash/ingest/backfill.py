@@ -555,8 +555,10 @@ class Backfill:
     def _batches(self, points: Sequence[Mapped], lo: datetime, hi: datetime) -> list[list[Mapped]]:
         """The addresses of a slice in groups for one request each: at most MAX_ADDRESSES, and at most `max_rows` rows expected
         (addresses times seconds over the mapping's interval). One address is a batch of its own however many rows it needs: the
-        source cuts the answer and the engine continues from there."""
-        seconds = max((hi - lo).total_seconds(), 1.0)
+        source cuts the answer and the engine continues from there. The rows are counted over the slice's whole hours (from the hour
+        `lo` is in), not from `lo`: the first slice of a first run starts at a floor that moves with the clock, and the same batches
+        must come out at every cycle, because a batch is recognised by its addresses."""
+        seconds = max((hi - rollups.hour_floor(lo)).total_seconds(), 1.0)
         batches: list[list[Mapped]] = []
         current: list[Mapped] = []
         rows = 0.0
@@ -621,7 +623,10 @@ class Backfill:
 
     async def _batch(self, run: _Run, batch: list[Mapped], lo: datetime, hi: datetime, wrote: _Span) -> datetime | None:
         """One batch of addresses over one slice. Returns how far the source vouched for it, or None when it was set aside."""
-        key = (run.source.id, tuple(m.point_id for m in batch), lo)
+        # A batch is the same batch at every cycle when its slice starts in the same hour with the same addresses. Not `lo` itself and
+        # not `hi`: the first slice of a first run starts at "now - lookback" and the newest slice ends at "now", and both move with
+        # the clock, so the strikes would never add up to three.
+        key = (run.source.id, rollups.hour_floor(lo), tuple(m.point_id for m in batch))
         cursor = [lo]  # kept across tries, so a retry continues where the failed one stopped
         while True:
             try:
