@@ -735,6 +735,36 @@ async def test_a_stuck_batch_among_several_in_the_newest_slice_is_set_aside_thou
     assert {call.addresses for call in world.calls if "M005_kWh" in call.addresses} == {("M005_kWh", "M006_kWh")}
 
 
+async def test_the_strikes_of_batches_that_cannot_come_again_are_forgotten(db):
+    async def stuck(call, number):
+        if "M002_kWh" in call.addresses:
+            raise ConnectorError("protocol_error", "HTTP 500")
+
+    first = NOW - 2 * HOUR
+    world = await make_world(db, {"M001_kWh": KWH, "M002_kWh": KWH}, {"M001_kWh": first, "M002_kWh": first}, script=stuck)
+    result = await world.cycle()
+    assert result.state == "backing_off" and len(world.engine._strikes) == 1  # the one batch of both addresses has a strike
+    # the mapping of the stuck address goes: the batch of both is never asked again, and the cycle that follows is a success
+    await db.execute("DELETE FROM mappings WHERE point_id = $1", world.points["M002_kWh"])
+    world.clock.now = result.next_try_at
+    assert (await world.cycle()).state == "idle"
+    assert world.engine._strikes == {}
+
+
+async def test_a_source_that_stays_stuck_for_days_keeps_no_strikes_of_hours_before_the_floor_of_its_lookback(db):
+    async def stuck_everywhere(call, number):
+        raise ConnectorError("protocol_error", "HTTP 500")
+
+    world = await make_world(db, {"M001_kWh": KWH}, script=stuck_everywhere)
+    assert (await world.cycle()).state == "backing_off"
+    [(_, old_hour, _)] = world.engine._strikes
+    world.clock.now = NOW + 5 * 24 * HOUR
+    await db.execute("UPDATE history_status SET next_try_at = NULL WHERE source_id = $1", world.source)
+    assert (await world.cycle()).state == "backing_off"
+    [(_, new_hour, _)] = world.engine._strikes  # one key: the floor moved on, two days before the clock, and the old hour's strike went
+    assert new_hour == NOW + 3 * 24 * HOUR and old_hour < new_hour
+
+
 async def test_a_source_that_vouches_only_up_to_a_quarter_hour_ago_is_no_failure_and_the_mark_follows_it(db):
     clock = Clock()
     # a historian that buffers: its own "now" is fifteen minutes behind ours, so it is complete only up to there

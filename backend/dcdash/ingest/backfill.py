@@ -501,6 +501,7 @@ class Backfill:
         if success:
             if self._failed_cycles.pop(sid, 0):
                 self._episodes[sid] += 1  # the next trouble is a new episode: it is journaled at once
+            self._forget_strikes(sid)  # a batch that is not stuck any more (or that cannot come again, as it was grouped) has no strikes
         else:
             self._failed_cycles[sid] += 1
         error = None if success else clip_error(scrub_url_credentials(reason, known), 500)
@@ -520,6 +521,13 @@ class Backfill:
         own = min(BACKOFF_CAP_SECONDS, BACKOFF_FIRST_SECONDS * 2 ** (RETRIES + self._failed_cycles[source_id]))
         return min(NOT_SUPPORTED_WAIT_SECONDS, max(own, retry_after or 0.0))
 
+    def _forget_strikes(self, source_id: int, before: datetime | None = None) -> None:
+        """Drop the strikes of one source: those of slices that start in an hour before `before`, or all of them. A key stays only
+        while the same batch can come again, which a regrouped batch or an hour that is past cannot."""
+        self._strikes = {
+            key: count for key, count in self._strikes.items() if key[0] != source_id or (before is not None and key[1] >= before)
+        }
+
     def _jitter(self) -> float:
         return 0.1 * self._rng.random() if self._rng is not None else 0.0
 
@@ -533,6 +541,7 @@ class Backfill:
             return
         floor = now - timedelta(days=min(self._settings.lookback_days, run.retention_days - 2))
         floor = max(floor, rollups.hour_floor(min(run.first_bucket.values())))  # nothing earlier than the first hour may be stored
+        self._forget_strikes(sid, rollups.hour_floor(floor))  # no slice starts before the floor: those hours' batches cannot come again
         mark, reread = row["answered_through"], row["reread_through"]
         start = floor if mark is None else max(mark, floor)
         late_to = min(now - reread_after, start)  # the late pass stops where this cycle's new window starts
