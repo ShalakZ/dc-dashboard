@@ -352,7 +352,7 @@ async def test_an_undo_does_not_deadlock_with_the_delete_of_an_asset_it_created(
         await waiting(undo, "the delete's lock on the asset")
         # The cascade takes the mappings: no wait. Had the Undo locked them already, this would wait for it while it waits for the
         # asset, and the database would end the cycle after deadlock_timeout (1 s) by killing the Undo: that is the 409 below.
-        await asyncio.wait_for(conn.execute("DELETE FROM assets WHERE id = $1", meter), 0.8)
+        await asyncio.wait_for(conn.execute("DELETE FROM assets WHERE id = $1", meter), WAIT)
         await tx.commit()
         response = await asyncio.wait_for(undo, WAIT)
     assert response.status_code == 409 and response.json()["detail"].startswith('the mapping of the tag "M1.kWh" no longer exists')
@@ -368,7 +368,7 @@ async def test_an_undo_does_not_deadlock_with_the_delete_of_an_ancestor_that_exi
         await conn.fetch("SELECT id FROM assets WHERE id = ANY($1) ORDER BY id FOR UPDATE", [hall, row])  # the delete of Hall 1
         undo = asyncio.create_task(client.post(undo_url(audit_id)))
         await waiting(undo, "the delete's locks")
-        await asyncio.wait_for(conn.execute("DELETE FROM assets WHERE id = $1", hall), 0.8)  # see the test above
+        await asyncio.wait_for(conn.execute("DELETE FROM assets WHERE id = $1", hall), WAIT)  # see the test above
         await tx.commit()
         response = await asyncio.wait_for(undo, WAIT)
     assert response.status_code == 409 and response.json()["detail"].startswith('the mapping of the tag "A" no longer exists')

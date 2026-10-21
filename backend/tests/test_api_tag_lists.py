@@ -82,6 +82,16 @@ async def waiting(task: asyncio.Task, why: str) -> None:
     assert not task.done(), f"the request answered without waiting for {why}"
 
 
+async def until_blocked(db, why: str, timeout: float = 10.0) -> None:
+    """Wait until some backend of this database is waiting for a lock: the request really is parked there, whatever the machine's speed."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not await db.fetchval(
+        "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+    ):
+        assert asyncio.get_running_loop().time() < deadline, f"nothing waited for {why}"
+        await asyncio.sleep(0.05)
+
+
 # ---- the dry run --------------------------------------------------------------------------------------------------------
 
 
@@ -551,7 +561,7 @@ async def test_the_run_takes_the_assets_it_writes_under_in_id_order_before_its_f
         # The run has locked nothing yet (its one statement takes the lower id first and waits there), so the delete goes on to the
         # higher id at once. A run that had inserted the first line already would hold KEY SHARE on High, and this would wait for it
         # while the run waits for Low: a cycle the database ends after a second by killing one of the two.
-        await asyncio.wait_for(conn.fetch("SELECT id FROM assets WHERE id = $1 FOR UPDATE", high), 0.8)
+        await asyncio.wait_for(conn.fetch("SELECT id FROM assets WHERE id = $1 FOR UPDATE", high), WAIT)
         await conn.execute("DELETE FROM assets")
         await tx.commit()
         response = await asyncio.wait_for(run, WAIT)
@@ -570,7 +580,7 @@ async def test_a_deadlock_that_still_happens_is_a_409_try_again_not_a_503(client
         # A mapping for the same (asset, metric), not committed: the run's insert waits for its unique entry...
         await conn.execute("INSERT INTO mappings (point_id, asset_id, metric, interval_seconds) VALUES ($1, $2, 'voltage_v', 5)", other, hall)
         run = asyncio.create_task(real(client, source, body, report))
-        await waiting(run, "the unique entry")
+        await until_blocked(db, "the unique entry")
         # ...and this wants the asset FOR UPDATE, which the run holds FOR KEY SHARE: each waits for the other. The run started waiting
         # first, so its deadlock check fires first and it is the one that is ended.
         await asyncio.wait_for(conn.fetch("SELECT id FROM assets WHERE id = $1 FOR UPDATE", hall), WAIT)
