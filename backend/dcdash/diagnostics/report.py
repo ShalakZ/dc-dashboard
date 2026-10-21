@@ -25,7 +25,7 @@ import socket
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -80,7 +80,8 @@ CAPS: dict[str, tuple[int, int]] = {
     "journal": (30, 100), "points": (10, 20), "audit": (10, 20), "api_errors": (5, 20), "scans": (3, 5), "health_errors": (3, 10),
 }
 # How a body that is too long is cut down, in order: (knob, floor); a knob is halved until it reaches its floor. The tails go first
-# (M7), then the health lines of healthy sources, then the history lines of the sources whose backfill is fine (w30: a line each, so
+# (M7), then the health lines of healthy sources (one whose backfill is backing off or has an error on record is not healthy), then
+# the history lines of the sources whose backfill is fine, and the one line of an unreadable history (w30: a line each, so
 # a few dozen of them must not be what pushes a report into dropping sources), and only then the sources themselves (`source_limit`),
 # which M7 wants kept whole.
 TRIM_STEPS = (
@@ -207,8 +208,9 @@ class SourceHealth:
     reads: int = 0  # readings in the last HEALTH_WINDOW_MINUTES
     bad: int = 0
     newest_age_seconds: float | None = None  # by the database clock; None: no reading on record
-    # None: the source has no history_status row (the report then says nothing about history); Unavailable: the read failed.
-    history: HistoryInfo | Unavailable | None = None
+    # None: the source has no history_status row (the report then says nothing about history). A read that failed is not kept
+    # here, once per source: it is `ReportData.history_unavailable`.
+    history: HistoryInfo | None = None
 
 
 @dataclass(frozen=True)
@@ -346,6 +348,8 @@ class ReportData:
     settings: SettingsInfo | Unavailable = field(default_factory=SettingsInfo)
     sources: tuple[SourceInfo, ...] | Unavailable = ()
     health: tuple[SourceHealth, ...] | Unavailable = ()
+    # The history status rows could not be read (an older schema, a timeout): SOURCE HEALTH says so once, at its end, not per source.
+    history_unavailable: Unavailable | None = None
     points: PointsInfo | Unavailable = field(default_factory=PointsInfo)
     checks: tuple[CheckInfo, ...] | Unavailable = ()
     journal: tuple[Event, ...] | Unavailable = ()
@@ -396,7 +400,7 @@ async def gather(
     # Once, before the first savepoint: a SET LOCAL inside a savepoint is undone when that savepoint rolls back.
     await db.execute(text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT}'"))
     generated = datetime.now(timezone.utc)
-    return ReportData(
+    data = ReportData(
         detail=detail,
         source_id=source_id,
         generated_at=generated,
@@ -413,6 +417,13 @@ async def gather(
         audit=await _guard(db, lambda: _audit(db, CAPS["audit"][full])),
         api_errors=await _guard(db, lambda: _api_errors(db, CAPS["api_errors"][full] * 3)),
     )
+    # Its own savepoint, after the sections above: a database without the table (an older schema) still gets its health lines.
+    history = await _guard(db, lambda: _history(db, source_id))
+    if isinstance(history, Unavailable):
+        return replace(data, history_unavailable=history)
+    if isinstance(data.health, Unavailable):
+        return data
+    return replace(data, health=tuple(replace(item, history=history.get(item.source_id)) for item in data.health))
 
 
 async def load_known(
@@ -728,14 +739,7 @@ async def _health(db: AsyncSession, source_id: int | None) -> tuple[SourceHealth
             {"minutes": HEALTH_WINDOW_MINUTES, **({} if source_id is None else {"sid": source_id})},
         )
     ).all()
-    # Its own savepoint: a database without the table (an older schema) still gets its health lines.
-    history = await _guard(db, lambda: _history(db, source_id))
-    return tuple(
-        SourceHealth(
-            r.id, int(r.reads), int(r.bad), _float(r.age), history if isinstance(history, Unavailable) else history.get(r.id)
-        )
-        for r in rows
-    )
+    return tuple(SourceHealth(r.id, int(r.reads), int(r.bad), _float(r.age)) for r in rows)
 
 
 async def _history(db: AsyncSession, source_id: int | None) -> dict[int, HistoryInfo]:
@@ -1344,7 +1348,9 @@ class _Renderer:
         for item in health:
             if not self.shown(item.source_id):
                 continue
-            if not self.caps["health_sources"] and item.source_id not in self.problems:
+            # A source whose backfill is in trouble keeps its block even when the source itself reads fine: its history line is the
+            # only place that says so, and the note below must not call it problem-free.
+            if not self.caps["health_sources"] and item.source_id not in self.problems and not self._history_alarm(item.history):
                 healthy_left_out += 1
                 continue
             newest = "no reading on record" if item.newest_age_seconds is None else f"newest reading {_age(item.newest_age_seconds)} ago"
@@ -1373,18 +1379,25 @@ class _Renderer:
             lines.append("... distinct errors per source omitted to fit one part (see JOURNAL, or use detail=full or source=<id>)")
         if healthy_left_out:
             lines.append(f"... health of {healthy_left_out} sources without a problem omitted to fit one part")
+        # One line for the whole section: the same failed read would otherwise print under every source. A tight report drops it.
+        if lines and (unreadable := self.data.history_unavailable) is not None and self.caps["history_lines"]:
+            lines.append(f"history: unavailable ({self.text(unreadable.error, 80)})")
         return lines or ["no sources"]
 
     @staticmethod
-    def _history_trouble(info: HistoryInfo | Unavailable) -> bool:
-        """A history that is not simply idle or filling: the backfill is backing off or cannot read history, has an error on record,
-        or could not be read at all."""
-        return isinstance(info, Unavailable) or info.state in ("backing_off", "not_supported") or bool(info.last_error)
+    def _history_trouble(info: HistoryInfo) -> bool:
+        """A history that is not simply idle or filling: the backfill is backing off or cannot read history, or has an error on
+        record."""
+        return info.state in ("backing_off", "not_supported") or bool(info.last_error)
 
-    def _history_line(self, info: HistoryInfo | Unavailable) -> str:
+    @staticmethod
+    def _history_alarm(info: HistoryInfo | None) -> bool:
+        """A backfill that needs a look even when the source reads fine: backing off, or an error on record. Not `not_supported`
+        (the source simply has no history interface, which is no fault) and not a row that could not be read."""
+        return info is not None and (info.state == "backing_off" or bool(info.last_error))
+
+    def _history_line(self, info: HistoryInfo) -> str:
         """One line under a source's health: where the history backfill stands, in plain words and UTC."""
-        if isinstance(info, Unavailable):
-            return f"   history: unavailable ({self.text(info.error, 80)})"
         through = f"answered through {_utc_minute(info.answered_through)}" if info.answered_through else "nothing answered yet"
         line = (
             f"   history: {self.text(info.state.replace('_', ' '), 20)}, {through}, since restart {info.rows_new:,} new / "
@@ -1703,7 +1716,7 @@ def render(data: ReportData, detail: Detail, transform: Transform, *, masked: bo
     limit = max_chars or (FULL_BODY_CHARS if detail == "full" else SUMMARY_BODY_CHARS)
     column = detail == "full"
     caps = {name: pair[column] for name, pair in CAPS.items()}
-    caps["health_sources"] = 1  # 0: only the sources with a problem keep their SOURCE HEALTH lines
+    caps["health_sources"] = 1  # 0: only the sources with a problem (or a backfill in trouble) keep their SOURCE HEALTH lines
     caps["history_lines"] = 1  # 0: only the history lines of a backfill in trouble stay
     source_limit: int | None = None
     count = 0 if isinstance(data.sources, Unavailable) else len(data.sources)

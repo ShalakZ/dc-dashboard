@@ -113,7 +113,8 @@ has never run for (all OPC UA and Modbus sources) has none, so a report from a s
 - `N requests, N failed`: requests sent to the source since the restart, and the failed ones plus the groups of points set aside.
 - `, next try <time>`: shown while backing off. `, last error: <text>`: the reason, with credentials removed; it starts with the
   status (`unreachable`, `timeout`, `rate_limited`, `auth_failed`, `protocol_error`, `pending_drop`).
-- `history: unavailable (<error>)`: the report could not read the status table, as on a database older than migration 0016.
+- `history: unavailable (<error>)`: one line at the end of SOURCE HEALTH (not one per source) when the report could not read the status
+  table, as on a database older than migration 0016. A report that is too long for one part may leave it out.
 
 The same numbers come from `GET /api/sources/{id}/history`, and the journal part of the report has the events `history.filled`,
 `history.failed`, `history.closed_month` and `readings.conflict`.

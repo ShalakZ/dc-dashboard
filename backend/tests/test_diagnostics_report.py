@@ -1388,9 +1388,47 @@ def test_the_history_line_is_scrubbed_and_clipped_like_every_text_of_the_report(
     assert all(len(line) <= report.LINE_LIMIT for line in body.split("\n"))
 
 
-def test_a_history_that_could_not_be_read_is_one_line_and_the_health_lines_stay():
-    lines = health_lines(SourceHealth(3, 120, 3, 2.0, Unavailable("ProgrammingError (UndefinedTableError)")))
-    assert lines[0].startswith('#3 "Main SCADA": 12.0 reads/min') and lines[1] == "   history: unavailable (ProgrammingError (UndefinedTableError))"
+def test_a_history_that_could_not_be_read_is_one_line_for_the_whole_section_and_the_health_lines_stay():
+    data = ReportData(
+        generated_at=NOW, sources=(source(3), source(4, "Spare")), history_unavailable=Unavailable("ProgrammingError (UndefinedTableError)"),
+        health=(SourceHealth(3, 120, 3, 2.0), SourceHealth(4, 0, 0, None)),
+    )
+    lines = lines_of(render(data, "summary", ident), "SOURCE HEALTH")
+    assert [line[:12] for line in lines] == ['#3 "Main SCA', '#4 "Spare": ', "history: una"]
+    assert lines[-1] == "history: unavailable (ProgrammingError (UndefinedTableError))"
+    # a tight report may drop it (the knob of the history lines at 0); the health lines stay
+    tight = report._assemble(data, "summary", ident, {**{n: p[0] for n, p in report.CAPS.items()}, "health_sources": 1, "history_lines": 0}, None, {}, False)
+    assert "history: unavailable" not in tight and lines_of(tight, "SOURCE HEALTH") == lines[:2]
+    # and a section with no sources has nothing to say it about
+    assert lines_of(render(replace(data, sources=(), health=()), "summary", ident), "SOURCE HEALTH") == ["no sources"]
+
+
+def test_an_alarm_on_a_backfill_keeps_the_block_of_an_online_source_without_a_check_through_the_tightest_trim():
+    """A source whose live reads are fine (online, no check) but whose backfill is backing off and holds an error is not a source
+    without a problem: its health line and its history line survive the steps that drop the healthy blocks and the idle history lines
+    (an offline source with an idle backfill keeps its health line and loses the history line); the note does not count it."""
+    alarm = history("backing_off", failures=4, next_try_at=THROUGH + timedelta(minutes=30), last_error="unreachable: no route")
+
+    def state(i: int) -> HistoryInfo:
+        if i == 7:  # online, no check: the 7th of 40
+            return alarm
+        if i == 8:  # online, no check: no history interface is no fault
+            return history("not_supported")
+        return history()
+
+    data = replace(busy(40, 500, failing=33), health=tuple(SourceHealth(i, 120, 3, 2.0, state(i)) for i in range(1, 41)))
+    assert data.sources[6].status == "online" and data.sources[7].status == "online" and all(c.source_id != 7 for c in data.checks)
+    body = render(data, "summary", ident)
+    parts = finalize(body, "abc1234-dirty", NOW)
+    assert len(parts.parts) == 1 and verify_paste(parts.text()).ok and "more sources omitted" not in body
+    lines = lines_of(body, "SOURCE HEALTH")
+    assert lines[lines.index('#7 "Plant 7": 12.0 reads/min, 2.5% bad, newest reading 2 s ago') + 1].startswith("   history: backing off, ")
+    assert "   history: backing off" in "\n".join(lines) and all(not line.startswith("   history: idle") for line in lines)  # idle ones are gone
+    assert not any(line.startswith('#8 ') for line in lines)  # online, no check, and a backfill that only has no history interface
+    offline = [i for i in range(1, 41) if i % 3 == 0]  # the sources that have a problem anyway (#33 among them)
+    assert [line.split(":")[0] for line in lines if line.startswith("#")] == [f'#{i} "Plant {i}"' for i in sorted([*offline, 7])]
+    left_out = 40 - len(offline) - 1  # everything but the problems and the alarm
+    assert f"... health of {left_out} sources without a problem omitted to fit one part" in lines
 
 
 def test_a_busy_summary_with_a_history_line_on_every_source_still_keeps_every_source_in_one_part():
@@ -1455,7 +1493,7 @@ async def test_gather_reads_the_history_row_of_each_source_that_has_one(db, sess
     assert [h.history for h in (await gather(session, detail="summary", source_id=ids["b"])).health] == [health[ids["b"]].history]
 
 
-async def test_a_failing_history_read_leaves_the_health_lines_and_marks_each_source(db, session, monkeypatch):
+async def test_a_failing_history_read_leaves_the_health_lines_and_says_so_once(db, session, monkeypatch):
     ids = await seed(db)
 
     async def broken(db_, *args):
@@ -1464,9 +1502,12 @@ async def test_a_failing_history_read_leaves_the_health_lines_and_marks_each_sou
     monkeypatch.setattr(report, "_history", broken)
     data = await gather(session, detail="summary")
     assert not isinstance(data.health, Unavailable) and {h.source_id for h in data.health} == set(ids.values())
-    assert {h.history for h in data.health} == {Unavailable("RuntimeError")} and "Zq9-secret-pw" not in repr(data)
+    assert {h.history for h in data.health} == {None} and data.history_unavailable == Unavailable("RuntimeError")
+    assert "Zq9-secret-pw" not in repr(data)
     assert await session.scalar(select(1)) == 1  # the transaction is usable
-    assert "   history: unavailable (RuntimeError)" in render(data, "summary", ident)
+    lines = lines_of(render(data, "summary", ident), "SOURCE HEALTH")
+    assert lines.count("history: unavailable (RuntimeError)") == 1 and lines[-1] == "history: unavailable (RuntimeError)"
+    assert len(data.health) == 2 and len([line for line in lines if line.startswith("#")]) == 2
 
 
 async def test_a_database_without_the_history_table_still_gives_the_health_section(db, session):
@@ -1474,7 +1515,7 @@ async def test_a_database_without_the_history_table_still_gives_the_health_secti
     await session.execute(text("ALTER TABLE history_status RENAME TO history_status_away"))  # undone with the session's transaction
     data = await gather(session, detail="summary")
     assert not isinstance(data.health, Unavailable) and len(data.health) == 2
-    assert {h.history for h in data.health} == {Unavailable("ProgrammingError (UndefinedTableError)")}
+    assert {h.history for h in data.health} == {None} and data.history_unavailable == Unavailable("ProgrammingError (UndefinedTableError)")
     assert not isinstance(data.points, Unavailable) and not isinstance(data.journal, Unavailable)  # the other sections never noticed
     lines = lines_of(render(data, "summary", ident), "SOURCE HEALTH")
     assert any(line.startswith(f'#{ids["a"]} "Main SCADA": ') for line in lines)

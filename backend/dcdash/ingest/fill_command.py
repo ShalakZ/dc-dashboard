@@ -99,6 +99,9 @@ async def amain(
     try:
         hooks = {name: hook for name, hook in (("clock", clock), ("sleep", sleep)) if hook is not None}
         return await _fill(args, Backfill(pool, factory, settings, **hooks), pool, settings, clock or (lambda: datetime.now(UTC)))
+    except Exception as exc:  # a statement outside the engine (the source row, the retention): the class only, as at the pool opening
+        _say(f"the fill failed: {type(exc).__name__}", error=True)
+        return EXIT_REFUSED
     finally:
         if own:
             await pool.close()
@@ -114,9 +117,10 @@ async def _fill(
     kind = connector_types().get(row["connector_type"])
     name = " ".join(row["name"].split())
     if kind is None or not kind.supports_history:
+        article = "an" if row["connector_type"][:1].lower() in ("a", "e", "i", "o", "u") else "a"
         _say(
-            f"source {args.source} ({name}) is a {row['connector_type']} source; this connector does not read history, so there is "
-            "nothing to fill", error=True,
+            f"source {args.source} ({name}) is {article} {row['connector_type']} source; this connector does not read history, so "
+            "there is nothing to fill", error=True,
         )
         return EXIT_REFUSED
     try:

@@ -135,13 +135,18 @@ async def test_before_first_reading_with_yes_stores_the_earlier_samples(db, caps
 
 async def test_a_connector_that_cannot_read_history_is_refused_in_one_sentence(db, capsys):
     plc = await make_source(db, "Main PLC", "opcua", {"endpoint": "opc.tcp://plc:4840"})
+    meter = await make_source(db, "Meter", "modbus", {"host": "meter", "port": 502})
     world = await make_world(db, {"M001_kWh": KWH})
     for flags in ((), ("--yes",)):
         assert await amain(["--source", str(plc), *flags], FAST, pool=db, factory=factory_for(world.app)) == 1
         out, err = lines(capsys)
         assert out == [] and err == [
-            f"source {plc} (Main PLC) is a opcua source; this connector does not read history, so there is nothing to fill"
+            f"source {plc} (Main PLC) is an opcua source; this connector does not read history, so there is nothing to fill"
         ]
+        assert await amain(["--source", str(meter), *flags], FAST, pool=db, factory=factory_for(world.app)) == 1  # "a", before a consonant
+        assert lines(capsys) == (
+            [], [f"source {meter} (Meter) is a modbus source; this connector does not read history, so there is nothing to fill"]
+        )
 
 
 async def test_an_unknown_source_is_refused_in_one_sentence(db, capsys):
@@ -251,6 +256,49 @@ async def test_a_connector_error_that_quotes_the_credentials_is_scrubbed_before_
     assert seen.out == "" and "cannot be used" in seen.err
     for hidden in (secret, password, f"opuser:{password}"):
         assert hidden not in seen.out + seen.err
+
+
+async def test_a_database_that_cannot_be_opened_ends_in_one_sentence_with_the_class_and_no_connection_string(capsys, monkeypatch):
+    async def refuse():
+        raise OSError("connection refused: postgresql://dcdash:Zq9-db-pw@db:5432/dcdash")
+
+    monkeypatch.setattr("dcdash.ingest.fill_command.create_pool", refuse)
+    assert await amain(["--source", "1"], FAST) == 1
+    assert lines(capsys) == ([], ["could not open the database: OSError"])
+
+
+async def test_a_statement_that_fails_before_the_fill_starts_ends_in_one_sentence_and_the_pool_the_command_opened_is_closed(
+    capsys, monkeypatch
+):
+    class BrokenPool:
+        closed = False
+
+        async def fetchrow(self, *args):
+            raise ConnectionResetError("postgresql://dcdash:Zq9-db-pw@db:5432/dcdash")
+
+        async def close(self):
+            self.closed = True
+
+    broken = BrokenPool()
+
+    async def open_it():
+        return broken
+
+    monkeypatch.setattr("dcdash.ingest.fill_command.create_pool", open_it)
+    assert await amain(["--source", "1"], FAST) == 1
+    assert lines(capsys) == ([], ["the fill failed: ConnectionResetError"]) and broken.closed
+
+
+async def test_a_retention_that_cannot_be_read_ends_in_one_sentence_and_the_pool_it_was_given_stays_open(db, capsys, monkeypatch):
+    world = await make_world(db, {"M001_kWh": KWH})
+
+    async def fail(pool):
+        raise RuntimeError("secret message: Zq9-secret-pw")
+
+    monkeypatch.setattr("dcdash.ingest.fill_command.rollups.raw_retention_days", fail)
+    assert await command(world) == 1  # no range: the lookback needs the retention
+    assert lines(capsys) == ([], ["the fill failed: RuntimeError"])
+    assert await db.fetchval("SELECT 1") == 1
 
 
 # ---- the command line itself -----------------------------------------------------------------------------------------------------
