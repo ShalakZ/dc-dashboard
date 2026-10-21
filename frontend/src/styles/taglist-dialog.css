@@ -12,7 +12,7 @@
      its own padding puts the buttons where they were. The page colour keeps scrolled content from showing through, the hairline is what it slides under. The scroll padding
      is the row's height (12 + one button + 22 + the hairline) and a gap, so a field that Tab scrolls into view lands above it. */
   .taglist-dialog { scroll-padding-bottom: calc(var(--ctl-h) + 12px + 22px + 1px + 12px); }
-  .taglist-dialog > .row { justify-content: flex-end; position: sticky; bottom: 0; z-index: 1; margin: 0 -24px -22px; padding: 12px 24px 22px; border-top: 1px solid var(--border); background: var(--bg); }
+  .taglist-dialog > .row { justify-content: flex-end; position: sticky; bottom: 0; z-index: 1; margin: 0 -24px -22px; padding: 12px 24px 22px; border-top: 1px solid var(--border); background: var(--bg); box-shadow: 0 22px 0 var(--bg); }
 
   .taglist-input { resize: vertical; }
   .taglist-help { display: grid; gap: 4px; }
