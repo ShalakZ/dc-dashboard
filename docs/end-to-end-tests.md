@@ -9,7 +9,7 @@ spec guards, and the two scratch-stack self-tests. The unit tests are on [Develo
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Forty-nine specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Fifty-one specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`E2E_BASE_URL` changes it). `frontend/e2e/playwright.config.ts` makes each spec its own project and runs them one at a time in the
 order below, each depending on the one before; all but `journey` use a 1600×1000 window unless a spec sets its own sizes. Its
 `global-setup.ts` waits up to 120 s for the stack and refuses a database that already has users.
@@ -465,7 +465,7 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   secrets (a right secret from that address still connects, and the case checks it), so no later project may make a wrong claim (`w29`
   makes right ones only) and `W28_SKIP_BLOCK=1` skips the case. Every secret the spec used is appended to the file named by
   `W28_SECRET_FILE` (default `/tmp/w28-secret.txt`) so a log check can look for it.
-- `w29.spec.ts` (its own project, last in the list, after `w28`, `dependencies: ["w28"]`) checks the wall, the rotating screen a connected
+- `w29.spec.ts` (its own project, after `w28`, `dependencies: ["w28"]`; `w31` follows it) checks the wall, the rotating screen a connected
   display shows. It makes its own data through the API (an asset, two dashboards, a playlist of them with a focus asset on the second and
   a display, plus dashboards, playlists and displays of their own for the cases that change or delete a dashboard, all named
   `W29 <run> ...`), deletes it in `afterAll` (displays first, also after a failed case), needs no scratch stack of its own and no running
@@ -487,6 +487,22 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   wake); case 1 runs in real time, because `runFor` pushes the page's clock ahead of the server's and the wall corrects its own clock from
   the `Date` header of every answer, which would move a turn later by the amount pushed. Every secret the spec used is appended to the
   file named by `W29_SECRET_FILE` (default `/tmp/w29-secret.txt`) so a log check can look for it.
+- `w31.spec.ts` (its own project, last in the list, after `w29`, `dependencies: ["w29"]`; 1440 x 900) checks importing readings and
+  mapping tags. It makes its own data through the API and the pages (sources, the top-level asset the tag list creates and the
+  import profile, all named `W31 <run> ...` or `w31-<run>`, and the accounts and roles of case 2 that start `w31-`), removes it in
+  `afterAll` also after a failed case, needs no scratch stack, and its cases do not depend on each other. Cases: (1) a `file` source from
+  start to Undo: **Add source** shows the `file` description and no field of its own; **Map tag list...** refuses six lines until
+  **Create missing assets** is ticked, **Check list** counts 6 mappings, 4 assets and 6 points, and **Create 6 mappings** raises a
+  toast with an **Undo**; **Import file...** checks a file of 147 rows (144 new, 2 rejected, 1 unknown tag, each in words) through a new
+  profile and imports it, a second check with the saved profile says 0 new and writes no audit row, and the Audit drawer's **Undo this
+  tag list** removes 6 mappings and 4 assets, keeps the 6 points (they hold readings), waits while it works and answers "already undone" the
+  second time; (2) a role with only `sources.view` has no Actions menu and gets 403 from the three routes, one with `discovery.accept`
+  sees **Map tag list...** and not **Import file...**, one with `readings.import` the other way round; (3) the keyboard: both dialogs open
+  from the menu by keys, focus lands inside and Tab wraps, Escape closes and focus returns to the menu button; (4) **Fill older range...**
+  appears only on a source whose connector keeps history, and refuses 400 days and 51 days in the server's words without sending a fill;
+  (5) the `file` source reads "filled by file import" and "Filled by importing files", has no **Test**, **Check connection** or **Browse
+  points**, and its Points page says where its points come from. Lookups use `exact: true` where a name is part of another ("File" is
+  inside "Profile", "Undo" inside "Undo this tag list").
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

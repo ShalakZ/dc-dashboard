@@ -164,6 +164,52 @@ stays: run the same command again.
 terminal shows both), its exit code when it is not 0, and a new **Summary** report built after the run, so the `history:` line and the
 journal show the state. Never paste anything from `.env`.
 
+**From the Sources page.** **Fill older range...** in a source's row menu (`sources.edit`, only for a source whose connector keeps
+history) starts the same fill in the collector instead of at the command line: the dialog's **Check range** is the dry run, **Start fill**
+the `--yes`, and the dialog follows the job and ends with the same one line of counts. Only one fill runs at a time in total, and a
+collector restart fails a running one: start it again and it adds only what is missing. If it fails, paste back the sentence the dialog
+shows and a new Summary report.
+
+## Importing a file by command
+
+The Sources page imports a CSV export in two steps, **Check file** and **Import N rows** ([how it works](sources-and-discovery.md#importing-readings-from-a-file)).
+The same import runs from the project folder, which is the way to try a file on the laptop without a browser. `N` is the source's number
+as in the history section, and the profile (which columns hold the tag, time and value) is one saved in the dashboard by **Import
+file...**. The file goes in on standard input (`-`), so it is read on your machine, not inside the container:
+
+    docker compose exec -T api python -m dcdash.ingest.importer --source N --profile-name hourly - < export.csv
+    docker compose exec -T api python -m dcdash.ingest.importer --source N --profile-name hourly --yes - < export.csv
+
+PowerShell has no `<`; run the same thing through `cmd`, which also hands the file over byte for byte:
+
+    cmd /c "docker compose exec -T api python -m dcdash.ingest.importer --source N --profile-name hourly - < export.csv"
+
+Without `--yes` it is a **dry run**: it reads the whole file, writes nothing and records nothing, and prints what a real import would do:
+a line naming the source and profile, the one sentence of counts (`12,480 rows read, 12,000 new, 480 already there, 0 differing, 0
+rejected, 3 unknown tags (TAG-A, TAG-B, TAG-C)`), a line for each closed month the rows fall in, one for rows of bad quality, and the
+first 20 rejected lines with their line numbers and reasons. It never prints a reading value. With `--yes` it imports and ends with
+`Done.`; the same file again says `0 new`, so it is safe to repeat. `--profile-file FILE.json` takes a profile from a file instead, but
+the path is read inside the container, so a saved profile and `--profile-name` are the practical way. A file can be at most 20 MB,
+500,000 rows and 4,096 bytes a line, and UTF-8; a refusal is one sentence.
+
+`--refresh` (with `--yes` only) is the repair for an import that was cut off (the server stopped, or Ctrl+C). An import refreshes the
+hourly and minute summaries over the hours of its new rows that are older than a week (the newer ones follow by themselves); a run
+that was cut off before it got there leaves those rows stored, and importing the file again finds them "already there" and refreshes
+nothing. Run the same file with `--yes --refresh` and the summaries over every row of the file older than a week are refreshed, the rows
+already there included. The web page never does this.
+
+**Exit codes.** 0: done, or checked. 1: refused or failed (one sentence on the error output: the file, an unknown source, the profile's
+columns missing from the file, a run that stopped half way; what was stored stays). 2: bad arguments, a profile that is not usable, or
+`--refresh` without `--yes`. 3: another import is running; there is one lock for the page and the command, a dry run included, so wait
+for it and run again. 130: Ctrl+C. `echo $?` in bash and `$LASTEXITCODE` in PowerShell show it.
+
+**Where it shows.** A real run writes one audit row `readings.imported` (the Audit page; `via: command`, with no user, the file's
+SHA-256 and the counts, never a value) and one journal event `import.finished` (the JOURNAL part of a report). A dry run writes
+neither.
+
+**What to paste back.** The command line you typed, everything it printed (the refusals come on the error output; the terminal shows
+both), its exit code when it is not 0, and a new Summary report after a real run. The file itself stays on your machine.
+
 ## Reading a report (what Claude looks at)
 1. The **header**: build id and time, to know which code produced it.
 2. The **LATEST CHECK** line right after it: the failing step and the OPC UA status, or "all steps OK", or "no connection check has been run".

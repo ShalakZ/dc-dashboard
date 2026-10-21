@@ -126,7 +126,8 @@ at the stand-in Historian (dev profile) can answer; for every other source the l
   dense can trail by up to a slice and then catches up; nothing is lost.
 - **One run per source.** A cycle takes a lock on the source for as long as it works on it. A second collector, or the fill command
   ([Field debugging](field-debugging.md#history-fill)), finds the lock taken: the loop skips that source for that cycle, and the
-  command refuses with a sentence and does nothing.
+  command refuses with a sentence and does nothing. A fill a person starts from the Sources page (**Fill older range...**) runs in the
+  collector as a job, and a collector restart fails a running one; start it again and it adds only what is missing.
 - **Where to look.**
   - The `history:` line of the source in SOURCE HEALTH of the Diagnostics report, and `GET /api/sources/{id}/history` (permission
     `sources.view`), say the state (`idle`, `filling`, `backing_off` or `not_supported`), how far the source has been answered, the

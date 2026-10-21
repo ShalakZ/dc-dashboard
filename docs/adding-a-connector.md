@@ -2,7 +2,7 @@
 
 This page is for developers who add a new kind of data source (a protocol). A connector is one Python class: the API uses it to
 validate a source's settings and to discover sources on the network, and the collector uses it to test, browse and read. The built-in
-connectors are `opcua`, `modbus` and `simulator`; what each protocol does for a user is on
+connectors are `opcua`, `modbus`, `simulator` and `file` (a source filled by importing files, never polled); what each protocol does for a user is on
 [Sources and discovery](sources-and-discovery.md).
 
 ## The class
@@ -23,6 +23,8 @@ Create `backend/dcdash/connectors/<name>.py` with a subclass of `Connector` (`ba
 | `endpoint_key(config)` | no | host, port and qualifier of the endpoint a configuration points at, so a scan recognises a source that exists already |
 | `check(points, publish)` | no | the step-by-step connection check; the default is one step that runs `test()` (OPC UA has its own) |
 | `supports_history` | no | `True` when the connector can read a source's history; the default is `False` (see [Reading history](#reading-history)) |
+| `polls` | no | `False` for a connector that must never be polled, such as `file`; the default is `True` (see [How the collector uses it](#how-the-collector-uses-it)) |
+| `description` | no | one sentence under the type in the Add source form; the default is empty, for a type that explains itself |
 | `read_history(addresses, start, end, resolution=None, *, after=None, limit=None)` | no | the samples the source stored between two times, as a `HistoryPage`; the default raises `not_supported` |
 | `close()` | no | release connections |
 
@@ -48,6 +50,11 @@ validated configuration and the source's secret.
 The collector groups the mapped points of each enabled source by interval and calls `read` for each group on that interval, backing
 off after failures (`backend/dcdash/collector/scheduler.py`). The test, browse, scan and connection-check jobs that the API queues run
 in the collector too (`backend/dcdash/collector/jobs.py`, `browse.py`, `scan.py`).
+
+A connector with `polls = False` (today only `file`, whose readings come from imported files) is left out of all of that: the poll loop
+never groups its points, the Sources page offers it no **Test**, **Check connection** or **Browse** and **Test all** skips it, and a
+test or browse queued by hand does not change its status, which stays `unknown` (the page reads "filled by file import"; the
+Diagnostics report does not rank it as a problem). `GET /api/connectors` lists such types last, so the Add source form still starts on one that polls, and shows each type's `description` under the select.
 
 ## Reading history
 
