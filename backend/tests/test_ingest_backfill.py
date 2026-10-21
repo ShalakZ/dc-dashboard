@@ -1018,3 +1018,51 @@ async def test_one_source_that_breaks_does_not_stop_the_others(db, monkeypatch):
 
     monkeypatch.setattr(world.engine, "run_cycle", breaking)
     assert [(r.source_id, r.state) for r in await world.engine.run_all()] == [(other, "idle")]
+
+
+# ---- an answer the source cuts, the repeated autumn hour, an address the source lacks ----------------------------------------
+
+
+async def test_an_answer_the_source_cuts_at_its_row_limit_is_continued_from_where_it_was_complete(db):
+    first = NOW - 4 * HOUR + timedelta(seconds=17)
+    world = await make_world(db, {"M001_kWh": KWH, "M002_kWh": KWH}, {"M001_kWh": first, "M002_kWh": first}, historian={"max_rows": 150})
+    # an end in the past: the shortcut for a source that is a little behind our clock only applies to the newest part of the window
+    report = await world.engine.fill_range(world.source, NOW - 4 * HOUR, NOW - HOUR, dry_run=False, yes=True)
+    assert (report.new, report.rejected) == (2 * 181, 0)
+    assert len(world.calls) >= 3  # 362 rows, 150 at a time, in ONE slice
+    assert {(c.start, c.end) for c in world.calls} >= {(NOW - 4 * HOUR, NOW - HOUR)}
+    one, two = world.calls[0], world.calls[1]
+    assert two.start == one.start + 75 * MINUTE and two.end == one.end  # 75 instants of two addresses were complete; the next starts at the cut
+    assert two.after == {"M001_kWh": two.start - MINUTE, "M002_kWh": two.start - MINUTE}  # the last instant received, per address
+    for tag in ("M001_kWh", "M002_kWh"):
+        stored = [row["ts"] for row in await world.stored(tag)]
+        assert len(stored) == len(set(stored)) == 181 + 1
+        assert [ts for ts in stored if ts.second == 0] == [NOW - 4 * HOUR + k * MINUTE for k in range(181)]
+
+
+@pytest.mark.parametrize("mark", [datetime(2026, 10, 25, 0, 30, tzinfo=UTC), datetime(2026, 10, 25, 1, 30, tzinfo=UTC)], ids=["first-pass", "second-pass"])
+async def test_a_window_that_starts_inside_the_repeated_autumn_hour_loses_nothing(db, mark):
+    now = datetime(2026, 10, 25, 4, 0, tzinfo=UTC)  # the clocks went back at 01:00 UTC: Berlin showed 02:00 to 03:00 twice
+    world = await make_world(
+        db, {"LOCAL_kWh": KWH}, {"LOCAL_kWh": now - 6 * HOUR + timedelta(seconds=17)}, clock=Clock(now), settings=settings_with(max_rows=100),
+    )  # a cap of 100 rows: one-hour slices, so a slice starts right inside the repeated hour
+    await db.execute("INSERT INTO history_status (source_id, answered_through) VALUES ($1, $2)", world.source, mark)
+    result = await world.cycle()
+    assert (result.state, result.rejected, result.differing) == ("idle", 0, 0)
+    stored = [row["ts"] for row in await world.stored("LOCAL_kWh") if row["ts"].second == 0]
+    assert stored == [mark + k * MINUTE for k in range(int((now - mark) / MINUTE) + 1)]  # one row a minute, both passes through the hour
+    assert world.calls[0].start == mark and set(world.calls[0].after) == {"LOCAL_kWh"}
+
+
+async def test_an_address_the_source_does_not_have_is_told_once_and_never_holds_the_mark(db):
+    first = NOW - 3 * HOUR + timedelta(seconds=17)
+    world = await make_world(db, {"M001_kWh": KWH, "NOPE_kWh": KWH}, {"M001_kWh": first, "NOPE_kWh": first})
+    result = await world.cycle()
+    assert (result.state, result.unknown, result.set_aside) == ("idle", ("NOPE_kWh",), 0)
+    assert (await world.status())["answered_through"] == NOW and len(await world.stored("M001_kWh")) == 181 + 1
+    assert len(await world.stored("NOPE_kWh")) == 1
+    [event] = await world.events(HISTORY_FAILED)
+    assert (event["code"], event["level"], event["detail"]) == ("unknown_addresses", "warning", {"count": 1, "addresses": ["NOPE_kWh"]})
+    world.clock.now += 10 * MINUTE
+    assert (await world.cycle()).unknown == ("NOPE_kWh",)
+    assert len(await world.events(HISTORY_FAILED)) == 1  # told once a day, not at every cycle

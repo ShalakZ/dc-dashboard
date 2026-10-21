@@ -133,6 +133,7 @@ class CycleResult(Tally):
     next_try_at: datetime | None = None
     through: datetime | None = None  # the frontier after the cycle
     short_hours: int | None = None
+    unknown: tuple[str, ...] = ()  # addresses the source does not have (reported once a day, never hold the mark)
 
 
 @dataclass
@@ -191,6 +192,7 @@ class _Run:
     received: dict[str, datetime] = field(default_factory=dict)  # per address, the newest instant received
     spans: list[tuple[datetime, datetime]] = field(default_factory=list)  # first and last new row of every write that stored some
     aside: list[str] = field(default_factory=list)  # a few addresses of the batches set aside
+    unknown: set[str] = field(default_factory=set)  # addresses the source said it does not have: left out, they never hold a mark
     by_address: dict[str, Mapped] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -478,6 +480,7 @@ class Backfill:
                     log.warning("could not close the connector of source %s: %s", sid, exc)
         if run is not None:
             _copy_counts(run.tally, result)
+            result.unknown = tuple(sorted(run.unknown))
         known = journal.known_for(source.config, source.secret)
         ended = self._clock()
         success = state == "idle"
@@ -647,6 +650,7 @@ class Backfill:
             # pass from its first when a window starts inside it.
             page = await self._ask(run, addresses, start, hi, {a: run.received.get(a, start) for a in addresses})
             await self._store(run, page, wrote)
+            run.unknown.update(page.unknown)  # an address the source lacks has no rows; the batch is still answered
             for value in page.values:
                 if value.address not in run.received or value.ts > run.received[value.address]:
                     run.received[value.address] = value.ts
@@ -791,6 +795,7 @@ class Backfill:
             if run is not None:
                 await self._report_new(run)
                 await self._report_aside(run)
+                await self._report_unknown(run)
             if result.state == "not_supported":
                 if journal.allow((HISTORY_FAILED, sid, "not_supported"), NOT_SUPPORTED_WAIT_SECONDS):
                     await journal.record(
@@ -828,6 +833,19 @@ class Backfill:
                 f"readings were filled into {row['month']}, a month that is closed: its frozen figures did not change",
                 source_id=run.source.id, known=known, detail={"month": row["month"], "by_command": fill},
             )
+
+    async def _report_unknown(self, run: _Run) -> None:
+        """Addresses the source says it does not have: told once a day (a mapping that points at nothing is a mistake somebody should
+        see), never a reason to hold a mark."""
+        if not run.unknown or not journal.allow((HISTORY_FAILED, run.source.id, "unknown"), NOT_SUPPORTED_WAIT_SECONDS):
+            return
+        await journal.record(
+            self._pool, "collector", HISTORY_FAILED,
+            f"the source does not have {len(run.unknown)} of the addresses mapped to it, so none of their history is filled",
+            level="warning", source_id=run.source.id, code="unknown_addresses",
+            known=journal.known_for(run.source.config, run.source.secret),
+            detail={"count": len(run.unknown), "addresses": sorted(run.unknown)[:5]},
+        )
 
     async def _report_aside(self, run: _Run) -> None:
         if not run.tally.set_aside or not journal.allow((HISTORY_FAILED, run.source.id, "set_aside"), FAILED_REPEAT_SECONDS):
@@ -926,6 +944,7 @@ class Backfill:
             try:
                 await self._report_new(run, fill=True)
                 await self._report_aside(run)
+                await self._report_unknown(run)
             except Exception as exc:
                 log.warning("could not journal the fill of source %s: %s", source_id, exc)
         text = _counts_text(run.tally)
