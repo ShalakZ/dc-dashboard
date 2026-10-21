@@ -643,7 +643,7 @@ export interface ImportReport {
   bad_quality?: Record<string, number>;
   closed_months: Record<string, number>;
   /** The first 20 counter values that go down or jump, and how many there are in all. Optional here so older fixtures compile; the server always sends both. */
-  counter_warnings?: ImportCounterWarning[]; counter_warnings_total?: number;
+  counter_warnings?: ImportCounterWarning[]; counter_warnings_total?: number; raw_floor?: string | null;
   differing_samples: ImportDifference[];
   problems: ImportProblem[]; problems_total: number;
   refresh: { state: ImportRefreshState; days: number; note: string | null };
