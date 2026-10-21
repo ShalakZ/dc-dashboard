@@ -124,6 +124,7 @@ name the old README sections; this is where each one is now:
 | End-to-end tests | [docs/end-to-end-tests.md](docs/end-to-end-tests.md) | The Playwright specs and the isolated end-to-end stack |
 | Adding a connector | [docs/adding-a-connector.md](docs/adding-a-connector.md) | How a new kind of source is added to the code |
 | Field debugging | [docs/field-debugging.md](docs/field-debugging.md) | Connecting to a real SCADA and debugging it by copy and paste |
+| Historian integration | [docs/historian-integration.md](docs/historian-integration.md) | What the platform sends to a Historian and how often, the questions for its owners, and the file alternative, for the approval review |
 | Release notes | [CHANGELOG.md](CHANGELOG.md) | What each release changed and its upgrade notes, newest first |
 | Changelog archive | [docs/changelog-archive.md](docs/changelog-archive.md) | The release notes of the older releases (up to W7j), with the upgrade notes of migrations 0004 to 0008 |
 
