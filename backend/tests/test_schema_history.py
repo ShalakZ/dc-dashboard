@@ -6,12 +6,15 @@ refuses, before it changes anything, to run over a table that holds one reading 
 duplicate it swaps the index and creates one empty table. The downgrade restores the plain index and drops the table, and no
 reading is lost either way (an index holds no data and the table is derived)."""
 import importlib.util
+import time
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import asyncpg
 import pytest
-from sqlalchemy import text
+from sqlalchemy import exc as sa_exc, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from dcdash.core.config import get_settings
@@ -39,13 +42,14 @@ COLUMNS = [
     ("updated_at", "timestamp with time zone", "NO", "now()"),
 ]
 COUNTERS = ("rows_new", "rows_already", "rows_differing", "rows_rejected", "requests", "failures")
+NON_NEGATIVE = (*COUNTERS, "short_hours")  # the six BIGINT counters and the INTEGER hours: each has a CHECK >= 0
 # Every constraint by name: (type, definition). The names are part of the contract: the collector's code and the tests refer to them.
 CONSTRAINTS = {
     "history_status_pkey": ("p", "PRIMARY KEY (source_id)"),
     "history_status_source_fk": ("f", "FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE"),
     "history_status_state_ck": (
         "c", "CHECK ((state = ANY (ARRAY['idle'::text, 'filling'::text, 'backing_off'::text, 'not_supported'::text])))"),
-    **{f"history_status_{name}_ck": ("c", f"CHECK (({name} >= 0))") for name in COUNTERS},
+    **{f"history_status_{name}_ck": ("c", f"CHECK (({name} >= 0))") for name in NON_NEGATIVE},
 }
 KEY_INDEX = "CREATE UNIQUE INDEX readings_point_ts_key ON public.readings USING btree (point_id, ts DESC)"
 PLAIN_INDEX = "CREATE INDEX readings_point_ts ON public.readings USING btree (point_id, ts DESC)"
@@ -169,6 +173,10 @@ async def plant_duplicates(db, *, compressed: bool, uncompressed: bool) -> tuple
             await insert_reading(db, point, RECENT, value=value)
         pairs, extra = pairs + 1, extra + 2
     await compress_old_chunks(db)
+    if compressed:  # compress_old_chunks only says that SOME chunk is compressed: the pair must sit in one
+        assert await db.fetchval(
+            "SELECT bool_and(is_compressed) FROM timescaledb_information.chunks "
+            "WHERE hypertable_name = 'readings' AND range_start <= $1 AND $1 < range_end", OLD) is True
     return pairs, extra
 
 
@@ -182,8 +190,9 @@ async def take_duplicates_away(db) -> int:
 
 
 async def back_to_head(db, *, clear_readings: bool = True) -> None:
-    """The cleanup of a test that moved the shared database below the head: take planted duplicates away (the upgrade refuses
-    them), then upgrade, and say so loudly if that failed (every later test would otherwise run at the wrong revision)."""
+    """The cleanup of a test that moved the shared database below the head: empty `readings` (the upgrade refuses planted
+    duplicates; a test that planted none and wants its readings kept says clear_readings=False), then upgrade, and say so loudly
+    if that failed (every later test would otherwise run at the wrong revision)."""
     if clear_readings:
         await db.execute("TRUNCATE readings")
     up = run_alembic("upgrade", "head")
@@ -273,7 +282,7 @@ async def test_any_other_state_is_refused(db, state):
     assert caught.value.constraint_name == "history_status_state_ck"
 
 
-@pytest.mark.parametrize("counter", COUNTERS)
+@pytest.mark.parametrize("counter", NON_NEGATIVE)
 async def test_a_negative_counter_is_refused_and_zero_is_fine(db, counter):
     source = await make_source(db, "hist")
     await db.execute(f"INSERT INTO history_status (source_id, {counter}) VALUES ($1, 0)", source)
@@ -500,9 +509,10 @@ async def test_the_upgrade_refuses_a_duplicate_with_a_plain_message_and_changes_
         assert "RuntimeError: migration 0016 was stopped before it changed anything" in up.stderr
         assert f"readings holds {pairs} reading(s) that are stored more than once" in up.stderr
         assert f"{extra} extra row(s)" in up.stderr
-        for sentence in ("The database is still at revision 0015", "docker compose stop api", "scripts/backup.sh",
-                         "docs/upgrading.md", "Duplicate readings"):
+        for sentence in ("the database is still at the revision it was at before this upgrade", "docker compose stop api",
+                         "scripts/backup.sh", "docs/upgrading.md", "Duplicate readings"):
             assert sentence in up.stderr, sentence
+        assert "revision 0015" not in up.stderr  # the run may have been several revisions long: no number is promised
         assert await db.fetchval("SELECT version_num FROM alembic_version") == "0015"
         assert await snapshot(db) == at_0015  # the old index, no key, no table: nothing was created or dropped
         assert await fingerprints(db) == before
@@ -610,7 +620,7 @@ async def test_the_build_alone_over_a_table_without_duplicates_builds_the_key(db
 
 
 async def test_another_error_than_a_unique_violation_is_not_turned_into_the_refusal(db):
-    """A build that fails for another reason (here: a name that is already taken by a plain index) propagates unchanged."""
+    """A build that fails for another reason (here: a name that is already taken by a table) propagates unchanged."""
     from sqlalchemy.exc import ProgrammingError
 
     try:
@@ -627,3 +637,135 @@ def test_the_refusal_is_one_line_with_the_counts():
     message = migration()._refusal(2, 3)
     assert "\n" not in message
     assert "readings holds 2 reading(s) that are stored more than once" in message and "3 extra row(s)" in message
+
+
+# ---- the key check, and the lock: the index drop comes last and gives up with a plain message ----------------------------------
+
+async def test_the_key_check_wants_a_valid_unique_index_of_readings(db):
+    check = migration()._KEY_EXISTS
+    assert await db.fetchval(check) is True
+    await db.execute("UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'readings_point_ts_key'::regclass")
+    try:
+        assert await db.fetchval(check) is False  # an index that a failed build left invalid is not a key
+    finally:
+        await db.execute("UPDATE pg_index SET indisvalid = true WHERE indexrelid = 'readings_point_ts_key'::regclass")
+    assert await db.fetchval(check) is True
+
+
+async def test_a_unique_index_of_that_name_on_another_table_is_not_taken_for_the_key(db):
+    check = migration()._KEY_EXISTS
+    try:
+        await downgrade_to_0015(db)
+        await db.execute("CREATE TABLE scratch_unique (x int)")
+        await db.execute("CREATE UNIQUE INDEX readings_point_ts_key ON scratch_unique (x)")
+        assert await db.fetchval(check) is False
+        up = run_alembic("upgrade", "head")
+        assert up.returncode != 0 and "already exists" in up.stderr  # PostgreSQL's own answer to a name that is taken
+        assert await db.fetchval("SELECT version_num FROM alembic_version") == "0015"
+        assert await index_names(db) == {"readings_point_ts", "readings_ts_idx"}
+    finally:
+        await db.execute("DROP TABLE IF EXISTS scratch_unique")
+        await back_to_head(db, clear_readings=False)
+
+
+class RecordingBind:
+    """A stand-in for the connection a migration gets: it records every statement, says that the key exists (or not) and that no
+    reading is stored twice."""
+
+    def __init__(self, key_exists: bool):
+        self.key_exists = key_exists
+        self.statements: list[str] = []
+
+    def execute(self, statement, *args):
+        self.statements.append(" ".join(str(statement).split()))
+        return self
+
+    def scalar(self):
+        return self.key_exists
+
+    def one(self):
+        return 0, 0
+
+    def begin_nested(self):
+        return nullcontext()
+
+
+def statements_of(direction: str, key_exists: bool = False) -> list[str]:
+    """Every statement that `upgrade` or `downgrade` runs, in order, against a recording stand-in."""
+    module, bind = migration(), RecordingBind(key_exists)
+    module.op = SimpleNamespace(get_bind=lambda: bind, execute=lambda statement: bind.execute(text(statement)))
+    getattr(module, direction)()
+    return bind.statements
+
+
+@pytest.mark.parametrize("key_exists", [False, True])
+def test_the_upgrade_drops_the_old_index_last_under_the_timeout(key_exists):
+    statements = statements_of("upgrade", key_exists)
+    assert statements[-2:] == ["SET LOCAL lock_timeout = '120s'", "DROP INDEX IF EXISTS readings_point_ts"]
+    assert any(s.startswith("CREATE TABLE IF NOT EXISTS history_status") for s in statements[:-2])  # before the lock is taken
+    assert any(s.startswith("CREATE UNIQUE INDEX readings_point_ts_key") for s in statements) is not key_exists
+    assert not any(s.startswith("RESET") for s in statements)  # the transaction ends right after: SET LOCAL needs no reset
+
+
+def test_the_downgrade_drops_the_key_last_under_the_timeout():
+    statements = statements_of("downgrade")
+    assert statements[0] == "DROP TABLE IF EXISTS history_status"
+    assert statements[1] == "CREATE INDEX IF NOT EXISTS readings_point_ts ON readings (point_id, ts DESC)"
+    assert statements[2:] == ["SET LOCAL lock_timeout = '120s'", "DROP INDEX IF EXISTS readings_point_ts_key"]
+
+
+async def drop_index_while_readings_is_locked(db, name: str, seconds: int):
+    """Run the migration's `_drop_index` on a SQLAlchemy connection while a second connection holds a lock on readings that
+    conflicts with the drop (what a long query holds). Returns (the error it raised, how long it waited, the migration module)."""
+    module = migration()
+    module.LOCK_TIMEOUT_SECONDS = seconds
+    holder = await db.acquire()
+    transaction = holder.transaction()
+    await transaction.start()
+    engine = create_async_engine(get_settings().sqlalchemy_url)
+    try:
+        await holder.execute("LOCK TABLE readings IN ACCESS SHARE MODE")
+        async with engine.connect() as connection:
+            started = time.monotonic()
+            try:
+                await connection.run_sync(lambda sync: module._drop_index(sync, name))
+            except Exception as error:  # noqa: BLE001 - the caller looks at it
+                caught = error
+            else:
+                caught = None
+            waited = time.monotonic() - started
+            await connection.rollback()
+        return caught, waited, module
+    finally:
+        await engine.dispose()
+        await transaction.rollback()
+        await db.release(holder)
+
+
+async def test_a_lock_that_is_not_got_in_time_gives_a_plain_message_and_the_index_stays(db):
+    caught, waited, module = await drop_index_while_readings_is_locked(db, "readings_point_ts_key", 1)
+    assert isinstance(caught, RuntimeError), repr(caught)
+    assert str(caught) == (
+        "migration 0016 could not get the lock it needs on readings within 1 seconds (a long query or a writer holds it); "
+        "nothing has been changed; start the api again, or stop the collector and figures for a minute and try once more")
+    assert caught.__cause__ is None and caught.__suppress_context__  # not the driver's message with a chain behind it
+    assert 0.9 <= waited < 30, waited  # it waited for the timeout, not for the holder
+    assert await index_names(db) == {"readings_point_ts_key", "readings_ts_idx"}
+    assert module.LOCK_TIMEOUT_SECONDS == 1
+
+
+def test_the_lock_message_names_the_real_timeout_of_the_migration():
+    module = migration()
+    assert module.LOCK_TIMEOUT_SECONDS == 120
+    assert "could not get the lock it needs on readings within 120 seconds" in module._lock_refusal()
+
+
+async def test_another_error_than_a_lock_timeout_is_not_turned_into_the_lock_message(db):
+    connection = create_async_engine(get_settings().sqlalchemy_url)
+    try:
+        async with connection.connect() as session:
+            with pytest.raises(sa_exc.DBAPIError):
+                await session.run_sync(lambda sync: migration()._drop_index(sync, "sources"))  # a table, not an index
+            await session.rollback()
+    finally:
+        await connection.dispose()
