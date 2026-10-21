@@ -23,11 +23,10 @@ from dcdash.core.audit import clip_error, scrub_url_credentials
 from dcdash.core.crypto import decrypt
 from dcdash.core.pg import create_pool
 from dcdash.ingest import rollups
-from dcdash.ingest.backfill import Backfill, FillRefused
+from dcdash.ingest.backfill import Backfill, FillRefused, LeaseHeld
 from dcdash.ingest.settings import HistorySettings
 
 EXIT_REFUSED, EXIT_USAGE, EXIT_LEASE = 1, 2, 3
-LEASE_HELD = "working on this source right now"  # what the engine's sentence says when the lease is taken (a test pins it)
 WINDOWS_SHOWN = (4, 1)  # of a long plan: this many windows from the start, this many from the end
 
 
@@ -136,10 +135,12 @@ async def _fill(
         report = await engine.fill_range(
             args.source, start, end, before_first_reading=args.before_first_reading, dry_run=not args.yes, yes=args.yes
         )
+    except LeaseHeld as held:  # the engine says by its class that the lease is taken, not by the words of its sentence
+        _say(clip_error(scrub_url_credentials(str(held), known)), error=True)
+        return EXIT_LEASE
     except FillRefused as refused:
-        sentence = clip_error(scrub_url_credentials(str(refused), known))
-        _say(sentence, error=True)
-        return EXIT_LEASE if LEASE_HELD in sentence else EXIT_REFUSED
+        _say(clip_error(scrub_url_credentials(str(refused), known)), error=True)
+        return EXIT_REFUSED
     except Exception as exc:  # whatever else: a sentence with the class, scrubbed, never a traceback that could quote a credential
         _say(f"the fill failed: {type(exc).__name__}: {clip_error(scrub_url_credentials(str(exc), known), 300)}", error=True)
         return EXIT_REFUSED

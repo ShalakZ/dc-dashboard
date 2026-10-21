@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from dcdash.ingest.backfill import LEASE_KEY
-from dcdash.ingest.fill_command import LEASE_HELD, amain, main
+from dcdash.ingest.fill_command import amain, main
 from dcdash.simulator.app import create_sim_app
 from dcdash.simulator.model import Simulator
 from helpers import insert_readings, make_asset, make_mapping, make_point, make_source
@@ -166,7 +166,7 @@ async def test_while_the_loop_holds_the_source_a_fill_exits_3_with_the_engines_s
         try:
             assert await command(world, *argv, "--yes") == 3
             out, err = lines(capsys)
-            assert out == [] and len(err) == 1 and LEASE_HELD in err[0] and "wait for it to finish" in err[0]
+            assert out == [] and len(err) == 1 and "working on this source right now" in err[0] and "wait for it to finish" in err[0]
             assert world.calls == []
             assert await command(world, *argv) == 0  # a plan takes no lease
             assert capsys.readouterr().out.startswith("Dry run for source")

@@ -19,7 +19,7 @@ from dcdash.core.tree import AssetTree
 from dcdash.ingest import backfill as engine_module
 from dcdash.ingest import rollups, store
 from dcdash.ingest import settings as history_settings
-from dcdash.ingest.backfill import LEASE_KEY, Backfill, FillRefused, backfill_loop, thin
+from dcdash.ingest.backfill import LEASE_KEY, Backfill, FillRefused, LeaseHeld, backfill_loop, thin
 from dcdash.ingest.kinds import HISTORY_CLOSED_MONTH, HISTORY_FAILED, HISTORY_FILLED, READINGS_CONFLICT
 from dcdash.ingest.settings import HistorySettings
 from dcdash.simulator.app import create_sim_app
@@ -897,8 +897,9 @@ async def test_a_second_run_of_a_source_is_skipped_while_the_first_holds_its_lea
     await asyncio.wait_for(inside.wait(), 5)
     second = await world.cycle()
     assert (second.state, world.calls[1:]) == ("skipped", []) and "in progress" in second.reason
-    with pytest.raises(FillRefused, match="working on this source right now"):
+    with pytest.raises(LeaseHeld, match="working on this source right now") as refused:
         await world.engine.fill_range(world.source, NOW - HOUR, NOW, yes=True)
+    assert isinstance(refused.value, FillRefused)  # the command tells it from any other refusal by its class
     release.set()
     assert (await first).state == "idle"
     assert (await world.engine.fill_range(world.source, NOW - HOUR, NOW, yes=True)).new == 0  # the lease is free again

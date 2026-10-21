@@ -71,6 +71,10 @@ class FillRefused(RuntimeError):
     """A fill that was refused or could not be done; the message is a plain sentence for the person who asked."""
 
 
+class LeaseHeld(FillRefused):
+    """A fill that was refused because the backfill loop (or another fill) holds the source's lease right now."""
+
+
 class _Halt(Exception):
     """The cycle ends here, in `state`, and the source is not asked again before `wait` seconds have passed."""
 
@@ -935,7 +939,7 @@ class Backfill:
         (clamped, slice by slice), journals what it filled like a cycle does, and returns the counts and the sentence
         `12,480 rows read, 12,000 new, 480 already there, 0 differing, 0 rejected`.
 
-        Refused with FillRefused, in plain words: a start older than the raw retention minus a day, an end in the future, an empty
+        Refused with FillRefused (LeaseHeld, a FillRefused, when the lease is taken), in plain words: a start older than the raw retention minus a day, an end in the future, an empty
         range, a source that cannot read history, and a refresh that would delete history. Before a point's first reading nothing
         is stored unless `before_first_reading` is set; the dry run then says that it changes the past figures of a parent."""
         dry = dry_run and not yes
@@ -984,7 +988,7 @@ class Backfill:
             raise FillRefused(unsafe)
         async with self._lease(source_id) as conn:
             if conn is None:
-                raise FillRefused(
+                raise LeaseHeld(
                     "the history backfill (or another fill) is working on this source right now; wait for it to finish and run the fill again"
                 )
             try:
