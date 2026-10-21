@@ -10,6 +10,11 @@ x-backend-env: &backend-env
   DCDASH_FIGURE_LEDGER: ${DCDASH_FIGURE_LEDGER:-1}
   DCDASH_FIGURES_INTERVAL: ${DCDASH_FIGURES_INTERVAL:-30}
   DCDASH_FIGURES_MONTHS: ${DCDASH_FIGURES_MONTHS:-6}
+  DCDASH_HISTORY_EVERY: ${DCDASH_HISTORY_EVERY:-}
+  DCDASH_HISTORY_MAX_ROWS: ${DCDASH_HISTORY_MAX_ROWS:-}
+  DCDASH_HISTORY_RATE: ${DCDASH_HISTORY_RATE:-}
+  DCDASH_HISTORY_LOOKBACK_DAYS: ${DCDASH_HISTORY_LOOKBACK_DAYS:-}
+  DCDASH_HISTORY_REREAD_HOURS: ${DCDASH_HISTORY_REREAD_HOURS:-}
 
 # api, collector, figures and simulator build the same image (dcdash-backend:local), so they must pass the same arguments. The build id comes from
 # scripts/setup.sh, setup.ps1 and e2e.sh (the commit and its commit time); a hand-typed build without them says dev / unknown.
