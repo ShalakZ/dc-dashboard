@@ -48,16 +48,18 @@ def by_pair(values) -> dict:
     return {(v.address, v.ts): v for v in values}
 
 
-async def walk(c: SimulatorConnector, addresses: list[str], start: datetime, end: datetime) -> tuple[list, list[datetime]]:
+async def walk(
+    c: SimulatorConnector, addresses: list[str], start: datetime, end: datetime, limit: int | None = None
+) -> tuple[list, list[datetime]]:
     """Every page of an answer cut by the row limit, each continued from the previous `complete_until` with the last instant received."""
     values, cuts, cursor, after = [], [], start, {}
     while True:
-        page = await c.read_history(addresses, cursor, end, after=after)
+        page = await c.read_history(addresses, cursor, end, after=after, limit=limit)
         values += page.values
         after.update({v.address: v.ts for v in page.values})
         if page.complete_until >= end:
             # Rows AT complete_until may be missing (an answer cut right at `end`): the next window starts AT it, so ask once more.
-            values += (await c.read_history(addresses, end, end, after=after)).values
+            values += (await c.read_history(addresses, end, end, after=after, limit=limit)).values
             return values, cuts
         assert page.complete_until > cursor, "a cut answer must make progress"
         cuts.append(page.complete_until)
@@ -256,6 +258,39 @@ async def test_a_cut_answer_stops_early_and_the_next_call_from_complete_until_co
     values, cuts = await walk(c, ["M001_kWh", "M002_kWh"], start, end)
     assert cuts[0] == first.complete_until and cuts == sorted(set(cuts))
     assert by_pair(values) == by_pair(whole.values) and len(by_pair(values)) == 242
+
+
+async def test_an_answer_cut_at_the_callers_limit_continues_from_complete_until_without_a_gap():
+    c = connector()  # the source itself would send everything (its own limit is 50,000)
+    start, end = NOW - timedelta(hours=2), NOW
+    first = await c.read_history(["M001_kWh", "M002_kWh"], start, end, limit=25)
+    assert len(first.values) == 25 and start < first.complete_until < end
+    whole = await c.read_history(["M001_kWh", "M002_kWh"], start, end)
+    assert len(whole.values) == 242 and whole.complete_until == end
+    values, cuts = await walk(c, ["M001_kWh", "M002_kWh"], start, end, limit=25)
+    assert cuts[0] == first.complete_until and cuts == sorted(set(cuts)) and len(cuts) >= 9
+    assert by_pair(values) == by_pair(whole.values)
+    # a limit above what the source has changes nothing
+    assert await c.read_history(["M001_kWh", "M002_kWh"], start, end, limit=10_000) == whole
+
+
+async def test_the_limit_is_sent_with_every_chunk_and_only_when_it_is_given():
+    asked = []
+
+    def handler(request):
+        asked.append(dict(request.url.params))
+        return httpx.Response(200, json={"values": [], "complete_until": NOW.isoformat()})
+
+    c = mocked(handler)
+    addresses = [f"A{n:04d}" for n in range(450)]
+    await c.read_history(addresses, NOW - MINUTE, NOW, limit=500)
+    assert [params.get("limit") for params in asked] == ["500", "500", "500"]  # three chunks of 200, 200 and 50, a limit for each
+    asked.clear()
+    await c.read_history(addresses[:3], NOW - MINUTE, NOW)
+    assert asked and "limit" not in asked[0]
+    for limit in (0, -5):
+        with pytest.raises(ValueError, match="limit"):
+            await c.read_history(["a"], NOW - MINUTE, NOW, limit=limit)
 
 
 async def test_an_unknown_address_lands_in_unknown_and_the_rest_is_answered():

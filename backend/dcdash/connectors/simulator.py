@@ -217,10 +217,16 @@ class SimulatorConnector(Connector):
         resolution: timedelta | None = None,
         *,
         after: Mapping[str, datetime] | None = None,
+        limit: int | None = None,
     ) -> HistoryPage:
         first, last = _utc("start", start), _utc("end", end)
         if resolution is not None:
             raise ConnectorError("not_supported", "this source answers raw samples only")
+        if limit is not None and limit < 1:
+            raise ValueError("limit must be at least one row")
+        # The limit goes with every request, so with several chunks of addresses it is a limit per chunk (the engine asks for at most
+        # one chunk at a time); a source cuts at its own row limit, the smaller of the two, and `complete_until` says where.
+        extra = {} if limit is None else {"limit": str(limit)}
         # An address in `after` continues a series the caller already holds, so its first item here is simply the first at or after
         # `start`: the order evidence is `start` itself, never the older (or, in a re-read, later) instant `after` names. Without
         # `after` the first item of an address has no evidence, and an ambiguous local time is refused rather than guessed.
@@ -234,7 +240,7 @@ class SimulatorConnector(Connector):
         for chunk in _chunks(list(dict.fromkeys(addresses))):  # one address twice would carry its own order evidence into itself
             data = await self._get(
                 "/history", statuses=_HISTORY_STATUSES,
-                addresses=",".join(chunk), start=first.isoformat(), end=last.isoformat(),
+                addresses=",".join(chunk), start=first.isoformat(), end=last.isoformat(), **extra,
             )
             if not isinstance(data, dict) or not isinstance(data.get("values"), list):
                 raise ConnectorError("protocol_error", "the history answer has no list of values")

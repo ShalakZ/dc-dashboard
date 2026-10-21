@@ -74,6 +74,7 @@ class Call:
     start: datetime
     end: datetime
     after: dict[str, datetime]
+    limit: int | None = None
 
 
 class Watched(SimulatorConnector):
@@ -85,13 +86,13 @@ class Watched(SimulatorConnector):
         self.calls = calls if calls is not None else []
         self.script = script
 
-    async def read_history(self, addresses, start, end, resolution=None, *, after=None):
-        self.calls.append(Call(tuple(addresses), start, end, dict(after or {})))
+    async def read_history(self, addresses, start, end, resolution=None, *, after=None, limit=None):
+        self.calls.append(Call(tuple(addresses), start, end, dict(after or {}), limit))
         if self.script is not None:
             scripted = await self.script(self.calls[-1], len(self.calls))
             if scripted is not None:
                 return scripted
-        return await super().read_history(addresses, start, end, resolution, after=after)
+        return await super().read_history(addresses, start, end, resolution, after=after, limit=limit)
 
     async def read(self, addresses):
         raise AssertionError("the backfill must never call read")
@@ -1142,6 +1143,21 @@ async def test_an_answer_the_source_cuts_at_its_row_limit_is_continued_from_wher
         stored = [row["ts"] for row in await world.stored(tag)]
         assert len(stored) == len(set(stored)) == 181 + 1
         assert [ts for ts in stored if ts.second == 0] == [NOW - 4 * HOUR + k * MINUTE for k in range(181)]
+
+
+async def test_a_source_denser_than_the_mapping_is_asked_for_max_rows_and_its_cut_answers_are_continued_up_to_now(db):
+    first = NOW - 3 * HOUR + timedelta(seconds=17)
+    # the stand-in keeps a sample a minute, five times what a 300-second mapping promises: the expected 36 rows are really 181
+    world = await make_world(db, {"M001_kWh": ("energy_kwh", 300)}, {"M001_kWh": first}, settings=settings_with(max_rows=100))
+    result = await world.cycle()
+    assert (result.state, result.set_aside, result.failures) == ("idle", 0, 0)
+    assert [call.limit for call in world.calls] == [100, 100]  # the limit the engine wants, asked of the source itself
+    # The window reaches now, where a short answer means "the source is behind": but an answer that holds as many rows as were asked
+    # for is a cut, and is continued from where it was complete, inside the same cycle.
+    assert [(call.start, call.end) for call in world.calls] == [(NOW - 3 * HOUR, NOW), (NOW - 3 * HOUR + 100 * MINUTE, NOW)]
+    assert (await world.status())["answered_through"] == NOW
+    stored = [row["ts"] for row in await world.stored("M001_kWh") if row["ts"].second == 0]
+    assert stored == [NOW - 3 * HOUR + k * MINUTE for k in range(181)]  # every minute, no gap at the cut, none twice
 
 
 @pytest.mark.parametrize("mark", [datetime(2026, 10, 25, 0, 30, tzinfo=UTC), datetime(2026, 10, 25, 1, 30, tzinfo=UTC)], ids=["first-pass", "second-pass"])

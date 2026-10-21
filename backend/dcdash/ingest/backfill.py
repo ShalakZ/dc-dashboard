@@ -649,11 +649,12 @@ class Backfill:
     async def _pages(self, run: _Run, batch: list[Mapped], cursor: list[datetime], hi: datetime, wrote: _Span) -> datetime:
         """The answers for one batch from cursor[0] to `hi`, each continued from the previous one's `complete_until`."""
         addresses = [m.address for m in batch]
+        limit = self._settings.max_rows  # what the batch was sized for; a source denser than its mapping is cut here, not by memory
         while True:
             start = cursor[0]
             # Every address gets an `after`, also the first time: the connector needs it to tell the repeated autumn hour's second
             # pass from its first when a window starts inside it.
-            page = await self._ask(run, addresses, start, hi, {a: run.received.get(a, start) for a in addresses})
+            page = await self._ask(run, addresses, start, hi, {a: run.received.get(a, start) for a in addresses}, limit)
             await self._store(run, page, wrote)
             run.unknown.update(page.unknown)  # an address the source lacks has no rows; the batch is still answered
             for value in page.values:
@@ -662,8 +663,10 @@ class Backfill:
             until = page.complete_until
             if until >= hi:
                 return hi
+            # A page that holds as many rows as were asked for was cut at the limit: the source has more, so the rest is asked right away.
+            cut = len(page.values) + page.rejected >= limit
             newest = hi >= run.now
-            if newest and not run.strict:
+            if newest and not cut and not run.strict:
                 # The newest part of the window: a source whose clock is behind ours (a historian that buffers is often a quarter of
                 # an hour behind) is complete only up to its own "now", which is no failure and no cut. Vouch for that much, however
                 # little it is, and ask the rest next cycle: asking again now would meet the same answer. (A fill ignores what a
@@ -671,12 +674,12 @@ class Backfill:
                 return max(until, start)
             if until <= start:
                 raise _NoProgress(f"the source answered up to {until.isoformat()} for a request that started at {start.isoformat()}")
-            if newest and hi - until <= SKEW:
+            if newest and not cut and hi - until <= SKEW:
                 return until
             cursor[0] = until
 
     async def _ask(
-        self, run: _Run, addresses: list[str], lo: datetime, hi: datetime, after: dict[str, datetime]
+        self, run: _Run, addresses: list[str], lo: datetime, hi: datetime, after: dict[str, datetime], limit: int
     ) -> HistoryPage:
         sid = run.source.id
         if sid not in self._paces:
@@ -686,7 +689,7 @@ class Backfill:
             await self._paces[sid].wait()
             run.tally.requests += 1
             try:
-                return await run.connector.read_history(addresses, lo, hi, after=after)
+                return await run.connector.read_history(addresses, lo, hi, after=after, limit=limit)
             except ConnectorError as exc:
                 run.tally.failures += 1
                 if exc.status == "auth_failed":

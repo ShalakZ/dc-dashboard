@@ -126,6 +126,7 @@ class Connector(ABC):
         resolution: timedelta | None = None,
         *,
         after: Mapping[str, datetime] | None = None,
+        limit: int | None = None,
     ) -> HistoryPage:
         """The samples the source stored for `addresses` between `start` and `end` (aware, both inclusive), for the backfill.
 
@@ -138,6 +139,7 @@ class Connector(ABC):
           requested address, and the caller continues from it (the next window starts AT it, because a row at that instant may be
           missing, even when it equals `end`). `after` maps an address to the last instant already received for it,
           so a page cut inside the repeated autumn hour still tells the first pass from the second;
+        - `limit` is the most rows the caller wants in one answer; a source may cut earlier or later, `complete_until` says where;
         - a connector that sets `supports_history` must stamp the values of `read()` with the source's time too, so a live value and
           its history twin are one `(point, time)` pair and a re-read of a polled window adds nothing.
 
