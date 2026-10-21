@@ -321,6 +321,73 @@ async def test_slices_keep_the_frontier_so_an_interruption_continues_where_it_st
     assert (await world.status())["answered_through"] == NOW
 
 
+async def test_a_first_run_that_halted_still_gets_the_late_pass_for_what_it_asked_while_that_was_young(db):
+    async def break_in_the_third_slice(call, number):
+        if number == 3:
+            raise RuntimeError("the connection dropped")
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 20 * HOUR + timedelta(seconds=17)}, script=break_in_the_third_slice)
+    result = await world.cycle()
+    row = await world.status()
+    assert (row["answered_through"], row["reread_through"]) == (NOW - 8 * HOUR, None)  # two slices were asked, the late pass never began
+    world.clock.now = result.next_try_at
+    assert (await world.cycle()).state == "idle"
+    # Not "three hours before this cycle": the slices asked in the first cycle were young then, and their second look is still owed.
+    assert (await world.status())["reread_through"] == NOW - 8 * HOUR - 3 * HOUR
+    done = len(world.calls)
+    world.clock.now += 10 * MINUTE
+    await world.cycle()
+    assert world.requests(done)[1][0] == NOW - 11 * HOUR  # the late pass of the next cycle starts there
+
+
+async def test_a_slice_whose_rollups_could_not_be_refreshed_does_not_move_the_mark_and_is_refreshed_with_the_next_try(db, monkeypatch):
+    real, ranges, broken = rollups.refresh_range, [], {"on": True}
+
+    async def flaky(pool, lo, hi, now):
+        ranges.append((lo, hi))
+        if broken["on"]:
+            raise RuntimeError("the refresh timed out")
+        return await real(pool, lo, hi, now)
+
+    monkeypatch.setattr(rollups, "refresh_range", flaky)
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR + timedelta(seconds=17)})
+    result = await world.cycle()
+    assert result.state == "backing_off" and "the rollups could not be refreshed: RuntimeError: the refresh timed out" in result.reason
+    assert (await world.status())["answered_through"] is None  # the slice is asked again: Billing would otherwise miss these rows for good
+    assert len(await world.stored("M001_kWh")) == 1 + 121  # the rows themselves were stored
+    broken["on"] = False
+    ranges.clear()
+    world.clock.now = result.next_try_at
+    again = await world.cycle()
+    assert (again.state, again.new) == ("idle", 4)  # the four minutes that have passed; everything before them is "already"
+    assert (await world.status())["answered_through"] == world.clock.now
+    assert ranges[0][0] <= NOW - 2 * HOUR and ranges[0][1] >= NOW + HOUR  # the retry refreshed what the failed try had stored, too
+
+
+async def test_values_the_source_was_not_asked_for_are_not_stored_and_do_not_count_as_received(db):
+    async def strays(call, number):
+        if number == 3:  # the first batch of the second slice, M001 from 10:00 to 11:00
+            at = lambda minutes: call.start + timedelta(minutes=minutes)  # noqa: E731
+            return HistoryPage(
+                [
+                    PointValue("M001_kWh", at(10), 1.0),
+                    PointValue("M002_kWh", at(10), 999.0),  # an address of another batch
+                    PointValue("M001_kWh", at(-30), 777.0),  # before the request, further than a mapping interval
+                    PointValue("M001_kWh", at(90), 888.0),  # after the request
+                ],
+                call.end,
+            )
+
+    first = NOW - 3 * HOUR + timedelta(seconds=17)
+    world = await make_world(
+        db, {"M001_kWh": KWH, "M002_kWh": KWH}, {"M001_kWh": first, "M002_kWh": first}, settings=settings_with(max_rows=100), script=strays
+    )  # one-hour slices, one address to a batch
+    result = await world.cycle()
+    assert result.state == "idle" and result.rejected == 3
+    assert await db.fetchval("SELECT count(*) FROM readings WHERE value IN (777, 888, 999)") == 0
+    assert world.calls[3].after == {"M002_kWh": world.calls[3].start}  # nothing the stray row said is held as received for M002
+
+
 # ---- trouble: back-off, set-aside batches, a source that keeps no history ----------------------------------------------------
 
 
@@ -403,6 +470,27 @@ async def test_refused_credentials_wait_fifteen_minutes_and_are_journaled_once(d
     assert (await world.cycle()).state == "backing_off"  # the same trouble again, a moment later
     [event] = await world.events(HISTORY_FAILED)
     assert event["code"] == "auth_failed" and "credentials" in event["message"]
+
+
+async def test_refused_credentials_are_journaled_once_a_day_though_the_source_is_asked_every_fifteen_minutes(db, monkeypatch):
+    from dcdash.core import journal
+
+    async def refused(call, number):
+        raise ConnectorError("auth_failed", "credentials rejected")
+
+    seconds = [journal._clock()]  # the journal's gates run on a clock of their own: move it with ours
+    monkeypatch.setattr(journal, "_clock", lambda: seconds[0])
+    world = await make_world(db, {"M001_kWh": KWH}, script=refused)
+    assert (await world.cycle()).next_try_at == NOW + timedelta(minutes=15)
+    for _ in range(3):  # the 15-minute wait is over each time: the source is asked again, the journal is not troubled again
+        world.clock.now += 16 * MINUTE
+        seconds[0] += 16 * 60
+        assert (await world.cycle()).state == "backing_off"
+    assert [event["code"] for event in await world.events(HISTORY_FAILED)] == ["auth_failed"]
+    world.clock.now += timedelta(days=1)
+    seconds[0] += 86_400
+    assert (await world.cycle()).state == "backing_off"
+    assert [event["code"] for event in await world.events(HISTORY_FAILED)] == ["auth_failed", "auth_failed"]  # told again after a day
 
 
 async def test_a_plain_simulator_source_becomes_not_supported_for_a_day_with_one_event(db):
@@ -587,10 +675,12 @@ async def test_a_sample_from_the_future_or_older_than_the_raw_retention_is_count
 
     world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 35 * 24 * HOUR}, settings=settings_with(lookback_days=1), script=crafted)
     result = await world.cycle()
-    assert result.rejected == 2  # six minutes ahead is clock skew, 29 days and an hour back is past the raw retention minus a day (30 - 1)
+    # The first slice asked for 12:00 to 18:00 of the day before: only the sample from 16:00 that day is in it. The others were not asked
+    # for (the future, and 29 days back, which is past the raw retention minus a day as well) and are counted, not stored.
+    assert result.rejected == 3
     stored = {row["ts"] for row in await world.stored("M001_kWh")}
-    assert NOW + 4 * MINUTE in stored and NOW - 20 * HOUR in stored
-    assert NOW + 6 * MINUTE not in stored and NOW - 29 * 24 * HOUR - HOUR not in stored
+    assert NOW - 20 * HOUR in stored
+    assert not stored & {NOW + 6 * MINUTE, NOW + 4 * MINUTE, NOW - 29 * 24 * HOUR - HOUR}
 
 
 async def test_the_lookback_is_capped_at_the_raw_retention_minus_two_days(db):
@@ -1027,6 +1117,39 @@ async def test_a_fill_that_stops_says_so_after_telling_the_journal_what_it_did(d
     assert len(await world.stored("M001_kWh")) == 361 + 1  # the first slice stayed
     [event] = await world.events(HISTORY_FILLED)
     assert event["detail"]["new"] == 361
+
+
+async def test_a_fill_that_dies_on_an_unexpected_error_tells_the_journal_what_it_stored_and_says_so_in_one_sentence(db):
+    async def breaks_from_the_second_slice(call, number):
+        if number >= 2:
+            raise RuntimeError("the connection dropped")
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 8 * HOUR + timedelta(seconds=17)}, script=breaks_from_the_second_slice)
+    with pytest.raises(FillRefused, match=r"the fill stopped early \(RuntimeError: the connection dropped\); until then: 361 rows read, 361 new"):
+        await world.engine.fill_range(world.source, NOW - 8 * HOUR, NOW, yes=True)
+    [event] = await world.events(HISTORY_FILLED)
+    assert event["detail"]["new"] == 361 and event["detail"]["by_command"] is True
+    assert len(await world.stored("M001_kWh")) == 361 + 1
+    async with db.acquire() as conn:  # the lease is let go
+        assert await conn.fetchval("SELECT pg_try_advisory_lock($1, $2)", LEASE_KEY, world.source) is True
+        await conn.execute("SELECT pg_advisory_unlock($1, $2)", LEASE_KEY, world.source)
+
+
+async def test_a_fill_whose_rollup_refresh_fails_still_tells_the_journal_and_keeps_its_own_sentence(db, monkeypatch):
+    real, calls = rollups.refresh_range, []
+
+    async def second_fails(pool, lo, hi, now):
+        calls.append(lo)
+        if len(calls) == 2:
+            raise RuntimeError("the refresh timed out")
+        return await real(pool, lo, hi, now)
+
+    monkeypatch.setattr(rollups, "refresh_range", second_fails)
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 8 * HOUR + timedelta(seconds=17)})
+    with pytest.raises(FillRefused, match=r"^the rows were stored, but the rollups could not be refreshed: .*refresh timed out"):
+        await world.engine.fill_range(world.source, NOW - 8 * HOUR, NOW, yes=True)
+    [event] = await world.events(HISTORY_FILLED)
+    assert event["detail"]["new"] == len(await world.stored("M001_kWh")) - 1  # both slices were stored before the second refresh failed
 
 
 async def test_a_fill_says_no_in_plain_words(db):

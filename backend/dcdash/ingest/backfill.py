@@ -191,7 +191,8 @@ class _Run:
     received: dict[str, datetime] = field(default_factory=dict)  # per address, the newest instant received
     spans: list[tuple[datetime, datetime]] = field(default_factory=list)  # first and last new row of every write that stored some
     aside: list[str] = field(default_factory=list)  # a few addresses of the batches set aside
-    unknown: set[str] = field(default_factory=set)  # addresses the source said it does not have: left out, they never hold a mark
+    unknown: set[str] = field(default_factory=set)  # addresses the source said it does not have: still asked for at every cycle (a
+    # mapping may be fixed on the source's side), told once a day, and never a reason to hold a mark
     by_address: dict[str, Mapped] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -337,6 +338,7 @@ class Backfill:
         self._failed_cycles: dict[int, int] = defaultdict(int)  # cycles in a row that ended in trouble, per source
         self._episodes: dict[int, int] = defaultdict(int)  # a new episode of trouble gets its own journal gate
         self._strikes: dict[tuple, int] = {}  # failed tries of one batch of one slice
+        self._owed: dict[int, tuple[datetime, datetime]] = {}  # per source, the range whose rollup refresh failed (lost on a restart)
 
     # ---- the automatic cycle -----------------------------------------------------------------------------------------------
 
@@ -543,6 +545,10 @@ class Backfill:
                 return
         # What the frontier asked in this very cycle and is now old enough needs no second ask.
         target = min(now - reread_after, through)
+        if reread is None and mark is not None:
+            # An earlier cycle halted before it set the late-pass mark: what it asked was young when it asked, so its second look is
+            # owed from there (not from three hours before THIS cycle, which would leave out the stretch in between).
+            target = min(target, mark - reread_after)
         if reread is None or target > reread:
             await self._save(sid, "reread_through", target)
 
@@ -607,20 +613,39 @@ class Backfill:
 
     async def _refresh(self, run: _Run, wrote: _Span, lo: datetime, hi: datetime, *, failing: bool = False) -> None:
         """The rollups over what a slice stored (D8). A fill refreshes its whole slice even when nothing in it was new: an earlier
-        fill that was interrupted may have stored rows whose hours were never refreshed."""
+        fill that was interrupted may have stored rows whose hours were never refreshed.
+
+        A refresh that fails ends the cycle BEFORE the slice's mark is saved (the caller saves it after this returns): the slice is
+        asked again, its rows are "already there", and the range that could not be refreshed is remembered (`_owed`) and refreshed
+        with the next try, which would otherwise see no new row in it. A refresh that fails while another error is already on its
+        way is only logged, so that it cannot hide the first one."""
+        sid = run.source.id
         if wrote.first is not None and wrote.last is not None:
             first, last = rollups.hour_floor(wrote.first), wrote.last + rollups.HOUR
         elif run.strict and not failing:
             first, last = lo, hi
         else:
+            first = last = None
+        owed = None if failing else self._owed.get(sid)
+        if owed is not None:
+            first, last = owed if first is None or last is None else (min(first, owed[0]), max(last, owed[1]))
+        if first is None or last is None:
             return
         try:
             await rollups.refresh_range(self._pool, first, last, self._clock())
         except Exception as exc:
-            if run.strict and not failing:
+            if failing:
+                log.warning("could not refresh the rollups after a history fill of source %s: %s", sid, exc)
+                return
+            if run.strict:
                 raise FillRefused(f"the rows were stored, but the rollups could not be refreshed: {exc}") from exc
-            # An automatic cycle stays inside the 7 days the refresh policies cover, so they will catch up.
-            log.warning("could not refresh the rollups after a history fill of source %s: %s", run.source.id, exc)
+            self._owed[sid] = (first, last)
+            raise _Halt(
+                "backing_off", "refresh_failed", f"the rows were stored, but the rollups could not be refreshed: {type(exc).__name__}: {exc}",
+                self._giveup_wait(sid, None),
+            ) from None
+        if not failing:
+            self._owed.pop(sid, None)
 
     async def _batch(self, run: _Run, batch: list[Mapped], lo: datetime, hi: datetime, wrote: _Span) -> datetime | None:
         """One batch of addresses over one slice. Returns how far the source vouched for it, or None when it was set aside."""
@@ -656,9 +681,10 @@ class Backfill:
             # Every address gets an `after`, also the first time: the connector needs it to tell the repeated autumn hour's second
             # pass from its first when a window starts inside it.
             page = await self._ask(run, addresses, start, hi, {a: run.received.get(a, start) for a in addresses}, limit)
-            await self._store(run, page, wrote)
+            asked = self._requested(run, batch, page.values, start, hi)
+            await self._store(run, page, asked, wrote)
             run.unknown.update(page.unknown)  # an address the source lacks has no rows; the batch is still answered
-            for value in page.values:
+            for value in asked:  # not the stray rows: they would pose as the order evidence of an address they are not about
                 if value.address not in run.received or value.ts > run.received[value.address]:
                     run.received[value.address] = value.ts
             until = page.complete_until
@@ -714,13 +740,25 @@ class Backfill:
 
     # ---- what is stored ----------------------------------------------------------------------------------------------------
 
-    async def _store(self, run: _Run, page: HistoryPage, wrote: _Span) -> None:
-        """Filter one answer (D7), thin it (D15) and store what is left in a transaction of its own, never notifying."""
+    @staticmethod
+    def _requested(run: _Run, batch: list[Mapped], values: list[PointValue], start: datetime, hi: datetime) -> list[PointValue]:
+        """The values of an answer that were asked for: an address of the batch, at a time of the request. A source that sends
+        more is counted as rejected and ignored, so it cannot write outside the range that was checked before the first request.
+        (A value stamped at the end of its period moves back by it, so the first period of a request may begin up to one mapping
+        interval before `start`.)"""
+        slack = {m.address: timedelta(seconds=m.interval) for m in batch}
+        kept = [value for value in values if value.address in slack and start - slack[value.address] <= value.ts <= hi]
+        run.tally.rejected += len(values) - len(kept)
+        return kept
+
+    async def _store(self, run: _Run, page: HistoryPage, values: list[PointValue], wrote: _Span) -> None:
+        """Filter one answer (D7), thin it (D15) and store what is left in a transaction of its own, never notifying. `values` are
+        the part of the answer that was asked for."""
         tally = run.tally
         tally.read += len(page.values) + page.rejected
         tally.rejected += page.rejected
         chosen: list[tuple[Mapped, PointValue]] = []
-        for value in page.values:
+        for value in values:
             mapped = run.by_address.get(value.address)
             if mapped is None or normalise.check_window(value.ts, run.now, run.retention_days) is not None:
                 tally.rejected += 1
@@ -821,12 +859,17 @@ class Backfill:
                     await journal.record(
                         self._pool, "collector", HISTORY_FAILED, result.reason, source_id=sid, code="not_supported", known=known,
                     )
-            elif result.state == "backing_off" and journal.allow((HISTORY_FAILED, sid, self._episodes[sid]), FAILED_REPEAT_SECONDS):
-                await journal.record(
-                    self._pool, "collector", HISTORY_FAILED, f"the history of the source could not be read: {result.reason}",
-                    level="warning", source_id=sid, code=code, known=known,
-                    detail={"next_try_at": result.next_try_at.isoformat() if result.next_try_at else None, "requests": result.requests},
-                )
+            elif result.state == "backing_off":
+                # Refused credentials are asked again every 15 minutes for as long as they last, but told once a day (per episode).
+                auth = code == "auth_failed"
+                gate = (HISTORY_FAILED, sid, "auth_failed", self._episodes[sid]) if auth else (HISTORY_FAILED, sid, self._episodes[sid])
+                if journal.allow(gate, NOT_SUPPORTED_WAIT_SECONDS if auth else FAILED_REPEAT_SECONDS):
+                    lead = "the history backfill stopped" if code == "refresh_failed" else "the history of the source could not be read"
+                    await journal.record(
+                        self._pool, "collector", HISTORY_FAILED, f"{lead}: {result.reason}",
+                        level="warning", source_id=sid, code=code, known=known,
+                        detail={"next_try_at": result.next_try_at.isoformat() if result.next_try_at else None, "requests": result.requests},
+                    )
         except Exception as exc:
             log.warning("could not journal the history cycle of source %s: %s", sid, exc)
 
@@ -950,12 +993,15 @@ class Backfill:
                 raise FillRefused(f"the source's configuration cannot be used: {exc}") from None
             run = _Run(source, connector, conn, points, now, retention, first, before_first_reading=before_first_reading, strict=True)
             stopped: str | None = None
+            failure: Exception | None = None
             try:
                 await self._window(run, start, end, None)
             except _Halt as halt:
                 stopped = halt.reason
             except _Gone:
                 stopped = "the source was deleted"
+            except Exception as exc:  # a connector's error, a database error, a refresh that failed: what was stored is told below
+                failure = exc
             finally:
                 try:
                     await connector.close()
@@ -968,6 +1014,12 @@ class Backfill:
             except Exception as exc:
                 log.warning("could not journal the fill of source %s: %s", source_id, exc)
         text = _counts_text(run.tally)
+        if isinstance(failure, FillRefused):
+            raise failure  # its own sentence (a refresh that failed after the rows were stored), now that the journal has been told
+        if failure is not None:
+            raise FillRefused(
+                f"the fill stopped early ({type(failure).__name__}: {clip_error(str(failure), 300)}); until then: {text}"
+            ) from failure
         if stopped is not None:
             raise FillRefused(f"the fill stopped early ({stopped}); until then: {text}")
         tally = run.tally
