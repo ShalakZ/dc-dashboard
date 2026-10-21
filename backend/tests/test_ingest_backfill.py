@@ -366,26 +366,39 @@ async def test_a_slice_whose_rollups_could_not_be_refreshed_does_not_move_the_ma
 
 async def test_values_the_source_was_not_asked_for_are_not_stored_and_do_not_count_as_received(db):
     async def strays(call, number):
-        if number == 3:  # the first batch of the second slice, M001 from 10:00 to 11:00
+        if number == 5:  # the first batch of the third slice, M001 from 08:00 to 09:00
             at = lambda minutes: call.start + timedelta(minutes=minutes)  # noqa: E731
             return HistoryPage(
                 [
                     PointValue("M001_kWh", at(10), 1.0),
                     PointValue("M002_kWh", at(10), 999.0),  # an address of another batch
-                    PointValue("M001_kWh", at(-30), 777.0),  # before the request, further than a mapping interval
+                    PointValue("M001_kWh", at(-90), 777.0),  # before the hour that precedes the request's own hour, though after the point's first hour
                     PointValue("M001_kWh", at(90), 888.0),  # after the request
                 ],
                 call.end,
             )
 
-    first = NOW - 3 * HOUR + timedelta(seconds=17)
+    first = NOW - 6 * HOUR + timedelta(seconds=17)
     world = await make_world(
         db, {"M001_kWh": KWH, "M002_kWh": KWH}, {"M001_kWh": first, "M002_kWh": first}, settings=settings_with(max_rows=100), script=strays
     )  # one-hour slices, one address to a batch
     result = await world.cycle()
     assert result.state == "idle" and result.rejected == 3
     assert await db.fetchval("SELECT count(*) FROM readings WHERE value IN (777, 888, 999)") == 0
-    assert world.calls[3].after == {"M002_kWh": world.calls[3].start}  # nothing the stray row said is held as received for M002
+    assert world.calls[5].after == {"M002_kWh": world.calls[5].start}  # nothing the stray row said is held as received for M002
+
+
+async def test_an_end_stamped_value_with_a_period_longer_than_its_mapping_interval_is_stored_in_a_steady_state_cycle(db):
+    # INTERVAL_kWh is the energy of 15 minutes stamped at their END; the connector moves a value back by its period. Mapped at 300 s,
+    # the period that ended at 12:15 lands at 12:00, three mapping intervals before the 12:10 a cycle's request starts at.
+    world = await make_world(db, {"INTERVAL_kWh": ("custom", 300)}, {"INTERVAL_kWh": NOW - 2 * HOUR + timedelta(seconds=17)})
+    assert (await world.cycle()).state == "idle"
+    world.clock.now += 10 * MINUTE
+    assert (await world.cycle()).new == 0  # [12:00, 12:10]: no period ended in it that was not stored before
+    world.clock.now += 10 * MINUTE
+    result = await world.cycle()  # [12:10, 12:20]
+    assert (result.state, result.new, result.rejected) == ("idle", 1, 0)  # kept, not refused as a stray
+    assert NOW in {row["ts"] for row in await world.stored("INTERVAL_kWh")}
 
 
 # ---- trouble: back-off, set-aside batches, a source that keeps no history ----------------------------------------------------

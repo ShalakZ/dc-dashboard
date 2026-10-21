@@ -755,12 +755,15 @@ class Backfill:
 
     @staticmethod
     def _requested(run: _Run, batch: list[Mapped], values: list[PointValue], start: datetime, hi: datetime) -> list[PointValue]:
-        """The values of an answer that were asked for: an address of the batch, at a time of the request. A source that sends
-        more is counted as rejected and ignored, so it cannot write outside the range that was checked before the first request.
-        (A value stamped at the end of its period moves back by it, so the first period of a request may begin up to one mapping
-        interval before `start`.)"""
-        slack = {m.address: timedelta(seconds=m.interval) for m in batch}
-        kept = [value for value in values if value.address in slack and start - slack[value.address] <= value.ts <= hi]
+        """The values of an answer that were asked for: an address of the batch, at a time the request can reach. A source that
+        sends more is counted as rejected and ignored, so it cannot write outside the range that was checked before the first
+        request. A value stamped at the end of its period moves back by that period (the connector does it), and a period may be
+        longer than the mapping interval, so the lower bound is not `start` less an interval but the hour before the hour `start`
+        is in (the whole hours the cycle checks and refreshes, and one more). Samples slightly ahead of `hi` (a source whose clock
+        runs ahead of ours) are dropped here too, counted as rejected and asked for again by the next window."""
+        addresses = {m.address for m in batch}
+        low = rollups.hour_floor(start) - rollups.HOUR
+        kept = [value for value in values if value.address in addresses and low <= value.ts <= hi]
         run.tally.rejected += len(values) - len(kept)
         return kept
 
