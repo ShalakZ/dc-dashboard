@@ -119,10 +119,12 @@ const NARROW = 80; // a fixed column narrower than this gets a line that fits it
  * accessibility tree; it never scrolls. `caption` adds the muted how-to-read row above the header (Billing's), `headless` leaves the header
  * out (Storage's rows per day has body rows only): a table is as tall as the real one only if it has the same rows. `widths` is for a table
  * whose real columns are fixed (the audit log's `table-layout: fixed`): one px width per column, null for the rest, drawn as a `<colgroup>`
- * in a fixed layout, and a column narrower than 80px gets a line that fits inside its cell padding.
+ * in a fixed layout, and a column narrower than 80px gets a line that fits inside its cell padding. `twoLine` lists the columns whose real cell holds a second,
+ * smaller line under the first (the Sources page's history line): their body cells draw both, the second in the real line's own class (`cell-history`,
+ * pages-sources.css), so a loaded row is no taller than the placeholder it replaces.
  */
-export function TableSkeleton({ columns, rows, label, caption, headless, widths }: {
-  columns: number; rows: number; label?: string; caption?: boolean; headless?: boolean; widths?: readonly (number | null)[];
+export function TableSkeleton({ columns, rows, label, caption, headless, widths, twoLine }: {
+  columns: number; rows: number; label?: string; caption?: boolean; headless?: boolean; widths?: readonly (number | null)[]; twoLine?: readonly number[];
 }) {
   const cols = Array.from({ length: columns }, (_, c) => c);
   const narrow = (c: number) => {
@@ -143,7 +145,14 @@ export function TableSkeleton({ columns, rows, label, caption, headless, widths 
           )}
           <tbody>
             {Array.from({ length: rows }, (_, r) => (
-              <tr key={r}>{cols.map((c) => <td key={c}>{line(c, CELL_WIDTHS[(r * 2 + c * 3) % CELL_WIDTHS.length])}</td>)}</tr>
+              <tr key={r}>
+                {cols.map((c) => (
+                  <td key={c}>
+                    {line(c, CELL_WIDTHS[(r * 2 + c * 3) % CELL_WIDTHS.length])}
+                    {twoLine?.includes(c) ? <span className="cell-history"><Skeleton width="18ch" /></span> : null}
+                  </td>
+                ))}
+              </tr>
             ))}
           </tbody>
         </table>

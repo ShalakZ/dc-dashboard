@@ -140,8 +140,9 @@ export function SourcesPage() {
     return errorUpdateCount > 0 ? <p className="muted">loading…</p> : (
       <>
         <PageHeader title="Sources" actions={<ActionsSpace />} />
-        {/* Seven of the table's nine columns: nine rows of placeholders are 1300px wide at 1440, wider than the page, and would be cut at its edge */}
-        <TableSkeleton columns={7} rows={5} label="Loading sources" />
+        {/* Seven of the table's nine columns: nine rows of placeholders are 1300px wide at 1440, wider than the page, and would be cut at its edge.
+            The Name cell has two lines (the history line under the name), as the loaded rows of a source that keeps history or is filled by files do. */}
+        <TableSkeleton columns={7} rows={5} label="Loading sources" twoLine={[0]} />
       </>
     );
   }

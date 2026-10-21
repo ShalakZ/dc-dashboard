@@ -8,8 +8,8 @@ const hoursAgo = (hours: number) => minutesAgo(hours * 60);
 const history = (over: Partial<HistorySummary> = {}): HistorySummary => ({
   supports_history: true, state: "idle", answered_through: null, last_success_at: null, next_try_at: null, last_error: null, ...over,
 });
-const row = (over: Partial<Pick<Source, "connector_type" | "polls" | "history">> = {}): Pick<Source, "connector_type" | "polls" | "history"> => ({
-  connector_type: "simulator", polls: true, history: history(), ...over,
+const row = (over: Partial<Pick<Source, "connector_type" | "polls" | "enabled" | "history">> = {}): Pick<Source, "connector_type" | "polls" | "enabled" | "history"> => ({
+  connector_type: "simulator", polls: true, enabled: true, history: history(), ...over,
 });
 
 describe("historyLine", () => {
@@ -40,8 +40,33 @@ describe("historyLine", () => {
     expect(historyLine(row({ history: history({ state: "never_run" }) }), NOW)).toBe("History: not started yet");
   });
 
+  describe("a source that is switched off", () => {
+    const off = (state: HistorySummary["state"], over: Partial<HistorySummary> = {}) => row({ enabled: false, history: history({ state, ...over }) });
+
+    it("never_run reads as not filled because the source is off, not as 'not started yet' for ever", () => {
+      expect(historyLine(off("never_run"), NOW)).toBe("History: not filled (the source is switched off)");
+    });
+
+    it("keeps the same line for a source that is on, and reads a row without the field as on", () => {
+      expect(historyLine(row({ enabled: true, history: history({ state: "never_run" }) }), NOW)).toBe("History: not started yet");
+      expect(historyLine(row({ enabled: undefined, history: history({ state: "never_run" }) }), NOW)).toBe("History: not started yet");
+    });
+
+    it("leaves every other state as the history says it (a fill started by hand on a switched-off source is real)", () => {
+      expect(historyLine(off("filling", { answered_through: hoursAgo(5) }), NOW)).toBe("History: filling, 5 hours behind");
+      expect(historyLine(off("idle", { last_success_at: minutesAgo(3) }), NOW)).toBe("History: up to date, last fill 3 min ago");
+      expect(historyLine(off("backing_off", { last_error: "no answer" }), NOW)).toBe("History: waiting, no answer");
+      expect(historyLine(off("not_supported"), NOW)).toBeNull();
+    });
+
+    it("shows nothing for a switched-off connector that keeps no history, and still says a file source is filled by files", () => {
+      expect(historyLine(row({ enabled: false, history: history({ supports_history: false, state: "not_supported" }) }), NOW)).toBeNull();
+      expect(historyLine(row({ enabled: false, connector_type: "file", polls: false, history: null }), NOW)).toBe("Filled by importing files");
+    });
+  });
+
   describe("filling", () => {
-    const filling = (answered_through: string | null) => row({ history: history({ state: "filling", answered_through }) });
+    const filling =(answered_through: string | null) => row({ history: history({ state: "filling", answered_through }) });
 
     it("counts the whole hours between what was answered and now", () => {
       expect(historyLine(filling(hoursAgo(5)), NOW)).toBe("History: filling, 5 hours behind");

@@ -9,6 +9,7 @@ import { describeAudit } from "../lib/auditText";
 import { relativeTime } from "../lib/relativeTime";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { TAG_LIST_REFRESHED, undoSentence } from "../lib/tagListUndo";
+import { upperFirst } from "../lib/upperFirst";
 import { KindTile, UserLabel } from "./AuditCells";
 import { Drawer } from "./Drawer";
 import { Skeleton, SkeletonRegion } from "./Skeleton";
@@ -78,7 +79,8 @@ function UndoThisList({ entryId }: { entryId: number }) {
       toast.success(text);
       setState({ phase: "done", text, refused: false });
     } catch (error) {
-      setState({ phase: "idle", text: error instanceof Error ? error.message : String(error), refused: true });
+      // The server writes its refusals in lower case ("this tag list was already undone"); shown as a sentence, like the other pages' API messages.
+      setState({ phase: "idle", text: upperFirst(error instanceof Error ? error.message : String(error)), refused: true });
     } finally {
       try { await invalidate(...TAG_LIST_REFRESHED); } catch { /* the lists fetch themselves again on their next visit */ }
       running.current = false;

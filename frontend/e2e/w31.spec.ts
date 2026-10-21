@@ -8,7 +8,8 @@ import { expectNoRowAction, rowAction } from "./shell";
 // `simulator` source `W31 <run> sim` (the simulator is the one connector that keeps history, so it is the one that offers Fill older range...); case 1 makes its own `file` source through the UI. Every name starts `W31 <run>`, the tag list
 // makes the top-level asset `W31 <run>` with three meters under it, the import profile is `w31-<run>`, and the accounts and roles of case 2 start `w31-`. afterAll removes it all, each step on its own and also after a failed case (accounts
 // first, then roles, sources, assets and profiles), and beforeAll sweeps what an earlier run left. The readings an import stores have no foreign key to their point: deleting the source leaves them (the same as every other delete of a source).
-//   1  A FILE SOURCE FROM START TO UNDO. Add source: the connector `file` shows its description and no field of its own. Map tag list...: six lines (three meters, a kWh counter and a kW tag each); without "Create missing assets" every line is a problem
+//   1  A FILE SOURCE FROM START TO UNDO. Add source: the connector `file` shows its description and no field of its own (no Secret: it has nothing to authenticate). Map tag list...: six lines (three meters, a kWh counter and a kW tag each, every line with
+//      interval_seconds 3600, the spacing of the hourly series, which the dialog asks of a file source); the buttons of the dialog and of the Import dialog stay where they are when a report arrives (1 px); without "Create missing assets" every line is a problem
 //      and Create stays off; ticking the box takes the report away (it counts only for what is in the dialog now); Check list counts 6 mappings, 4 assets and 6 points with no problem; Create 6 mappings closes the dialog and raises the toast "Created 6
 //      mappings" with an Undo (not pressed). Import file...: 24 hourly rows of each of the 6 tags (UTC with Z, the last one one to two hours ago) plus one row for a tag the source does not have, one row with a value that is not a number and one exact
 //      repeat of the first row. A new profile `w31-<run>` is named, its unit and quality columns are filled in (the dialog starts them empty), and Check file reads 147 rows, 144 new, 2 rejected and 1 unknown tag, with the unknown tag and the two reasons
@@ -71,9 +72,12 @@ const ASSETS = METERS.length + 1;
 
 const isoZ = (ms: number): string => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
 
-/** `tag,asset,metric,unit`: the first line names the columns, then one line per tag. The root asset `W31 <run>` does not exist yet, so the list needs "Create missing assets". */
+/** The spacing of the generated series in seconds: it is hourly. A `file` source's tag list must give it on every active_power_kw line (the engine works a power-only meter's energy out from it); the dialog says so. */
+const INTERVAL_SECONDS = 3600;
+
+/** `tag,asset,metric,unit,interval_seconds`: the first line names the columns, then one line per tag. The root asset `W31 <run>` does not exist yet, so the list needs "Create missing assets". */
 function tagListText(): string {
-  return ["tag,asset,metric,unit", ...TAGS.map((t) => `${t.tag},${ROOT} / ${t.meter},${t.metric},${t.unit}`)].join("\n") + "\n";
+  return ["tag,asset,metric,unit,interval_seconds", ...TAGS.map((t) => `${t.tag},${ROOT} / ${t.meter},${t.metric},${t.unit},${INTERVAL_SECONDS}`)].join("\n") + "\n";
 }
 
 /** 24 hourly rows of every tag, UTC with Z, from 25 to 2 hours before `nowMs` (the last one is the hour before the current one), then three bad rows. */
@@ -269,6 +273,24 @@ async function chooseByKeyboard(page: Page, row: Locator, item: string): Promise
 /** The report tile `dt` -> `dd` of the tag list dialog. */
 const tile = (report: Locator, title: string) => report.locator(".taglist-tiles > div").filter({ hasText: title }).locator("dd");
 
+/** The top edge, in px from the window's top, of the one element each selector finds inside `dialog`. */
+async function tops(dialog: Locator, selectors: string[]): Promise<number[]> {
+  const edges: number[] = [];
+  for (const selector of selectors) {
+    const box = await dialog.locator(selector).boundingBox();
+    expect(box, `${selector} is on screen`).not.toBeNull();
+    edges.push(box!.y);
+  }
+  return edges;
+}
+
+/** A report that arrives late must not move the buttons: the one just pressed would slide out from under the pointer. 1 px of rounding is allowed. */
+function expectStill(selectors: string[], before: number[], after: number[], when: string): void {
+  selectors.forEach((selector, i) => {
+    expect(Math.abs(after[i] - before[i]), `${selector} ${when}: it was at y=${before[i]} and is at y=${after[i]}`).toBeLessThanOrEqual(1);
+  });
+}
+
 /** A day for a date input (yyyy-mm-dd), `daysAgo` days before today in the browser's zone. */
 function dayInput(daysAgo: number): string {
   const moment = new Date();
@@ -281,6 +303,7 @@ function dayInput(daysAgo: number): string {
 
 test("1. a file source: a tag list is checked and created, a file is checked and imported twice, and the Undo takes the mappings back", async ({ page }) => {
   test.setTimeout(300_000);
+  await page.setViewportSize({ width: 1440, height: 900 }); // the size the button positions below are measured at
   const csv = readingsCsv(Date.now());
   const fileName = `w31-${RUN}.csv`;
   let id = 0;
@@ -297,6 +320,8 @@ test("1. a file source: a tag list is checked and created, a file is checked and
     await expect(connector, "the select is described by it").toHaveAccessibleDescription(FILE_DESCRIPTION);
     await expect(add.getByLabel(/^Url/i), "a file source has no address to fill in").toHaveCount(0);
     await expect(add.locator("input:not([type=checkbox]):not([type=password])"), "the name is the only text field").toHaveCount(1);
+    await expect(add.getByLabel("Secret", { exact: true }), "a file reaches nothing, so it has nothing to authenticate").toHaveCount(0);
+    await expect(add.locator("input[type=password]")).toHaveCount(0);
     await add.getByLabel("Name", { exact: true }).fill(ONE);
     await add.getByRole("button", { name: "Save", exact: true }).click();
     await expect(add).toBeHidden();
@@ -307,15 +332,19 @@ test("1. a file source: a tag list is checked and created, a file is checked and
   const tags = tagDialog(page, ONE);
   const report = tags.getByRole("region", { name: "Result of the check", exact: true });
   const status = tags.locator(".taglist-status");
+  /** Cancel, Check list and Create: the three buttons of the dialog's foot. */
+  const footButtons = ["button.taglist-cancel", "button.taglist-check", "button.taglist-go"];
 
   await test.step("Map tag list...: without 'Create missing assets' every line is a problem, and ticking the box takes the report away", async () => {
     await (await rowAction(page, sourceRow(page, ONE), MENU.map)).click();
     await expect(tags).toBeVisible();
     await tags.getByLabel("Tag list", { exact: true }).fill(tagListText());
+    const waiting = await tops(tags, footButtons);
     await tags.getByRole("button", { name: "Check list", exact: true }).click();
     await expect(status).toContainText(`${TAGS.length} lines to fix`);
     await expect(report.getByRole("heading", { name: "Problem lines", exact: true })).toBeVisible();
     await expect(report).toContainText("does not exist");
+    expectStill(footButtons, waiting, await tops(tags, footButtons), "after a report with problem lines arrived");
     await expect(tags.getByRole("button", { name: "Create mappings", exact: true }), "nothing can be created from a list with problems").toHaveAttribute("aria-disabled", "true");
 
     await tags.getByRole("checkbox", { name: "Create missing assets" }).check();
@@ -324,8 +353,11 @@ test("1. a file source: a tag list is checked and created, a file is checked and
   });
 
   await test.step("Check list: the report counts the mappings, the assets and the points, with no problem", async () => {
+    const waiting = await tops(tags, footButtons);
     await tags.getByRole("button", { name: "Check list", exact: true }).click();
     await expect(status).toContainText(`Would create ${MAPPINGS} mappings, ${ASSETS} assets and ${TAGS.length} points`);
+    await expect(report.getByRole("heading", { name: "New assets", exact: true })).toBeVisible();
+    expectStill(footButtons, waiting, await tops(tags, footButtons), "after the clean report arrived");
     await expect(status).toContainText("Nothing is created until you press Create");
     await expect(tile(report, "Points to create")).toHaveText(String(TAGS.length));
     await expect(tile(report, "Assets to create")).toHaveText(String(ASSETS));
@@ -406,9 +438,13 @@ test("1. a file source: a tag list is checked and created, a file is checked and
     await expect(dialog).toBeVisible();
     await dialog.getByLabel("File", { exact: true }).setInputFiles({ name: fileName, mimeType: "text/csv", buffer: Buffer.from(csv, "utf8") });
     await dialog.getByLabel("Profile", { exact: true }).selectOption(PROFILE);
+    const footButtons = ["button.import-close", "button.import-check", "button.import-go"];
+    const waiting = await tops(dialog, footButtons);
     await dialog.getByRole("button", { name: "Check file", exact: true }).click();
     await expect(sentence).toContainText(`Checked: ${READ} rows read, 0 new, ${NEW} already there, 0 differing, ${REJECTED} rejected`);
     await expect(dialog.getByText("There is nothing new to import from this file.", { exact: true })).toBeVisible();
+    // The report holds the unknown tag and the reasons for the two rejected rows, so it is the long kind: Check file, just pressed, must be where it was (the report's room is reserved, not a minimum).
+    expectStill(footButtons, waiting, await tops(dialog, footButtons), "after the report of the check arrived");
     await expect(dialog.getByRole("button", { name: "Import 0 rows", exact: true })).toHaveAttribute("aria-disabled", "true");
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await expect(dialog).toBeHidden();

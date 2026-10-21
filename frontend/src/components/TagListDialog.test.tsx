@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import type { TagListReport } from "../api/types";
@@ -78,6 +78,18 @@ describe("TagListDialog: the frame", () => {
   it("tells a source that is not a file that Browse comes first", () => {
     const { dialog } = setup({ source: { id: 5, name: "Gateway", connector_type: "modbus_tcp" } });
     expect(dialog).toHaveTextContent("The tags must already be points of this source: run Browse first.");
+  });
+
+  it("tells a file source that interval_seconds is the spacing of the export (3600 for an hourly file) and that every power line needs it", () => {
+    const { dialog } = setup();
+    expect(dialog).toHaveTextContent("interval_seconds is the spacing of the export in seconds (3600 for an hourly file).");
+    expect(dialog).toHaveTextContent("Every active_power_kw line of a file source needs it");
+    expect(within(dialog).getByLabelText("Tag list")).toHaveAccessibleDescription(/spacing of the export in seconds \(3600 for an hourly file\)/); // read with the field
+  });
+
+  it("does not tell a source that is polled about the spacing of an export", () => {
+    const { dialog } = setup({ source: { id: 5, name: "Gateway", connector_type: "modbus_tcp" } });
+    expect(dialog).not.toHaveTextContent("spacing of the export");
   });
 
   it("has Create mappings waiting (aria-disabled, never native disabled) until a check has been made, and pressing it sends nothing", async () => {
@@ -364,8 +376,61 @@ describe("TagListDialog: creating", () => {
     const before = refreshedKeys().length;
     toasts.calls[0].options!.action!.onAction();
     await waitFor(() => expect(toasts.calls).toHaveLength(2));
-    expect(toasts.calls[1]).toEqual({ kind: "error", text: 'the asset "Hall 1" was renamed or moved after the list created it; the list cannot be undone as a whole' });
+    // the server writes its refusals in lower case; the toast starts the sentence with a capital
+    expect(toasts.calls[1]).toEqual({ kind: "error", text: 'The asset "Hall 1" was renamed or moved after the list created it; the list cannot be undone as a whole' });
     await waitFor(() => expect(refreshedKeys().length).toBeGreaterThan(before));
+  });
+
+  describe("the focus when the toast's Undo is pressed (the toast leaves with its button)", () => {
+    // The dialog is gone by then (it closed on Create), so the page under it and the toast stack are stood in for by a little DOM: the page heading (focusable by script, as
+    // the Sources page makes it), the source's row with its menu button, and a toast whose Undo has the focus.
+    const hosts: HTMLElement[] = [];
+    const standIns = (over: { row?: boolean; toastFocused?: boolean } = {}) => {
+      const { row = true, toastFocused = true } = over;
+      const host = document.createElement("div");
+      hosts.push(host);
+      host.innerHTML = `<h1 tabindex="-1">Sources</h1>
+        ${row ? '<table><tbody><tr data-source="5"><td><button type="button" class="icon-btn row-menu-btn" aria-label="Actions for Meters"></button></td></tr></tbody></table>' : ""}
+        <button type="button" class="elsewhere">Elsewhere</button>
+        <div class="toast"><button type="button" class="toast-action">Undo</button></div>`;
+      document.body.append(host);
+      host.querySelector<HTMLElement>(toastFocused ? ".toast-action" : ".elsewhere")!.focus();
+      return { host, heading: host.querySelector("h1")!, menu: host.querySelector<HTMLElement>(".row-menu-btn"), elsewhere: host.querySelector<HTMLElement>(".elsewhere")! };
+    };
+    const created77 = async () => {
+      const { check, create, toasts, onClose } = setup({ extra: { [UNDO]: { body: { mappings: 217, assets: 12, points_removed: 0, points_kept: 217 } } } });
+      await check();
+      await userEvent.click(create());
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      cleanup(); // the dialog is gone, as it is when the page closes it: its focus trap must not pull the focus back
+      return toasts;
+    };
+    afterEach(() => { hosts.splice(0).forEach((host) => host.remove()); });
+
+    it("goes to the source's row menu button, which has a name", async () => {
+      const toasts = await created77();
+      const { menu } = standIns();
+      toasts.calls[0].options!.action!.onAction();
+      expect(menu).toHaveFocus();
+      expect(menu).toHaveAccessibleName("Actions for Meters");
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+    });
+
+    it("goes to the page heading when the row is not on the page any more", async () => {
+      const toasts = await created77();
+      const { heading } = standIns({ row: false });
+      toasts.calls[0].options!.action!.onAction();
+      expect(heading).toHaveFocus();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+    });
+
+    it("leaves the focus alone for a person who has gone elsewhere in the 10 seconds", async () => {
+      const toasts = await created77();
+      const { elsewhere } = standIns({ toastFocused: false });
+      toasts.calls[0].options!.action!.onAction(); // pressed with a pointer that never focused the button: the focus is not on the toast
+      expect(elsewhere).toHaveFocus();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+    });
   });
 
   it("answers a 409 with the server's sentence and the new numbers, drops the report, keeps the dialog open and reads the lists again", async () => {

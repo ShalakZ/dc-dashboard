@@ -352,7 +352,7 @@ describe("AuditDrawer: Undo this tag list", () => {
       "POST /api/tag-lists/80/undo": { status: 409, body: { detail: "this tag list was already undone" } },
     });
     await userEvent.click(undo()!);
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("this tag list was already undone");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("This tag list was already undone");
     expect(toasts.calls).toEqual([]);
     expect(undo()).not.toHaveAttribute("aria-disabled");
     await waitFor(() => expect(refreshed).toHaveBeenCalled()); // the lists are out of date after a refusal too
@@ -363,7 +363,8 @@ describe("AuditDrawer: Undo this tag list", () => {
     const { undo, dialog } = await showAs(["discovery.accept"], mapped(), { "POST /api/tag-lists/80/undo": { status: 409, body: { detail: changed } } });
     expect(dialog.querySelector(".audit-undo-slot")).toBeEmptyDOMElement();
     await userEvent.click(undo()!);
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent(changed);
+    // The server writes it in lower case; the drawer starts the sentence with a capital, like the other pages' API messages.
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(`The asset "Hall 1" was renamed or moved after the list created it; the list cannot be undone as a whole`);
   });
 
   it("forgets a refusal when the drawer steps to another entry", async () => {

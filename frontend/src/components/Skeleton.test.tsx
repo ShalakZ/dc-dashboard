@@ -232,6 +232,21 @@ describe("TableSkeleton", () => {
     expect(render(<TableSkeleton columns={2} rows={1} />).container.querySelector("colgroup")).toBeNull(); // unchanged without widths
   });
 
+  it("with twoLine draws a second, smaller line in the body cells of those columns only, in the class the real second line has (the Sources page's history line)", () => {
+    const { container } = render(<TableSkeleton columns={3} rows={4} twoLine={[0]} />);
+    const bodyRows = [...container.querySelectorAll("tbody tr")];
+    expect(bodyRows).toHaveLength(4);
+    for (const row of bodyRows) {
+      const [first, ...rest] = row.querySelectorAll("td");
+      expect(first.querySelectorAll(".sk-line")).toHaveLength(2);
+      expect(first.querySelectorAll(":scope > .cell-history .sk-line")).toHaveLength(1);
+      for (const cell of rest) expect(cell.querySelectorAll(".sk-line")).toHaveLength(1);
+    }
+    expect(container.querySelectorAll("thead .cell-history")).toHaveLength(0);
+    expect(container.querySelector(".cell-history")!.textContent).toBe(""); // still no words
+    expect(render(<TableSkeleton columns={3} rows={2} />).container.querySelector(".cell-history")).toBeNull(); // unchanged without it
+  });
+
   it("varies the widths but not from one render to the next", () => {
     const { container } = render(<TableSkeleton columns={4} rows={4} />);
     const widths = [...container.querySelectorAll<HTMLElement>("tbody .sk-line")].map((l) => l.style.width);

@@ -16,15 +16,17 @@ function hoursSince(since: string | null, now: number): number | null {
 /**
  * The second line under a source's name on the Sources page: how far its history backfill got, or null when there is nothing to say (a connector that keeps
  * no history, which is every real source today, shows nothing). A source that is filled by importing files is never polled and keeps no history, and says so.
+ * A switched-off source that never ran says it is not filled, since nothing starts its fill.
  * The times in `history` are the server's, `now` is the browser's clock (epoch ms, as `ageNow` takes it): a clock that is off shifts the figures, never the state.
  */
-export function historyLine(row: Pick<Source, "connector_type" | "polls" | "history">, now: number): string | null {
+export function historyLine(row: Pick<Source, "connector_type" | "polls" | "enabled" | "history">, now: number): string | null {
   if (row.polls === false || row.connector_type === "file") return "Filled by importing files";
   const history = row.history;
   if (!history || !history.supports_history) return null;
   switch (history.state) {
     case "never_run":
-      return "History: not started yet";
+      // The automatic fill only takes sources that are switched on, so a switched-off one that never ran stays at never_run until somebody fills it by hand.
+      return row.enabled === false ? "History: not filled (the source is switched off)" : "History: not started yet";
     case "filling": {
       const hours = hoursSince(history.answered_through, now);
       if (hours === null) return "History: filling";

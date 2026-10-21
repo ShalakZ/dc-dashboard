@@ -880,6 +880,14 @@ describe("SourcesPage while the list loads (W7f)", () => {
     const region = screen.getByText(LABEL).parentElement!;
     expect(region).toHaveAttribute("role", "status");
     expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(7); // seven of the table's nine columns: more would run wider than the page
+    // The loaded Name cell has the history line under the name: the placeholder draws both lines, or the page grows by about 24px a row when the list lands.
+    const rows = region.querySelectorAll(".sk-table tbody tr");
+    expect(rows).toHaveLength(5);
+    for (const row of rows) {
+      expect(row.querySelectorAll("td:first-child .sk-line")).toHaveLength(2);
+      expect(row.querySelectorAll("td:first-child > .cell-history .sk-line")).toHaveLength(1);
+      expect(row.querySelectorAll("td:not(:first-child) .cell-history")).toHaveLength(0);
+    }
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
     expect(screen.queryByText("No sources yet.")).not.toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument(); // the placeholder is not a table to assistive technology
@@ -1146,6 +1154,20 @@ describe("SourcesPage, importing, mapping a tag list and filling (w31)", () => {
       expect(lineOf("fresh").getByText("History: not started yet")).toBeInTheDocument();
       expect(lineOf("catching").getByText("History: filling, 5 hours behind")).toBeInTheDocument();
       expect(lineOf("refused").getByText("History: waiting, the Historian refused: 429")).toBeInTheDocument();
+    });
+
+    it("says a switched-off source that never ran is not filled, rather than 'not started yet' for ever (the automatic fill skips it)", async () => {
+      mockFetch({
+        ...routes("operator"),
+        "GET /api/sources": { body: [
+          { ...source, id: 1, name: "off", enabled: false, history: history({ state: "never_run", last_success_at: null, answered_through: null }) },
+          { ...source, id: 2, name: "on", history: history({ state: "never_run", last_success_at: null, answered_through: null }) },
+        ] },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await screen.findByText("off");
+      expect(lineOf("off").getByText("History: not filled (the source is switched off)")).toHaveClass("cell-history");
+      expect(lineOf("on").getByText("History: not started yet")).toBeInTheDocument();
     });
 
     it("shows nothing for a source whose connector keeps no history, or whose row has none", async () => {

@@ -5,6 +5,7 @@ import { METRICS, type TagListChanged, type TagListReport, type TagListUndoResul
 import { UNDO_MS } from "../lib/mappingActions";
 import { TAG_LIST_REFRESHED, undoSentence } from "../lib/tagListUndo";
 import { UNIT_LABELS } from "../lib/unitFit";
+import { upperFirst } from "../lib/upperFirst";
 import { InfoTip } from "./InfoTip";
 import { useToast, type ToastApi, type ToastOptions } from "./Toasts";
 
@@ -69,17 +70,29 @@ async function undoTagList(auditId: number, toast: ToastApi, invalidate: Invalid
   try {
     toast.success(undoSentence(await api.post<TagListUndoResult>(`/api/tag-lists/${auditId}/undo`)));
   } catch (error) {
-    toast.error(reasonOf(error)); // "already undone", "changed since ...", "no longer possible": the server's sentence
+    toast.error(upperFirst(reasonOf(error))); // "already undone", "changed since ...", "no longer possible": the server's sentence, which it writes in lower case
   } finally {
     try { await invalidate(...TAG_LIST_REFRESHED); } catch { /* the lists fetch themselves again on their next visit */ }
   }
 }
 
-function undoOptions(auditId: number, toast: ToastApi, invalidate: Invalidate): ToastOptions {
+/**
+ * The toast leaves with its Undo button, and a focus that was on the button would fall to the body. It goes where the dialog's own close put it: the source's row
+ * menu button, as long as the page still shows the row (the Sources page's `tr[data-source]`), else the page's heading. Only a focus that is on the toast moves: a
+ * person who has gone elsewhere in the 10 seconds keeps their place. Run while the button still has the focus, before the toast fades.
+ */
+function keepFocusAfterUndo(sourceId: number): void {
+  const at = document.activeElement;
+  if (!(at instanceof HTMLElement) || at.closest(".toast") === null) return;
+  const target = document.querySelector<HTMLElement>(`tr[data-source="${sourceId}"] .row-menu-btn`) ?? document.querySelector<HTMLElement>("h1");
+  target?.focus({ preventScroll: true });
+}
+
+function undoOptions(auditId: number, sourceId: number, toast: ToastApi, invalidate: Invalidate): ToastOptions {
   return {
     durationMs: UNDO_MS,
     // No Ctrl+Z here: that shortcut belongs to the mapping Undo of the pages that mount useMappingActions, and a second listener could race it.
-    action: { label: "Undo", title: "Undo this tag list", onAction: () => { void undoTagList(auditId, toast, invalidate); } },
+    action: { label: "Undo", title: "Undo this tag list", onAction: () => { keepFocusAfterUndo(sourceId); void undoTagList(auditId, toast, invalidate); } },
   };
 }
 
@@ -261,7 +274,7 @@ export function TagListDialog({ source, onClose }: { source: { id: number; name:
     }
     if (done === null) return;
     const createdText = `Created ${plural(done.mappings_to_create, "mapping")}`;
-    toast.success(createdText, done.audit_id === null ? undefined : undoOptions(done.audit_id, toast, invalidate));
+    toast.success(createdText, done.audit_id === null ? undefined : undoOptions(done.audit_id, source.id, toast, invalidate));
     close.current();
   }
 
@@ -318,6 +331,8 @@ export function TagListDialog({ source, onClose }: { source: { id: number; name:
           />
           <div id={helpId} className="taglist-help">
             <p className="muted">The first line names the columns: tag, asset, metric, unit, scale, interval_seconds, kind, reading. tag, asset and metric are required. An asset is a path such as Hall 1 / Row A / Rack 01.</p>
+            {/* A file is never polled, so for it the interval is not "how often" but the spacing of the rows of the export; the energy of a power tag is worked out from it, so the server wants it on every power line. */}
+            {own && <p className="muted">interval_seconds is the spacing of the export in seconds (3600 for an hourly file). Every active_power_kw line of a file source needs it, because the energy of a meter that records only power is worked out from that spacing.</p>}
             <p className="muted">{`metric is one of ${METRICS.join(", ")}. Units: ${UNIT_LABELS.active_power_kw} for active power; ${UNIT_LABELS.energy_kwh} for energy; the other metrics take their base unit only.`}</p>
           </div>
         </div>
