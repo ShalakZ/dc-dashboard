@@ -116,8 +116,12 @@ at the stand-in Historian (dev profile) can answer; for every other source the l
   (`docker compose logs --tail 80 collector`). The rest of the collector keeps running.
 - **When it starts.** The loop waits one full cycle after the collector starts, so a restart does not start every fill at once. The
   totals in the status count since that start. A cycle that a stop cut off is not resumed; the next cycle continues from the saved mark.
-- **Switching it off is safe.** `DCDASH_HISTORY_EVERY=0` stops new fills and keeps every mark. When you switch it on again, the first
-  cycle fills what is missing, up to the lookback.
+- **Switching it off is safe.** `DCDASH_HISTORY_EVERY=0` stops new fills and keeps every mark (a state `filling` that a crash left
+  behind is put back to `idle` at start, also then). When you switch it on again, the first cycle fills what is missing, up to the
+  lookback.
+- **A few minutes behind now.** The automatic fill asks up to one mapping interval and a minute before now (the longest interval of the
+  source's mapped points), so the live poll stores its own sample of the newest minutes first. `answered_through` therefore shows a
+  time a few minutes in the past (2 minutes for a 1-minute mapping, 6 for a 5-minute one): that is normal, not a lag.
 - **One run per source.** A cycle takes a lock on the source for as long as it works on it. A second collector, or the fill command
   ([Field debugging](field-debugging.md#history-fill)), finds the lock taken: the loop skips that source for that cycle, and the
   command refuses with a sentence and does nothing.
@@ -127,7 +131,7 @@ at the stand-in Historian (dev profile) can answer; for every other source the l
     totals since the collector started, the next try and the last error.
   - The journal (the JOURNAL section of the report) has `history.filled` (a cycle or a fill stored new readings),
     `history.failed` (a source could not be read; written when the trouble begins and then at most every 15 minutes, with a code
-    such as `auth_failed`, `not_supported`, `pending_drop` or `set_aside`), `history.closed_month` (new readings landed in a month
+    such as `auth_failed`, `not_supported`, `pending_drop`, `owed_range_dropped` or `set_aside`), `history.closed_month` (new readings landed in a month
     that is closed) and `readings.conflict` (the same reading arrived again with another value; the stored value was kept).
 - **A source waiting.** `backing_off` with a `next_try_at` is normal after trouble: the loop leaves the source alone until then (4, 8,
   then 15 minutes after a failed cycle, 15 minutes after refused credentials, a day after "no history here"). Fixing the cause does

@@ -133,7 +133,7 @@ creates no status row and moves no mark. It prints the plan:
       1. <start> UTC to <end> UTC
       ...
     About <rows> rows are expected.
-    Nothing was written; run again with --yes to fill it.
+    Dry run: nothing was written; run again with --yes to fill it.
 
 Read the windows, then add `--yes` to fill. A range of your own is `--start 2026-10-14T00:00:00+00:00 --end 2026-10-15T00:00:00+00:00` (an ISO
 time with a UTC offset, both or neither). It must start no earlier than the raw retention minus a day ([Storage](storage.md#filling-older-gaps))
@@ -152,7 +152,7 @@ owner has agreed.
 **On a source that cannot read history** (today an OPC UA or Modbus source, which is every source on the owner's laptop) the command
 stops at once, with exit code 1:
 
-    source 2 (Main SCADA) is a opcua source; this connector does not read history, so there is nothing to fill
+    source 2 (Main SCADA) is an opcua source; this connector does not read history, so there is nothing to fill
 
 **Exit codes.** 0: done, or planned. 1: refused or failed (one sentence on the error output says why: a range that is too old, one that
 ends in the future or is empty, an unknown source, a source with no mapped point, a connector that cannot read history). 2: bad

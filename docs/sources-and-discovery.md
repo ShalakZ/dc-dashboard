@@ -611,8 +611,11 @@ fill command (below) does not wait.
 **How politely it asks.** One request at a time per source, at most 30 requests a minute (`DCDASH_HISTORY_RATE`), at most 20,000 rows
 expected in a request (`DCDASH_HISTORY_MAX_ROWS`) and at most 200 addresses. When a request times out, finds the source unreachable or
 is answered "too many requests" (429) or "not available" (503), the platform waits 30 seconds, then 60, then 120, or longer when the
-source asks for longer (`Retry-After`, at most an hour), and tries again. After that the cycle ends and the source is left alone for
-4 minutes, then 8, then 15 minutes, as long as it keeps failing. A source that refuses our credentials is left alone for 15 minutes;
+source asks for longer (`Retry-After`, up to 15 minutes), and tries again. A source that asks for more than 15 minutes ends the cycle
+at once, and the wait it asked for (up to a day) becomes the time of the next try: the platform does not sit through it holding the
+source's lease and a database connection. After three tries the cycle ends and the source is left alone for 4 minutes, then 8, then
+15 minutes, as long as it keeps failing. A connector that breaks on an answer (anything that is not its own error) counts as a bad
+answer, like a malformed one. A source that refuses our credentials is left alone for 15 minutes;
 a source that has no history interface, for a day. Each hour is asked for at most twice: once as it arrives, and once more 3 hours
 later (`DCDASH_HISTORY_REREAD_HOURS`) for values the source stored late. An hour that was answered is not asked again whatever it
 holds. A Historian that stores only on change leaves some hours thin for good; the status counts them as short hours, and asking again
@@ -644,13 +647,20 @@ platform does not change what it counts.
   last value before and the first value after is not counted, as for live readings.
 
 **Power-only meters and thinning.** A meter with no energy counter is estimated from its power samples (samples times the mapping's
-interval). A history that is denser than the mapping must not add samples to an hour the estimate already counts, or the estimate
-would move. So the history of a point that is not mapped as an energy counter is thinned. A history sample is kept only when no stored
-good sample of that point lies within one whole mapping interval of it, and it is at least 0.9 of an interval after the previous
-sample kept. So a hole of two intervals or more is filled, while a poll that merely drifted (two samples 6 minutes apart on a
-5-minute mapping) is not: that would move the estimate of an hour the poll already covers. Holes fill at the mapping's density and a
-covered hour never changes. A sample at a time that is already stored is not
-thinned; it is counted as already there or differing. Samples thinned away are counted as rejected. Energy counters keep every sample.
+interval), and the energy of an hour of a counter is its last value less the last value before it. A history that is denser than the
+mapping must not add samples to an hour the poll already covers, or the estimate would move (and a counter's last value of the hour
+would move from the poll's last stamp to the history's, shifting energy between hours). So the history of every point is thinned, an
+energy counter as much as any other. A history sample is kept only when no stored good sample of that point lies within one whole
+mapping interval of it, and it is at least 0.9 of an interval after the previous sample kept. So a hole of two intervals or more is
+filled, while a poll that merely drifted (two samples 6 minutes apart on a 5-minute mapping) is not: that would move the estimate of
+an hour the poll already covers. Holes fill at the mapping's density and a covered hour never changes. A sample at a time that is
+already stored is not thinned; it is counted as already there or differing. Samples thinned away are counted as rejected.
+
+**The newest minutes belong to the live poll.** The automatic fill asks up to one mapping interval and a minute before now (the longest
+interval of the source's mapped points), not up to now. The live poll stores its own sample of the newest minutes first, so the fill
+never stores the sample that a poll which drifts by a minute is about to store, and the poll's own copy is not counted as already
+there (which would also skip the update of a live widget). A source whose poll is down is filled one interval and a minute later.
+The second look, 3 hours later, is not held back. A fill by hand asks exactly the range it was given.
 
 **Where to see it.**
 - The Diagnostics report: a `history:` line per source in SOURCE HEALTH, for a source that has run at least one cycle

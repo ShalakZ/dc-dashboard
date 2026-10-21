@@ -23,7 +23,7 @@ Create `backend/dcdash/connectors/<name>.py` with a subclass of `Connector` (`ba
 | `endpoint_key(config)` | no | host, port and qualifier of the endpoint a configuration points at, so a scan recognises a source that exists already |
 | `check(points, publish)` | no | the step-by-step connection check; the default is one step that runs `test()` (OPC UA has its own) |
 | `supports_history` | no | `True` when the connector can read a source's history; the default is `False` (see [Reading history](#reading-history)) |
-| `read_history(addresses, start, end, resolution=None, *, after=None)` | no | the samples the source stored between two times, as a `HistoryPage`; the default raises `not_supported` |
+| `read_history(addresses, start, end, resolution=None, *, after=None, limit=None)` | no | the samples the source stored between two times, as a `HistoryPage`; the default raises `not_supported` |
 | `close()` | no | release connections |
 
 Raise `ConnectorError(status, message)` for a failure, with one of the `ConnectionCheck` statuses. The constructor receives the
@@ -59,7 +59,7 @@ the default `read_history` raises `ConnectorError("not_supported", ...)`.
 ```python
 async def read_history(
     self, addresses: list[str], start: datetime, end: datetime, resolution: timedelta | None = None,
-    *, after: Mapping[str, datetime] | None = None,
+    *, after: Mapping[str, datetime] | None = None, limit: int | None = None,
 ) -> HistoryPage: ...
 ```
 
@@ -77,7 +77,9 @@ The caller continues a cut answer by asking again from `complete_until` (the nex
 answers a window inclusively is read correctly and the store absorbs the row read twice. An answer that stops no later than the
 request started makes no progress; the backfill counts that as a failure of the batch. `after` maps an address to the last UTC instant
 already received for it. It is the order evidence for the repeated hour of the autumn clock change, so a page that was cut inside that
-hour still tells the first pass from the second.
+hour still tells the first pass from the second. `limit` is the most rows the caller wants in one answer (the backfill passes its
+`DCDASH_HISTORY_MAX_ROWS`): a source may cut earlier or later, and `complete_until` says where. The backfill passes both keywords at
+every call, so a connector that has no use for one of them must still accept it (an unknown keyword is a `TypeError` on the first cycle).
 
 **The source-time contract.** A connector that supports history must stamp the values of `read()` with the source's time too, in the
 same form as its history. Then a live value and its history twin are one pair (the same address and time), and a re-read of a window
@@ -107,8 +109,10 @@ reading (they return a value or a plain sentence a report can count).
 **Errors.** Raise `ConnectorError(status, message, retry_after=None)`. The backfill reacts to the status: `auth_failed` waits 15
 minutes, `not_supported` waits a day, and `timeout`, `unreachable`, `rate_limited` and `protocol_error` back off (30, 60 and 120
 seconds inside a cycle, then 4, 8 and 15 minutes between cycles). `retry_after` is the number of seconds the source asked to wait
-(`Retry-After`, as seconds or as an HTTP date; ignore a value you cannot read); a longer wait than the back-off wins, but never more
-than an hour inside a cycle. `rate_limited` and `not_supported` belong to `read_history`. The simulator connector maps an HTTP 404 to
+(`Retry-After`, as seconds or as an HTTP date; ignore a value you cannot read); a longer wait than the back-off wins, up to 15 minutes
+inside a cycle. A wait above 15 minutes ends the cycle at once and goes into the time of the next try (up to a day): it is not slept,
+because a cycle holds the source's lease and a database connection. An exception that is not a `ConnectorError` counts as a
+`protocol_error`. `rate_limited` and `not_supported` belong to `read_history`. The simulator connector maps an HTTP 404 to
 `not_supported`, 429 to `rate_limited` and 503 to `unreachable` inside `read_history` only; `read()` and `test()` keep reporting any
 other answer than 200 as `protocol_error`.
 

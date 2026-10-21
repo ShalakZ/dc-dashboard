@@ -191,9 +191,9 @@ need for `docker compose down --remove-orphans` (it would also take every other 
   ([Sources and discovery](sources-and-discovery.md#history-and-backfill)). It is derived data, written by the collector.
 
 **What an update looks like.** The first start of the new `api` runs the migration. On a copy of the development database (400 MB,
-4.3 million readings) it took 4.6 seconds, 2.6 of them spent counting duplicates. On a database of 1.6 GB expect up to about 20 seconds;
+4,269,975 readings) it took 4.2 seconds, 2.4 of them spent counting duplicates. On a database of 1.6 GB expect up to about 20 seconds;
 that is the measurement scaled up, not a measurement. Do not stop it. While the unique key is built, writes to `readings` wait (the
-longest wait of a writer in the drill was 1.4 seconds) and reads do not. The new key is built before the old index is dropped, so for a
+longest wait of a writer in the drill was 0.89 seconds) and reads do not. The new key is built before the old index is dropped, so for a
 moment the database holds both (about 104 MB each on the copy), and then one. Collection pauses while the migration runs, as in step 4
 above.
 
@@ -203,13 +203,14 @@ database is still at the revision it was at before, and the `api` restarts in a 
 `docker compose stop api`. Then follow [Duplicate readings](#duplicate-readings). A migration never deletes a reading: which copy is the
 right one is for a person to decide, and a downgrade could not put a deleted reading back. A second refusal exists for a busy
 database: `migration 0016 could not get the lock it needs on readings within 120 seconds`. A long query or a writer held the lock,
-nothing was changed, and starting the `api` again, or stopping `collector` and `figures` for a minute first, is enough.
+nothing was changed, and starting the `api` again is usually enough. If the refusal repeats, stop `figures` and `collector` for a minute
+(the figures worker can hold one long query, up to two minutes) and start again.
 
 **Going back.** Lossless; use option a of step 6 with `alembic downgrade 0015` and the code from before w30 (`de67feb`, or the commit you
-noted in step 1). The downgrade builds the plain index again, then drops the unique key and `history_status`. It took 2.2 seconds on the
-copy, and every table was identical to its state before the upgrade (counts and row hashes). Afterwards a reading can be stored twice
-again, as before. Upgrading once more builds the key and an empty `history_status`; the history fill then starts again from its
-lookback, and the store ignores whatever it already has.
+noted in step 1). The downgrade drops `history_status`, builds the plain index again, and drops the unique key last, so there is never
+a moment without an index. It took 1.9 seconds on the copy, and every table was identical to its state before the upgrade (counts and row
+hashes). Afterwards a reading can be stored twice again, as before. Upgrading once more (7.0 seconds on the copy) builds the key and an
+empty `history_status`; the history fill then starts again from its lookback, and the store ignores whatever it already has.
 
 ## Duplicate readings
 

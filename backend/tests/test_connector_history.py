@@ -4,6 +4,7 @@ No Docker, no sockets: the stand-in app is driven through httpx.ASGITransport wi
 answers, header spellings, request counts) use httpx.MockTransport. Wire format: plan D9; the rules applied: dcdash/ingest/normalise.py.
 """
 import asyncio
+import inspect
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta, timezone
@@ -12,7 +13,7 @@ from email.utils import format_datetime
 import httpx
 import pytest
 
-from dcdash.connectors.base import BAD, GOOD, ConnectionCheck, Connector, ConnectorError, HistoryPage, create_connector
+from dcdash.connectors.base import BAD, GOOD, ConnectionCheck, Connector, ConnectorError, HistoryPage, connector_types, create_connector
 from dcdash.connectors.simulator import CHUNK, THREAD_ABOVE, SimulatorConfig, SimulatorConnector
 from dcdash.simulator.app import create_sim_app
 from dcdash.simulator.historian import ANCHOR, QUALITIES, HistorianConfig, create_historian_app
@@ -90,6 +91,26 @@ async def test_the_default_read_history_says_not_supported():
     with pytest.raises(ConnectorError) as raised:
         await Bare(object()).read_history(["a"], NOW - MINUTE, NOW)
     assert raised.value.status == "not_supported" and raised.value.retry_after is None
+
+
+def takes_what_the_backfill_passes(function) -> bool:
+    """True when `function(self, addresses, start, end, after=..., limit=...)` is a call the signature accepts: the engine passes both."""
+    try:
+        inspect.signature(function).bind(object(), [], NOW, NOW, after={}, limit=1)
+    except TypeError:
+        return False
+    return True
+
+
+def test_every_registered_connectors_read_history_takes_the_keywords_the_backfill_passes():
+    # A connector written from the docs without `limit` would raise TypeError on the first cycle of its first source.
+    kinds = connector_types()
+    assert {"simulator", "opcua", "modbus"} <= set(kinds)
+    assert [name for name, kind in kinds.items() if not takes_what_the_backfill_passes(kind.read_history)] == []
+
+    async def without_limit(self, addresses, start, end, resolution=None, *, after=None): ...
+
+    assert not takes_what_the_backfill_passes(without_limit)  # the check is not vacuous
 
 
 def test_connector_error_takes_retry_after_by_keyword_and_defaults_to_none():
