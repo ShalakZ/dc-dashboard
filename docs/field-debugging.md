@@ -187,7 +187,7 @@ PowerShell has no `<`; run the same thing through `cmd`, which also hands the fi
 Without `--yes` it is a **dry run**: it reads the whole file, writes nothing and records nothing, and prints what a real import would do:
 a line naming the source and profile, the one sentence of counts (`12,480 rows read, 12,000 new, 480 already there, 0 differing, 0
 rejected, 3 unknown tags (TAG-A, TAG-B, TAG-C)`), a line for each closed month the rows fall in, one for rows of bad quality, one for rows
-older than the oldest raw reading stored, the energy counter readings to check (below), and the first 20 rejected lines with their line
+in a stretch whose raw readings the retention removed, the energy counter readings to check (below), and the first 20 rejected lines with their line
 numbers and reasons. It never prints a reading value, except in that counter list. With `--yes` it imports and ends with
 `Done.`; the same file again says `0 new`, so it is safe to repeat. `--profile-file FILE.json` takes a profile from a file instead, but
 the path is read inside the container, so a saved profile and `--profile-name` are the practical way. A file can be at most 20 MB,
@@ -241,9 +241,10 @@ neither.
 
 **What to paste back.** The command line you typed, everything it printed (the refusals come on the error output; the terminal shows
 both), its exit code when it is not 0, and a new Summary report after a real run. The file itself stays on your machine. The reasons of
-the rejected lines are worth reading before pasting: `older_than_stored_raw_readings` (the raw retention already removed the raw
-readings there, so the row cannot be stored, whatever the retention is now), `interval_energy_in_counter_point` (energy per period
-into a point mapped as anything but `custom`), `malformed_line` (also a row with more cells than the header) and `duplicate_in_file`
+the rejected lines are worth reading before pasting: `older_than_stored_raw_readings` (the time is in a stretch whose raw
+readings the retention removed while the summaries are kept, so the row cannot be stored, whatever the retention is now; a row after
+that stretch is stored even when the raw table is empty), `interval_energy_in_counter_point` (energy per period
+into a point mapped as anything but `custom`), `malformed_line` (also a row with a filled cell beyond the header's columns) and `duplicate_in_file`
 (also a repeated line in the hour the clocks go back). An unknown tag marked `[non-ASCII]` holds a look-alike letter. The web page's
 own refusals are 408 (an upload that stopped for 30 seconds) and 403 (a request from another site); the command meets neither.
 

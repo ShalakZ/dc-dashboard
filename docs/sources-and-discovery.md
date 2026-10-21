@@ -748,10 +748,10 @@ stored and stays. Rejected: refused, counted by reason.
   with the same value). An import cannot be undone.
 - A quality other than good is stored as bad quality (counted in "new") and counts in no figure.
 - Rows in a closed month are written; its frozen figures do not change. A time older than the raw retention minus a day, or more than 5
-  minutes ahead, is refused; so is one older than the oldest raw reading stored where the retention already dropped raw data but kept
-  its summaries (`older_than_stored_raw_readings`), which no later rise of the retention or fill reopens. A value is stored as written
-  (the mapping's scale converts it for a figure); a unit column is only checked.
-- Also refused: energy per period (`interval`) for any metric but `custom`, and a row with more cells than the header. Energy counter
+  minutes ahead, is refused; so is one in a stretch whose raw readings the retention removed while it kept the summaries
+  (`older_than_stored_raw_readings`; no later rise of the retention or fill reopens it, and a row after it is stored even when no raw
+  reading is left). A value is stored as written (the mapping's scale converts it for a figure); a unit column is only checked.
+- Also refused: energy per period (`interval`) for any metric but `custom`, and a row with a filled cell beyond the header. Energy counter
   readings that fall or jump are listed as a warning and stored; a wrong stored row is repaired by hand with SQL. Unknown tags with
   non-ASCII letters read `[non-ASCII]`.
 - Limits: 20 MB, 500,000 rows, 4,096 bytes a line, 50 columns, UTF-8. One import at a time. An upload that stops for 30 seconds is cut
