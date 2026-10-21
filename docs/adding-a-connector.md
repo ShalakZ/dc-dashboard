@@ -52,7 +52,7 @@ off after failures (`backend/dcdash/collector/scheduler.py`). The test, browse, 
 in the collector too (`backend/dcdash/collector/jobs.py`, `browse.py`, `scan.py`).
 
 A connector with `polls = False` (today only `file`, whose readings come from imported files) is left out of all of that: the poll loop
-never groups its points, the Sources page offers it no **Test**, **Check connection** or **Browse** and **Test all** skips it, and a
+never groups its points, the Sources and Points pages offer it no **Test**, **Check connection** or **Browse** and **Test all** skips it, and a
 test or browse queued by hand does not change its status, which stays `unknown` (the page reads "filled by file import"; the
 Diagnostics report does not rank it as a problem). `GET /api/connectors` lists such types last, so the Add source form still starts on one that polls, and shows each type's `description` under the select.
 

@@ -53,9 +53,10 @@ those, the page or the control shows nothing. The server does not enforce these 
 | | `diagnostics.run` | Run the connection check | change | Run the step-by-step connection check of a source. | `sources.view` |
 
 `readings.import` lets a person write readings into any source from a file and save the import profiles. The report of its dry run can show
-a stored value and the address of its point (five samples at most) where the file disagrees with what is stored, so it is for trusted
-roles; only the built-in Admin holds it until an administrator ticks it on a role. It needs See sources to be of use: **Import file...**
-is in the Sources row menu ([Importing readings from a file](sources-and-discovery.md#importing-readings-from-a-file)).
+a stored value and the address of its point (five samples at most) where the file disagrees with what is stored, and a tag it does not
+call unknown is an address of that source, so a person without See sources can probe for them; it is for trusted roles, and only the
+built-in Admin holds it until an administrator ticks it on a role. It needs See sources to be of use: **Import file...** is in the
+Sources row menu ([Importing readings from a file](sources-and-discovery.md#importing-readings-from-a-file)).
 `discovery.accept` also gates **Map tag list...** and the Undo of a tag list.
 
 `billing.close` is held by the built-in Admin only, until an administrator ticks it on a role of their own (unlike `roles.manage` it can

@@ -696,7 +696,7 @@ moves the marks, so the loop is not disturbed. A source whose connector cannot r
 history, today the stand-in). Choose the first and last day (at most 31 days, none older than the raw retention minus a day), press
 **Check range**, then **Start fill**, which queues it in the collector; the dialog follows it. One fill
 runs at a time in total. A collector restart fails a running fill; run it again and it adds only what is missing. The line under the
-source's name reads "History: not started yet", "filling, 3 hours behind", "up to date, last fill 3 min ago" or "waiting, <error>"
+source's name reads "History: not started yet", "filling, 3 hours behind", "up to date, last fill 3 min ago" or "waiting, `<error>`"
 ("Filled by importing files" for `file`, nothing for a connector without history).
 
 **Decisions that are still the owner's.** Until the owner decides, the safe default is in force.
@@ -740,8 +740,8 @@ imported time. An import may also target a live source whose tags have the same 
 **Import file...** **Check file** is a dry run (nothing is written or audited); **Import N rows** then stores that same file. A profile,
 saved by name (at most 20), names the tag, time, value and optional unit and quality columns, the delimiter, decimal mark, time format
 and zone, what a value is (counter, power or amount per period) and the good quality codes. The report is one sentence,
-`12,480 rows read, 12,000 new, 480 already there, 0 differing, 0 rejected, 3 unknown tags (TAG-A, TAG-B, TAG-C)`, with rows read = new
-+ already there + differing + rejected + rows of unknown tags. Already there: stored with the same value. Differing: another value is
+`12,480 rows read, 12,000 new, 480 already there, 0 differing, 0 rejected, 3 unknown tags (TAG-A, TAG-B, TAG-C)`, with rows read = new +
+already there + differing + rejected + rows of unknown tags. Already there: stored with the same value. Differing: another value is
 stored and stays. Rejected: refused, counted by reason.
 - An import never creates a point. The first stored value of a tag and time wins, so a file repeated is safe; the same tag and time twice
   in one file is rejected after the first.
