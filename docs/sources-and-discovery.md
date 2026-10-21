@@ -646,8 +646,9 @@ platform does not change what it counts.
 **Power-only meters and thinning.** A meter with no energy counter is estimated from its power samples (samples times the mapping's
 interval). A history that is denser than the mapping must not add samples to an hour the estimate already counts, or the estimate
 would move. So the history of a point that is not mapped as an energy counter is thinned. A history sample is kept only when no stored
-good sample of that point lies within half the mapping's interval of it, and it is at least 0.9 of an interval after the previous
-sample kept. Holes fill at the mapping's density and a covered hour never changes. A sample at a time that is already stored is not
+good sample of that point lies within one whole mapping interval of it, and it is at least 0.9 of an interval after the previous
+sample kept. So only a gap of more than two intervals is filled (a single missing live sample is not: it would move the estimate of an
+hour the poll already covers). Holes fill at the mapping's density and a covered hour never changes. A sample at a time that is already stored is not
 thinned; it is counted as already there or differing. Samples thinned away are counted as rejected. Energy counters keep every sample.
 
 **Where to see it.**
