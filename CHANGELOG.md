@@ -16,7 +16,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w31 (2026-10-21, MERGEHASH)
+## w31 (2026-10-21, 53df503)
 
 The data-path foundation, part 2 (no migration). New permission `readings.import` (Admin only by default). On the Sources page: **Import file...** reads a CSV export into a source, a dry run first (a saved profile names the columns, the time format and the zone; the report counts the new, already-there, different, rejected and unknown-tag rows); **Map tag list...** creates points, assets and mappings from a list, all or nothing, with an Undo for 24 hours; **Fill older range...** starts a history fill; each row shows its history state. A new source type `file` is filled by import and never polled. New page `docs/historian-integration.md` for the governance review. The new permission changes the figure engine's id, so every stored figure is recomputed once after the update: the first pages may be a little slower for a few minutes.
 
