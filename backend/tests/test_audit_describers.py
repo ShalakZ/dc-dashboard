@@ -13,7 +13,7 @@ AUDIT_TEXT = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / 
 SECURITY_EVENTS = BACKEND_PACKAGE / "api" / "security_events.py"
 
 AUDIT_FUNCTIONS = {"audit", "audit_change", "audit_pool"}  # audit(db, user_id, action, ...): the action is argument 3
-ACTION_SHAPE = re.compile(r"^[a-z]+\.[a-z_]+$")
+ACTION_SHAPE = re.compile(r"^[a-z_]+\.[a-z_]+$")
 
 
 def _call_name(call: ast.Call) -> str | None:
@@ -40,7 +40,7 @@ def written_actions() -> set[str]:
 
 def described_actions(source: str) -> set[str]:
     """The actions that are a quoted key in the table: "asset.created": ..."""
-    return set(re.findall(r"""["']([a-z]+\.[a-z_]+)["']\s*:""", source))
+    return set(re.findall(r"""["']([a-z_]+\.[a-z_]+)["']\s*:""", source))
 
 
 def test_the_collector_finds_the_actions_the_backend_writes():
