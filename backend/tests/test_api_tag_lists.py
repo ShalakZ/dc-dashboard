@@ -82,13 +82,14 @@ async def waiting(task: asyncio.Task, why: str) -> None:
     assert not task.done(), f"the request answered without waiting for {why}"
 
 
-async def until_blocked(db, why: str, timeout: float = 10.0) -> None:
-    """Wait until some backend of this database is waiting for a lock: the request really is parked there, whatever the machine's speed."""
+async def until_blocked(db, why: str, timeout: float = 10.0, waiters: int = 1) -> None:
+    """Wait until `waiters` backends of this database are waiting for a lock: the requests really are parked there, whatever the
+    machine's speed (a test that races two requests waits for both, then lets go)."""
     deadline = asyncio.get_running_loop().time() + timeout
-    while not await db.fetchval(
+    while await db.fetchval(
         "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
-    ):
-        assert asyncio.get_running_loop().time() < deadline, f"nothing waited for {why}"
+    ) < waiters:
+        assert asyncio.get_running_loop().time() < deadline, f"fewer than {waiters} waited for {why}"
         await asyncio.sleep(0.05)
 
 
@@ -219,6 +220,30 @@ async def test_a_list_on_a_live_source_maps_its_browsed_points_and_creates_no_po
     assert p2 in {r["point_id"] for r in await db.fetch("SELECT point_id FROM mappings")}
 
 
+@pytest.mark.parametrize("origin, enabled_after", [("discovered", True), ("manual", False)])
+async def test_a_run_enables_a_disabled_source_a_scan_found_when_it_maps_it_and_a_hand_made_one_keeps_its_flag(
+    client, db, origin, enabled_after
+):
+    await login_as(client, db)
+    source = await make_source(db, "modbus", "modbus", {"host": "10.0.0.1", "port": 502}, enabled=False)
+    await db.execute("UPDATE sources SET origin = $2 WHERE id = $1", source, origin)
+    await make_point(db, source, "40001")
+    await apply(client, source, "40001,Hall 1,active_power_kw,kW,")
+    assert await db.fetchval("SELECT enabled FROM sources WHERE id = $1", source) is enabled_after  # as discovery.accept leaves it
+    assert await db.fetchval("SELECT count(*) FROM mappings") == 1
+
+
+async def test_a_run_that_is_refused_leaves_a_discovered_source_disabled(client, db):
+    await login_as(client, db)
+    source = await make_source(db, "modbus", "modbus", {"host": "10.0.0.1", "port": 502}, enabled=False)
+    await db.execute("UPDATE sources SET origin = 'discovered' WHERE id = $1", source)
+    await make_point(db, source, "40001")
+    body = body_of("40001,Hall 1,active_power_kw,kW,", "99999,Hall 1,voltage_v,V,")  # the second tag is not on the source
+    report = (await dry(client, source, body)).json()
+    assert (await real(client, source, body, report)).status_code == 422
+    assert await db.fetchval("SELECT enabled FROM sources WHERE id = $1", source) is False
+
+
 async def test_an_unknown_tag_on_a_live_source_is_a_problem_line_and_nothing_is_written(client, db):
     await login_as(client, db)
     source = await make_source(db, "modbus", "modbus", {"host": "10.0.0.1", "port": 502})
@@ -296,6 +321,19 @@ async def test_the_same_counts_with_another_digest_are_a_409_because_two_lists_c
     response = await real(client, source, other, report)  # the same three numbers (1, 1, 1), another list
     assert response.status_code == 409 and "other points or assets" in response.json()["detail"]
     assert await counts(db) == {"assets": 0, "points": 0, "mappings": 0, "audit": 0}
+
+
+async def test_a_body_that_spells_a_new_assets_name_another_way_than_the_dry_run_is_a_409_and_writes_nothing(client, db):
+    await login_as(client, db)
+    source = await make_source(db, "files", "file")
+    report = (await dry(client, source, body_of("A,Hall 1 / Row A,voltage_v,V,"))).json()
+    # The same assets for the database (its comparison key ignores case and repeated spaces), but not the names the person was shown.
+    response = await real(client, source, body_of("A,HALL   1 / ROW a,voltage_v,V,"), report)
+    assert response.status_code == 409 and "other points or assets" in response.json()["detail"], response.text
+    assert await counts(db) == {"assets": 0, "points": 0, "mappings": 0, "audit": 0}
+    spaced = await real(client, source, body_of("A,  Hall 1 /Row A  ,voltage_v,V,"), report)  # padding is trimmed before it is written
+    assert spaced.status_code == 200, spaced.text
+    assert [r["name"] for r in await db.fetch("SELECT name FROM assets ORDER BY id")] == ["Hall 1", "Row A"]
 
 
 async def test_the_digest_is_the_same_for_the_same_list_in_another_order(client, db):
@@ -449,7 +487,7 @@ async def test_formulas_and_traversals_are_stored_as_text_and_nothing_is_interpr
     assert {r["name"] for r in await db.fetch("SELECT name FROM assets")} == {"=Group", "@Rack", "Hall"}
 
 
-async def test_a_thousand_lines_are_created_and_their_audit_row_stays_under_80_kb(client, db):
+async def test_a_thousand_lines_with_realistic_names_are_created_and_their_audit_row_is_measured(client, db):
     await login_as(client, db)
     source = await make_source(db, "files", "file")
     lines = [
@@ -460,8 +498,37 @@ async def test_a_thousand_lines_are_created_and_their_audit_row_stays_under_80_k
     done = await apply(client, source, *lines, header="tag,asset,metric,unit")
     assert (done["mappings_to_create"], done["points_to_create"]) == (1000, 1000)
     size = await db.fetchval("SELECT length(detail::text) FROM audit_log WHERE action = 'tags.mapped'")
-    assert size < 80_000, size
+    assert size < 80_000, size  # short names, small ids: what a real list looks like; the next test is the bound
     assert await db.fetchval("SELECT count(*) FROM mappings") == 1000
+
+
+def _widened(detail: dict) -> dict:
+    """The same audit detail with every id as wide as a 32-bit column allows: ids only grow in a database that lives for years."""
+    wide = lambda n: None if n is None else 2_000_000_000 + n  # noqa: E731
+    return {
+        **detail,
+        "points": [wide(i) for i in detail["points"]],
+        "assets": [[wide(a[0]), wide(a[1]), a[2]] for a in detail["assets"]],
+        "mappings": [[wide(m[0]), wide(m[1]), wide(m[2]), *m[3:]] for m in detail["mappings"]],
+    }
+
+
+async def test_the_audit_row_of_the_largest_list_a_run_accepts_is_about_200_kb_and_no_more(client, db):
+    """The bound, not a wish: 1,000 lines is the most a list holds, 1,000 new assets the most it creates, a name is at most 100
+    characters and a custom unit at most 20. The row keeps ids, names and the numbers of every mapping, never a tag, so this is the
+    largest it can get. The audit drawer shows this JSON collapsed. The size is counted in characters; non-ASCII names take more bytes."""
+    await login_as(client, db)
+    source = await make_source(db, "files", "file")
+    root = "R" * 100
+    # One root and 999 children (so every child names a parent), each with a mapping of its own, and the last line maps the root.
+    lines = [f"T{i},{root} / {i:04d}{'c' * 96},custom,{i:03d}{'u' * 17},5,0.30000000000000004" for i in range(999)]
+    lines.append(f"T999,{root},custom,{'u' * 20},2678400,0.30000000000000004")
+    done = await apply(client, source, *lines, header="tag,asset,metric,unit,interval_seconds,scale")
+    assert (done["mappings_to_create"], done["points_to_create"], done["assets_to_create_total"]) == (1000, 1000, 1000)
+    size = await db.fetchval("SELECT length(detail::text) FROM audit_log WHERE action = 'tags.mapped'")
+    detail = await db.fetchval("SELECT detail FROM audit_log WHERE action = 'tags.mapped'")
+    widest = len(json.dumps(_widened(detail)))  # json.dumps spells it as jsonb does: ", " and ": " between the items
+    assert 180_000 < size < widest < 250_000, (size, widest)  # measured: about 194 KB as stored in a new database, 238 KB with wide ids
 
 
 # ---- the locks ----------------------------------------------------------------------------------------------------------
@@ -590,7 +657,35 @@ async def test_a_deadlock_that_still_happens_is_a_409_try_again_not_a_503(client
     assert await counts(db) == {"assets": 1, "points": 1, "mappings": 0, "audit": 0}
 
 
-async def test_a_real_run_and_the_delete_of_its_ancestor_started_together_both_end_cleanly(client, db):
+# Two requests that meet are tested as the two orders they can end in, each on its own: a race has only one outcome per run, so a test
+# that started both "together" would only ever pin the order the machine happened to pick.
+
+
+async def test_a_run_that_is_ahead_of_the_delete_of_its_ancestor_is_finished_first_and_the_delete_takes_what_it_made(client, db):
+    await login_as(client, db)
+    source = await make_source(db, "files", "file")
+    hall = await make_asset(db, "Hall 1")
+    await make_asset(db, "Row A", hall)
+    other = await make_point(db, source, "OTHER")
+    body = body_of("A,Hall 1,voltage_v,V,", "B,Hall 1 / Row A / Meter,voltage_v,V,")
+    report = (await dry(client, source, body)).json()
+    async with holder(db) as (conn, tx):
+        # A mapping for Hall 1's voltage, not committed: the run, which holds KEY SHARE on Hall 1 by then, waits for its unique entry.
+        await conn.execute("INSERT INTO mappings (point_id, asset_id, metric, interval_seconds) VALUES ($1, $2, 'voltage_v', 5)", other, hall)
+        run = asyncio.create_task(real(client, source, body, report))
+        await until_blocked(db, "the unique entry")
+        delete = asyncio.create_task(client.delete(f"/api/assets/{hall}?confirm=true"))  # its FOR UPDATE waits for the run's KEY SHARE
+        await until_blocked(db, "the run's lock on Hall 1", waiters=2)
+        await tx.rollback()
+        run_response, delete_response = await asyncio.wait_for(asyncio.gather(run, delete), WAIT)
+    assert run_response.status_code == 200, run_response.text
+    assert delete_response.status_code == 204, delete_response.text
+    left = await counts(db)
+    assert left["assets"] == 0 and left["mappings"] == 0  # the delete took the run's assets and mappings with the subtree
+    assert left["audit"] == 1  # the run is on record
+
+
+async def test_the_delete_of_an_ancestor_that_is_ahead_of_a_run_makes_the_run_a_409_and_writes_nothing(client, db):
     await login_as(client, db)
     source = await make_source(db, "files", "file")
     hall = await make_asset(db, "Hall 1")
@@ -600,17 +695,51 @@ async def test_a_real_run_and_the_delete_of_its_ancestor_started_together_both_e
     async with holder(db) as (conn, tx):
         await conn.fetchval("SELECT id FROM sources WHERE id = $1 FOR UPDATE", source)
         run = asyncio.create_task(real(client, source, body, report))
-        await waiting(run, "the source")
-        delete = asyncio.create_task(client.delete(f"/api/assets/{hall}?confirm=true"))
+        await until_blocked(db, "the source")
+        delete_response = await asyncio.wait_for(client.delete(f"/api/assets/{hall}?confirm=true"), WAIT)  # takes no source lock
+        await tx.rollback()
+        run_response = await asyncio.wait_for(run, WAIT)
+    assert delete_response.status_code == 204, delete_response.text
+    assert run_response.status_code == 409 and run_response.json()["detail"].startswith("The list now creates"), run_response.text
+    assert await counts(db) == {"assets": 0, "points": 0, "mappings": 0, "audit": 0}
+
+
+async def test_a_source_delete_that_comes_after_a_run_in_flight_is_refused_for_the_mappings_it_was_not_shown(client, db):
+    await login_as(client, db)
+    source = await make_source(db, "files", "file")
+    body = body_of(*LIST)
+    report = (await dry(client, source, body)).json()
+    async with holder(db) as (conn, tx):
+        await conn.execute("SELECT pg_advisory_xact_lock(7305002)")  # the run takes the source row first and waits here
+        run = asyncio.create_task(real(client, source, body, report))
+        await until_blocked(db, "the names lock")
+        shown = {"confirm": "true", "expect_points": 0, "expect_mappings": 0}  # the source had nothing mapped when the person looked
+        delete = asyncio.create_task(client.delete(f"/api/sources/{source}", params=shown))
+        await until_blocked(db, "the run's lock on the source", waiters=2)
         await tx.rollback()
         run_response, delete_response = await asyncio.wait_for(asyncio.gather(run, delete), WAIT)
-    assert run_response.status_code in (200, 409) and delete_response.status_code in (204, 404, 409), (run_response.text, delete_response.text)
-    assert run_response.status_code < 500 and delete_response.status_code < 500
-    left = await counts(db)
-    if delete_response.status_code == 204:
-        assert left["assets"] == 0 and left["mappings"] == 0  # the delete took the run's assets and mappings with the subtree
-    if run_response.status_code == 409:
-        assert left["mappings"] == 0 and left["points"] == 0
+    assert run_response.status_code == 200, run_response.text
+    assert delete_response.status_code == 409 and "More than you were shown" in delete_response.json()["detail"], delete_response.text
+    assert await counts(db) == {"assets": 6, "points": 4, "mappings": 4, "audit": 1}  # nothing stranded and nothing lost
+
+
+async def test_a_source_delete_that_is_ahead_of_a_run_makes_the_run_a_404_and_leaves_no_point_behind(client, db):
+    await login_as(client, db)
+    source = await make_source(db, "files", "file")
+    unmapped = await make_point(db, source, "UNMAPPED")
+    body = body_of(*LIST)
+    report = (await dry(client, source, body)).json()
+    async with holder(db) as (conn, tx):
+        await conn.fetch("SELECT id FROM points WHERE id = $1 FOR KEY SHARE", unmapped)  # the delete holds the source row and parks here
+        delete = asyncio.create_task(client.delete(f"/api/sources/{source}"))
+        await until_blocked(db, "the source's point")
+        run = asyncio.create_task(real(client, source, body, report))
+        await until_blocked(db, "the delete's lock on the source", waiters=2)
+        await tx.rollback()
+        delete_response, run_response = await asyncio.wait_for(asyncio.gather(delete, run), WAIT)
+    assert delete_response.status_code == 204, delete_response.text
+    assert run_response.status_code == 404 and run_response.json()["detail"] == "source not found", run_response.text
+    assert await counts(db) == {"assets": 0, "points": 0, "mappings": 0, "audit": 0}
 
 
 async def test_a_run_while_the_names_lock_is_held_waits_for_it_and_then_sees_the_asset_made_meanwhile(client, db):

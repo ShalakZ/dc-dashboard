@@ -21,27 +21,29 @@ The real run, in order, and why (the order is the design; api/asset_move.py expl
    The client's numbers only decide whether to go on; what is written is always the server's own plan.
 5. Any problem line: nothing is written (422). Otherwise assets (parents first, one insert per depth), points, mappings, ONE
    `tags.mapped` audit row, NOTIFY, commit. A unique violation (somebody mapped one of these points, or took an asset's metric,
-   without any lock this run could have seen) rolls everything back: a 409.
+   without any lock this run could have seen) rolls everything back: a 409. A disabled source that was found by a scan is enabled
+   when the run maps it, as `discovery.accept` does.
 The Undo takes its locks in the order of the delete routes (source row, names lock, then the assets in ONE id-ordered statement, then
-points and mappings, each ordered by id) and compares every recorded value with the present one before it deletes anything.
+points and mappings, each ordered by id) and compares every recorded value with the present one before it deletes anything. The
+mapping routes (api/mappings.py) take the asset BEFORE the mapping row or its point for the same reason: the other order closes a
+cycle with the Undo and with `delete_asset`.
 A deadlock that still happens is a 409 "try again", never a 503."""
 import asyncio
 import contextlib
 import math
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import ClientDisconnect
 
 from dcdash.api.asset_names import _KEY, lock_asset_names
 from dcdash.api.deps import current_user, get_db, notify, require_permission
+from dcdash.api.mappings import try_again
 from dcdash.core.audit import audit
 from dcdash.core.models import Asset, AuditLog, Mapping, Point, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
@@ -60,9 +62,6 @@ BODY_SECONDS = 60  # a list is at most 1 MB: a slower upload than this is stuck
 UNDO_HOURS = 24
 LISTED = 50  # assets and problem lines a report lists; the totals are always counted
 ACCEPTED_TYPES = frozenset({"text/csv", "text/plain", "application/csv", "application/vnd.ms-excel", "application/octet-stream"})
-# Deadlock, lock not available, serialization failure: another transaction was in the way. The state is a 409 "try again".
-RETRY_STATES = frozenset({"40P01", "55P03", "40001"})
-TRY_AGAIN = "another change to these assets was running; try again"
 AS_A_WHOLE = "the list cannot be undone as a whole"
 CHANGED = "something this list points at changed while it was being applied (a point was mapped, or an asset removed); check the list again"
 
@@ -111,23 +110,10 @@ async def _read_body(request: Request) -> bytes:
     return b"".join(chunks)
 
 
-@contextlib.asynccontextmanager
-async def _try_again(db: AsyncSession, conflict: str) -> AsyncIterator[None]:
-    """Whatever the transaction in here runs into that means "someone else was in the way" is a rolled-back 409. A refusal raised in
-    here (a 404, a 409 naming what changed) also rolls back at once, so the locks are let go before the answer is built."""
-    try:
-        yield
-    except HTTPException:
-        await db.rollback()
-        raise
-    except (_Gone, IntegrityError):
-        await db.rollback()
-        raise HTTPException(409, conflict) from None
-    except DBAPIError as error:
-        if getattr(error.orig, "sqlstate", None) not in RETRY_STATES:
-            raise
-        await db.rollback()
-        raise HTTPException(409, TRY_AGAIN) from None
+def _try_again(db: AsyncSession, conflict: str) -> contextlib.AbstractAsyncContextManager[None]:
+    """The rolled-back 409 for whatever means "someone else was in the way" (api/mappings.py `try_again`, which the mapping routes use
+    too), with `_Gone` among the things that say `conflict`."""
+    return try_again(db, conflict, _Gone)
 
 
 # ---- the plan's inputs --------------------------------------------------------------------------------------------------
@@ -278,11 +264,15 @@ async def map_tag_list(
         )
     async with _try_again(db, CHANGED):
         # 1. The source row, before anything of its points or any mapping (see the module text).
-        connector_type = await db.scalar(
-            select(Source.connector_type).where(Source.id == source_id).with_for_update(key_share=True)  # FOR NO KEY UPDATE
-        )
-        if connector_type is None:
+        source = (
+            await db.execute(
+                select(Source.connector_type, Source.enabled, Source.origin)
+                .where(Source.id == source_id).with_for_update(key_share=True)  # FOR NO KEY UPDATE
+            )
+        ).first()
+        if source is None:
             raise HTTPException(404, "source not found")
+        connector_type = source.connector_type
         await lock_asset_names(db)  # 2.
         plan_ = await _plan_for(db, source_id, connector_type, parsed, create_assets, lock=True)  # 3. and 4.
         shown = (expect_points, expect_assets, expect_mappings, expect_plan)
@@ -309,6 +299,11 @@ async def map_tag_list(
                 },
             )
         created = await _insert(db, source_id, plan_)
+        if plan_.mappings and not source.enabled and source.origin == "discovered":
+            # As `discovery.accept` does ("mapping enables it", docs/sources-and-discovery.md): the collector polls enabled sources only,
+            # so a discovered source that now has mappings would otherwise be listed, mapped and never read. A hand-made source keeps
+            # its flag. The Undo does not touch it.
+            await db.execute(update(Source).where(Source.id == source_id).values(enabled=True))
         await audit(
             db, user_id, "tags.mapped",
             {

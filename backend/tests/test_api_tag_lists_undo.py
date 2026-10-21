@@ -9,9 +9,10 @@ import pytest
 from dcdash.core.pg import CONFIG_CHANNEL
 from helpers import listening, login_as, make_asset, make_mapping, make_point, make_role, make_source
 from test_api_assets import add, add_tariff
-from test_api_tag_lists import LIST, WAIT, apply, counts, holder, waiting
+from test_api_tag_lists import LIST, WAIT, apply, counts, holder, until_blocked, waiting
 
 NAMES_LOCK = 7_305_002
+TRY_AGAIN = "another change to these assets was running; try again"
 
 
 def undo_url(audit_id: int) -> str:
@@ -375,22 +376,117 @@ async def test_an_undo_does_not_deadlock_with_the_delete_of_an_ancestor_that_exi
     assert await counts(db) == {"assets": 0, "points": 1, "mappings": 0, "audit": 1}  # the delete took everything under Hall 1
 
 
+# Two requests that meet are tested as the two orders they can end in, each on its own: a race has only one outcome per run, so a test that
+# started both "together" would only ever pin the order the machine happened to pick.
+
+
 @pytest.mark.parametrize("target", ["Meter 01", "Hall 1"])
-async def test_an_undo_and_a_delete_started_together_both_end_cleanly(client, db, target):
+async def test_an_undo_that_is_ahead_of_a_delete_of_one_of_its_assets_leaves_the_delete_a_404(client, db, target):
+    await login_as(client, db)
+    _source, audit_id = await run_list(client, db)
+    asset = await db.fetchval("SELECT id FROM assets WHERE name = $1", target)
+    first_point = await db.fetchval("SELECT min(id) FROM points")
+    async with holder(db) as (conn, tx):
+        await conn.fetch("SELECT id FROM points WHERE id = $1 FOR KEY SHARE", first_point)  # parks the Undo once it holds its assets
+        undo = asyncio.create_task(client.post(undo_url(audit_id)))
+        await until_blocked(db, "the first listed point")
+        delete = asyncio.create_task(client.delete(f"/api/assets/{asset}?confirm=true"))  # queues behind the Undo's lock on the asset
+        await until_blocked(db, "the Undo's lock on the asset", waiters=2)
+        await tx.rollback()
+        undo_response, delete_response = await asyncio.wait_for(asyncio.gather(undo, delete), WAIT)
+    assert undo_response.status_code == 200, undo_response.text
+    assert delete_response.status_code == 404, delete_response.text  # the Undo took the asset first: nothing is left to delete
+    assert await counts(db) == {"assets": 0, "points": 0, "mappings": 0, "audit": 2}
+
+
+@pytest.mark.parametrize("target", ["Meter 01", "Hall 1"])
+async def test_a_delete_of_one_of_its_assets_that_is_ahead_of_an_undo_makes_the_undo_a_409(client, db, target):
     await login_as(client, db)
     source, audit_id = await run_list(client, db)
     asset = await db.fetchval("SELECT id FROM assets WHERE name = $1", target)
     async with holder(db) as (conn, tx):
         await conn.fetchval("SELECT id FROM sources WHERE id = $1 FOR UPDATE", source)
         undo = asyncio.create_task(client.post(undo_url(audit_id)))
-        await waiting(undo, "the source")
-        delete = asyncio.create_task(client.delete(f"/api/assets/{asset}?confirm=true"))
-        await asyncio.sleep(0.3)
+        await until_blocked(db, "the source")
+        delete_response = await asyncio.wait_for(client.delete(f"/api/assets/{asset}?confirm=true"), WAIT)  # takes no source lock
         await tx.rollback()
-        undo_response, delete_response = await asyncio.wait_for(asyncio.gather(undo, delete), WAIT)
-    assert undo_response.status_code in (200, 409) and delete_response.status_code in (204, 404, 409), (undo_response.text, delete_response.text)
-    if undo_response.status_code == 200:
-        assert await db.fetchval("SELECT count(*) FROM assets") == 0  # undone first: nothing left for the delete (a 404)
-        assert delete_response.status_code == 404
-    else:
-        assert delete_response.status_code == 204  # the delete came first and the Undo found its assets gone
+        undo_response = await asyncio.wait_for(undo, WAIT)
+    assert delete_response.status_code == 204, delete_response.text
+    assert undo_response.status_code == 409 and "no longer exists" in undo_response.json()["detail"], undo_response.text
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'tags.unmapped'") == 0
+
+
+# ---- the mapping routes against the Undo (I1 of the T3 review) -----------------------------------------------------------
+#
+# The Undo holds the assets it will delete FOR UPDATE and then asks for the points and the mappings. A person who moves a mapping onto
+# one of those assets, or maps a point onto one, used to hold the mapping first and then ask for the asset: a cycle, which the database
+# ends by killing one side, and when it was the mapping route it answered 500. Both routes now take the asset first.
+
+
+def _none_raised(*results):
+    """The test client raises what the app did not catch (a deadlock is a 500): none of the answers may be one."""
+    assert not [r for r in results if isinstance(r, BaseException)], results
+
+
+async def test_a_mapping_moved_onto_an_asset_the_undo_holds_waits_for_it_and_is_then_told_to_try_again(client, db):
+    await login_as(client, db)
+    _source, audit_id = await run_list(client, db)
+    first_point = await db.fetchval("SELECT min(id) FROM points")
+    mapping = await db.fetchval("SELECT m.id FROM mappings m JOIN points p ON p.id = m.point_id WHERE p.address = 'M1.kW'")
+    meter_two = await db.fetchval("SELECT id FROM assets WHERE name = 'Meter 02'")
+    async with holder(db) as (conn, tx):
+        await conn.fetch("SELECT id FROM points WHERE id = $1 FOR KEY SHARE", first_point)  # the Undo parks here, holding every asset
+        undo = asyncio.create_task(client.post(undo_url(audit_id)))
+        await until_blocked(db, "the first listed point")
+        patch = asyncio.create_task(client.patch(f"/api/mappings/{mapping}", json={"asset_id": meter_two}))
+        await until_blocked(db, "the Undo's lock on the asset", waiters=2)  # the PATCH holds no mapping row while it waits
+        await tx.rollback()
+        results = await asyncio.wait_for(asyncio.gather(undo, patch, return_exceptions=True), WAIT)
+    _none_raised(*results)
+    undo_response, patch_response = results
+    assert undo_response.status_code == 200, undo_response.text
+    assert patch_response.status_code == 409 and patch_response.json()["detail"] == TRY_AGAIN, patch_response.text  # its target is gone
+    assert await counts(db) == {"assets": 0, "points": 0, "mappings": 0, "audit": 2}
+
+
+async def test_a_point_mapped_onto_an_asset_the_undo_holds_waits_for_it_and_the_undo_refuses_the_mapping_it_missed(client, db):
+    await login_as(client, db)
+    _source, audit_id = await run_list(client, db)
+    first_point = await db.fetchval("SELECT min(id) FROM points")
+    point = await db.fetchval("SELECT id FROM points WHERE address = 'M1.kW'")
+    await db.execute("DELETE FROM mappings WHERE point_id = $1", point)  # somebody unmapped it, so the Undo will refuse
+    meter_two = await db.fetchval("SELECT id FROM assets WHERE name = 'Meter 02'")
+    async with holder(db) as (conn, tx):
+        await conn.fetch("SELECT id FROM points WHERE id = $1 FOR KEY SHARE", first_point)
+        undo = asyncio.create_task(client.post(undo_url(audit_id)))
+        await until_blocked(db, "the first listed point")
+        create = asyncio.create_task(
+            client.post("/api/mappings", json={"point_id": point, "asset_id": meter_two, "metric": "voltage_v", "interval_seconds": 5})
+        )
+        await until_blocked(db, "the Undo's lock on the asset", waiters=2)
+        await tx.rollback()
+        results = await asyncio.wait_for(asyncio.gather(undo, create, return_exceptions=True), WAIT)
+    _none_raised(*results)
+    undo_response, create_response = results
+    assert undo_response.status_code == 409 and "no longer exists" in undo_response.json()["detail"], undo_response.text
+    assert create_response.status_code == 201, create_response.text  # the Undo let go of the asset when it refused
+    assert await db.fetchval("SELECT count(*) FROM mappings WHERE point_id = $1 AND asset_id = $2", point, meter_two) == 1
+
+
+async def test_a_deadlock_that_ends_the_undo_is_a_409_try_again_and_changes_nothing(client, db):
+    await login_as(client, db)
+    _source, audit_id = await run_list(client, db)
+    first_point = await db.fetchval("SELECT min(id) FROM points")
+    meter = await db.fetchval("SELECT id FROM assets WHERE name = 'Meter 01'")
+    before = await snapshot(db)
+    async with holder(db) as (conn, tx):
+        await conn.fetch("SELECT id FROM points WHERE id = $1 FOR KEY SHARE", first_point)  # the Undo parks here, holding the assets
+        undo = asyncio.create_task(client.post(undo_url(audit_id)))
+        await until_blocked(db, "the first listed point")
+        # A request that holds the point and now wants an asset the Undo holds: each waits for the other. The Undo started waiting first,
+        # so its deadlock check fires first and it is the one that is ended.
+        await asyncio.wait_for(conn.fetch("SELECT id FROM assets WHERE id = $1 FOR KEY SHARE", meter), WAIT)
+        await tx.rollback()
+        response = await asyncio.wait_for(undo, WAIT)
+    assert response.status_code == 409 and response.json()["detail"] == TRY_AGAIN, response.text
+    assert await snapshot(db) == before and await unmapped_rows(db) == []

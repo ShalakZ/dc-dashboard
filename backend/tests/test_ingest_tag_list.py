@@ -180,6 +180,19 @@ def test_the_digest_does_not_depend_on_the_order_of_the_lines_and_changes_with_t
     assert planned("A,Hall,voltage_v,V,", "B,Hall,current_a,A,", "C,Row 2,voltage_v,V,").digest != one.digest
 
 
+def test_the_digest_follows_the_spelling_of_a_new_assets_name_but_not_the_padding_around_it():
+    one = planned("A,Hall 1 / Row A,voltage_v,V,")
+    assert [a.name for a in one.assets] == ["Hall 1", "Row A"]
+    assert planned("A,HALL 1 / Row A,voltage_v,V,").digest != one.digest  # one comparison key, another name written
+    assert planned("A,Hall   1 / Row A,voltage_v,V,").digest != one.digest
+    assert planned("A,  Hall 1 /Row A  ,voltage_v,V,").digest == one.digest  # the parts are trimmed before they are named
+    # Two lines that spell one new asset differently: the first line's spelling is written, so the order of the lines decides the plan.
+    mixed = planned("A,Hall 1,voltage_v,V,", "B,HALL 1,current_a,A,")
+    flipped = planned("B,HALL 1,current_a,A,", "A,Hall 1,voltage_v,V,")
+    assert [a.name for a in mixed.assets] == ["Hall 1"] and [a.name for a in flipped.assets] == ["HALL 1"]
+    assert mixed.digest != flipped.digest
+
+
 def test_the_digest_changes_when_the_asset_a_path_lands_on_changes():
     a = planned("T,Hall,voltage_v,V,", assets=[(3, None, "Hall")], points={"T": 9})
     b = planned("T,Hall,voltage_v,V,", assets=[(4, None, "Hall")], points={"T": 9})

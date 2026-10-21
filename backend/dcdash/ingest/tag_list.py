@@ -471,7 +471,8 @@ def plan(
     asset_metrics: Collection[tuple[int, str]],
 ) -> Plan:
     """What the list would create, and what is wrong with it. The same inputs give the same plan, and the digest does not depend
-    on the order of the lines.
+    on the order of the lines, except where two lines spell one new asset differently (the first line's spelling is the one written,
+    so the order then decides what is written, and the digest follows).
 
     `points`: address -> id of the points of THE chosen source. `seg_keys`: part text -> the database's key for it.
     `mapped_points`: ids of points that already have a mapping. `asset_metrics`: (asset id, metric) pairs that exist."""
@@ -493,10 +494,12 @@ def plan(
 
 def _digest(points: Iterable[PlannedPoint], assets: Iterable[PlannedAsset], mappings: Iterable[PlannedMapping]) -> str:
     """A SHA-256 of what would be written, in an order that does not depend on the order of the lines. The ids of the existing
-    points and assets are part of it: a list that now lands on other rows is another plan, even when the names read the same."""
+    points and assets are part of it: a list that now lands on other rows is another plan, even when the names read the same. So is
+    the spelling of a new asset's name (`path` holds only its comparison key, and `HALL 1` and `Hall 1` are one key): the person is
+    shown the names that will be written, so another spelling is another plan."""
     body = {
         "points": sorted((p.address, p.unit_hint or "") for p in points),
-        "assets": sorted([list(a.path), a.kind] for a in assets),
+        "assets": sorted([list(a.path), a.kind, a.name] for a in assets),
         "mappings": sorted(
             [m.tag, list(m.asset_path), m.point_id, m.asset_id, m.metric, m.scale, m.interval_seconds, m.custom_unit]
             for m in mappings

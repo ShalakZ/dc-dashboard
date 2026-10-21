@@ -1,8 +1,11 @@
+import contextlib
+from collections.abc import AsyncIterator, Iterable
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import current_user, get_db, notify, require_permission
@@ -12,6 +15,12 @@ from dcdash.core.models import Asset, Mapping, Point, User
 from dcdash.core.pg import CONFIG_CHANNEL
 
 router = APIRouter(prefix="/api", tags=["mappings"])
+
+CLASH = "this point is already mapped, or the asset already has this metric"
+# Deadlock, lock not available, serialization failure: another transaction was in the way. The state is a 409 "try again".
+RETRY_STATES = frozenset({"40P01", "55P03", "40001"})
+TRY_AGAIN = "another change to these assets was running; try again"
+_LOCK_ASSETS = text("SELECT id FROM assets WHERE id = ANY(CAST(:ids AS integer[])) ORDER BY id FOR KEY SHARE")
 
 
 class MappingIn(BaseModel):
@@ -47,13 +56,40 @@ async def _require(db: AsyncSession, model: type, row_id: int, label: str) -> No
         raise HTTPException(404, f"{label} not found")
 
 
+@contextlib.asynccontextmanager
+async def try_again(db: AsyncSession, conflict: str, *gone: type[Exception]) -> AsyncIterator[None]:
+    """Whatever the transaction in here runs into that means "someone else was in the way" is a rolled-back 409: a unique clash (or an
+    exception in `gone`) says `conflict`, a deadlock, a lock that could not be had or a serialization failure says TRY_AGAIN. A refusal
+    raised in here also rolls back at once, so the locks are let go before the answer is built. Any other error goes on unchanged."""
+    try:
+        yield
+    except HTTPException:
+        await db.rollback()
+        raise
+    except (IntegrityError, *gone):
+        await db.rollback()
+        raise HTTPException(409, conflict) from None
+    except DBAPIError as error:
+        if getattr(error.orig, "sqlstate", None) not in RETRY_STATES:
+            raise
+        await db.rollback()
+        raise HTTPException(409, TRY_AGAIN) from None
+
+
+async def lock_assets(db: AsyncSession, asset_ids: Iterable[int]) -> None:
+    """KEY SHARE on these assets, in ONE statement in id order, taken BEFORE the mapping row or its point is touched. The Undo of a tag
+    list and `delete_asset` hold assets first and the mappings after; a route that held the mapping and then asked for the asset
+    closed a cycle with them. An asset that is gone when the lock is had (it was deleted while this waited) is a 409 to repeat."""
+    wanted = sorted(set(asset_ids))
+    if len((await db.scalars(_LOCK_ASSETS, {"ids": wanted})).all()) != len(wanted):
+        raise HTTPException(409, TRY_AGAIN)
+
+
 async def _flush(db: AsyncSession) -> None:
     try:
         await db.flush()
     except IntegrityError:
-        raise HTTPException(
-            409, "this point is already mapped, or the asset already has this metric"
-        ) from None
+        raise HTTPException(409, CLASH) from None
 
 
 async def _publish(db: AsyncSession) -> None:
@@ -83,20 +119,22 @@ async def create_mapping(
 ) -> Mapping:
     await _require(db, Point, body.point_id, "point")
     await _require(db, Asset, body.asset_id, "asset")
-    mapping = Mapping(
-        point_id=body.point_id,
-        asset_id=body.asset_id,
-        metric=body.metric.value,
-        scale=body.scale,
-        interval_seconds=body.interval_seconds or default_interval(body.metric),
-        custom_unit=body.custom_unit,
-    )
-    db.add(mapping)
-    await _flush(db)
-    await audit(
-        db, user.id, "mapping.created", {"mapping_id": mapping.id, "point_id": mapping.point_id, **_values(mapping)}
-    )
-    await _publish(db)
+    async with try_again(db, CLASH):
+        await lock_assets(db, [body.asset_id])  # before the insert: its foreign keys take the point's lock, then the asset's
+        mapping = Mapping(
+            point_id=body.point_id,
+            asset_id=body.asset_id,
+            metric=body.metric.value,
+            scale=body.scale,
+            interval_seconds=body.interval_seconds or default_interval(body.metric),
+            custom_unit=body.custom_unit,
+        )
+        db.add(mapping)
+        await _flush(db)
+        await audit(
+            db, user.id, "mapping.created", {"mapping_id": mapping.id, "point_id": mapping.point_id, **_values(mapping)}
+        )
+        await _publish(db)
     return mapping
 
 
@@ -121,19 +159,25 @@ async def update_mapping(
     mapping = await get_mapping(db, mapping_id)
     before = _values(mapping)
     changes = body.model_dump(exclude_unset=True)
-    if changes.get("asset_id") is not None:
-        await _require(db, Asset, changes["asset_id"], "asset")
-    if "custom_unit" in changes:
-        mapping.custom_unit = changes.pop("custom_unit")
-    for field, value in changes.items():
-        if value is not None:
-            setattr(mapping, field, value.value if isinstance(value, Metric) else value)
-    await _flush(db)
-    await audit_change(
-        db, user.id, "mapping.updated", {"mapping_id": mapping.id, "point_id": mapping.point_id},
-        before, _values(mapping),
-    )
-    await _publish(db)
+    new_asset = changes.get("asset_id")
+    if new_asset is not None:
+        await _require(db, Asset, new_asset, "asset")
+    async with try_again(db, CLASH):
+        if new_asset is not None and new_asset != mapping.asset_id:
+            # Before the first change to the mapping (the session would flush it ahead of this statement): the row is not held while the
+            # assets are waited for. The old one is locked too, so a mapping whose asset went with a delete is a 409, not a stale update.
+            await lock_assets(db, [mapping.asset_id, new_asset])
+        if "custom_unit" in changes:
+            mapping.custom_unit = changes.pop("custom_unit")
+        for field, value in changes.items():
+            if value is not None:
+                setattr(mapping, field, value.value if isinstance(value, Metric) else value)
+        await _flush(db)
+        await audit_change(
+            db, user.id, "mapping.updated", {"mapping_id": mapping.id, "point_id": mapping.point_id},
+            before, _values(mapping),
+        )
+        await _publish(db)
     return mapping
 
 
