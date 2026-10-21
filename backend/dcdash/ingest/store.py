@@ -51,6 +51,20 @@ _COMPARE = f"""
     FROM (SELECT count(*) FILTER (WHERE differs) AS differing FROM cmp) c
     LEFT JOIN (SELECT * FROM cmp WHERE differs ORDER BY point_id, ts LIMIT {SAMPLES}) d ON true
 """
+# The read-only twin of the insert and `_COMPARE` together (the dry run of an import): how many of the batch's pairs are stored at all,
+# how many of those carry another value or quality, and up to SAMPLES examples of the latter.
+_CLASSIFY = f"""
+    WITH cmp AS (
+        SELECT t.point_id, t.ts, r.value AS stored, t.value AS resent,
+               (r.value IS DISTINCT FROM t.value OR r.quality <> t.quality) AS differs
+        FROM {_UNNEST}
+        JOIN readings r ON r.point_id = t.point_id AND r.ts = t.ts
+        WHERE r.ts BETWEEN $5 AND $6
+    )
+    SELECT c.found, c.differing, d.point_id, d.ts, d.stored, d.resent
+    FROM (SELECT count(*) AS found, count(*) FILTER (WHERE differs) AS differing FROM cmp) c
+    LEFT JOIN (SELECT * FROM cmp WHERE differs ORDER BY point_id, ts LIMIT {SAMPLES}) d ON true
+"""
 # The EXISTS guard skips points deleted while their readings were buffered. One statement for the whole batch, in point_id
 # order (the lock order on point_latest); the strict < means a time that is not newer never replaces the stored one.
 _UPSERT_LATEST = f"""
@@ -154,6 +168,30 @@ async def insert_readings(conn: asyncpg.Connection, rows: Sequence[Row], *, noti
         first_new=min(times, default=None),
         last_new=max(times, default=None),
     )
+
+
+async def classify_readings(conn: asyncpg.Connection, rows: Sequence[Row]) -> tuple[int, int, int, list[dict]]:
+    """What `insert_readings` would make of `rows`, without writing anything: (new, already, differing, samples), the samples as
+    in `WriteResult.samples`. This is the dry run of an import. The rows are prepared exactly as the insert prepares them (every
+    time in UTC, a non-finite value as BAD with no value, the first occurrence of a pair wins), so the two agree on any input;
+    an importer de-duplicates a whole file itself and so never relies on that last step."""
+    unique: dict[tuple[int, datetime], Row] = {}
+    for row in rows:
+        row = finite_or_bad(row)
+        ts = row[1].replace(tzinfo=UTC) if row[1].tzinfo is None else row[1].astimezone(UTC)
+        unique.setdefault((row[0], ts), (row[0], ts, row[2], row[3]))
+    if not unique:
+        return 0, 0, 0, []
+    batch = sorted(unique.values(), key=lambda row: (row[0], row[1]))
+    times = [row[1] for row in batch]
+    found = await conn.fetch(_CLASSIFY, *_columns(batch), min(times), max(times))
+    stored, differing = found[0]["found"], found[0]["differing"]
+    samples = [
+        {"point_id": r["point_id"], "ts": r["ts"].isoformat(), "stored": _clean(r["stored"]), "resent": _clean(r["resent"])}
+        for r in found
+        if r["point_id"] is not None
+    ]
+    return len(batch) - stored, stored - differing, differing, samples
 
 
 @dataclass
