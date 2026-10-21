@@ -23,7 +23,12 @@
   .import-dialog .import-warn { display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border: 1px solid var(--warn-line); border-radius: var(--radius); background: var(--warn-tint); color: var(--warn-ink); }
   .import-dialog .import-warn svg.i { margin-top: 1px; color: var(--warn-icon); }
 
-  .import-dialog .import-foot { justify-content: flex-end; }
+  /* The dialog is its own scroll box (app.css), and this one is taller than a laptop window, so its buttons would start under the fold. The footer sticks to the dialog's
+     bottom edge instead: the negative margin undoes the dialog's own 22 px / 24 px padding so the footer runs edge to edge and, at the end of the scroll, takes the place of
+     the bottom padding (no gap, no double padding); its own padding puts the buttons where they were. The page colour keeps the scrolled fields from showing through, the
+     hairline is what they slide under. The scroll padding is the footer's height (12 + one button + 22 + the hairline) and a gap: a field that Tab scrolls into view lands above it. */
+  .import-dialog { scroll-padding-bottom: calc(var(--ctl-h) + 12px + 22px + 1px + 12px); }
+  .import-dialog .import-foot { justify-content: flex-end; position: sticky; bottom: 0; z-index: 1; margin: 0 -24px -22px; padding: 12px 24px 22px; border-top: 1px solid var(--border); background: var(--bg); }
   .import-dialog .import-go { min-width: 13em; font-variant-numeric: tabular-nums; }
   /* The buttons wait with aria-disabled, never disabled: the one that was pressed holds the focus. They look the way a disabled button does (app.css). */
   .import-dialog .import-go[aria-disabled="true"], .import-dialog .import-go[aria-disabled="true"]:hover { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); cursor: not-allowed; }
