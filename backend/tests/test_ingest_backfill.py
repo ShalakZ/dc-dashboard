@@ -609,17 +609,35 @@ async def test_a_source_that_vouches_only_up_to_a_quarter_hour_ago_is_no_failure
     behind = create_historian_app(HistorianConfig(meters=2), clock=lambda: clock.now - 15 * MINUTE, api_key=KEY)
     world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 6 * HOUR}, clock=clock, app=behind)
     result = await world.cycle()
-    assert (result.state, result.set_aside, result.failures, len(world.calls)) == ("idle", 0, 0, 1)  # one request, not three wasted ones
+    # two requests, not three wasted ones: the first is answered up to the source's own "now" and continues from there, the second
+    # (the boundary row only, complete up to where it started) says the source is not there yet
+    assert (result.state, result.set_aside, result.failures, len(world.calls)) == ("idle", 0, 0, 2)
     assert (await world.status())["answered_through"] == NOW - 15 * MINUTE
     done = len(world.calls)
     clock.now += 10 * MINUTE
     result = await world.cycle()
     assert (result.state, result.set_aside, result.failures) == ("idle", 0, 0)
-    # the next cycle asks from where the source vouched, and the late pass still runs although the frontier is not up to now
-    assert world.requests(done) == [(NOW - 15 * MINUTE, NOW + 10 * MINUTE), (NOW - 3 * HOUR, NOW - 3 * HOUR + 10 * MINUTE)]
+    # the next cycle asks from where the source vouched (and on from where it was complete then), and the late pass still runs
+    # although the frontier is not up to now
+    assert world.requests(done) == [
+        (NOW - 15 * MINUTE, NOW + 10 * MINUTE), (NOW - 5 * MINUTE, NOW + 10 * MINUTE), (NOW - 3 * HOUR, NOW - 3 * HOUR + 10 * MINUTE),
+    ]
     assert (await world.status())["answered_through"] == NOW - 5 * MINUTE
     assert await world.events(HISTORY_FAILED) == []  # no warning at every cycle
     assert len(await world.stored("M001_kWh")) == 356  # every minute from the first hour (the live row is its twin) to the source's own now, five minutes before ours
+
+
+async def test_a_source_that_cuts_at_a_smaller_row_cap_of_its_own_is_followed_to_now_in_the_newest_slice_inside_the_cycle(db):
+    first = NOW - 4 * HOUR + timedelta(seconds=17)
+    # The stand-in cuts every answer at 150 rows, though we asked for up to 20,000: a short answer that is not empty and that gained
+    # something is a cut of the source's own, not a source that is behind, also in the slice that reaches now.
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": first}, historian={"max_rows": 150})
+    result = await world.cycle()  # [4 hours back, now] is ONE slice, and it ends at now
+    assert (result.state, result.set_aside, result.failures) == ("idle", 0, 0)
+    assert [(call.start, call.end) for call in world.calls] == [(NOW - 4 * HOUR, NOW), (NOW - 4 * HOUR + 150 * MINUTE, NOW)]
+    assert (await world.status())["answered_through"] == NOW  # the frontier caught up within the cycle, not one page a cycle
+    stored = [row["ts"] for row in await world.stored("M001_kWh") if row["ts"].second == 0]
+    assert stored == [NOW - 4 * HOUR + k * MINUTE for k in range(241)]
 
 
 async def test_trouble_that_ends_resets_the_back_off_and_a_new_trouble_is_journaled_at_once(db):
