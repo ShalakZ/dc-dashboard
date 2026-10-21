@@ -231,7 +231,7 @@ def test_quoted_cells_may_hold_the_delimiter_and_doubled_quotes():
 def test_too_few_and_too_many_cells_are_problem_lines():
     assert reasons(one("P.kW,2026-10-20T10:00:00Z")) == {importer.MALFORMED: 1}  # no value cell
     assert reasons(one("P.kW")) == {importer.MALFORMED: 1}
-    assert reasons(one("," * 60)) == {importer.MALFORMED: 1}
+    assert reasons(one("," * 60)) == {importer.BAD_TAG: 1}  # only empty cells: the surplus is blank (a trailing delimiter), the tag is empty
     assert reasons(one(f"P.kW,{T},1," + ",".join(["x"] * 48))) == {importer.MALFORMED: 1}  # 51 cells
     wide = ",".join(["tag", "timestamp", "value", *[f"c{i}" for i in range(47)]])  # a header of 50 columns
     assert parse([f"P.kW,{T},1," + ",".join(["x"] * 47)], header=wide, profile=make_profile(unit=None, quality=None)).kept  # 50 are fine
@@ -245,6 +245,18 @@ def test_a_line_with_more_cells_than_the_header_is_not_this_files_layout():
     assert one(f"P.kW,{T},1,kW,good").kept and one(f"P.kW,{T},1,kW").kept  # the header's own width, or fewer cells down to the needed ones
     trailing = parse([f"P.kW,{T},1,kW,good,"], header=HEADER + ",")
     assert len(trailing.kept) == 1 and not trailing.rejected
+
+
+def test_a_trailing_delimiter_on_the_data_lines_alone_is_fine_and_a_filled_surplus_cell_is_not():
+    """M1 of the re-review: an export whose data lines end with `,` while its header does not stored nothing at all. Only a cell with
+    something in it beyond the header's columns is the sign of a shifted column (the tag list takes the same shape)."""
+    bare = make_profile(unit=None, quality=None)
+    result = parse([f"P.kW,{T},1,", f"P.kW,{T},2,,", f"P.kW,{T},3, ,"], header="tag,timestamp,value", profile=bare)
+    assert [row.value for row in result.kept] == [1.0, 2.0, 3.0] and not result.rejected
+    for line in (f"P.kW,{T},1,x", f"P.kW,{T},1,,x", f"P.kW,{T},1, ,y"):
+        assert reasons(parse([line], header="tag,timestamp,value", profile=bare)) == {importer.MALFORMED: 1}, line
+    assert reasons(one(f"P.kW,{T},1,kW,good, ,x")) == {importer.MALFORMED: 1}
+    assert reasons(parse([f"P.kW,{T}"], header="tag,timestamp,value", profile=bare)) == {importer.MALFORMED: 1}  # too few is still too few
 
 
 def test_a_line_that_stops_before_the_optional_columns_is_read_with_them_empty():
@@ -518,6 +530,21 @@ def test_a_step_is_big_only_when_it_is_over_100_times_the_usual_one_and_over_100
     small = [float(i) for i in range(10)]  # steps of 1: 900 is over 100 times the usual step, and under 1000
     assert named({1: [*small, small[-1] + 900]}) == ([], 0)
     assert named({1: [*small, small[-1] + 1000.5]})[1] == 1
+
+
+def test_a_step_is_held_against_the_minimum_in_kwh_through_the_points_scale():
+    """M2 of the re-review: the file's values are the source's own, so a CT ratio multiplies the step and a Wh counter shrinks it."""
+    steps_of_one = [float(i) for i in range(10)]
+    ct = series({1: [*steps_of_one, steps_of_one[-1] + 999]})  # a raw step of 999 over a usual 1
+    assert importer.counter_warnings(ct, {1: "E1"})[1] == 0  # in kWh as written it is under the minimum ...
+    shown, total = importer.counter_warnings(ct, {1: "E1"}, {1: 60.0})  # ... and with a scale of 60 it is 59,940 kWh
+    assert total == 1 and (shown[0]["previous"], shown[0]["value"]) == (9.0, 1008.0)
+    wh = series({1: [*steps_of_one, steps_of_one[-1] + 100_000]})  # 100 kWh written in Wh
+    assert importer.counter_warnings(wh, {1: "E1"})[1] == 1  # taken as kWh it would be named, wrongly
+    assert importer.counter_warnings(wh, {1: "E1"}, {1: 0.001}) == ([], 0)
+    big = series({1: [*steps_of_one, steps_of_one[-1] + 1_500_000]})  # 1,500 kWh written in Wh: over the minimum
+    assert importer.counter_warnings(big, {1: "E1"}, {1: 0.001})[1] == 1
+    assert importer.counter_warnings(series({1: [100, 99]}), {1: "E1"}, {1: 0.001})[1] == 1  # a fall is named whatever the scale
 
 
 def test_one_honest_big_step_among_many_is_named_and_that_is_all_it_costs():

@@ -520,7 +520,7 @@ async def test_after_the_retention_was_raised_an_import_of_the_dropped_days_stor
     await db.execute("UPDATE settings SET value = jsonb_set(value, '{raw_retention_days}', '90') WHERE key = 'storage'")
     dry = await post(client, source, body)
     assert dry.status_code == 200 and dry.json()["rejected_by"] == {"older_than_stored_raw_readings": 3}  # the check says so before anything is stored
-    assert dry.json()["new"] == 1 and dry.json()["raw_floor"] == floor.isoformat() and await db.fetchval("SELECT count(*) FROM readings WHERE point_id = $1", ids["P1"]) == 0
+    assert dry.json()["new"] == 1 and dry.json()["raw_floor"] == "2026-10-01T02:00:00+00:00" and await db.fetchval("SELECT count(*) FROM readings WHERE point_id = $1", ids["P1"]) == 0
     real = await post(client, source, body, dry_run="0", expect=dry.json()["sha256"])
     assert real.status_code == 200 and real.json()["rejected_by"] == {"older_than_stored_raw_readings": 3} and real.json()["new"] == 1
     assert [row["ts"] for row in await db.fetch("SELECT ts FROM readings WHERE point_id = $1", ids["P1"])] == [datetime(2026, 10, 12, 0, 10, tzinfo=UTC)]

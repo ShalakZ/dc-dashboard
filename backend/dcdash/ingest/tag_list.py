@@ -345,6 +345,11 @@ class _Planner:
             refuse_interval_as_energy(reading or "counter", metric.value)
         except NormaliseError as refused:
             raise _Bad(str(refused)) from None
+        if reading == "interval" and metric is not Metric.CUSTOM:  # the importer refuses every row of such a point (importer.point_info)
+            raise _Bad(
+                f"an interval tag (energy per period) cannot be mapped as {metric.value}: its figures would read each period's energy "
+                "as a reading of that metric; map it as custom, or give the reading counter or power"
+            )
         scale, custom_unit, shown, unit = self._scale(metric, values.get("unit", ""), values.get("scale", ""))
         interval = self._interval(metric, values.get("interval_seconds", ""))
         parts = _segments(values["asset"])

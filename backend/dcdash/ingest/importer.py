@@ -19,9 +19,10 @@ is also what makes the dry run and the real run agree. Nothing in a report, an a
 reading value, except the five `differing_samples` the report names for a person to look at, and the `counter_warnings` (a warning,
 never a refusal: the energy counter readings that fall or jump, with the value before them).
 
-A row before the oldest raw reading stored is refused (`older_than_stored_raw_readings`) when the minute rollup keeps minutes below
-that reading: the raw retention dropped the raw data and kept the summaries, and a raw row stored there would lower the floor so
-that a refresh deletes the summaries of the other meters. The floor is read once, before the first write.
+A row in a stretch whose raw readings the retention removed is refused (`older_than_stored_raw_readings`): the minute and hourly
+summaries there are kept, and a raw row stored among them would lower the floor so that a refresh deletes the summaries of the other
+meters. The stretch ends at the first whole hour after the newest summary minute that lies below the oldest raw reading (or below
+all of them, when no raw reading is left); a row after it is stored. The floor is read once, before the first write.
 """
 import argparse
 import asyncio
@@ -82,11 +83,11 @@ PENDING_SHOWN = 20  # unrefreshed ranges an audit row or a journal event lists
 CANCEL_REFRESH_SECONDS = 30  # what the wrap-up of a cancelled run may spend on the rollup refresh before it records the ranges as pending
 COUNTERS_SHOWN = 20  # counter warnings the report names; the rest are counted
 COUNTER_JUMP_FACTOR = 100  # a step this many times the point's usual step ...
-COUNTER_JUMP_MIN = 1_000  # ... and bigger than this (kWh) is named: one reading written in Wh among kWh, or a spike
+COUNTER_JUMP_MIN = 1_000  # ... and worth more than this many kWh (the step times the mapping's scale) is named: one reading written in Wh among kWh, or a spike
 NON_ASCII_MARK = " [non-ASCII]"  # after an unknown tag name with a character outside ASCII (a look-alike of a known tag reads the same)
 
 # The reason codes of a rejected row besides `normalise.Rejected`'s (the front end words them: lib/importReport.ts).
-MALFORMED = "malformed_line"  # an unbalanced quote, a line break inside a cell, too few cells, or more cells than the header has
+MALFORMED = "malformed_line"  # an unbalanced quote, a line break inside a cell, too few cells, or a filled cell beyond the header's columns
 BAD_TAG = "bad_tag"  # an empty tag, or one longer than MAX_TAG_CHARS
 EMPTY_VALUE = "empty_value"
 NOT_A_NUMBER = "not_a_number"
@@ -100,7 +101,7 @@ POINT_DELETED = "point_deleted"
 OLDER_THAN_RAW = "older_than_stored_raw_readings"
 
 REASON_TEXT = {  # for the command line; a browser words the codes itself
-    MALFORMED: "the line does not fit the header (an unbalanced quote, a line break inside a cell, too few cells, or more cells than the header has)",
+    MALFORMED: "the line does not fit the header (an unbalanced quote, a line break inside a cell, too few cells, or a filled cell beyond the header's columns)",
     BAD_TAG: f"the tag is empty or longer than {MAX_TAG_CHARS} characters",
     normalise.Rejected.NO_ZONE.value: "the time has no UTC offset and the profile names no zone",
     normalise.Rejected.NONEXISTENT.value: "this local time does not exist (the clocks went forward)",
@@ -117,10 +118,7 @@ REASON_TEXT = {  # for the command line; a browser words the codes itself
     DUPLICATE: "the same tag and time are earlier in the file with the same value",
     CONFLICTING: "the same tag and time are earlier in the file with another value (the first one is used)",
     POINT_DELETED: "the point was deleted while the file was being imported",
-    OLDER_THAN_RAW: (
-        "the raw readings before the oldest one stored were removed by the raw retention but their summaries are kept; storing raw "
-        "readings there would make a refresh delete the summaries of the other meters"
-    ),
+    OLDER_THAN_RAW: "The time is in a stretch whose raw readings the retention removed; the summaries there are kept, so nothing can be added",
 }
 
 _NUMBER = re.compile(r"[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?")
@@ -403,7 +401,8 @@ def parse_chunk(
         except csv.Error:
             reject(number, MALFORMED)
             continue
-        if len(cells) > layout.columns or len(cells) < need:
+        # A trailing delimiter leaves an empty surplus cell (the tag list accepts it too); only a cell with something in it is a mistake.
+        if len(cells) < need or (len(cells) > layout.columns and any(cell.strip() for cell in cells[layout.columns:])):
             reject(number, MALFORMED)
             continue
 
@@ -519,17 +518,21 @@ def _dedupe(kept: list[Kept], seen: dict[int, tuple[float, int]], rejected: dict
 _TIME_MASK = (1 << 56) - 1  # the low bits of a `_dedupe` key: the instant in whole microseconds since the epoch
 
 
-def counter_warnings(seen: Mapping[int, tuple[float, int]], energy: Mapping[int, str]) -> tuple[list[dict[str, Any]], int]:
+def counter_warnings(
+    seen: Mapping[int, tuple[float, int]], energy: Mapping[int, str], scales: Mapping[int, float] | None = None,
+) -> tuple[list[dict[str, Any]], int]:
     """The rows of the file that look wrong in a running energy counter, from the file-wide map `_dedupe` filled: (the first
     COUNTERS_SHOWN as {tag, ts, previous, value}, in time order, and how many there are). Pure, for the compute thread.
 
     Per point mapped as `energy_kwh` (`energy` is point id -> tag) the rows of GOOD quality are put in time order and two things are
     named: a value LOWER than the one before it, and a step bigger than COUNTER_JUMP_FACTOR times the point's usual step (the median
     of its positive steps; the lower middle one, so that one spike among few steps cannot raise the bar it is measured against) and
-    bigger than COUNTER_JUMP_MIN. A reading stored once is never corrected by a second import and a counter is billed in full from
-    its first to its last value, so a spike (1e15) or one hour written in Wh among kWh would sit in the bill for good; this is only
-    a warning, because a counter does reset and a gap in the data is one big honest step. A series of one row has no step to judge,
-    and a power point is not a counter: it is never looked at."""
+    bigger than COUNTER_JUMP_MIN kWh. The file's values are the source's own, so the step is turned into kWh with the point's mapping
+    scale (`scales`, point id -> scale; 1 when a point is not in it) before it is held against that minimum: a CT-ratio scale of 60
+    makes a raw step of 999 a bill of 59,940 kWh, and a Wh counter (0.001) needs a raw step of a million. A reading stored once is
+    never corrected by a second import and a counter is billed in full from its first to its last value, so a spike (1e15) or one hour
+    written in Wh among kWh would sit in the bill for good; this is only a warning, because a counter does reset and a gap in the
+    data is one big honest step. A series of one row has no step to judge, and a power point is not a counter: it is never looked at."""
     series: dict[int, list[tuple[int, float]]] = {}
     for key, (value, quality) in seen.items():
         point = key >> 56
@@ -541,8 +544,9 @@ def counter_warnings(seen: Mapping[int, tuple[float, int]], energy: Mapping[int,
         steps = [after[1] - before[1] for before, after in zip(rows, rows[1:])]
         positive = [step for step in steps if step > 0]
         usual = statistics.median_low(positive) if positive else None
+        scale = abs((scales or {}).get(point, 1.0))
         for (_, before), (micros, value), step in zip(rows, rows[1:], steps):
-            if step < 0 or (usual is not None and step > COUNTER_JUMP_FACTOR * usual and step > COUNTER_JUMP_MIN):
+            if step < 0 or (usual is not None and step > COUNTER_JUMP_FACTOR * usual and step * scale > COUNTER_JUMP_MIN):
                 found.append((micros, point, before, value))
     found.sort(key=lambda item: item[:2])
     shown = [
@@ -588,13 +592,13 @@ class ImportReport:
     refresh_pending: list[tuple[datetime, datetime]] = field(default_factory=list)  # UTC ranges whose rollups were not refreshed
     counter_warnings: list[dict[str, Any]] = field(default_factory=list)  # a warning, never a refusal: see counter_warnings()
     counter_warnings_total: int = 0
-    raw_floor: datetime | None = None  # the oldest raw reading before the run, when rows before it are refused (older_than_stored_raw_readings)
+    # The first instant a row is accepted from, when the rows before it are refused (older_than_stored_raw_readings): the end of the
+    # summaries whose raw readings the retention removed, read BEFORE the first write. The guard of the rollup refresh judges every
+    # window against it too: the rows a run stores lower `min(ts)`, which would hide the minutes below them, and with no raw reading at
+    # all the guard would take the new rows' own minutes (the view's real-time part shows them) for minutes that lost their raw data.
+    raw_floor: datetime | None = None
     complete: bool = True
     error: str | None = None
-    # The oldest raw reading the run saw BEFORE its first write (None: there was none), kept for the guard of the rollup refresh when
-    # the summaries reach below it: the rows a run stores lower `min(ts)`, which would hide the rollup minutes below the raw data it found.
-    floor_read: bool = False
-    floor_before: datetime | None = None
 
     @property
     def rejected(self) -> int:
@@ -671,17 +675,16 @@ def report_lines(report: ImportReport) -> list[str]:
             f"{_plural(rows, 'row')} of the file {'has' if rows == 1 else 'have'} a quality other than good ({labels}); "
             "the new ones are stored as bad quality, which counts in no figure"
         )
-    if report.rejected_by.get(OLDER_THAN_RAW):
-        since = f"the oldest raw reading stored ({report.raw_floor:%Y-%m-%d %H:%M} UTC)" if report.raw_floor else "any raw reading stored (there is none)"
+    if report.rejected_by.get(OLDER_THAN_RAW) and report.raw_floor:  # raw_floor is always set when a row is refused for this reason
         lines.append(
-            f"{_plural(report.rejected_by[OLDER_THAN_RAW], 'row')} of the file lie before {since}: the raw retention removed the readings "
-            "there but the minute and hourly summaries are kept, and storing raw readings there would make a refresh delete the summaries "
-            "of the other meters, so they are not stored"
+            f"{_plural(report.rejected_by[OLDER_THAN_RAW], 'row')} of the file lie before {report.raw_floor:%Y-%m-%d %H:%M} UTC, the end "
+            "of the summaries whose raw readings are gone: the raw retention removed the readings there but the minute and hourly "
+            "summaries are kept, and a refresh would delete them, so these rows are not stored"
         )
     if report.counter_warnings_total:  # a warning only: the rows are stored, and a stored reading is not corrected by a second import
         lines.append(
-            f"Check these energy counter readings ({report.counter_warnings_total:,} of the file; they are stored as they are, "
-            "and a stored reading is not corrected by a second import):"
+            f"Check these energy counter readings ({report.counter_warnings_total:,} of the file; they "
+            f"{'will be' if report.dry_run else 'were'} stored as they are, and a stored reading is not corrected by a second import):"
         )
         for warning in report.counter_warnings:
             what = "lower than the reading before it" if warning["value"] < warning["previous"] else "a step far bigger than the usual one"
@@ -702,13 +705,13 @@ def report_lines(report: ImportReport) -> list[str]:
 _TRY_LOCK = "SELECT pg_try_advisory_lock($1, 0)"
 _POINTS = "SELECT p.id, p.address, m.metric, m.scale FROM points p LEFT JOIN mappings m ON m.point_id = p.id WHERE p.source_id = $1"
 _CLOSED_MONTHS = "SELECT month FROM billing_closes WHERE reopened_at IS NULL"
-# The floor of the raw readings, read ONCE before the first write, and whether the minute rollup keeps minutes below it (the raw
-# retention dropped raw data, the summaries stay). No raw reading at all is a floor at infinity: every rollup minute lies below it.
+# The floor of the raw readings, read ONCE before the first write, and the newest minute of the minute rollup that lies below it (the
+# raw retention dropped the raw data of those minutes, the summaries stay). No raw reading at all is a floor at infinity: every
+# rollup minute lies below it.
 _RAW_FLOOR = "SELECT min(ts) FROM readings"
-_SUMMARIES_BELOW = (
-    "SELECT EXISTS (SELECT 1 FROM readings_1m WHERE bucket < coalesce(time_bucket(INTERVAL '1 minute', $1::timestamptz), 'infinity'::timestamptz))"
+_NEWEST_SUMMARY_BELOW = (
+    "SELECT max(bucket) FROM readings_1m WHERE bucket < coalesce(time_bucket(INTERVAL '1 minute', $1::timestamptz), 'infinity'::timestamptz)"
 )
-_NO_FLOOR = datetime.max.replace(tzinfo=UTC)
 # FOR KEY SHARE, in id order: the Undo of a tag list and the delete of a source take FOR UPDATE on the same rows, so neither can
 # remove a point under a batch. It does NOT stop a delete that commits BETWEEN two batches from leaving the earlier batches' readings
 # behind (readings have no foreign key, as for the live poll); that is the same trade the whole data path makes.
@@ -829,8 +832,8 @@ async def _refresh(pool: asyncpg.Pool, report: ImportReport, spans: Sequence[tup
             where = f"{lo:%Y-%m-%d %H:%M} to {hi:%Y-%m-%d %H:%M} UTC"
             try:
                 unsafe = await (
-                    rollups.pending_drop_range(pool, lo, hi, floor=report.floor_before)
-                    if report.floor_read else rollups.pending_drop_range(pool, lo, hi)
+                    rollups.pending_drop_range(pool, lo, hi, floor=report.raw_floor)
+                    if report.raw_floor is not None else rollups.pending_drop_range(pool, lo, hi)
                 )
                 if unsafe is not None:
                     trouble.append(f"{where}: {unsafe.removesuffix(', so nothing is written')}")
@@ -896,18 +899,18 @@ async def _import(
             found["address"]: point_info(found["id"], found["metric"], found["scale"], profile.reading)
             for found in await conn.fetch(_POINTS, source_id)
         }
-        # The floor of the raw readings BEFORE the first write: the guard of the refresh must judge the rollup minutes against the raw
-        # data that was there, not against the rows this run stores (they lower `min(ts)` and would hide the minutes below them). When
-        # the summaries reach below that floor, a row before it is refused here: stored, it would lower the floor for every later run.
+        # The floor of the raw readings BEFORE the first write: the rows this run stores lower `min(ts)`, which would hide the summaries
+        # below them. When summaries lie below that floor, their raw readings are gone: a row among them is refused here (stored, it
+        # would lower the floor for every later run), up to the first whole hour after the newest of them, so that no accepted row
+        # shares an hour with an orphaned minute. A row after that is stored even below the floor, or when no raw reading is left at
+        # all, and the guard of the refresh judges the windows against this same instant: every orphaned minute lies below it and every
+        # window of a stored row starts at or after it. Without summaries below the floor there is nothing to protect, and the guard
+        # asks for the minimum itself.
         floor = await conn.fetchval(_RAW_FLOOR)
         reject_before = None
-        if await conn.fetchval(_SUMMARIES_BELOW, floor):
-            reject_before, report.raw_floor = floor or _NO_FLOOR, floor
-            # The guard of the refresh is then judged against this floor too (no row of the run lies below it, so the minutes below it
-            # are the summaries that lost their raw readings). Without summaries below the floor there is nothing to protect, and the
-            # rows a run stores below it are backed by raw readings of their own: the guard asks for the minimum itself, because the
-            # view's real-time part (before the policy's first refresh) shows those minutes and would have them taken for lost ones.
-            report.floor_read, report.floor_before = True, floor
+        newest = await conn.fetchval(_NEWEST_SUMMARY_BELOW, floor)
+        if newest is not None:
+            reject_before = report.raw_floor = rollups.hour_ceil(newest + rollups.MINUTE)
         ctx = ParseContext(layout, profile, points, now, retention, closed, site, reject_before)
         seen: dict[int, tuple[float, int]] = {}
         unknown_seen: set[str] = set()
@@ -973,7 +976,8 @@ async def _import(
             await asyncio.sleep(0)  # let the other requests in between two chunks
         energy = {info.point_id: tag for tag, info in points.items() if info.metric == "energy_kwh"}
         if energy and seen:
-            report.counter_warnings, report.counter_warnings_total = await compute.run(counter_warnings, seen, energy)
+            scales = {info.point_id: info.scale for info in points.values() if info.metric == "energy_kwh" and info.scale is not None}
+            report.counter_warnings, report.counter_warnings_total = await compute.run(counter_warnings, seen, energy, scales)
     except asyncio.CancelledError:
         raise
     except Exception as exc:

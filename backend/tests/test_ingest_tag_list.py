@@ -310,15 +310,20 @@ def test_the_scale_and_the_unit_must_agree_and_each_must_be_a_number_in_range():
     assert [m.tag for m in result.mappings] == ["B"]
 
 
-def test_an_interval_tag_cannot_be_mapped_as_cumulative_energy():
+def test_an_interval_tag_is_refused_for_every_metric_except_custom():
+    """The importer refuses every row of an interval profile into a mapped point that is not `custom` (a counter would read each
+    period as a reset, a power would be read as kW), so the list must not map one."""
     header = "tag,asset,metric,unit,reading,interval_seconds"
     result = planned(
         "A,Hall,energy_kwh,kWh,interval", "B,Hall,active_power_kw,kW,interval,3600", "C,Hall,voltage_v,V,weekly",
-        "D,Hall,current_a,A,counter", header=header,
+        "D,Hall,current_a,A,counter", "E,Hall,custom,x,interval", "F,Hall,voltage_v,V,interval", header=header,
     )
-    assert [p.line for p in result.problems] == [2, 4]
+    assert [p.line for p in result.problems] == [2, 3, 4, 7]
     assert "cannot be mapped as a cumulative energy counter" in result.problems[0].reason
-    assert 'the reading "weekly" is not known' in result.problems[1].reason
+    assert "cannot be mapped as active_power_kw" in result.problems[1].reason and "map it as custom" in result.problems[1].reason
+    assert 'the reading "weekly" is not known' in result.problems[2].reason
+    assert "cannot be mapped as voltage_v" in result.problems[3].reason
+    assert [m.tag for m in result.mappings] == ["D", "E"]  # a counter-reading tag and a custom one are fine
 
 
 def test_a_tag_twice_in_the_file_is_a_problem_on_the_later_line_even_when_the_first_is_wrong():
