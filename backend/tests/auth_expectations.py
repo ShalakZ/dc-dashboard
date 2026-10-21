@@ -109,6 +109,8 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
          "PUT /api/settings/billing"),
     _all("sources.view", "GET /api/sources", "GET /api/sources/{source_id}/points", "GET /api/collector/status",
          "GET /api/secret-key/status"),
+    # Added in W30 (the history backfill's state of one source): after the freeze, so not in auth_matrix_pre_w9a.json; the gate and isolation tests cover it.
+    _all("sources.view", "GET /api/sources/{source_id}/history"),
     _all("sources.edit", "POST /api/sources", "PATCH /api/sources/{source_id}", "DELETE /api/sources/{source_id}",
          "POST /api/sources/{source_id}/browse", "GET /api/connectors", "GET /api/sources/{source_id}/impact"),
     _all("sources.test", "POST /api/sources/test-all", "POST /api/sources/{source_id}/test"),

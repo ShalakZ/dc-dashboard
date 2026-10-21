@@ -51,4 +51,29 @@ saved values) and, for a confirmed save, `confirmed_loss`.
 
 The hourly rollup is the only permanent copy of the energy data: back it up ([Backup and restore](backup-and-restore.md)).
 
+## Filling older gaps
+
+When a source keeps its own history, the platform can fill the holes an outage leaves
+([History and backfill](sources-and-discovery.md#history-and-backfill)). How far back that reaches depends on the raw retention.
+
+- **Automatic fills stay inside the lookback**: 7 days (`DCDASH_HISTORY_LOOKBACK_DAYS`), and never further than two days inside the raw
+  retention. The refresh policies of the rollups cover the last 7 days, so a row that old reaches the 1-minute rollup in about a minute
+  and the hourly rollup in about 10 minutes by itself (measured on a row 3 days old).
+- **The fill command reaches back to the raw retention minus a day** (29 days with the default of 30), and it refreshes the rollups itself
+  over what it stored. A row older than the 7-day window stayed out of both rollups until a refresh (measured on a row 10 days old).
+- **"Older than that cannot be added" is by design.** The default raw retention is 30 days, so a gap of 40 days cannot be filled. The raw
+  readings of those days are gone; only the rollups remain.
+- **Why the platform refuses instead of trying.** Refreshing a rollup over a range recomputes every bucket in it from the raw readings.
+  If the raw readings of some of those minutes are gone, the refresh would recompute them from nothing and delete real rollup history.
+  This was measured: after a raw chunk was dropped, a refresh over its range took the rollup from 21 rows to 0 (1-minute) and from 1 row
+  to 0 (hourly). So before it asks the source, the platform checks the 1-minute rollup for minutes in the range whose raw readings are
+  gone, and when it finds one it writes nothing and says so.
+- **What to do for an older gap.** Raise the raw retention on the Storage page before the gap becomes older than it, because retention
+  drops raw chunks of 7 days at a time and raising it later cannot bring back what was dropped. A longer retention costs space; the
+  page's size projection shows how much. A gap whose raw readings retention has already dropped cannot be filled, whatever you set now.
+- **Filling into a compressed chunk works.** Readings older than the compression delay (7 days by default) are stored compressed. A
+  fill writes into such a chunk, the database checks the new readings against the stored ones, and the chunk stays compressed. It costs
+  about 35 ms per 1,000 rows (a few milliseconds per 1,000 in an uncompressed chunk): 20,000 rows take about 0.9 seconds and 60,000
+  about 2.2 seconds.
+
 Related: [Sources and discovery](sources-and-discovery.md), [Dashboards and billing](dashboards-and-billing.md), [Backup and restore](backup-and-restore.md), [Screens](screens.md)

@@ -42,7 +42,6 @@ normal deletes; as after any source delete, the readings and rollup rows of the 
 """
 import argparse
 import asyncio
-import json
 import math
 import os
 import random
@@ -60,11 +59,13 @@ from dcdash.api.asset_names import _KEY, ASSET_NAMES_LOCK  # the one definition 
 from dcdash.collector.writer import Row, Writer
 from dcdash.connectors.base import GOOD
 from dcdash.connectors.simulator import SimulatorConfig
-from dcdash.core.config import get_settings
 from dcdash.core.metrics import Metric
 from dcdash.core.pg import create_pool
-from dcdash.core.storage import FACTORY_STORAGE_SETTINGS, REFRESH_WINDOW_DAYS, STORAGE_KEY
+from dcdash.core.storage import FACTORY_STORAGE_SETTINGS
 from dcdash.core.timeutil import local_midnight, month_start, resolve_range, validate_whole_hour_zone
+from dcdash.ingest import rollups
+from dcdash.ingest.rollups import default_timezone as _default_timezone  # the helpers moved to ingest.rollups; the old names stay
+from dcdash.ingest.rollups import hour_floor, raw_retention_days, site_timezone
 
 SWITCH = "DCDASH_ALLOW_SEED_HISTORY"
 SOURCE_NAME = "seeded-history"
@@ -135,11 +136,6 @@ def _floor(ts: datetime, step_seconds: int = STEP_SECONDS) -> datetime:
 def _ceil(ts: datetime, step_seconds: int = STEP_SECONDS) -> datetime:
     floored = _floor(ts, step_seconds)
     return floored if floored == ts else floored + timedelta(seconds=step_seconds)
-
-
-def hour_floor(ts: datetime) -> datetime:
-    """time_bucket('1 hour', ts): the rollup buckets are UTC hours."""
-    return ts.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
 
 
 @dataclass(frozen=True)
@@ -253,58 +249,12 @@ def build_series(plan: Plan) -> dict[str, list[tuple[datetime, float]]]:
 # ---- the database --------------------------------------------------------------------------------------------------
 
 
-def _default_timezone() -> str:
-    try:
-        return get_settings().timezone
-    except Exception:  # no secret key in this environment: the dry run still works
-        return os.environ.get("DCDASH_TIMEZONE", "UTC")
-
-
-async def _stored(pool: asyncpg.Pool, key: str) -> dict:
-    value = await pool.fetchval("SELECT value FROM settings WHERE key = $1", key)
-    if isinstance(value, str):
-        value = json.loads(value)
-    return value if isinstance(value, dict) else {}
-
-
-async def site_timezone(pool: asyncpg.Pool) -> str:
-    """The site time zone the way api.settings.current_timezone reads it: the stored value, else the configured default."""
-    name = (await _stored(pool, "general")).get("timezone")
-    for candidate in (name, _default_timezone()):
-        try:
-            ZoneInfo(str(candidate))
-            return str(candidate)
-        except (KeyError, ValueError, OSError):
-            continue
-    return "UTC"
-
-
-async def raw_retention_days(pool: asyncpg.Pool) -> int:
-    """Raw retention from the `storage` setting; the factory value when it is missing or no longer passes the storage rules."""
-    days = (await _stored(pool, STORAGE_KEY)).get("raw_retention_days")
-    if isinstance(days, int) and not isinstance(days, bool) and days >= REFRESH_WINDOW_DAYS + 1:
-        return days
-    return FACTORY_STORAGE_SETTINGS.raw_retention_days
-
-
-# A rollup minute older than the oldest raw reading: raw data was dropped (or deleted) and the rollup still has what it made of it.
-_MINUTES_WITHOUT_RAW = """
-SELECT min(bucket) FROM readings_1m
-WHERE bucket >= $1 AND bucket < $2
-  AND bucket < coalesce((SELECT time_bucket(INTERVAL '1 minute', min(ts)) FROM readings), 'infinity'::timestamptz)
-"""
-
-
 async def pending_drop(pool: asyncpg.Pool, plan: Plan) -> str | None:
     """Why a refresh over the range would be unsafe, or None. See the module docstring."""
-    oldest = await pool.fetchval(_MINUTES_WITHOUT_RAW, hour_floor(plan.start), plan.now)
-    if oldest is None:
+    reason = await rollups.pending_drop_range(pool, plan.start, plan.now)
+    if reason is None:
         return None
-    return (
-        f"the 1-minute rollup (readings_1m) holds minutes from {oldest:%Y-%m-%d %H:%M} UTC whose raw readings are gone (the raw "
-        "retention dropped them). Refreshing the rollups over the range would recompute them from nothing and delete that real "
-        "history, so nothing is written. Run the seeder on a stack whose raw data is complete (a scratch stack)"
-    )
+    return f"{reason}. Run the seeder on a stack whose raw data is complete (a scratch stack)"
 
 
 @dataclass(frozen=True)
@@ -383,7 +333,7 @@ async def write_batches(pool: asyncpg.Pool, batches: Iterable[tuple[date, list[R
     """Each batch (a UTC day and its rows) through the collector's own `Writer`, one flush per batch, in the order given. Returns
     how many rows were written. A batch must fit the Writer's buffer; the checks on the buffer and on flush() are described in
     write_readings."""
-    writer = Writer(pool)
+    writer = Writer(pool, notify=False)
     total = 0
     for day, rows in batches:
         writer.add(rows)
@@ -397,18 +347,9 @@ async def write_batches(pool: asyncpg.Pool, batches: Iterable[tuple[date, list[R
 
 
 async def _refresh(pool: asyncpg.Pool, view: str, lo: datetime, hi: datetime) -> None:
-    """refresh_continuous_aggregate must run outside a transaction: a pooled connection executing a bare statement (the simple
-    query protocol, autocommit) satisfies that. A policy job refreshing the same view holds a lock for a moment: retry."""
-    sql = f"CALL refresh_continuous_aggregate('{view}', '{lo.isoformat()}'::timestamptz, '{hi.isoformat()}'::timestamptz)"
-    for attempt in range(50):
-        try:
-            async with pool.acquire() as conn:
-                await conn.execute(sql)
-            return
-        except asyncpg.LockNotAvailableError:
-            if attempt == 49:
-                raise
-            await asyncio.sleep(0.2)
+    """One view over [lo, hi] exactly as given (the seeder's own window, not the backfill's clamped one): `ingest.rollups.refresh_view`.
+    The name stays here because the seeder's tests patch it."""
+    await rollups.refresh_view(pool, view, lo, hi)
 
 
 async def refresh_rollups(pool: asyncpg.Pool, plan: Plan) -> None:

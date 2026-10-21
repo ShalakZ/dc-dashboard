@@ -146,7 +146,7 @@ message appeared as described), and lost what came after the dump.
 
 ## Migrations in order
 
-The files are in `backend/migrations/versions/`; each revises the one before it, and `0015` is the head. The release-note entry of a
+The files are in `backend/migrations/versions/`; each revises the one before it, and `0016` is the head. The release-note entry of a
 migration says how to apply it, how to verify it and the commit to go back to.
 
 | Revision | What it does | Downgrade | Release note |
@@ -166,6 +166,7 @@ migration says how to apply it, how to verify it and the commit to go back to.
 | `0013` | text widget: the widget type CHECK allows `text` | lossless while no text widget exists; refuses while one does: remove them first | [w22](../CHANGELOG.md#upgrading-to-w22-migration-0013) |
 | `0014` | the figure ledger: the table `figure_ledger` (derived data: computed figures kept between requests) | lossless except the stored figures, which are recomputed (the downgrade drops the table) | the w26b entry in the [CHANGELOG](../CHANGELOG.md) |
 | `0015` | display screens: three empty tables, `playlists`, `playlist_items` and `displays` | lossless for everything older; the downgrade drops the three tables and loses the playlists and display links | the w28 entry in the [CHANGELOG](../CHANGELOG.md) |
+| `0016` | a unique key on readings (`readings_point_ts_key`, in place of the plain index `readings_point_ts`) and the small table `history_status` (the history fill's progress per source) | lossless: the downgrade builds the plain index again and drops `history_status`, which is derived data | the w30 entry in the [CHANGELOG](../CHANGELOG.md), and [`0016`](#0016-and-the-history-fill-w30) below |
 
 Waves without a migration also have entries in the CHANGELOG (for example W7p, no migration): read them too, they can name checks.
 
@@ -179,6 +180,70 @@ the container one of two ways. Either while the new checkout is still in place (
 `docker compose rm --stop --force figures` (option b: the same as adding `figures` to the `rm` line of its step 1); or leave it and add
 `--remove-orphans` to the next `up -d` that you run from the OLD checkout, whose compose file no longer has the service. There is no
 need for `docker compose down --remove-orphans` (it would also take every other container down). Not rehearsed.
+
+### `0016` and the history fill (w30)
+
+**What it changes.** Two things, and no reading and no figure changes.
+- A unique key on `readings` (`readings_point_ts_key`): the database now refuses a second reading with the same point and the same time.
+  It replaces the plain index `readings_point_ts` (the same columns in the same order, so every query that used the old index can use
+  the new one).
+- The table `history_status`, empty at first: one row per source that says how far the history fill has got
+  ([Sources and discovery](sources-and-discovery.md#history-and-backfill)). It is derived data, written by the collector.
+
+**What an update looks like.** The first start of the new `api` runs the migration. On a copy of the development database (400 MB,
+4,269,975 readings) it took 4.2 seconds, 2.4 of them spent counting duplicates. On a database of 1.6 GB expect up to about 20 seconds;
+that is the measurement scaled up, not a measurement. Do not stop it. While the unique key is built, writes to `readings` wait (the
+longest wait of a writer in the drill was 0.89 seconds) and reads do not. The new key is built before the old index is dropped, so for a
+moment the database holds both (about 104 MB each on the copy), and then one. Collection pauses while the migration runs, as in step 4
+above.
+
+**If it refuses.** If some reading is stored more than once, the migration stops before it changes anything. Its message starts
+`migration 0016 was stopped before it changed anything, because readings holds N reading(s) that are stored more than once`. The
+database is still at the revision it was at before, and the `api` restarts in a loop and stops here every time until you stop it:
+`docker compose stop api`. Then follow [Duplicate readings](#duplicate-readings). A migration never deletes a reading: which copy is the
+right one is for a person to decide, and a downgrade could not put a deleted reading back. A second refusal exists for a busy
+database: `migration 0016 could not get the lock it needs on readings within 120 seconds`. A long query or a writer held the lock,
+nothing was changed, and starting the `api` again is usually enough. If the refusal repeats, stop `figures` and `collector` for a minute
+(the figures worker can hold one long query, up to two minutes) and start again.
+
+**Going back.** Lossless; use option a of step 6 with `alembic downgrade 0015` and the code from before w30 (`de67feb`, or the commit you
+noted in step 1). The downgrade drops `history_status`, builds the plain index again, and drops the unique key last, so there is never
+a moment without an index. It took 1.9 seconds on the copy, and every table was identical to its state before the upgrade (counts and row
+hashes). Afterwards a reading can be stored twice again, as before. Upgrading once more (7.0 seconds on the copy) builds the key and an
+empty `history_status`; the history fill then starts again from its lookback, and the store ignores whatever it already has.
+
+## Duplicate readings
+
+Read this when the update to migration 0016 refused because some readings are stored more than once. Everything here only reads: nothing
+in this section changes the database.
+
+1. **Stop the `api`**, so that it stops restarting: `docker compose stop api`. The `db` container stays up.
+2. **Back up.** `scripts/backup.sh` (Windows: `scripts\backup.ps1`), and keep both files it writes, the `.dump` and the `.version` file.
+3. **List the duplicates.** Open `docker compose exec db psql -U dcdash -d dcdash` and paste the two statements. The first counts the
+   pairs (a pair is one point at one time) and the readings beyond the first of each; the second lists at most 50 of them, with the
+   lowest and the highest value stored, so you can see whether the copies agree. Counting reads the whole table: it took 2.6 seconds
+   on 4.3 million readings.
+
+   ```sql
+   SELECT count(*) AS pairs, coalesce(sum(n - 1), 0) AS extra_rows
+   FROM (SELECT point_id, ts, count(*) AS n FROM readings GROUP BY point_id, ts HAVING count(*) > 1) d;
+
+   SELECT point_id, ts, count(*) AS times_stored, min(value) AS lowest, max(value) AS highest
+   FROM readings
+   GROUP BY point_id, ts
+   HAVING count(*) > 1
+   ORDER BY point_id, ts
+   LIMIT 50;
+   ```
+
+4. **Send the output to support**: the migration's message, the count and the list (in the field-debugging loop, paste them into a
+   Claude session with the message template of [Field debugging](field-debugging.md)). Do not delete anything by hand before then. The
+   platform never removes readings by itself.
+5. **Start again** with `docker compose up -d` once the duplicates have been dealt with. The migration runs from the beginning and counts
+   again.
+
+No code of the platform stores a reading twice, so duplicates in a database mean that something wrote into it from outside the
+platform.
 
 ## Upgrading images
 

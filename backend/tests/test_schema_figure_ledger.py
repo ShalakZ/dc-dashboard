@@ -1,6 +1,6 @@
 """Migration 0014 (W26b): the table `figure_ledger` (the dashboard's computed figures kept in the database: DERIVED data).
 
-This file pins only that 0014 follows 0013 (the head is pinned by the newest migration's test, test_schema_displays.py).
+This file pins only that 0014 follows 0013 (the head is pinned by the newest migration's test, test_schema_history.py).
 The upgrade writes no row and touches no other table; the downgrade drops the table and touches nothing else (the stored
 figures are lost on purpose: they can always be computed again)."""
 from datetime import datetime, timezone
@@ -32,9 +32,12 @@ SETTINGS = "SELECT key, value FROM settings ORDER BY key"
 SEPT = datetime(2026, 9, 1, tzinfo=timezone.utc)
 OCT = datetime(2026, 10, 1, tzinfo=timezone.utc)
 NOON = datetime(2026, 10, 20, 12, 0, 5, 123456, tzinfo=timezone.utc)
-# Tables of LATER migrations (0015, w28): they exist at head and not below 0015, so a comparison made at head and again below
-# it must not see them. They are left out of `snapshot` and `fingerprints` below.
-LATER_TABLES = ("playlists", "playlist_items", "displays")
+# Tables of LATER migrations (0015, w28 and 0016, w30): they exist at head and not below 0015, so a comparison made at head and
+# again below it must not see them. They are left out of `snapshot` and `fingerprints` below.
+LATER_TABLES = ("playlists", "playlist_items", "displays", "history_status")
+# 0016 also replaced the plain index of readings by a unique key: `snapshot` shows the key under the name and the definition of the
+# plain index, for the same reason (test_schema_history.py pins the swap itself).
+PLAIN_READINGS_INDEX = "CREATE INDEX readings_point_ts ON public.readings USING btree (point_id, ts DESC)"
 
 
 async def snapshot(db) -> dict:
@@ -51,6 +54,9 @@ async def snapshot(db) -> dict:
         "triggers": [tuple(r) for r in await db.fetch(
             "SELECT tgrelid::regclass::text, tgname FROM pg_trigger WHERE NOT tgisinternal ORDER BY 1, 2")],
     }
+    taken["indexes"] = sorted(
+        ("readings", "readings_point_ts", PLAIN_READINGS_INDEX) if row[1] == "readings_point_ts_key" else row
+        for row in taken["indexes"])
     return {kind: [row for row in entries if row[0] not in LATER_TABLES] for kind, entries in taken.items()}
 
 

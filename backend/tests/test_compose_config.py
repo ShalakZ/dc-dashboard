@@ -159,6 +159,19 @@ def test_the_figures_service_runs_the_worker_from_the_backend_image_with_the_sha
         assert figures["environment"][name] == default, name
 
 
+def test_the_history_settings_reach_every_backend_service_empty_so_the_code_owns_the_defaults():
+    from dcdash.ingest.settings import NAMES
+
+    services = compose_config()["services"]
+    assert NAMES == (
+        "DCDASH_HISTORY_EVERY", "DCDASH_HISTORY_MAX_ROWS", "DCDASH_HISTORY_RATE", "DCDASH_HISTORY_LOOKBACK_DAYS",
+        "DCDASH_HISTORY_REREAD_HOURS",
+    )
+    for service in ("api", "collector", "figures"):
+        environment = services[service]["environment"]
+        assert {name: environment.get(name) for name in NAMES} == {name: "" for name in NAMES}, service
+
+
 def test_the_figures_service_waits_for_the_api_and_has_no_profile_and_no_ports():
     figures = compose_config()["services"]["figures"]
     assert figures["depends_on"]["api"]["condition"] == "service_healthy"  # the api runs the migrations (the table must exist)

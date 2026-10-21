@@ -146,8 +146,8 @@ async def test_write_batches_fails_when_a_flush_writes_less(monkeypatch):
 
 async def test_write_batches_fails_when_the_buffer_dropped_rows(monkeypatch):
     class Small(history.Writer):  # a buffer that holds 2 rows, so a batch of 3 loses its oldest
-        def __init__(self, pool):
-            super().__init__(pool, max_buffer=2)
+        def __init__(self, pool, **kwargs):  # write_batches passes notify=False
+            super().__init__(pool, max_buffer=2, **kwargs)
 
     monkeypatch.setattr(history, "Writer", Small)
     with pytest.raises(RuntimeError, match="the write buffer dropped readings of 2026-10-01 before they were written"):

@@ -2,7 +2,8 @@
 
 This page is for the engineer who connects the platform to the field: the data sources it reads (OPC UA, Modbus TCP and the HTTP
 simulator), their settings, the OPC UA client certificate, and Discovery, which finds sources on the network and maps their points to
-assets. What gets recorded in the audit log is listed here too (item 8 of Discovery).
+assets. What gets recorded in the audit log is listed here too (item 8 of Discovery), and so is how the platform fills the holes an
+outage leaves from a source's own history ([History and backfill](#history-and-backfill)).
 
 ## Protocols
 
@@ -12,7 +13,8 @@ Every connector is read-only toward the source; only `collector` opens connectio
 
 **HTTP simulator** (`simulator`): `url` (default `http://simulator:9000`) and `timeout_seconds` (5). The
 secret is sent as the simulator's API key; see [The simulator](install-and-run.md#the-simulator) for the dev
-profile and the key.
+profile and the key. It is the only connector that can read history, from the stand-in Historian on port 9100
+([History and backfill](#history-and-backfill)).
 
 **OPC UA** (`opcua`): `endpoint` (`opc.tcp://...`), `security_policy` (`none` or `basic256sha256`),
 optional `username` (the password is the source secret), `root_node` (default `i=85`, the Objects
@@ -569,5 +571,149 @@ request (more is refused with a 422). It answers which sources were removed and 
 `manual` or `gone`, and refuses with a 409 and removes nothing while a scan is queued or running. Each scan in `GET /api/scans` carries
 the `targets` and `ports` it covered, and each source in `GET /api/discovery/graph` a `last_scan` (`{scan_id, at}` of the newest scan
 that found it, or `null`).
+
+## History and backfill
+
+Some sources keep their own history and can answer "the values between 10:00 and 14:00". The platform uses that to fill the holes an
+outage leaves: when the collector was down, or the source could not be reached, it asks the source afterwards for the readings of that
+time. It asks the source's Historian read-only. Only GET requests are sent, and the connector interface has no way to write.
+
+**What reads history today.** No connector for a named Historian product exists yet, because nobody has confirmed which product it will
+be. The one connector that can read history is `simulator` (HTTP), and what it reads is the **stand-in Historian**: a second server of
+the simulator process on port 9100, in the dev profile only (`http://simulator:9100` inside the stack, `127.0.0.1:9100` from the host,
+the same API key as the plain simulator). That is how the feature is tested. OPC UA and Modbus sources keep no history that can be
+read, so for them nothing happens. A scan offers port 9100 only when you add it to the scan's ports (the connector's own default is
+9000); the stand-in answers the same probe as the plain simulator. A `simulator` source that points at port 9000, the plain simulator,
+has no history interface: the first request is answered "not found", the status becomes `not_supported`, and the platform waits a day
+before it asks again. That wait is kept when you change the source's URL to port 9100, so the next automatic try can be a day away; the
+fill command (below) does not wait.
+
+**What is filled.**
+- Holes after an outage, and values the source stored late. Each cycle asks for everything after the point where the last cycle was
+  answered (the mark, kept in the database, so it survives a restart). After an outage exactly the outage is asked.
+- At most 7 days back (`DCDASH_HISTORY_LOOKBACK_DAYS`) and never further back than two days inside the raw retention. The first time a
+  source is seen, those 7 days are fetched in one catch-up.
+- Only after a point's first reading, meaning its first hour in the hourly rollup. A parent asset counts a meter from that hour on;
+  filling earlier hours would change the past figures of every asset above it.
+- Only mapped points of enabled sources. The automatic fill skips a source that is switched off; when you switch it on again, the next
+  cycle fills the time it was off, within the 7 days.
+
+**What is never filled.**
+- Anything older than the raw retention minus a day (29 days with the default of 30). Older days exist only as rollups, and rewriting a
+  rollup over raw readings that are gone would delete real history. See [Storage](storage.md#filling-older-gaps).
+- Anything before a point's first reading, unless the fill command is told `--before-first-reading` (its dry run then says in plain
+  words that it changes the past figures of the assets above).
+- The frozen figures of a closed month. A fill into a closed month stores the readings, and the month keeps the figures it was closed
+  with; the Billing page of that month says that today's figures differ ([Closing a month](dashboards-and-billing.md#closing-a-month)).
+  The journal gets one `history.closed_month` event per month and cycle.
+- Anything more than five minutes ahead of the platform's clock.
+
+**How politely it asks.** One request at a time per source, at most 30 requests a minute (`DCDASH_HISTORY_RATE`), at most 20,000 rows
+expected in a request (`DCDASH_HISTORY_MAX_ROWS`) and at most 200 addresses. When a request times out, finds the source unreachable or
+is answered "too many requests" (429) or "not available" (503), the platform waits 30 seconds, then 60, then 120, or longer when the
+source asks for longer (`Retry-After`, up to 15 minutes), and tries again. A source that asks for more than 15 minutes ends the cycle
+at once, and the wait it asked for (up to a day) becomes the time of the next try: the platform does not sit through it holding the
+source's lease and a database connection. After three tries the cycle ends and the source is left alone for 4 minutes, then 8, then
+15 minutes, as long as it keeps failing. A connector that breaks on an answer (anything that is not its own error) counts as a bad
+answer, like a malformed one. A source that refuses our credentials is left alone for 15 minutes;
+a source that has no history interface, for a day. Each hour is asked for at most twice: once as it arrives, and once more 3 hours
+later (`DCDASH_HISTORY_REREAD_HOURS`) for values the source stored late. An hour that was answered is not asked again whatever it
+holds. A Historian that stores only on change leaves some hours thin for good; the status counts them as short hours, and asking again
+every cycle would be a flood. A group of points that three tries in a row could not read is set aside and journaled, so one bad
+address cannot hold a whole source for ever.
+
+**A reading already stored is never changed.** The first value of a point at a time wins. Since migration 0016 the database itself
+refuses a second copy of the same point and time ([Upgrading and going back](upgrading.md#migrations-in-order)). A reading that arrives
+again with the same value and quality is counted as already there. One that arrives with another value or another quality is
+differing: the stored value stays, the new one is dropped and counted, and the journal gets a `readings.conflict` warning (one per
+source and 10 minutes, with the counts added up). A re-read of a window the live poll already stored therefore adds nothing, as long as
+the live value carries the source's own time ([Adding a connector](adding-a-connector.md#reading-history)).
+
+**Quality.** Only a good reading counts. Uncertain, substituted, interpolated, bad and unknown quality codes are stored as bad
+quality: kept as evidence, left out of every figure. An uncertain kWh must not reach a bill unseen. If a real Historian marks normal
+data as uncertain, those readings are missing from the figures. Mapping a source's own quality codes is planned, not built; the
+platform does not change what it counts.
+
+**Units and times.**
+- A reading keeps the source's own unit and value. The mapping's scale converts when a figure is computed: W, kW or MW for power, Wh,
+  kWh or MWh for energy. Another metric takes only its base unit (V, A, Hz, kvar, kVA), and a different spelling is refused with a
+  sentence rather than guessed.
+- Times are stored as UTC. A time with an offset is converted. A time without one is accepted only when the tag declares its zone;
+  a local time that does not exist (the clock skipped it) is refused and counted. The repeated hour of the autumn clock change is told
+  apart by order: the first pass, then the second one. When order cannot tell, the reading is refused and counted.
+- An interval value (energy per period) that is stamped at the end of its period moves back by the period, so 23:45 to 24:00 lands in
+  the right hour, day and month.
+- A counter that resets or rolls over is stored as it is. The energy engine reads a decrease as a reset, and the energy between the
+  last value before and the first value after is not counted, as for live readings.
+
+**Power-only meters and thinning.** A meter with no energy counter is estimated from its power samples (samples times the mapping's
+interval), and the energy of an hour of a counter is its last value less the last value before it. A history that is denser than the
+mapping must not add samples to an hour the poll already covers, or the estimate would move (and a counter's last value of the hour
+would move from the poll's last stamp to the history's, shifting energy between hours). So the history of every point is thinned, an
+energy counter as much as any other. A history sample is kept only when no stored good sample of that point lies within one whole
+mapping interval of it, and it is at least 0.9 of an interval after the previous sample kept. So a hole of two intervals or more is
+filled, while a poll that merely drifted (two samples 6 minutes apart on a 5-minute mapping) is not: that would move the estimate of
+an hour the poll already covers. Holes fill at the mapping's density and a covered hour never changes. A sample at a time that is
+already stored is not thinned; it is counted as already there or differing. Samples thinned away are counted as rejected.
+
+**The newest minutes belong to the live poll.** The automatic fill asks up to one mapping interval and a minute before now (the longest
+interval of the source's mapped points), not up to now. The live poll stores its own sample of the newest minutes first, so the fill
+never stores the sample that a poll which drifts by a minute is about to store, and the poll's own copy is not counted as already
+there (which would also skip the update of a live widget). A source whose poll is down is filled one interval and a minute later.
+The second look, 3 hours later, is not held back. A fill by hand asks exactly the range it was given.
+
+**Where to see it.**
+- The Diagnostics report: a `history:` line per source in SOURCE HEALTH, for a source that has run at least one cycle
+  ([Field debugging](field-debugging.md#history-fill)).
+- `GET /api/sources/{id}/history` (permission `sources.view`): `supports_history`, `state` (`never_run`, `idle`, `filling`,
+  `backing_off` or `not_supported`), the two marks (`answered_through`, `reread_through`), the times of the last cycle, the last success
+  and the next try, `short_hours`, the totals since the collector started (`rows_new`, `rows_already`, `rows_differing`,
+  `rows_rejected`, `requests`, `failures`) and the scrubbed `last_error`. An unknown source is a 404; a source that never ran answers
+  `never_run` with empty values.
+- The journal: `history.filled`, `history.failed` (written when trouble begins, then at most every 15 minutes), `history.closed_month`
+  and `readings.conflict`. [Operating the stack](operating.md#background-history-fill) has the settings and the loop.
+
+**Fill a range by hand.** The command runs inside the `api` container and asks the source for one explicit range:
+
+    docker compose exec api python -m dcdash.ingest.backfill --source 3
+    docker compose exec api python -m dcdash.ingest.backfill --source 3 --start 2026-10-14T00:00:00+00:00 --end 2026-10-15T00:00:00+00:00 --yes
+
+Without `--yes` it is a dry run: it prints the windows it would ask and the rows it expects, and it asks nothing and writes nothing.
+With `--yes` it fills, always refreshes the rollups over what it stored, and ends with one line:
+
+    12,480 rows read, 12,000 new, 480 already there, 0 differing, 0 rejected
+
+Without `--start` and `--end` the range is the lookback window. The range must lie inside the raw retention minus a day and must not
+end in the future. The command takes the same per-source lease as the loop, so it refuses while the loop works on that source; it never
+moves the marks, so the loop is not disturbed. A source whose connector cannot read history is told so and nothing is done. More in
+[Field debugging](field-debugging.md#history-fill).
+
+**Decisions that are still the owner's.** Until the owner decides, the safe default is in force.
+- A reading stored twice makes the update to migration 0016 refuse, with nothing removed ([Upgrading and going back](upgrading.md#duplicate-readings)).
+- Only good quality counts.
+- A closed month receives the readings and shows that today's figures differ.
+- Interval energy (energy per period, not a counter) waits for the answer. Such a tag is stored as it comes, and it must not be
+  mapped as an energy counter: the counter maths would read every period as a reset. The meter kind that sums periods is not built.
+
+Measured numbers: see below.
+
+### Measured against the stand-in
+
+Measured in wave w30 against the stand-in with 217 meters (449 tags, one sample a minute), on a machine that was busy with other work
+(the times are about 2 to 4 times worse than an idle machine; the request and row counts do not depend on load):
+
+| Measure | First fill, 6.5 days | Afterwards (default pace) |
+|---|---|---|
+| Requests to the Historian | about 325, all `GET /history`, at most 200 addresses and 20,000 expected rows each | 36 an hour (3 for the new minutes and 3 for the one late-pass hour, every 10 minutes) |
+| Rows received | 4.2 million (about 92 bytes each as JSON, about 390 MB) | about 54,000 an hour (5 MB) |
+| Time | 18 minutes (10 minutes on an idle machine) | a few seconds a cycle |
+| Stored | 4.18 million new readings, 2.5 MB to 508 MB of database (about 121 bytes a reading with both indexes) | almost all "already there", late data as new rows |
+| Collector | CPU at most 49 percent, memory 115 MB | idle between cycles |
+
+A Historian that answers 503 to every fifth request and 429 above 2 requests a second still finished its 24-hour range (10 minutes,
+12 and 10 failed requests, all retried after their back-off, none lost, no storm). A restart of the collector in the middle of a fill
+resumes from the saved mark: 77 more requests after the restart instead of about 125 from the start. The live poll of a second source
+(every 5 seconds) was delayed by at most 0.5 seconds during the fill. A 2,000-meter run was not made; the numbers scale with the number of addresses (about 10 times the
+requests and rows of the 217-meter case).
 
 Related: [Assets and kinds](assets-and-kinds.md), [Storage](storage.md), [Install and run](install-and-run.md), [Field debugging](field-debugging.md), [Adding a connector](adding-a-connector.md)

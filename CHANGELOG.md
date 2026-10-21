@@ -4,7 +4,7 @@ What each release (a merged wave) changed, newest first. Each section is headed 
 
 A release that needs an upgrade note carries it as a `###` entry: the schema revision it leads to when there is a migration, what
 changes and what you will notice, the pre-checks to run before it, how to verify it, whether its downgrade is lossless (which decides
-whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 11 releases on this page
+whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 12 releases on this page
 have such an entry (4 of them have no migration) and the archive has 10 more. The other releases need nothing beyond the usual steps of
 [Upgrading and going back](docs/upgrading.md); they have one or two lines here. The releases up to W7j (2026-10-13) are in the
 [changelog archive](docs/changelog-archive.md), with migrations 0004 to 0008; Phase 1A, Phase 1C and Phase 2 brought migrations 0001
@@ -15,6 +15,20 @@ this page; for a version older than W9a, first in the [changelog archive](docs/c
 heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
+
+## w30 (2026-10-21, MERGEHASH)
+
+The data-path foundation, part 1 (backend only; the Sources page part is w31). Migration `0016`, no new permission, no changed figure. The database now refuses a reading it already has (a unique key on `readings`), and every writer of readings goes through one function: the first stored value wins, a re-send is counted and journaled, nothing is overwritten. Connectors can answer "the values between 10:00 and 14:00" (`read_history`, read-only); the simulator image gains a stand-in Historian (port 9100, dev profile). The collector fills holes left by an outage or late data from a Historian's history, one request at a time; it does nothing for a real source type until one supports history (none does yet). `GET /api/sources/{id}/history`, a `history:` line in the report and `python -m dcdash.ingest.backfill` show and drive it. Against the stand-in, 217 meters and 6.5 days fill in 18 minutes under load, then 36 requests an hour.
+
+### Upgrading to w30 (migration 0016)
+
+Schema `0015` to `0016`. Downgrade: **lossless** (it builds the plain index again and drops the unique key and the new table `history_status`, which holds only derived progress). The code to go back to is `de67feb` (the main before w30). Migration `0016` counts the readings stored more than once, and refuses, before it changes anything, if there are any; otherwise it builds the unique key and creates `history_status`, empty.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4: `docker compose up -d --build`. The first start takes seconds (4.2 s on a copy with 4.3 million readings; about 20 s is expected on 1.6 GB). Do not stop it.
+3. **If it refuses** ("migration 0016 was stopped before it changed anything ..."): `docker compose stop api` and follow [Duplicate readings](docs/upgrading.md#duplicate-readings).
+4. **Verify.** `docker compose exec api alembic current` prints `0016 (head)`.
+5. **Going back.** Follow [Upgrading and going back](docs/upgrading.md) with `<previous>` = `0015` and `<old commit>` = `de67feb`.
 
 ## w29 (2026-10-21, 5380bbe)
 
