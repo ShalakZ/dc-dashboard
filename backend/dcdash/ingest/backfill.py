@@ -5,7 +5,9 @@ politely. A loop in the collector runs `Backfill.run_all` every DCDASH_HISTORY_E
 What a cycle does for one source (the one that holds its lease):
 - two marks in `history_status` say how far it got: the FRONTIER `answered_through` (everything before it was asked once) and the LATE
   PASS `reread_through` (everything before it was asked a second time, once it was `reread_hours` old, for values the source stored
-  late). So an hour is asked at most twice. The window is [max(frontier, lookback start), now]; the first run starts at the lookback.
+  late). So an hour is asked at most twice. The window is [max(frontier, lookback start), the cap]; the first run starts at the
+  lookback, and the cap is `now` less the longest mapping interval of the source and a minute, so that the live poll stores its own
+  sample of the newest minutes before the history around it is asked.
 - the window is cut into ascending slices of whole UTC hours (at most six), each slice into batches of addresses small enough for one
   request (at most 200 addresses and `max_rows` expected rows), one request in flight, at most `rate` a minute. A slice's frontier
   mark is saved once every batch of it was answered (or set aside), and then its rollups are refreshed, so an interrupted fill keeps
@@ -200,9 +202,11 @@ class _Run:
     unknown: set[str] = field(default_factory=set)  # addresses the source said it does not have: still asked for at every cycle (a
     # mapping may be fixed on the source's side), told once a day, and never a reason to hold a mark
     by_address: dict[str, Mapped] = field(init=False)
+    newest_from: datetime = field(init=False)  # a window that reaches this instant is in the "newest part" (see `_pages`); `now` unless a cycle caps its frontier
 
     def __post_init__(self) -> None:
         self.by_address = {m.address: m for m in self.points}
+        self.newest_from = self.now
 
 
 def _utcnow() -> datetime:
@@ -559,9 +563,16 @@ class Backfill:
             # `reread_hours` ago, whichever is later, is owed one once it is old enough. (After the run it would be too late: a halted
             # run would leave the mark empty and its next cycle would have to guess, and re-ask a stretch of the lookback.)
             await self._save(sid, "reread_through", max(now - reread_after, start))
+        # The frontier stops one mapping interval and a minute short of now: the live poll stores its own sample first. A history sample
+        # stored ahead of the poll would be a second sample the drifting poll then lands next to (an hour that gains a sample moves a
+        # power-only figure by up to 9 percent), and the poll's own copy of it would count as "already there", so a widget would not be
+        # told. The price: a source whose poll is down is filled one interval (and a minute) later.
+        ahead = now - (timedelta(seconds=max(m.interval for m in run.points)) + rollups.MINUTE)
         through = start
-        if start < now:
-            through = await self._window(run, start, now, self._saver(sid, "answered_through"))
+        if start < ahead:
+            run.newest_from = ahead
+            through = await self._window(run, start, ahead, self._saver(sid, "answered_through"))
+            run.newest_from = now  # the late pass is not held back: it looks at hours the poll stored long ago
         result.through = through
         if through > start:
             result.short_hours = await self._short_hours(run, start, through)
@@ -737,7 +748,7 @@ class Backfill:
                 return hi
             # A page that holds as many rows as were asked for was cut at the limit: the source has more, so the rest is asked right away.
             cut = len(page.values) + page.rejected >= limit
-            newest = hi >= run.now
+            newest = hi >= run.newest_from
             if newest and not cut and (hi - until <= SKEW or (not run.strict and (not (page.values or page.rejected) or until <= start))):
                 # The newest part of the window: a source whose clock is behind ours (a historian that buffers is often a quarter of
                 # an hour behind) is complete only up to its own "now", which is no failure and no cut. Its answer to a request
