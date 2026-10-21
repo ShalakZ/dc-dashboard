@@ -4,6 +4,7 @@ Database tests; the engine is driven with a factory that hands out `SimulatorCon
 plain simulator app, which keeps no history) through `httpx.ASGITransport`, with one fake clock shared by the stand-in and the engine
 and a fake `sleep` that only records, so no test waits."""
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -797,6 +798,47 @@ async def test_an_answer_the_connector_chokes_on_is_struck_like_a_protocol_error
     assert world.sleeper.waits == [30.0, 60.0, 120.0] * 3
     assert (await world.status())["answered_through"] == FRONT
     assert [event["code"] for event in await world.events(HISTORY_FAILED)] == ["protocol_error", "set_aside"]
+
+
+@pytest.mark.parametrize(
+    "failure, status",
+    [
+        (ConnectionResetError("the connection dropped"), "unreachable"),
+        (OSError("no route to host"), "unreachable"),
+        (TimeoutError("timed out"), "timeout"),
+    ],
+)
+async def test_a_transport_error_a_connector_lets_escape_is_transient_never_struck_and_its_batch_is_never_set_aside(db, failure, status):
+    # A dropped connection is the source being away, not a bad answer: however many cycles it lasts, the mark holds and no batch is skipped.
+    async def dropping(call, number):
+        raise failure
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR}, script=dropping)
+    marks = []
+    for _ in range(4):
+        result = await world.cycle()
+        assert (result.state, result.set_aside) == ("backing_off", 0) and result.reason.startswith(f"{status}: ")
+        assert world.engine._strikes == {}
+        marks.append((await world.status())["answered_through"])
+        await db.execute("UPDATE history_status SET next_try_at = NULL WHERE source_id = $1", world.source)
+    assert marks == [None] * 4
+    assert [event["code"] for event in await world.events(HISTORY_FAILED)] == [status]  # told once, never "set_aside"
+
+
+async def test_any_other_exception_is_logged_with_its_traceback_once_and_is_still_a_strike(db, caplog):
+    async def choking(call, number):
+        raise ValueError("a bug of ours")
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR}, script=choking)
+    with caplog.at_level(logging.WARNING, logger=engine_module.log.name):
+        for _ in range(2):
+            assert (await world.cycle()).reason == "protocol_error: ValueError: a bug of ours"
+            await db.execute("UPDATE history_status SET next_try_at = NULL WHERE source_id = $1", world.source)
+        result = await world.cycle()
+    assert (result.state, result.set_aside) == ("idle", 1)  # struck three cycles in a row: given up
+    traces = [record for record in caplog.records if record.exc_info]
+    assert len(traces) == 1 and traces[0].exc_info[0] is ValueError  # 12 attempts, one traceback (per source and quarter hour)
+    assert str(world.source) in traces[0].getMessage()
 
 
 async def test_a_cancelled_request_is_not_a_failure_of_the_source(db):

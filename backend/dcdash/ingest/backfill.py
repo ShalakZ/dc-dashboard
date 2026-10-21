@@ -335,18 +335,30 @@ _FINISH = """
 
 
 async def _read_history(
-    connector: Connector, addresses: list[str], lo: datetime, hi: datetime, after: dict[str, datetime], limit: int
+    connector: Connector, addresses: list[str], lo: datetime, hi: datetime, after: dict[str, datetime], limit: int, source_id: int
 ) -> HistoryPage:
-    """`read_history`, but whatever a connector raises that is not its own `ConnectorError` counts as a protocol error. A connector
-    that breaks on an answer it has no rule for has not answered: the batch is struck and set aside after three cycles like any
-    other bad answer, instead of an exception that ends every cycle with no strike and pins the whole source for ever. (A stop,
-    `CancelledError`, is no `Exception` and passes through.)"""
+    """`read_history`, but whatever a connector raises that is not its own `ConnectorError` is mapped to one. A timeout and a
+    transport error (`OSError`, which `ConnectionError` is a kind of) are the source being away: transient, never struck, the batch
+    is asked again like after any other outage. Anything else is a connector that broke on an answer it has no rule for (or a bug of
+    ours): it has not answered, so the batch is struck and set aside after three cycles like any other bad answer, instead of an
+    exception that ends every cycle with no strike and pins the whole source for ever; the traceback is logged (once a quarter hour
+    per source), because the text kept in the status is only the one line. (A stop, `CancelledError`, is no `Exception` and passes
+    through.)"""
     try:
         return await connector.read_history(addresses, lo, hi, after=after, limit=limit)
     except ConnectorError:
         raise
     except Exception as exc:
-        raise ConnectorError("protocol_error", f"{type(exc).__name__}: {clip_error(str(exc), 200)}") from exc
+        text = f"{type(exc).__name__}: {clip_error(str(exc), 200)}"
+        if isinstance(exc, TimeoutError):  # before OSError, which it is a kind of
+            raise ConnectorError("timeout", text) from exc
+        if isinstance(exc, OSError):
+            raise ConnectorError("unreachable", text) from exc
+        if journal.allow(("history-read-raised", source_id), FAILED_REPEAT_SECONDS):
+            log.exception(
+                "the connector of source %s raised %s instead of a ConnectorError; counted as a protocol error", source_id, type(exc).__name__
+            )
+        raise ConnectorError("protocol_error", text) from exc
 
 
 def _copy_counts(source: Tally, target: Tally) -> None:
@@ -836,7 +848,7 @@ class Backfill:
             await self._paces[sid].wait()
             run.tally.requests += 1
             try:
-                return await _read_history(run.connector, addresses, lo, hi, after, limit)
+                return await _read_history(run.connector, addresses, lo, hi, after, limit, sid)
             except ConnectorError as exc:
                 run.tally.failures += 1
                 if exc.status == "auth_failed":
