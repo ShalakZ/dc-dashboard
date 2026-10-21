@@ -63,7 +63,7 @@ AUTH_WAIT_SECONDS = 900.0
 NOT_SUPPORTED_WAIT_SECONDS = 86_400.0
 FAILED_REPEAT_SECONDS = 900  # history.failed is repeated at most this often while a failure lasts
 STRIKES = 3  # failed tries of one batch before it is set aside
-COVERED = 1.0  # a stored good sample this close (in mapping intervals) already covers a sample: a full interval, because the live poll drifts
+COVERED = 1.0  # a stored good sample STRICTLY closer than this (in mapping intervals) already covers a sample: a full interval, because the live poll drifts
 SPACING = 0.9  # kept samples are at least this far apart (in mapping intervals): holes fill at the mapping's density
 SKEW = normalise.SKEW  # how far a source's idea of "now" may lag ours before a short answer counts as a cut
 NO_HISTORY = "this source cannot read history, so nothing is filled"
@@ -220,11 +220,14 @@ def thin(
 
     A power-only estimate counts samples times the mapping's interval, so a history that is denser than the mapping must not thicken
     an hour the engine already counts, and a hole must fill at the mapping's density and no denser. A sample is therefore dropped when
-    a good stored sample lies within one full interval of it (so a live poll that drifted, with two stamps six minutes apart on a
-    five-minute mapping, gets nothing added and its hour keeps its figure: only a hole of more than two intervals is filled), or when
-    the last good sample KEPT is less than 0.9 intervals before it (a bad sample is held to the last bad one kept instead: it covers
-    nothing). A sample at a time that is already stored is passed on unchanged: the store counts it as already there (or differing),
-    it never becomes a second row. So does the second copy of a sample an answer sent twice."""
+    a good stored sample lies STRICTLY less than one full interval from it (so a live poll that drifted, with two stamps six minutes
+    apart on a five-minute mapping, gets nothing added and its hour keeps its figure), or when the last good sample KEPT is less than
+    0.9 intervals before it (a bad sample is held to the last bad one kept instead: it covers nothing). A stored sample exactly one
+    interval away does not cover: the history's samples are the live poll's twins on the source's grid, so an aligned hole of G
+    intervals misses G - 1 of them, and its first and last one lie exactly one interval from a stored sample and must be filled too.
+    So a gap of two intervals or more is filled, and nothing is added where the poll only drifted. A sample at a time that is already
+    stored is passed on unchanged: the store counts it as already there (or differing), it never becomes a second row. So does the
+    second copy of a sample an answer sent twice."""
     cover = timedelta(seconds=interval * COVERED)
     spacing = timedelta(seconds=interval * SPACING)
     kept: list[PointValue] = []
@@ -235,7 +238,7 @@ def thin(
             kept.append(sample)
             continue
         at = bisect.bisect_left(stored_good, sample.ts)
-        near = (at < len(stored_good) and stored_good[at] - sample.ts <= cover) or (at > 0 and sample.ts - stored_good[at - 1] <= cover)
+        near = (at < len(stored_good) and stored_good[at] - sample.ts < cover) or (at > 0 and sample.ts - stored_good[at - 1] < cover)
         good = sample.quality == GOOD and sample.value is not None
         if near or (last_good is not None and sample.ts - last_good < spacing) or (
             not good and last_bad is not None and sample.ts - last_bad < spacing
