@@ -2,6 +2,7 @@ import asyncio
 import json
 import math
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -49,6 +50,12 @@ async def _events(db) -> list:
 
 async def _event_count(db) -> int:
     return len(await _events(db))
+
+
+async def _two_are_waiting(db) -> bool:
+    """True when two sessions are stopped on another transaction's uncommitted row (the insert of a pair waits for the
+    transaction that inserted it)."""
+    return await db.fetchval("SELECT count(DISTINCT pid) >= 2 FROM pg_locks WHERE NOT granted AND locktype = 'transactionid'")
 
 
 async def _latest(db, point) -> tuple:
@@ -173,6 +180,42 @@ async def test_a_naive_time_is_read_as_utc(db):
     assert await _latest(db, a) == (T0, 1.0, 0)
 
 
+async def test_every_time_zone_is_converted_to_utc_before_the_pairs_are_compared(db, database_url):
+    # In Berlin the clocks go back on 2026-10-25, so 02:30 happens twice, an hour apart. Python compares two times that carry
+    # the same tzinfo by their wall clock and ignores `fold`: left in Berlin time they would be one pair, and one reading lost.
+    (a,) = await _points(db)
+    berlin = ZoneInfo("Europe/Berlin")
+    summer = datetime(2026, 10, 25, 2, 30, tzinfo=berlin)  # 00:30 UTC
+    winter = summer.replace(fold=1)  # 01:30 UTC
+    early, late = datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc), datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc)
+    rows = [(a, winter, 2.0, 0), (a, summer, 1.0, 0)]  # the later instant first: the order of the batch decides nothing
+    async with listening(database_url, LATEST_CHANNEL) as received:
+        result = await _store(db, rows, notify=True)
+        payload = json.loads(await asyncio.wait_for(received.get(), 5))
+    assert (result.new, result.already, result.differing) == (2, 0, 0)
+    assert (result.first_new, result.last_new) == (early, late)
+    assert result.newest_new == {a: (a, late, 2.0, 0)}
+    stored = await db.fetch("SELECT ts, value FROM readings WHERE point_id = $1 ORDER BY ts", a)
+    assert [(r["ts"], r["value"]) for r in stored] == [(early, 1.0), (late, 2.0)]
+    assert await _latest(db, a) == (late, 2.0, 0)
+    assert payload == [[a, late.timestamp(), 2.0, 0]]
+    again = await _store(db, rows)  # the same two readings sent again are both stored already
+    assert (again.new, again.already, again.differing) == (0, 2, 0)
+
+
+async def test_a_new_row_with_the_time_of_the_latest_does_not_replace_it_or_notify(db, database_url):
+    # The strict `<` of the point_latest upsert. Only a NEW row reaches it, and a new row can share the time of the latest when
+    # the stored row is gone (retention) while point_latest still holds the value it had: the first value stays.
+    (a,) = await _points(db)
+    await db.execute("INSERT INTO point_latest (point_id, ts, value, quality) VALUES ($1, $2, 5.0, 0)", a, at(0))
+    async with listening(database_url, LATEST_CHANNEL) as received:
+        result = await _store(db, [(a, at(0), 9.0, 0)], notify=True)
+        await _quiet(db, received)
+    assert result.new == 1  # the reading is history, stored as such
+    assert await db.fetchval("SELECT value FROM readings WHERE point_id = $1", a) == 9.0
+    assert await _latest(db, a) == (at(0), 5.0, 0)
+
+
 async def test_a_point_removed_while_its_readings_were_buffered_keeps_the_readings_and_no_latest(db, database_url):
     (a,) = await _points(db)
     gone = a + 1000
@@ -206,6 +249,8 @@ async def test_a_resend_into_a_compressed_chunk_is_already_stored(db):
 async def test_overlapping_batches_in_opposite_orders_finish_without_a_deadlock(db):
     points = await _points(db, 30)
     shared = points[9:21]
+    await _store(db, [(points[0], at(-3600), 0.0, 0)])  # the chunk is made now: made inside the blocker's open transaction, it
+    # would stop both writers at the chunk, before any row where the lock order matters
     for turn in range(3):
         base = at(turn * 3600)
         grid = [(p, base + timedelta(seconds=s), float(s), 0) for p in points for s in range(20)]
@@ -213,19 +258,32 @@ async def test_overlapping_batches_in_opposite_orders_finish_without_a_deadlock(
         # and one reversed, and each adds its own newest row for the shared points, so point_latest is contended too.
         first = grid[:420] + [(p, base + timedelta(seconds=101), 1.0, 0) for p in shared]
         second = list(reversed(grid[180:])) + [(p, base + timedelta(seconds=100), 2.0, 0) for p in reversed(shared)]
-        barrier = asyncio.Barrier(2)
+        # One shared pair, in the middle of the sort order, is held by a third transaction that has not committed. Both writers
+        # run into it and wait there, so they are in flight at the same time and each holds the pairs it passed on the way:
+        # written in opposite orders, they would wait for each other for ever. The wait is polled, never assumed.
+        held = (points[15], base + timedelta(seconds=10), 10.0, 0)
+        assert held in first and held in second
 
         async def run(rows):
-            async with db.acquire() as conn:
-                await barrier.wait()  # both statements start together; never wait between a statement and its commit
-                async with conn.transaction():
-                    return await insert_readings(conn, rows, notify=True)
+            async with db.acquire() as conn, conn.transaction():
+                return await insert_readings(conn, rows, notify=True)
 
-        one, two = await asyncio.wait_for(asyncio.gather(run(first), run(second)), 60)
+        writers: list[asyncio.Task] = []
+        try:
+            async with db.acquire() as blocker:
+                async with blocker.transaction():
+                    await blocker.execute("INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)", *held)
+                    writers = [asyncio.create_task(run(first)), asyncio.create_task(run(second))]
+                    await wait_for(lambda: _two_are_waiting(db), True)
+            one, two = await asyncio.wait_for(asyncio.gather(*writers), 60)
+        finally:
+            for task in writers:
+                task.cancel()
+            await asyncio.gather(*writers, return_exceptions=True)
         distinct = len({(r[0], r[1]) for r in first + second})
         overlap = len({(r[0], r[1]) for r in first} & {(r[0], r[1]) for r in second})
-        assert one.new + two.new == distinct
-        assert one.already + two.already == overlap
+        assert one.new + two.new == distinct - 1  # all but the pair the third transaction stored
+        assert one.already + two.already == overlap + 1  # a shared pair is new to one writer; the held one is already stored to both
         assert one.differing == two.differing == 0
         assert await db.fetchval("SELECT count(*) FROM readings WHERE ts >= $1 AND ts < $2", base, base + timedelta(hours=1)) == distinct
         for p in shared:  # whichever batch came second, the newest row wins
@@ -283,6 +341,45 @@ async def test_a_hundred_conflicting_flushes_make_one_event_and_the_counts_add_u
     assert second["detail"]["differing"] == 100 and second["detail"]["flushes"] == 100
     assert first["detail"]["differing"] + second["detail"]["differing"] == 101  # as many as were sent
     assert second["message"] == "100 readings were sent again with a different value; the stored values were kept"
+
+
+class _CountingPool:
+    """The real pool, counting the source lookups of journal_conflicts (the only fetchval it makes)."""
+
+    def __init__(self, pool):
+        self._pool = pool
+        self.lookups = 0
+
+    async def fetchval(self, *args, **kwargs):
+        self.lookups += 1
+        return await self._pool.fetchval(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._pool, name)
+
+
+async def test_a_conflict_the_gate_holds_back_costs_no_source_lookup_and_its_counts_are_kept(db, monkeypatch):
+    source = await make_source(db, "origin")
+    p = await make_point(db, source, "A")
+    await _store(db, [(p, at(0), 1.0, 0)])
+    result = await _store(db, [(p, at(0), 2.0, 0)])
+    pool = _CountingPool(db)
+
+    await journal_conflicts(pool, result)  # the first one is let through: its source is looked up
+    await wait_for(lambda: _event_count(db), 1)
+    assert pool.lookups == 1
+    for _ in range(10):
+        await journal_conflicts(pool, result)  # the point's source is known now: held back without a query
+    assert pool.lookups == 1
+
+    now = journal._clock()
+    monkeypatch.setattr(journal, "_clock", lambda: now + store.CONFLICT_REPEAT_SECONDS + 1)
+    await journal_conflicts(pool, result)
+    await wait_for(lambda: _event_count(db), 2)
+    second = (await _events(db))[1]
+    assert second["source_id"] == source
+    assert (second["detail"]["flushes"], second["detail"]["differing"]) == (11, 11)  # the ten held back and this one
+    assert pool.lookups == 1
 
 
 async def test_each_source_has_its_own_event(db):

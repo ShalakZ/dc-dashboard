@@ -118,8 +118,11 @@ async def insert_readings(conn: asyncpg.Connection, rows: Sequence[Row], *, noti
     unique: dict[tuple[int, datetime], Row] = {}
     for row in rows:
         row = finite_or_bad(row)
-        if row[1].tzinfo is None:  # a naive time is read as UTC, as everything stored is; the set lookups below need it aware
-            row = (row[0], row[1].replace(tzinfo=UTC), row[2], row[3])
+        # Every time becomes UTC (a naive one is read as UTC, as everything stored is). A time left in a zone with daylight
+        # saving breaks the lookups below: two instants an hour apart in the repeated hour of the clock change compare equal
+        # to each other and unequal to the UTC times the database returns.
+        ts = row[1].replace(tzinfo=UTC) if row[1].tzinfo is None else row[1].astimezone(UTC)
+        row = (row[0], ts, row[2], row[3])
         unique.setdefault((row[0], row[1]), row)  # the first occurrence of a pair wins
     if not unique:
         return WriteResult()
@@ -164,21 +167,34 @@ class _Tally:
 
 
 _held: dict[int | None, _Tally] = {}  # per source
+# A point never changes its source, so a source that conflicts on every flush costs one lookup, not one per flush: the gate below
+# needs the source to be keyed by it, and a flush the gate holds back must not cost a query. Only a found source is kept.
+_source_of_point: dict[int, int] = {}
+SOURCES_KEPT = 5_000
 
 
 def forget_conflicts() -> None:
     """Drop the counts held back for the next event (for tests: the journal's own gates are reset the same way)."""
     _held.clear()
+    _source_of_point.clear()
 
 
 async def _source_of(pool: asyncpg.Pool, samples: Sequence[dict]) -> int | None:
     if not samples:
         return None
+    point_id = samples[0]["point_id"]
+    if point_id in _source_of_point:
+        return _source_of_point[point_id]
     try:
         async with asyncio.timeout(journal.WRITE_TIMEOUT_SECONDS):
-            return await pool.fetchval("SELECT source_id FROM points WHERE id = $1", samples[0]["point_id"])
+            source_id = await pool.fetchval("SELECT source_id FROM points WHERE id = $1", point_id)
     except Exception:
         return None
+    if source_id is not None:
+        if len(_source_of_point) >= SOURCES_KEPT:
+            _source_of_point.clear()
+        _source_of_point[point_id] = source_id
+    return source_id
 
 
 async def journal_conflicts(pool: asyncpg.Pool, result: WriteResult, source_id: int | None = None) -> None:

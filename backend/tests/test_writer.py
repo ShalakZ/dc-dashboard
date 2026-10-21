@@ -12,6 +12,7 @@ from dcdash.core import journal
 from dcdash.core.pg import LATEST_CHANNEL, create_pool
 from dcdash.ingest import store
 from dcdash.ingest.kinds import READINGS_CONFLICT
+from dcdash.seed import history
 from helpers import listening, make_point, make_source, wait_for
 
 T0 = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
@@ -27,6 +28,12 @@ def _conflict_state():
 
 async def _point(db) -> int:
     return await make_point(db, await make_source(db), "LVP01_kW")
+
+
+async def _two_are_waiting(db) -> bool:
+    """True when two sessions are stopped on another transaction's uncommitted row (the insert of a pair waits for the
+    transaction that inserted it)."""
+    return await db.fetchval("SELECT count(DISTINCT pid) >= 2 FROM pg_locks WHERE NOT granted AND locktype = 'transactionid'")
 
 
 async def test_flush_writes_readings_and_latest(db):
@@ -244,6 +251,18 @@ async def test_a_writer_that_does_not_notify_still_sets_the_latest(db, database_
     assert await db.fetchval("SELECT value FROM point_latest WHERE point_id = $1", point) == 10.0
 
 
+async def test_the_seeders_write_path_sends_no_notification(db, database_url):
+    # write_batches builds its Writer itself: it must pass notify=False, or a backfilled value would reach a live widget
+    point = await _point(db)
+    rows = [(point, T0 + timedelta(seconds=i), float(i), 0) for i in range(3)]
+    async with listening(database_url, LATEST_CHANNEL) as received:
+        assert await history.write_batches(db, [(T0.date(), rows)]) == 3
+        await db.execute("SELECT pg_notify($1, 'marker')", LATEST_CHANNEL)
+        assert await asyncio.wait_for(received.get(), 5) == "marker"
+    assert await db.fetchval("SELECT count(*) FROM readings") == 3
+    assert await db.fetchval("SELECT value FROM point_latest WHERE point_id = $1", point) == 2.0  # the latest still follows
+
+
 async def test_a_deadlock_is_an_exception_and_the_rows_are_kept(db, monkeypatch):
     point = await _point(db)
     real = writer_module.insert_readings
@@ -272,14 +291,28 @@ async def test_two_writers_with_overlapping_batches_in_opposite_orders_both_fini
     one, two = Writer(db), Writer(db)
     one.add(first)
     two.add(second)
-    barrier = asyncio.Barrier(2)
+    # The chunk is made now: made inside the blocker's open transaction, it would stop both writers at the chunk, before any
+    # row where the lock order matters.
+    await db.execute("INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, 0, 0)", points[0], T0 - timedelta(hours=1))
+    # One shared pair, in the middle of the sort order, is held by a third transaction that has not committed. Both writers run
+    # into it and wait there, so they are in flight at the same time and each holds the pairs it passed on the way: written in
+    # opposite orders, they would wait for each other for ever (a Writer swallows the deadlock, so `handled` would show it).
+    held = (points[10], T0 + timedelta(seconds=10), 10.0, 0)
+    assert held in first and held in second
 
-    async def flush(writer):
-        await barrier.wait()
-        return await writer.flush()
-
-    handled = await asyncio.wait_for(asyncio.gather(flush(one), flush(two)), 60)
+    flushes: list[asyncio.Task] = []
+    try:
+        async with db.acquire() as blocker:
+            async with blocker.transaction():
+                await blocker.execute("INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)", *held)
+                flushes = [asyncio.create_task(one.flush()), asyncio.create_task(two.flush())]
+                await wait_for(lambda: _two_are_waiting(db), True)
+        handled = await asyncio.wait_for(asyncio.gather(*flushes), 60)
+    finally:
+        for task in flushes:
+            task.cancel()
+        await asyncio.gather(*flushes, return_exceptions=True)
     assert handled == [len(first), len(second)]
     assert one.pending == two.pending == 0
-    assert await db.fetchval("SELECT count(*) FROM readings") == 20 * 20 + 10 * 2
+    assert await db.fetchval("SELECT count(*) FROM readings") == 20 * 20 + 10 * 2 + 1  # the grid, the newest rows, the chunk's row
     assert await db.fetchval("SELECT ts FROM point_latest WHERE point_id = $1", points[7]) == T0 + timedelta(seconds=61)
