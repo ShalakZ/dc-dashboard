@@ -671,14 +671,33 @@ async def test_a_one_minute_grid_mapped_at_five_minutes_leaves_covered_hours_alo
     new = [row["ts"] for row in await world.stored("MISMATCH_kW")][polled - polled:]  # all rows, sorted
     added = [ts for ts in new if last_before < ts < next_after]
     assert len(new) == polled + result.new and result.new == len(added)  # nothing was added outside the hole
-    # one sample 180 s after the last stored one (the first minute that is further than half an interval), then one about every 5 minutes
-    assert added[0] == last_before + 3 * MINUTE and {b - a for a, b in zip(added, added[1:])} == {5 * MINUTE}
-    assert added[-1] == next_after - 7 * MINUTE and len(added) == 36  # 185 minutes between the stored rows: 12 an hour
+    # one sample 6 minutes after the last stored one (the first minute that is further than a full interval), then one every 5 minutes
+    assert added[0] == last_before + 6 * MINUTE and {b - a for a, b in zip(added, added[1:])} == {5 * MINUTE}
+    assert added[-1] == next_after - 9 * MINUTE and len(added) == 35  # 185 minutes between the stored rows, 12 an hour
     await settle_rollups(db)
     after = await figure(asset, NOW - 9 * HOUR, NOW)
     for hour in (NOW - 9 * HOUR, NOW - 8 * HOUR, NOW - 2 * HOUR, NOW - HOUR):  # hours that were wholly covered
         assert after[hour] == first_hours[hour], hour
     assert all(after[NOW - 6 * HOUR + k * HOUR].kwh > 0 for k in range(3))  # the hole now has energy in it
+
+
+async def test_a_live_poll_that_drifted_a_minute_keeps_its_hour_and_its_power_only_figure_byte_for_byte(db):
+    world = await make_world(db, {"MISMATCH_kW": ("active_power_kw", 300)}, {"MISMATCH_kW": None})
+    # a stamp every five minutes, but for one pair six minutes apart (the collector sleeps the interval AFTER each read, so the poll
+    # drifts and now and then crosses a minute of the source's grid)
+    await poll_live(world, ["MISMATCH_kW"], NOW - 3 * HOUR, NOW - 2 * HOUR, 5 * MINUTE)
+    await poll_live(world, ["MISMATCH_kW"], NOW - 2 * HOUR + 6 * MINUTE, NOW, 5 * MINUTE)
+    before = await world.stored("MISMATCH_kW")
+    assert len(before) == 13 + 23  # the hour of the drift has eleven samples, not twelve
+    await settle_rollups(db)
+    power = await figure(world.assets["MISMATCH_kW"], NOW - 3 * HOUR, NOW)
+    assert power[NOW - 2 * HOUR].kwh > 0
+
+    result = await world.cycle()
+    assert (result.state, result.new) == ("idle", 0) and result.thinned > 100  # the stand-in has a sample every minute: all of them covered
+    assert await world.stored("MISMATCH_kW") == before  # not even the sample half way between the drifted pair
+    await settle_rollups(db)
+    assert await figure(world.assets["MISMATCH_kW"], NOW - 3 * HOUR, NOW) == power  # the figure is the same, not 9 % higher for that hour
 
 
 async def test_a_value_the_source_sends_again_with_a_different_value_is_counted_and_changes_nothing(db):
@@ -902,8 +921,8 @@ async def test_a_fill_into_an_open_month_makes_billing_equal_a_cold_computation_
     assert before["closed"] is None and gap_hours(check_before, asset) == 3
 
     report = await world.engine.fill_range(world.source, hole[0] - HOUR, hole[1] + HOUR, dry_run=False, yes=True)
-    assert (report.new, report.differing, report.rejected) == (180, 0, 0)
-    assert report.text == f"{report.read} rows read, 180 new, {report.already} already there, 0 differing, 0 rejected"
+    assert (report.new, report.differing, report.rejected) == (178, 0, 2)  # the hole's first and last minute are one interval from a stored sample: covered
+    assert report.text == f"{report.read} rows read, 178 new, {report.already} already there, 0 differing, 2 rejected"
 
     after, check_after = await get_json(client, COSTS, "2026-03"), await get_json(client, CHECK, "2026-03")
     assert after != before  # the hole has energy in it now
@@ -928,7 +947,7 @@ async def test_a_fill_into_a_closed_month_leaves_its_frozen_figures_alone_and_te
     assert before["closed"] is not None and before["live"]["differs"] is False
 
     report = await world.engine.fill_range(world.source, hole[0] - HOUR, hole[1] + HOUR, dry_run=False, yes=True)
-    assert report.new == 180
+    assert report.new == 178  # 180 minutes in the hole, less its first and last (one interval from a stored sample)
 
     after = await get_json(client, COSTS, "2026-03")
     assert {k: v for k, v in after.items() if k != "live"} == {k: v for k, v in before.items() if k != "live"}  # the bill did not move
@@ -937,7 +956,7 @@ async def test_a_fill_into_a_closed_month_leaves_its_frozen_figures_alone_and_te
     [closed] = await world.events(HISTORY_CLOSED_MONTH)
     assert (closed["level"], closed["source_id"], closed["detail"]["month"]) == ("info", world.source, "2026-03")
     [filled] = await world.events(HISTORY_FILLED)
-    assert filled["detail"]["new"] == 180 and filled["detail"]["by_command"] is True
+    assert filled["detail"]["new"] == 178 and filled["detail"]["by_command"] is True
     check = await get_json(client, CHECK, "2026-03")
     assert gap_hours(check, world.assets["M001_kW"]) is None
     assert (await world.status()) is None  # a fill moves no mark and makes no status row
@@ -1047,8 +1066,21 @@ def test_thinning_drops_what_a_stored_sample_covers_and_passes_what_is_already_s
     assert [row.ts for row in kept] == [NOW, NOW + 5 * MINUTE] and dropped == 4  # the two twins go to the store, which counts them
     kept, dropped = thin([sample(2.5), sample(2.6)], 300, {NOW, NOW + 5 * MINUTE}, [NOW, NOW + 5 * MINUTE])  # 150 s from a stored one is covered
     assert (kept, dropped) == ([], 2)
-    kept, _ = thin([sample(2.6)], 300, {NOW}, [NOW])  # 156 s from the only stored sample: further than half an interval, so it fills
+    kept, dropped = thin([sample(2.6)], 300, {NOW}, [NOW])  # 156 s from the only stored sample: a full interval covers, not half of one
+    assert (kept, dropped) == ([], 1)
+    assert thin([sample(5)], 300, {NOW}, [NOW])[0] == []  # exactly one interval away is still covered ...
+    assert len(thin([sample(5.1)], 300, {NOW}, [NOW])[0]) == 1  # ... and 306 s is further than that: it fills
+    kept, _ = thin([sample(1)], 300, {NOW}, [])  # a stored sample that is not good covers nothing
     assert len(kept) == 1
+
+
+def test_a_live_poll_that_drifted_a_minute_is_not_filled_in_but_a_hole_of_more_than_two_intervals_is():
+    drifted = [NOW, NOW + 6 * MINUTE]  # a collector sleeps the interval AFTER each read: stamps drift, now and then six minutes apart
+    kept, dropped = thin([sample(i) for i in range(1, 6)], 300, set(drifted), drifted)
+    assert (kept, dropped) == ([], 5)  # the one at 3 minutes is 180 s from both: a half interval would have let it in
+    hole = [NOW, NOW + 12 * MINUTE]  # two intervals and two minutes
+    kept, _ = thin([sample(i) for i in range(1, 12)], 300, set(hole), hole)
+    assert [(row.ts - NOW) // MINUTE for row in kept] == [6]  # only the sample further than an interval from BOTH neighbours
 
 
 def test_thinning_fills_a_hole_at_the_mapped_density_and_keeps_a_jittery_series():
