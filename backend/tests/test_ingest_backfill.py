@@ -999,9 +999,14 @@ def gap_hours(check: dict, asset: int) -> int | None:
     return next((item["hours"] for item in check["groups"]["gaps"]["items"] if item["asset_id"] == asset), None)
 
 
-async def test_a_fill_into_an_open_month_makes_billing_equal_a_cold_computation_and_check_month_forgets_the_hole(client, db, monkeypatch):
+@pytest.mark.parametrize("ledger_switch", ["1", "0"], ids=["ledger-on", "ledger-off"])
+async def test_a_fill_into_an_open_month_makes_billing_equal_a_cold_computation_and_check_month_forgets_the_hole(
+    client, db, monkeypatch, ledger_switch
+):
     from dcdash.core import figure_cache
     from helpers import login_as
+
+    monkeypatch.setenv("DCDASH_FIGURE_LEDGER", ledger_switch)  # the figures worker's table is read by Billing only when this is on
 
     hole = (datetime(2026, 3, 10, 9, tzinfo=UTC), datetime(2026, 3, 10, 12, tzinfo=UTC))  # ten days before the clock
     world = await minute_meter(db, datetime(2026, 3, 20, 10, 20, tzinfo=UTC), datetime(2026, 3, 9, tzinfo=UTC), hole, monkeypatch)
@@ -1050,6 +1055,50 @@ async def test_a_fill_into_a_closed_month_leaves_its_frozen_figures_alone_and_te
     check = await get_json(client, CHECK, "2026-03")
     assert gap_hours(check, world.assets["M001_kW"]) is None
     assert (await world.status()) is None  # a fill moves no mark and makes no status row
+
+
+async def test_a_fill_into_a_past_month_the_ledger_has_settled_but_nobody_closed_makes_billing_equal_a_cold_computation(client, db, monkeypatch):
+    from sqlalchemy import text
+
+    from dcdash.core import figure_cache, figures, ledger, ledger_codec
+    from dcdash.core.timeutil import month_bounds
+    from helpers import login_as
+
+    hole = (datetime(2026, 3, 31, 9, tzinfo=UTC), datetime(2026, 3, 31, 12, tzinfo=UTC))
+    world = await minute_meter(db, datetime(2026, 4, 10, 10, 20, tzinfo=UTC), datetime(2026, 3, 29, tzinfo=UTC), hole, monkeypatch)
+    await login_as(client, db, "admin")
+    asset = world.assets["M001_kW"]
+    start, end = (moment.astimezone(UTC) for moment in month_bounds("2026-03", "UTC"))
+    # A row made the way the figures worker makes it, BEFORE the fill: one repeatable-read snapshot, the fingerprints, the value. The
+    # month is over (and not closed), so a reader takes the row on an exact match of the readings_1h fingerprint, and on nothing else.
+    async with get_sessionmaker()() as session:
+        await session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
+        config_fp = await figure_cache.config_fingerprint(session)
+        data_fp = await figure_cache._data_fingerprint(session, start, end)
+        now = (await session.execute(text("SELECT now()"))).scalar_one()
+        value = await figures.compute_month_days(session, "UTC", *month_bounds("2026-03", "UTC"))
+        spec = figures.month_days_spec("UTC", end)
+        assert await ledger.write(
+            session, "month-days", start, end, spec.params, ledger_codec.encode(value),
+            engine=ledger.engine_id(), config_fp=config_fp, data_fp=data_fp, snapshot_at=now, checked_at=now,
+        )
+        await session.commit()
+    await figure_cache.aclear()
+    ledger.reset_stats()
+    before = await get_json(client, COSTS, "2026-03")
+    assert before["closed"] is None and ledger.stats()["hits_exact"] == 1  # the row stood in for the engine: the test is not vacuous
+
+    report = await world.engine.fill_range(world.source, hole[0] - HOUR, hole[1] + HOUR, dry_run=False, yes=True)
+    assert report.new > 100
+
+    after = await get_json(client, COSTS, "2026-03")
+    assert ledger.stats()["hits_exact"] == 1 and ledger.stats()["misses"] >= 1  # the row no longer matched the readings: not used
+    assert after != before
+    assert gap_hours(await get_json(client, CHECK, "2026-03"), asset) is None
+    await figure_cache.aclear()
+    await db.execute("DELETE FROM figure_ledger")
+    await settle_rollups(db)  # a full refresh from the raw rows: the cold computation
+    assert await get_json(client, COSTS, "2026-03") == after
 
 
 # ---- the explicit range (the fill command's engine) -------------------------------------------------------------------------
