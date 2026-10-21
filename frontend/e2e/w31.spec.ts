@@ -438,6 +438,7 @@ test("1. a file source: a tag list is checked and created, a file is checked and
     await expect(dialog).toBeVisible();
     await dialog.getByLabel("File", { exact: true }).setInputFiles({ name: fileName, mimeType: "text/csv", buffer: Buffer.from(csv, "utf8") });
     await dialog.getByLabel("Profile", { exact: true }).selectOption(PROFILE);
+    await expect(dialog).toContainText(`${fileName} (`); // the file's line is in: the buttons are measured with the dialog as the check will find it
     const footButtons = ["button.import-close", "button.import-check", "button.import-go"];
     const waiting = await tops(dialog, footButtons);
     await dialog.getByRole("button", { name: "Check file", exact: true }).click();
