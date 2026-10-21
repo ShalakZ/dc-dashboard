@@ -568,6 +568,88 @@ function displayUpdate(c: Context): string | null {
   return parts.length > 0 ? parts.join("; ") : null;
 }
 
+/** A count with thousands separators ("12,000"). */
+const grouped = (n: number) => figure(n, 0) ?? String(n);
+const amount = (n: number, noun: string) => `${grouped(n)} ${noun}${n === 1 ? "" : "s"}`;
+
+/** "a", "a and b", "a, b and c". */
+function andList(parts: string[]): string {
+  return parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+/** How many a stored value stands for: the number itself (a count) or the length of a list (the ids); null for anything else, so a garbled entry claims nothing. */
+function sizeOf(value: unknown): number | null {
+  if (Array.isArray(value)) return value.length;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/** "source PM-1", else "a source" (the bare noun reads badly mid-sentence), else "a deleted source". */
+function aSource(c: Context): string {
+  const what = thing(c, "source", "source_id", "source", shortName);
+  return what === "source" ? "a source" : what;
+}
+
+/** The source an import went into: the name stored with the entry (it is the name at the time), else the lookup's, else "a source". */
+function importedInto(c: Context): string {
+  const stored = text(c.d.source);
+  return stored ? `source ${shortName(stored)}` : aSource(c);
+}
+
+/** ": 12,000 new, 480 already there, 3 rejected" from the counts an import stored (never a value); rejected, differing and unknown-tag rows only when there are some; "" without counts. */
+function importCounts(d: Detail): string {
+  const some = (value: unknown) => {
+    const n = sizeOf(value);
+    return n !== null && n > 0 ? n : null;
+  };
+  const fresh = sizeOf(d.new);
+  const already = sizeOf(d.already);
+  const differing = some(d.differing);
+  const rejected = some(d.rejected);
+  const unknown = some(d.unknown_rows);
+  const parts = [
+    fresh !== null ? `${grouped(fresh)} new` : null,
+    already !== null ? `${grouped(already)} already there` : null,
+    differing !== null ? `${grouped(differing)} differing` : null,
+    rejected !== null ? `${grouped(rejected)} rejected` : null,
+    unknown !== null ? `${grouped(unknown)} for unknown tags` : null,
+  ].filter((part): part is string => part !== null);
+  return parts.length > 0 ? `: ${parts.join(", ")}` : "";
+}
+
+/** ": 217 mappings, 12 assets and 217 points created" from the lists a tag list stored (the counts are the lengths); a list that is absent or empty is left out. */
+function tagListCreated(d: Detail): string {
+  const parts = ([["mapping", d.mappings], ["asset", d.assets], ["point", d.points]] as const)
+    .map(([noun, list]) => ({ noun, n: Array.isArray(list) ? list.length : 0 }))
+    .filter(({ n }) => n > 0)
+    .map(({ noun, n }) => amount(n, noun));
+  return parts.length > 0 ? `: ${andList(parts)} created` : "";
+}
+
+/** "Undid a tag list: 217 mappings and 12 assets removed (3 points kept: they hold readings)": the first two are counts, the kept points a list of ids (their number is all that is said). */
+function tagListUndone(d: Detail): string {
+  const removed = ([["mapping", d.mappings], ["asset", d.assets]] as const)
+    .map(([noun, value]) => ({ noun, n: sizeOf(value) ?? 0 }))
+    .filter(({ n }) => n > 0)
+    .map(({ noun, n }) => amount(n, noun));
+  const kept = Array.isArray(d.points_kept) ? d.points_kept.length : 0;
+  return [
+    "Undid a tag list",
+    removed.length > 0 ? `: ${andList(removed)} removed` : "",
+    kept > 0 ? ` (${amount(kept, "point")} kept: ${kept === 1 ? "it holds" : "they hold"} readings)` : "",
+  ].join("");
+}
+
+/** "2026-10-01 00:00 UTC" from the ISO time a fill stored; any other text as it is (cut), nothing for a value that is not text. */
+function fillTime(value: unknown): string | null {
+  const raw = text(value);
+  if (raw === null) return null;
+  const match = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/.exec(raw.trim());
+  if (!match) return shortName(raw);
+  const [, date, time, zone] = match;
+  const where = zone === undefined ? "" : /^(Z|[+-]00:?00)$/.test(zone) ? " UTC" : ` ${zone}`;
+  return `${date} ${time}${where}`;
+}
+
 // One entry per action the backend writes. backend/tests/test_audit_describers.py fails when an action is missing.
 const RULES: Record<string, Rule> = {
   "asset.created": made("asset", "asset_id", ownAsset),
@@ -647,6 +729,22 @@ const RULES: Record<string, Rule> = {
   "display.revoked": { summary: (c) => `Revoked ${displayThing(c)}: its link no longer works`, link: displaysPage },
   "display.updated": { summary: (c) => displayUpdate(c) ?? withFields(`Changed ${displayThing(c)}`, c.fields), link: displaysPage },
 
+  // The job's id is only in the raw Details; the sentence says which source and which time range.
+  "history.fill_requested": {
+    summary: (c) => {
+      const start = fillTime(c.d.start);
+      const end = fillTime(c.d.end);
+      return `Asked for a history fill of ${aSource(c)}${start !== null && end !== null ? `, ${start} to ${end}` : ""}`;
+    },
+    link: sourcesPage,
+  },
+
+  // The profile is named by its name (the entry keeps it); a save lists only the fields that changed.
+  "import_profile.deleted": { summary: (c) => `Deleted ${thing(c, "import profile", "profile_id", undefined, shortName)}` },
+  "import_profile.saved": {
+    summary: (c) => withFields(`Saved ${thing(c, "import profile", "profile_id", undefined, shortName)}`, c.fields),
+  },
+
   // The detail keeps the kind's name (kind_id is only there for the raw Details JSON): a rename stores it in before/after.
   "kind.created": { summary: (c) => `Created ${kindThing(c.d.name)}`, link: kindsPage },
   "kind.deleted": { summary: (c) => `Deleted ${kindThing(c.d.name)}${movedTo(c.d)}` },
@@ -712,6 +810,12 @@ const RULES: Record<string, Rule> = {
   "playlist.created": { summary: (c) => `Created ${playlistThing(c)}${dashboardCount(c.d.items)}`, link: displaysPage },
   "playlist.deleted": { summary: (c) => `Deleted ${thing(c, "playlist", "playlist_id", undefined, shortName)}`, link: displaysPage },
   "playlist.updated": { summary: playlistUpdate, link: displaysPage },
+
+  // Counts only: the entry holds the file's hash and size and what happened to its rows, never a reading. `complete: false` is a run that stopped half-way.
+  "readings.imported": {
+    summary: (c) => `Imported readings into ${importedInto(c)}${importCounts(c.d)}${c.d.complete === false ? " (stopped half-way)" : ""}`,
+    link: sourcesPage,
+  },
 
   "role.created": {
     summary: (c) => {
@@ -803,6 +907,10 @@ const RULES: Record<string, Rule> = {
     summary: () => "Saved the storage settings as this site's default",
     link: storagePage,
   },
+
+  // A mapped tag list stores what it created as lists of ids (the Undo needs them), an undone one stores counts; the sentences read the sizes only.
+  "tags.mapped": { summary: (c) => `Mapped a tag list${tagListCreated(c.d)}`, link: sourcesPage },
+  "tags.unmapped": { summary: (c) => tagListUndone(c.d), link: sourcesPage },
 
   "tariff.created": { summary: (c) => `Created ${tariffName(c)}`, link: tariffsPage },
   "tariff.updated": { summary: (c) => withFields(`Changed ${tariffOf(c)}`, c.fields), link: tariffsPage },

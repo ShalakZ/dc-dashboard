@@ -5,6 +5,9 @@
      push the table (or the page) sideways. */
   .cell-name, .cell-trunc { display: block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cell-name { font-weight: 600; }
+  /* w31: the second line under a source's name (its history line, Sources only). A block of its own, as wide as the name cell allows and at most three lines: a
+     long reason ("History: waiting, ...") must not widen the Name column; the full text is the title attribute. */
+  .cell-history { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; max-width: 220px; margin-top: 2px; overflow: hidden; overflow-wrap: anywhere; font-size: var(--fs-xs); font-weight: 400; }
   .cell-trunc { max-width: 360px; }
   .wrap-any { overflow-wrap: anywhere; }
   .nowrap, .table-wrap.dense td.num { white-space: nowrap; }
@@ -18,6 +21,7 @@
     .table-wrap.dense th, .table-wrap.dense td { padding-left: 6px; padding-right: 6px; }
     .table-wrap.dense td { font-size: var(--fs-sm); }
     .cell-name { max-width: 104px; }
+    .cell-history { max-width: 150px; }
   }
   .table-wrap.dense td.error { min-width: 140px; max-width: 260px; overflow-wrap: break-word; } /* never squeezed to a few letters per line: the wrap scrolls instead */
 

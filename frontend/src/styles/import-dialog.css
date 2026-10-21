@@ -1,0 +1,41 @@
+@layer w6 {
+  /* w31: the rules of the Import readings dialog (components/ImportDialog.tsx, components/ImportProfileFields.tsx), under the page class .import-dialog. Tokens only. */
+  .import-dialog { width: min(760px, 100%); }
+
+  /* The file chooser's line and the profile's line are rooms of their own: a refusal or a note arriving does not push the controls below it. */
+  .import-dialog .import-slot { min-height: 2lh; font-size: var(--fs-sm); }
+  .import-dialog .import-slot p.error { font-weight: 600; }
+
+  .import-dialog .import-profile { display: grid; gap: 8px; }
+  .import-dialog .import-pair, .import-dialog .import-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+  .import-dialog .import-label-row { display: flex; align-items: center; gap: 4px; }
+  .import-dialog .import-label-row > .tip { flex: none; height: calc(var(--fs-sm) * 1.4); }
+  .import-dialog .import-hint { font-size: var(--fs-xs); }
+
+  /* The report is a box of one fixed size (a height, not a minimum) from the start, so the report that arrives after a check does not grow the dialog or move the buttons under it; a long report scrolls inside it. It is a tab stop, so the keyboard can scroll it. */
+  .import-dialog .import-report { height: min(24rem, 40vh); overflow: auto; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: var(--fs-sm); }
+  .import-dialog .import-report:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .import-dialog .import-body { display: grid; gap: 12px; }
+  .import-dialog .import-body > div { display: grid; gap: 2px; }
+  .import-dialog .import-head { font-weight: 600; }
+  .import-dialog .import-list { display: grid; gap: 2px; margin: 0; padding-left: 18px; font-variant-numeric: tabular-nums; }
+  .import-dialog .import-cell { overflow-wrap: anywhere; }
+  .import-dialog .import-warn { display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border: 1px solid var(--warn-line); border-radius: var(--radius); background: var(--warn-tint); color: var(--warn-ink); }
+  .import-dialog .import-warn svg.i { margin-top: 1px; color: var(--warn-icon); }
+
+  /* The dialog is its own scroll box (app.css), and this one is taller than a laptop window, so its buttons would start under the fold. The footer sticks to the dialog's
+     bottom edge instead: the negative margin undoes the dialog's own 22 px / 24 px padding so the footer runs edge to edge and, at the end of the scroll, takes the place of
+     the bottom padding (no gap, no double padding); its own padding puts the buttons where they were. The page colour keeps the scrolled fields from showing through, the
+     hairline is what they slide under. The scroll padding is the footer's height (12 + one button + 22 + the hairline) and a gap: a field that Tab scrolls into view lands above it. */
+  .import-dialog { scroll-padding-bottom: calc(var(--ctl-h) + 12px + 22px + 1px + 12px); }
+  .import-dialog .import-foot { justify-content: flex-end; position: sticky; bottom: 0; z-index: 1; margin: 0 -24px -22px; padding: 12px 24px 22px; border-top: 1px solid var(--border); background: var(--bg); box-shadow: 0 22px 0 var(--bg); }
+  .import-dialog .import-go { min-width: 13em; font-variant-numeric: tabular-nums; }
+  /* The buttons wait with aria-disabled, never disabled: the one that was pressed holds the focus. They look the way a disabled button does (app.css). */
+  .import-dialog .import-go[aria-disabled="true"], .import-dialog .import-go[aria-disabled="true"]:hover { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); cursor: not-allowed; }
+  .import-dialog .import-close[aria-disabled="true"], .import-dialog .import-check[aria-disabled="true"],
+  .import-dialog .import-save[aria-disabled="true"], .import-dialog .import-delete[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+
+  @media (max-width: 640px) {
+    .import-dialog .import-pair, .import-dialog .import-fields { grid-template-columns: minmax(0, 1fr); }
+  }
+}

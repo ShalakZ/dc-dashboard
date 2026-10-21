@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api } from "../api/client";
 import { keys } from "../api/queries";
@@ -59,6 +59,100 @@ describe("SourceForm, adding a source", () => {
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(onDone).not.toHaveBeenCalled();
     expect(toasts.calls).toEqual([]);
+  });
+});
+
+describe("SourceForm, the connector that is filled by files (w31)", () => {
+  const FILE_SENTENCE = "Readings are loaded from CSV files; nothing is polled.";
+  // As GET /api/connectors answers: the types that poll first, the one that does not last, each with `polls` and `description`.
+  const withFile = [
+    { ...connectors[0], polls: true, description: "" },
+    { ...connectors[1], polls: true, description: "" },
+    { type: "file", config_schema: { type: "object", title: "FileConfig", properties: {} }, polls: false, description: FILE_SENTENCE },
+  ];
+  const authWithFile = { ...auth, "GET /api/connectors": { body: withFile } };
+
+  it("starts on the first type the server lists (one that polls), lists the file type last, and shows no description for a type without one", async () => {
+    mockFetch(authWithFile);
+    renderWithProviders(<SourceForm onDone={() => {}} />);
+    const select = await screen.findByLabelText("Connector");
+    expect(select).toHaveValue("simulator");
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["simulator", "other", "file"]);
+    expect(screen.queryByText(FILE_SENTENCE)).not.toBeInTheDocument();
+    expect(select).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("shows the description under the select when the type has one, tied to the select, and takes it away for another type", async () => {
+    mockFetch(authWithFile);
+    renderWithProviders(<SourceForm onDone={() => {}} />);
+    const select = await screen.findByLabelText("Connector");
+    await userEvent.selectOptions(select, "file");
+    const note = screen.getByText(FILE_SENTENCE);
+    expect(select).toHaveAccessibleDescription(FILE_SENTENCE);
+    expect(note.closest("label")).toBeNull(); // outside the label: the select's name stays exactly "Connector"
+    await userEvent.selectOptions(select, "other");
+    expect(screen.queryByText(FILE_SENTENCE)).not.toBeInTheDocument();
+  });
+
+  it("has no config field for a file source, and saves it with an empty config", async () => {
+    const calls = mockFetch({ ...authWithFile, "POST /api/sources": { status: 201, body: { id: 5 } } });
+    const onDone = vi.fn();
+    renderWithProviders(<SourceForm onDone={onDone} />, { toasts: spyToasts().api });
+    await userEvent.selectOptions(await screen.findByLabelText("Connector"), "file");
+    expect(screen.queryByLabelText("Url")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Host")).not.toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Name"), "from files");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/sources")?.body).toEqual({
+      name: "from files", connector_type: "file", config: {}, secret: null, enabled: true,
+    });
+  });
+
+  it("offers no Secret for a type that does not poll (a file has nothing to authenticate), and brings it back for the others", async () => {
+    mockFetch(authWithFile);
+    renderWithProviders(<SourceForm onDone={() => {}} />);
+    const select = await screen.findByLabelText("Connector");
+    expect(screen.getByLabelText("Secret")).toBeInTheDocument(); // the form starts on a type that polls
+    await userEvent.selectOptions(select, "file");
+    expect(screen.queryByLabelText("Secret")).not.toBeInTheDocument();
+    expect(document.querySelector("input[type=password]")).toBeNull();
+    expect(screen.getByLabelText("Enabled")).toBeInTheDocument(); // the rest of the form is still there
+    await userEvent.selectOptions(select, "other");
+    expect(screen.getByLabelText("Secret")).toBeInTheDocument();
+  });
+
+  it("does not carry a secret typed for the type chosen before into a file source", async () => {
+    const calls = mockFetch({ ...authWithFile, "POST /api/sources": { status: 201, body: { id: 5 } } });
+    const onDone = vi.fn();
+    renderWithProviders(<SourceForm onDone={onDone} />, { toasts: spyToasts().api });
+    const select = await screen.findByLabelText("Connector");
+    await userEvent.type(screen.getByLabelText("Secret"), "typed-before");
+    await userEvent.selectOptions(select, "file");
+    await userEvent.type(screen.getByLabelText("Name"), "from files");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/sources")?.body).toMatchObject({ connector_type: "file", secret: null });
+  });
+
+  it("copes with an answer that has no description or polls at all (an older server): the Secret stays", async () => {
+    mockFetch(auth); // `connectors` above carries neither field
+    renderWithProviders(<SourceForm onDone={() => {}} />);
+    expect(await screen.findByLabelText("Connector")).toHaveValue("simulator");
+    expect(document.querySelector("small.muted")).toBeNull();
+    expect(screen.getByLabelText("Secret")).toBeInTheDocument();
+  });
+
+  it("edits a file source without a Secret, and sends no secret key (the stored state is kept)", async () => {
+    const calls = mockFetch({ ...authWithFile, "PATCH /api/sources/6": { body: { id: 6 } } });
+    const onDone = vi.fn();
+    const fileSource: Source = { ...sim, id: 6, name: "from files", connector_type: "file", config: {}, has_secret: false };
+    renderWithProviders(<SourceForm source={fileSource} onDone={onDone} />);
+    expect(await screen.findByText("Connector: file")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Secret")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(patchOf(calls)?.body).not.toHaveProperty("secret");
   });
 });
 

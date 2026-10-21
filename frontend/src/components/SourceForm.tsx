@@ -16,6 +16,7 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
   const queryClient = useQueryClient();
   const toast = useToast();
   const secretHintId = useId();
+  const connectorHintId = useId();
   const hiddenNoteId = useId();
   const [name, setName] = useState(source?.name ?? "");
   const [type, setType] = useState("");
@@ -31,6 +32,8 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
   // An edit never falls back to another connector: its fields would replace the stored config.
   const connector = source ? connectors.find((c) => c.type === source.connector_type) : connectors.find((c) => c.type === type) ?? connectors[0];
   const fields = useMemo(() => (connector ? fieldsFromSchema(connector.config_schema) : []), [connector]);
+  // A connector that does not poll (`file`) reaches nothing, so it has nothing to authenticate and the form offers no Secret. A reply without `polls` (an older server) counts as polling.
+  const takesSecret = connector?.polls !== false;
   useEffect(() => { if (!source && connector && type !== connector.type) setType(connector.type); }, [source, connector, type]);
   // `source` must be a stable object (the page keeps the one it was opened with): a new one would reset what is typed.
   useEffect(() => { setValues(source ? valuesFromConfig(fields, source.config) : initialValues(fields)); setClearKeys([]); }, [fields, source]);
@@ -58,7 +61,7 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
         setSecret("");
         await invalidate(keys.sources, keys.secretKey, keys.graph);
       } else {
-        const body: SourceIn = { name, connector_type: connector!.type, config: coerceValues(fields, values), secret: secret || null, enabled };
+        const body: SourceIn = { name, connector_type: connector!.type, config: coerceValues(fields, values), secret: takesSecret ? secret || null : null, enabled }; // a secret typed for the type chosen before is not carried over
         await api.post("/api/sources", body);
         toast.success("Source added"); // right after the request: the dialog closes and the new row is the only other sign
         setSecret("");
@@ -90,11 +93,16 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
       {source ? (
         <p className="muted">Connector: {source.connector_type}</p>
       ) : (
-        <label>Connector
-          <select value={connector.type} onChange={(e) => setType(e.target.value)}>
-            {connectors.map((c) => <option key={c.type} value={c.type}>{c.type}</option>)}
-          </select>
-        </label>
+        <>
+          {/* The server sorts the types (a type that is filled by files comes last), so the first one, which the form starts on, is one that polls. */}
+          <label>Connector
+            <select value={connector.type} aria-describedby={connector.description ? connectorHintId : undefined} onChange={(e) => setType(e.target.value)}>
+              {connectors.map((c) => <option key={c.type} value={c.type}>{c.type}</option>)}
+            </select>
+          </label>
+          {/* A reply from an older server has no description */}
+          {connector.description ? <small id={connectorHintId} className="muted">{connector.description}</small> : null}
+        </>
       )}
       <SchemaForm fields={fields} values={values} onChange={setValues} />
       {hiddenKeys.map((key) => (
@@ -109,16 +117,20 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
           </label>
         </div>
       ))}
-      <label>Secret
-        <input type="password" autoComplete="off" value={secret} disabled={removeSecret} aria-describedby={source?.has_secret ? secretHintId : undefined}
-          onChange={(e) => setSecret(e.target.value)} />
-      </label>
-      {source?.has_secret && (
+      {takesSecret && (
         <>
-          <small id={secretHintId} className="muted">A secret is stored; leave blank to keep it.</small>
-          <label>Remove the stored secret
-            <input type="checkbox" checked={removeSecret} onChange={(e) => { setRemoveSecret(e.target.checked); if (e.target.checked) setSecret(""); }} />
+          <label>Secret
+            <input type="password" autoComplete="off" value={secret} disabled={removeSecret} aria-describedby={source?.has_secret ? secretHintId : undefined}
+              onChange={(e) => setSecret(e.target.value)} />
           </label>
+          {source?.has_secret && (
+            <>
+              <small id={secretHintId} className="muted">A secret is stored; leave blank to keep it.</small>
+              <label>Remove the stored secret
+                <input type="checkbox" checked={removeSecret} onChange={(e) => { setRemoveSecret(e.target.checked); if (e.target.checked) setSecret(""); }} />
+              </label>
+            </>
+          )}
         </>
       )}
       <label>Enabled<input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /></label>

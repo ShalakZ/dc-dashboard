@@ -4,6 +4,7 @@ import pytest
 
 from dcdash.core.pg import CONFIG_CHANNEL
 from helpers import listening, login_as, make_asset, make_mapping, make_point, make_source
+from test_api_tag_lists import WAIT, holder, until_blocked
 
 
 async def setup(client, db):
@@ -205,3 +206,56 @@ async def test_ordinary_scales_still_work(client, db, scale):
     asset, kw, _ = await setup(client, db)
     r = await client.post("/api/mappings", json=body(kw, asset, "active_power_kw", scale=scale))
     assert r.status_code == 201 and r.json()["scale"] == scale
+
+
+# ---- the locks: the asset is taken before the mapping row or its point --------------------------------------------------------
+# (The Undo of a tag list and the delete of an asset hold assets first; test_api_tag_lists_undo.py runs the routes against them.)
+
+TRY_AGAIN = "another change to these assets was running; try again"
+
+
+async def test_a_deadlock_while_a_mapping_moves_to_another_asset_is_a_409_try_again_and_changes_nothing(client, db):
+    asset, kw, _ = await setup(client, db)
+    other = await make_asset(db, "LV Panel 2")  # the higher id: the PATCH locks `asset` first, then waits for this one
+    mapping = await make_mapping(db, kw, asset)
+    async with holder(db) as (conn, tx):
+        await conn.fetch("SELECT id FROM assets WHERE id = $1 FOR UPDATE", other)  # what a delete holds before it reaches the mappings
+        patch = asyncio.create_task(client.patch(f"/api/mappings/{mapping}", json={"asset_id": other}))
+        await until_blocked(db, "the other asset")
+        # The PATCH holds KEY SHARE on `asset` and waits for `other`; this wants `asset` FOR UPDATE: each waits for the other. The PATCH
+        # started waiting first, so its deadlock check fires first and it is the one that is ended.
+        await asyncio.wait_for(conn.fetch("SELECT id FROM assets WHERE id = $1 FOR UPDATE", asset), WAIT)
+        await tx.rollback()
+        response = await asyncio.wait_for(patch, WAIT)
+    assert response.status_code == 409 and response.json()["detail"] == TRY_AGAIN, response.text
+    assert await db.fetchval("SELECT asset_id FROM mappings WHERE id = $1", mapping) == asset
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'mapping.updated'") == 0
+
+
+async def test_a_deadlock_while_a_point_is_mapped_is_a_409_try_again_and_writes_nothing(client, db):
+    asset, kw, _ = await setup(client, db)
+    async with holder(db) as (conn, tx):
+        await conn.fetch("SELECT id FROM points WHERE id = $1 FOR UPDATE", kw)  # what the Undo holds, once it holds its assets
+        create = asyncio.create_task(client.post("/api/mappings", json=body(kw, asset, "active_power_kw")))
+        await until_blocked(db, "the point")  # the POST holds KEY SHARE on the asset and waits for the point
+        await asyncio.wait_for(conn.fetch("SELECT id FROM assets WHERE id = $1 FOR UPDATE", asset), WAIT)
+        await tx.rollback()
+        response = await asyncio.wait_for(create, WAIT)
+    assert response.status_code == 409 and response.json()["detail"] == TRY_AGAIN, response.text
+    assert await db.fetchval("SELECT count(*) FROM mappings") == 0
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'mapping.created'") == 0
+
+
+async def test_an_asset_deleted_while_a_mapping_waits_to_move_onto_it_is_a_409_to_repeat(client, db):
+    asset, kw, _ = await setup(client, db)
+    other = await make_asset(db, "LV Panel 2")
+    mapping = await make_mapping(db, kw, asset)
+    async with holder(db) as (conn, tx):
+        await conn.fetch("SELECT id FROM assets WHERE id = $1 FOR UPDATE", other)
+        patch = asyncio.create_task(client.patch(f"/api/mappings/{mapping}", json={"asset_id": other}))
+        await until_blocked(db, "the other asset")
+        await conn.execute("DELETE FROM assets WHERE id = $1", other)
+        await tx.commit()
+        response = await asyncio.wait_for(patch, WAIT)
+    assert response.status_code == 409 and response.json()["detail"] == TRY_AGAIN, response.text  # not a 500 and not a stale update
+    assert await db.fetchval("SELECT asset_id FROM mappings WHERE id = $1", mapping) == asset

@@ -277,7 +277,7 @@ test.describe("W9a: roles and permissions", () => {
     await asAdmin(browser, async (request) => {
       await removeMine(request);
       catalogue = await json<ApiPermission[]>(request, "/api/permissions");
-      expect(catalogue, "the catalogue has the 32 permissions").toHaveLength(32);
+      expect(catalogue, "the catalogue has the 33 permissions").toHaveLength(33);
       const mostOfThem = catalogue.map((p) => p.id).filter((id) => id !== "roles.manage");
       roleIds[ROLE_ASSETS] = await createRole(request, ROLE_ASSETS, ["assets.view"]);
       roleIds[ROLE_LOOK] = await createRole(request, ROLE_LOOK, ["assets.view", "dashboards.view"]);
@@ -529,7 +529,7 @@ test.describe("W9a: roles and permissions", () => {
     try {
       await as(browser, STAFF_USER, async (api) => {
         const own = await me(api);
-        expect(own.permissions, "31 permissions: all but roles.manage").toHaveLength(31);
+        expect(own.permissions, "32 permissions: all but roles.manage").toHaveLength(32);
         expect(own.permissions).toContain("users.edit");
         expect(own.permissions).not.toContain("roles.manage");
         const ownId = (await json<ApiUser[]>(api, "/api/users")).find((u) => u.username === STAFF_USER.username)!.id;
@@ -629,7 +629,7 @@ test.describe("W9a: roles and permissions", () => {
         expect(roles.slice(0, 3).map((r) => [r.name, r.builtin])).toEqual([["viewer", true], ["operator", true], ["admin", true]]);
         expect([...roles[0].permissions!].sort()).toEqual(VIEWER_PERMISSIONS);
         expect([...roles[1].permissions!].sort()).toEqual(OPERATOR_PERMISSIONS);
-        expect(roles[2].permissions).toHaveLength(32);
+        expect(roles[2].permissions).toHaveLength(33);
         for (const role of roles.slice(0, 3)) {
           const deleted = await api.delete(`/api/roles/${role.id}`);
           expect(deleted.status(), `deleting ${role.name}: ${await deleted.text()}`).toBe(409);
@@ -641,7 +641,7 @@ test.describe("W9a: roles and permissions", () => {
         const copy = await api.post(`/api/roles/${roles[2].id}/duplicate`, { data: { name: "w9a-copy-of-admin" } });
         expect(copy.status(), await copy.text()).toBe(201);
         const copied = (await copy.json()) as ApiRole;
-        expect(copied.permissions, "a copy of Admin holds everything but roles.manage").toHaveLength(31);
+        expect(copied.permissions, "a copy of Admin holds everything but roles.manage").toHaveLength(32);
         expect(copied.permissions).not.toContain("roles.manage");
         expect((await api.delete(`/api/roles/${copied.id}`)).status()).toBe(204);
       });
@@ -672,7 +672,7 @@ test.describe("W9a: roles and permissions", () => {
         expect((await json<ApiRole[]>(api, "/api/roles")).find((r) => r.id === spareId)).toBeUndefined();
       });
 
-      await test.step("the permission list is the 32 permissions, in the catalogue's order, with an area, a label and a description each", async () => {
+      await test.step("the permission list is the 33 permissions, in the catalogue's order, with an area, a label and a description each", async () => {
         const served = await json<ApiPermission[]>(api, "/api/permissions");
         expect(served.map((p) => p.id)).toEqual(catalogue.map((p) => p.id));
         for (const p of served) {

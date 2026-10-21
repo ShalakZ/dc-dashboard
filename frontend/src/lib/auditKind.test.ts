@@ -24,14 +24,16 @@ const EXPECTED: Record<string, AuditKind> = {
   "playlist.created": "create", "playlist.updated": "change", "playlist.deleted": "delete",
   "display.created": "create", "display.updated": "change", "display.revoked": "delete", "display.deleted": "delete",
   "display.connected": "signin", "display.claim_blocked": "problem",
+  "readings.imported": "create", "import_profile.saved": "change", "import_profile.deleted": "delete",
+  "tags.mapped": "create", "tags.unmapped": "delete", "history.fill_requested": "other",
 };
 
 describe("auditKind", () => {
-  it("names the kind of every one of the 62 actions in the audit text table", () => {
+  it("names the kind of every one of the 68 actions in the audit text table", () => {
     const source = readFileSync("src/lib/auditText.ts", "utf8"); // vitest runs from the frontend directory
     const table = source.slice(source.indexOf("const RULES"), source.indexOf("function build("));
     const actions = [...table.matchAll(/^ {2}"([a-z_.]+)":/gm)].map((m) => m[1]);
-    expect(actions).toHaveLength(62);
+    expect(actions).toHaveLength(68);
     expect([...actions].sort()).toEqual(Object.keys(EXPECTED).sort());
     for (const action of actions) expect(auditKind(action), action).toBe(EXPECTED[action]);
   });
@@ -57,6 +59,18 @@ describe("auditKind", () => {
     expect(auditKind("kind.renamed")).toBe("change"); // a rename is a change, not "other"
     expect(auditKind("kind.starter_pack_added")).toBe("create"); // the pack registers kinds: a creation, by name, not by a broad "_added" suffix
     expect(auditKind("tariff.rate_added")).toBe("other");
+  });
+
+  it("reads an import and a mapped tag list as creations, an undone tag list as a delete and a saved profile as a change, each by name or suffix", () => {
+    expect(auditKind("readings.imported")).toBe("create"); // by name: no broad ".imported" suffix
+    expect(auditKind("tags.mapped")).toBe("create");
+    expect(auditKind("tags.unmapped")).toBe("delete"); // by name: no broad "unmapped" suffix
+    expect(auditKind("import_profile.saved")).toBe("change");
+    expect(auditKind("import_profile.deleted")).toBe("delete");
+    expect(auditKind("history.fill_requested")).toBe("other"); // a request to the source, like a check
+    expect(auditKind("x.imported")).toBe("other");
+    expect(auditKind("x.unmapped")).toBe("other");
+    expect(auditKind("x.saved.more")).toBe("other"); // the end of the string, not a word inside it
   });
 
   it("reads a revoked display link as a delete, a display that connected as a sign-in and a blocked claim as a problem", () => {

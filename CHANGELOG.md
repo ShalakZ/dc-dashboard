@@ -16,6 +16,10 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w31 (2026-10-21, MERGEHASH)
+
+The data-path foundation, part 2 (no migration). New permission `readings.import` (Admin only by default). On the Sources page: **Import file...** reads a CSV export into a source, a dry run first (a saved profile names the columns, the time format and the zone; the report counts the new, already-there, different, rejected and unknown-tag rows); **Map tag list...** creates points, assets and mappings from a list, all or nothing, with an Undo for 24 hours; **Fill older range...** starts a history fill; each row shows its history state. A new source type `file` is filled by import and never polled. New page `docs/historian-integration.md` for the governance review. The new permission changes the figure engine's id, so every stored figure is recomputed once after the update: the first pages may be a little slower for a few minutes.
+
 ## w30 (2026-10-21, 7824026)
 
 The data-path foundation, part 1 (backend only; the Sources page part is w31). Migration `0016`, no new permission, no changed figure. The database now refuses a reading it already has (a unique key on `readings`), and every writer of readings goes through one function: the first stored value wins, a re-send is counted and journaled, nothing is overwritten. Connectors can answer "the values between 10:00 and 14:00" (`read_history`, read-only); the simulator image gains a stand-in Historian (port 9100, dev profile). The collector fills holes left by an outage or late data from a Historian's history, one request at a time; it does nothing for a real source type until one supports history (none does yet). `GET /api/sources/{id}/history`, a `history:` line in the report and `python -m dcdash.ingest.backfill` show and drive it. Against the stand-in, 217 meters and 6.5 days fill in 18 minutes under load, then 36 requests an hour.

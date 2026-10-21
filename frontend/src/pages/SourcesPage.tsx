@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { keys, loadSourceImpact, useCollectorStatus, useInvalidate, useSecretKeyStatus, useSite, useSources } from "../api/queries";
 import type { Source, SourceImpact } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { meets } from "../auth/need";
 import { ConnectionCheck } from "../components/ConnectionCheck";
+import { HistoryFillDialog } from "../components/HistoryFillDialog";
 import { ImpactDeleteDialog } from "../components/ImpactDeleteDialog";
+import { ImportDialog } from "../components/ImportDialog";
 import { JobStatus } from "../components/JobStatus";
 import { Modal } from "../components/Modal";
 import { PAGE_NEED } from "../components/navItems";
@@ -13,11 +15,13 @@ import { PageHeader } from "../components/PageHeader";
 import { RowActions, type RowAction } from "../components/RowActions";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { SourceForm } from "../components/SourceForm";
+import { TagListDialog } from "../components/TagListDialog";
 import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
 import { useNow } from "../hooks/useNow";
 import { ageNow, formatAge, formatSpan, secondsSince } from "../lib/age";
+import { historyLine } from "../lib/historyLine";
 import { sourceDeletePath, sourceImpact, sourceLoss, sourceNote } from "../lib/impact";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { sourceStatusText } from "../lib/sourceStatus";
@@ -28,6 +32,9 @@ const COLLECTOR_STATUS_STALE_SECONDS = 30;
 const TICK_MS = 5_000;
 /** The chip of a polled source's stored status; anything else the collector may write reads as unknown (hollow dot). */
 const STATUS_CHIP: Record<string, string> = { online: "chip-ok", offline: "chip-bad" };
+
+/** A source is polled, tested and browsed unless its connector says it is filled by importing files (`polls` false). A row without the field (an older API) counts as polled. */
+const polls = (s: Pick<Source, "polls">) => s.polls !== false;
 
 // Inline SVG, 24-unit viewBox, decoration only (the text next to it says everything).
 const WarnIcon = () => (
@@ -59,12 +66,34 @@ export function SourcesPage() {
   const [deleting, setDeleting] = useState<{ id: number; name: string } | null>(null);
   // The source whose step-by-step connection check is open in a dialog.
   const [checking, setChecking] = useState<{ id: number; name: string } | null>(null);
+  // The three w31 dialogs, each with the source as it was when its menu item was chosen (a snapshot, like `checking`: the list is replaced every 10 s).
+  const [importing, setImporting] = useState<{ id: number; name: string } | null>(null);
+  const [mapping, setMapping] = useState<{ id: number; name: string; connector_type: string } | null>(null);
+  const [filling, setFilling] = useState<{ id: number; name: string } | null>(null);
   const { run, busy, error: actionError } = useAction();
-  // While a test runs or a delete confirmation is open, no form may open next to it (two dialogs would share Escape and the focus trap).
-  const locked = busy || deleting !== null || checking !== null;
+  // While a test runs or a delete confirmation, a check or one of the w31 dialogs is open, no form may open next to it (two dialogs would share Escape and the focus trap).
+  const locked = busy || deleting !== null || checking !== null || importing !== null || mapping !== null || filling !== null;
   const openAdd = () => { if (!locked) setShowAdd(true); };
   const openEdit = (s: Source) => { if (!locked) setEditing(s); };
   const openCheck = (s: Source) => { if (!locked) setChecking({ id: s.id, name: s.name }); };
+  const openImport = (s: Source) => { if (!locked) setImporting({ id: s.id, name: s.name }); };
+  const openMapping = (s: Source) => { if (!locked) setMapping({ id: s.id, name: s.name, connector_type: s.connector_type }); };
+  const openFill = (s: Source) => { if (!locked) setFilling({ id: s.id, name: s.name }); };
+
+  // A dialog gives the focus back to what had it when it opened, the row's menu button, as long as that is still in the page. When the list moved on
+  // under the dialog and the row is gone (the source was deleted, or the list was empty), the focus would drop to the body: it goes to the heading instead.
+  const heading = useRef<HTMLHeadingElement>(null);
+  const [refocus, setRefocus] = useState<number | null>(null);
+  const closeDialog = (close: () => void, id: number) => { close(); setRefocus(id); };
+  useEffect(() => {
+    if (refocus === null) return;
+    const at = document.activeElement;
+    if (!(at instanceof HTMLElement) || at === document.body || !at.isConnected) {
+      const trigger = document.querySelector<HTMLElement>(`tr[data-source="${refocus}"] .row-menu-btn`);
+      (trigger ?? heading.current)?.focus({ preventScroll: true });
+    }
+    setRefocus(null);
+  }, [refocus]);
 
   const testOne = (id: number) => run(async () => {
     const { job_id } = await api.post<{ job_id: number }>(`/api/sources/${id}/test`);
@@ -72,8 +101,8 @@ export function SourcesPage() {
   });
   const testAll = () => run(async () => {
     const { job_ids } = await api.post<{ job_ids: number[] }>("/api/sources/test-all");
-    // The API creates one job per enabled source in Source.id order; the list itself is sorted by name.
-    const enabled = sources.filter((s) => s.enabled).map((s) => s.id).sort((a, b) => a - b);
+    // The API creates one job per enabled source in Source.id order, leaving out a source that is filled by importing files (nothing to test); the list itself is sorted by name.
+    const enabled = sources.filter((s) => s.enabled && polls(s)).map((s) => s.id).sort((a, b) => a - b);
     setJobs(Object.fromEntries(enabled.map((id, i) => [id, job_ids[i]])));
   });
   // `seen`: the counts the dialog showed; the server refuses (and the dialog shows the new numbers) if more would go now.
@@ -92,11 +121,18 @@ export function SourcesPage() {
   const canCheck = can("diagnostics.run");
   const canEdit = can("sources.edit"); // add, edit, delete and browse
   const canOpenPoints = meets(PAGE_NEED.sourcePoints, can); // the points page has its own permission
+  const canImport = can("readings.import");
+  const canMapTags = can("discovery.accept"); // the tag list creates mappings (and, if asked, assets) the way accepting a scan result does
+  // The w31 items come after the old ones, which keep their order and their words. Test and Check connection are for a source that is polled: a
+  // source filled by importing files has nothing to reach. Fill older range needs a connector that keeps history (the list row says so).
   const actionsOf = (s: Source): RowAction[] => [
-    ...(canTest ? [{ label: "Test", onSelect: () => testOne(s.id), disabled: locked }] : []),
-    ...(canCheck ? [{ label: "Check connection", onSelect: () => openCheck(s), disabled: locked }] : []),
+    ...(canTest && polls(s) ? [{ label: "Test", onSelect: () => testOne(s.id), disabled: locked }] : []),
+    ...(canCheck && polls(s) ? [{ label: "Check connection", onSelect: () => openCheck(s), disabled: locked }] : []),
     ...(canEdit ? [{ label: "Edit", onSelect: () => openEdit(s), disabled: locked }] : []),
     ...(canOpenPoints ? [{ label: "Points", to: `/sources/${s.id}/points` }] : []),
+    ...(canImport ? [{ label: "Import file...", onSelect: () => openImport(s), disabled: locked }] : []),
+    ...(canMapTags ? [{ label: "Map tag list...", onSelect: () => openMapping(s), disabled: locked }] : []),
+    ...(canEdit && s.history?.supports_history ? [{ label: "Fill older range...", onSelect: () => openFill(s), disabled: locked }] : []),
   ];
 
   if (isLoading) {
@@ -104,8 +140,9 @@ export function SourcesPage() {
     return errorUpdateCount > 0 ? <p className="muted">loading…</p> : (
       <>
         <PageHeader title="Sources" actions={<ActionsSpace />} />
-        {/* Seven of the table's nine columns: nine rows of placeholders are 1300px wide at 1440, wider than the page, and would be cut at its edge */}
-        <TableSkeleton columns={7} rows={5} label="Loading sources" />
+        {/* Seven of the table's nine columns: nine rows of placeholders are 1300px wide at 1440, wider than the page, and would be cut at its edge.
+            The Name cell has two lines (the history line under the name), as the loaded rows of a source that keeps history or is filled by files do. */}
+        <TableSkeleton columns={7} rows={5} label="Loading sources" twoLine={[0]} />
       </>
     );
   }
@@ -115,8 +152,9 @@ export function SourcesPage() {
     <>
       <PageHeader
         title="Sources"
+        headingRef={heading}
         actions={<>
-          {canTest && <button onClick={testAll} disabled={sources.length === 0 || busy}>Test all</button>}
+          {canTest && <button onClick={testAll} disabled={!sources.some(polls) || busy}>Test all</button>}
           {canEdit && <button className="primary" onClick={openAdd} disabled={locked}>Add source</button>}
         </>}
       />
@@ -163,6 +201,9 @@ export function SourcesPage() {
           <div className="row"><button type="button" onClick={() => setChecking(null)}>Close</button></div>
         </Modal>
       )}
+      {importing && <ImportDialog source={importing} onClose={() => closeDialog(() => setImporting(null), importing.id)} />}
+      {mapping && <TagListDialog source={mapping} onClose={() => closeDialog(() => setMapping(null), mapping.id)} />}
+      {filling && <HistoryFillDialog source={filling} onClose={() => closeDialog(() => setFilling(null), filling.id)} />}
       {deleting && (
         <ImpactDeleteDialog<SourceImpact>
           title={`Delete source "${deleting.name}"?`}
@@ -187,9 +228,15 @@ export function SourcesPage() {
             <tbody>
               {sources.map((s) => {
                 const status = sourceStatusText(s);
+                const history = historyLine(s, now);
                 return (
-                  <tr key={s.id}>
-                    <td><span className="cell-name" title={s.name}>{s.name}</span></td><td>{s.connector_type}</td><td>{s.enabled ? "yes" : "no"}</td>
+                  <tr key={s.id} data-source={s.id}>
+                    <td>
+                      <span className="cell-name" title={s.name}>{s.name}</span>
+                      {/* A second line inside the name cell: the table keeps its columns, and the skeleton its shape */}
+                      {history !== null && <span className="cell-history muted" title={history}>{history}</span>}
+                    </td>
+                    <td>{s.connector_type}</td><td>{s.enabled ? "yes" : "no"}</td>
                     <td>{status.polled ? <span className={`chip ${STATUS_CHIP[status.text] ?? "chip-stale"}`}>{status.text}</span> : <span className="muted st st-off note">{status.text}</span>}</td>
                     <td className="nowrap">{s.last_seen && site.data ? formatSiteDateTime(s.last_seen, site.data.timezone) : "—"}</td>
                     <td className="num">{formatAge(ageNow(s.last_reading_age_seconds, sourcesAnsweredAt, now))}</td>

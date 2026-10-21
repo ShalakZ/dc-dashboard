@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import os
 from collections.abc import Iterable
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -10,10 +12,14 @@ from dcdash.collector.browse import browse_source, connector_for
 from dcdash.collector.scan import run_scan
 from dcdash.collector.scheduler import mark_source
 from dcdash.connectors.base import ConnectorFactory, create_connector
-from dcdash.core import journal
+from dcdash.core import journal, pg
 from dcdash.core.audit import audit_pool, clip_error, scrub_strings, scrub_url_credentials
+from dcdash.core.config import get_settings
 from dcdash.core.crypto import decrypt
 from dcdash.diagnostics.check import CheckResult
+from dcdash.ingest import rollups
+from dcdash.ingest.backfill import Backfill, FillRefused, LeaseHeld
+from dcdash.ingest.settings import HistorySettings
 
 log = logging.getLogger(__name__)
 
@@ -46,7 +52,10 @@ async def _test_source(
         check = await connector.test()
     finally:
         await connector.close()
-    await mark_source(pool, source_id, check.ok, None if check.ok else scrub_url_credentials(check.message, known))
+    # A source that is never polled (`file`) keeps its status: "offline" or "online" would say something about a connection it does not have.
+    # getattr: a test factory may hand back a connector that is not a Connector subclass.
+    if getattr(connector, "polls", True):
+        await mark_source(pool, source_id, check.ok, None if check.ok else scrub_url_credentials(check.message, known))
     return asdict(check)
 
 
@@ -101,14 +110,107 @@ async def _check_connection(
         # The session was skipped because a step before it failed (dns, tcp, endpoints, certificates): the source cannot be reached,
         # and the first failed step says why. A failed diagnostic step while the session RAN decides nothing (handled above).
         decisive = next((step for step in result.steps if step.ok is False), None)
-    if decisive is not None and decisive.ok is not None:
+    if decisive is not None and decisive.ok is not None and getattr(connector, "polls", True):  # as in _test_source
         error = decisive.error or {}
         reason = error.get("message") or error.get("class") or "connection check failed"
         await mark_source(pool, source_id, decisive.ok, None if decisive.ok else scrub_url_credentials(reason, known))
     return result.to_json()
 
 
-_HANDLERS = {"test_source": _test_source, "browse_source": _browse_source, "scan": _scan, "check_connection": _check_connection}
+FILL_POOL_SIZE = 2  # the lease's connection and one for everything else the engine asks the database meanwhile
+FILL_LEASE_RETRIES = 3  # the automatic cycle of the same source holds its lease while it fills: wait and ask again, this many times
+FILL_LEASE_WAIT_SECONDS = 30.0
+FILL_CLOSE_SECONDS = 10.0  # as the collector's own shutdown: a database that never answers must not hold a job worker
+FILL_START_MARGIN = timedelta(hours=1)  # a start less than this before the retention bound is moved up to it (see _inside_retention)
+FILL_BOUND_SLACK = timedelta(minutes=1)  # the engine reads its clock a moment after this module did: land a little inside the bound
+
+
+async def _fill_sleep(seconds: float) -> None:
+    """Every wait of a fill job (the engine's request pace and the lease retries). A module-level name so that a test replaces it."""
+    await asyncio.sleep(seconds)
+
+
+async def _inside_retention(pool: asyncpg.Pool, start: datetime) -> datetime:
+    """`start`, moved up to the engine's bound (`now - (retention - 1) days`, the oldest it accepts) when it is less than FILL_START_MARGIN
+    before it. The route accepted `start` at its request; the queue and the lease retries (up to 90 s each try) have moved the bound
+    forward since, and a fill that was accepted must not be refused for the minutes it waited. A start further before the bound is left
+    as it is, so the engine refuses it in its own words."""
+    retention = await rollups.raw_retention_days(pool)
+    oldest = datetime.now(UTC) - timedelta(days=retention - 1)
+    return max(start, oldest + FILL_BOUND_SLACK) if oldest - start < FILL_START_MARGIN else start
+
+
+async def _close_fill_pool(pool: asyncpg.Pool) -> None:
+    """Close the fill's own pool. asyncpg waits for the database without a deadline (see `collector.main._close_down`): after
+    FILL_CLOSE_SECONDS, or when the job is cancelled meanwhile, the connections are aborted instead."""
+    closing = asyncio.ensure_future(pool.close())
+    done: set[asyncio.Future] = set()
+    try:
+        done, _ = await asyncio.wait({closing}, timeout=FILL_CLOSE_SECONDS)
+    finally:
+        if not done:
+            log.warning("closing the pool of a history fill did not finish in %.0f s: aborting its connections", FILL_CLOSE_SECONDS)
+            pool.terminate()
+            closing.cancel()
+    if done and closing.exception() is not None:  # retrieved, so that it is not reported as never retrieved
+        log.warning("closing the pool of a history fill failed: %s", type(closing.exception()).__name__)
+
+
+async def _history_fill(
+    pool: asyncpg.Pool, params: dict[str, Any], factory: ConnectorFactory, job_id: int, known: Iterable[str]
+) -> dict[str, Any]:
+    """Fill [start, end] of one source from the history it keeps (the work of `POST /api/sources/{id}/history/fill`).
+
+    The fill runs on a small pool of its own, as the fill command opens its own: a fill can last an hour, and it must not take the
+    collector's shared connections from the poll loop and the other jobs. A restart of the collector fails a running fill
+    (`fail_stale_jobs`); running the same fill again adds only what is missing. What the engine refuses, or stops with, becomes the
+    job's error: the runner stores `{"error": sentence}` for an exception, scrubbed of the source's credentials."""
+    settings = HistorySettings.from_env(os.environ)  # a ValueError names the variable that is wrong
+    known = list(known)
+    try:  # the route wrote these; a job row that was written by hand may lack them
+        source_id = params["source_id"]
+        start, end = datetime.fromisoformat(params["start"]), datetime.fromisoformat(params["end"])
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError("the fill job does not say which source and which range (source_id, start and end): ask for the fill again") from None
+    try:
+        own = await asyncpg.create_pool(
+            get_settings().database_url, min_size=1, max_size=FILL_POOL_SIZE, init=pg._init_connection
+        )
+    except Exception as exc:  # no database: the class says which; the message could quote the connection string
+        raise RuntimeError(f"could not open the database for the fill: {type(exc).__name__}") from None
+    try:
+        engine = Backfill(own, factory, settings, sleep=_fill_sleep)
+        for attempt in range(FILL_LEASE_RETRIES + 1):
+            try:
+                report = await engine.fill_range(
+                    source_id, await _inside_retention(own, start), end,
+                    before_first_reading=bool(params.get("before_first_reading")), dry_run=False, yes=True,
+                )
+                break
+            except LeaseHeld:
+                if attempt == FILL_LEASE_RETRIES:
+                    raise
+                await _fill_sleep(FILL_LEASE_WAIT_SECONDS)
+    except FillRefused as refused:  # LeaseHeld included, once the retries are used up: the engine's own sentence
+        raise RuntimeError(clip_error(scrub_url_credentials(str(refused), known))) from None
+    except Exception as exc:  # whatever else: a sentence with the class, scrubbed, never a traceback that could quote a credential
+        # The runner logs only the sentence: the stack stays in the collector's log, which hides URL credentials (install_log_scrub).
+        log.warning("history fill of source %s failed", source_id, exc_info=True)
+        raise RuntimeError(
+            f"the fill failed: {type(exc).__name__}: {clip_error(scrub_url_credentials(str(exc), known), 300)}"
+        ) from None
+    finally:
+        await _close_fill_pool(own)
+    return {
+        "ok": True, "text": report.text, "read": report.read, "new": report.new, "already": report.already,
+        "differing": report.differing, "rejected": report.rejected,
+    }
+
+
+_HANDLERS = {
+    "test_source": _test_source, "browse_source": _browse_source, "scan": _scan, "check_connection": _check_connection,
+    "history_fill": _history_fill,
+}
 
 
 def _stored_result(result: Any, known: Iterable[str] = ()) -> Any:

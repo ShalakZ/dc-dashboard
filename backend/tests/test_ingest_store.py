@@ -10,7 +10,7 @@ from dcdash.core import journal
 from dcdash.core.pg import LATEST_CHANNEL, create_pool
 from dcdash.ingest import store
 from dcdash.ingest.kinds import READINGS_CONFLICT
-from dcdash.ingest.store import WriteResult, insert_readings, journal_conflicts
+from dcdash.ingest.store import WriteResult, classify_readings, insert_readings, journal_conflicts
 from helpers import listening, make_point, make_source, wait_for
 
 T0 = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
@@ -411,3 +411,50 @@ async def test_journaling_never_raises(db, database_url, monkeypatch):
     journal.reset_limits()
     monkeypatch.setattr(journal, "record_soon", broken)
     await journal_conflicts(db, result)
+
+
+# --- classify_readings: the dry run of an import (w31) ---
+
+
+async def _classify(db, rows):
+    async with db.acquire() as conn, conn.transaction():
+        return await classify_readings(conn, rows)
+
+
+async def test_classify_agrees_with_the_insert_on_a_mixed_batch_and_writes_nothing(db, database_url):
+    a, b = await _points(db, 2)
+    await _store(db, [(a, at(0), 1.0, 0), (a, at(5), 2.0, 0), (b, at(0), 3.0, 0)])
+    batch = [(a, at(0), 1.0, 0), (a, at(5), 99.0, 0), (b, at(0), 3.0, 1), (b, at(10), 4.0, 0), (a, at(20), math.nan, 0)]
+    before = await db.fetchval("SELECT count(*) FROM readings")
+    async with listening(database_url, LATEST_CHANNEL) as received:
+        new, already, differing, samples = await _classify(db, batch)
+        await _quiet(db, received)  # a dry run notifies nobody
+    assert await db.fetchval("SELECT count(*) FROM readings") == before
+    assert await _latest(db, a) == (at(5), 2.0, 0)
+    assert (new, already, differing) == (2, 1, 2)
+    assert samples == [
+        {"point_id": a, "ts": at(5).isoformat(), "stored": 2.0, "resent": 99.0},
+        {"point_id": b, "ts": at(0).isoformat(), "stored": 3.0, "resent": 3.0},
+    ]
+    real = await _store(db, batch)
+    assert (real.new, real.already, real.differing) == (new, already, differing)
+    assert real.samples == samples
+
+
+async def test_classify_sees_into_a_compressed_chunk_and_keeps_the_first_of_a_pair_twice(db):
+    (a,) = await _points(db)
+    old = datetime.now(timezone.utc) - timedelta(days=40)
+    await _store(db, [(a, old + timedelta(minutes=i), float(i), 0) for i in range(5)])
+    await db.execute("SELECT count(compress_chunk(c, if_not_compressed => true)) FROM show_chunks('readings') c")
+    batch = [(a, old + timedelta(minutes=2), 2.0, 0), (a, old + timedelta(minutes=2), 50.0, 0), (a, old + timedelta(minutes=9), 9.0, 0)]
+    new, already, differing, samples = await _classify(db, batch)
+    assert (new, already, differing, samples) == (1, 1, 0, [])  # the second copy of a pair is not looked at
+    assert await db.fetchval("SELECT count(*) FROM readings") == 5
+
+
+async def test_classify_reads_a_naive_time_as_utc_and_an_aware_one_in_any_zone_as_the_same_instant(db):
+    (a,) = await _points(db)
+    await _store(db, [(a, at(0), 1.0, 0)])
+    cairo = at(0).astimezone(ZoneInfo("Africa/Cairo"))
+    assert await _classify(db, [(a, cairo, 1.0, 0), (a, at(0).replace(tzinfo=None), 1.0, 0)]) == (0, 1, 0, [])
+    assert await _classify(db, []) == (0, 0, 0, [])

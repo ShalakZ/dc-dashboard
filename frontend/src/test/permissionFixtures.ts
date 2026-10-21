@@ -26,6 +26,7 @@ export const AREA_AND_KIND: Record<PermissionId, [string, Kind]> = {
   "discovery.edit": ["Sources and discovery", "change"],
   "discovery.scan": ["Sources and discovery", "risky"],
   "discovery.accept": ["Sources and discovery", "risky"],
+  "readings.import": ["Sources and discovery", "risky"],
   "storage.view": ["Storage and settings", "see"],
   "storage.edit": ["Storage and settings", "change"],
   "settings.view": ["Storage and settings", "see"],
@@ -40,7 +41,7 @@ export const AREA_AND_KIND: Record<PermissionId, [string, Kind]> = {
   "diagnostics.run": ["Diagnostics", "change"],
 };
 
-/** GET /api/permissions as the server answers it: all 32 ids in catalogue order. */
+/** GET /api/permissions as the server answers it: all 33 ids in catalogue order. */
 export const catalogue = (): PermissionRow[] =>
   PERMISSIONS.map((id) => ({ id, area: AREA_AND_KIND[id][0], kind: AREA_AND_KIND[id][1], label: PERMISSION_LABELS[id], description: `About ${id}.` }));
 

@@ -67,9 +67,16 @@ export function notifyForbidden(path: string): void {
   if (!isAuthPath(path)) onForbidden?.();
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** A body that is sent as it is (a file or a pasted list), not as JSON. */
+interface RawBody { body: Blob | string; contentType: string }
+
+async function request<T>(method: string, path: string, body?: unknown, raw?: RawBody): Promise<T> {
   const init: RequestInit = { method, credentials: "same-origin", headers: {} };
-  if (body !== undefined) {
+  if (raw !== undefined) {
+    // Always named here: a browser sends no content-type for a file whose extension it does not know, and the server answers 415 to a body it cannot place.
+    (init.headers as Record<string, string>)["content-type"] = raw.contentType;
+    init.body = raw.body;
+  } else if (body !== undefined) {
     (init.headers as Record<string, string>)["content-type"] = "application/json";
     init.body = JSON.stringify(body);
   }
@@ -101,6 +108,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   get: <T>(path: string) => request<T>("GET", path),
   post: <T>(path: string, body?: unknown) => request<T>("POST", path, body),
+  /** POST `body` (a File, a Blob or a string) unchanged, with `contentType` always set; the reply, the refusals and the 401/403 handling are `post`'s. */
+  postRaw: <T>(path: string, body: Blob | string, contentType = "text/csv") => request<T>("POST", path, undefined, { body, contentType }),
   patch: <T>(path: string, body: unknown) => request<T>("PATCH", path, body),
   put: <T>(path: string, body: unknown) => request<T>("PUT", path, body),
   del: (path: string) => request<undefined>("DELETE", path),

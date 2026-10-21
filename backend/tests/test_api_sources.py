@@ -37,6 +37,42 @@ async def test_connectors_lists_types_with_a_config_schema(client, db):
     assert "url" in properties and "timeout_seconds" in properties
 
 
+async def test_connectors_say_which_types_poll_and_list_the_ones_that_do_not_last(client, db):
+    await login_as(client, db)
+    listed = (await client.get("/api/connectors")).json()
+    assert all(set(entry) == {"type", "config_schema", "polls", "description"} for entry in listed)
+    # the source form starts on the first entry, so a type without an address to fill in (file) must not be first
+    ours = [entry["type"] for entry in listed if entry["type"] in {"file", "modbus", "opcua", "simulator"}]
+    assert ours == ["modbus", "opcua", "simulator", "file"]
+    assert listed[0]["polls"] is True
+    by_type = {entry["type"]: entry for entry in listed}
+    assert [by_type[name]["polls"] for name in ("modbus", "opcua", "simulator", "file")] == [True, True, True, False]
+    assert by_type["file"]["description"] and by_type["modbus"]["description"] == ""
+    assert by_type["file"]["config_schema"].get("properties", {}) == {}
+
+
+async def test_a_file_source_is_created_without_a_config_and_listed_as_not_polling(client, db):
+    await login_as(client, db)
+    created = await client.post("/api/sources", json={"name": "imports", "connector_type": "file"})
+    assert created.status_code == 201, created.text
+    assert created.json()["config"] == {} and created.json()["status"] == "unknown"
+    assert (await client.post("/api/sources", json={"name": "bad", "connector_type": "file", "config": {"host": "h"}})).status_code == 422
+    sim = await create_sim(client)
+    listed = {row["name"]: row for row in (await client.get("/api/sources")).json()}
+    assert listed["imports"]["polls"] is False and listed[sim["name"]]["polls"] is True
+
+
+async def test_test_all_leaves_out_a_source_that_is_filled_by_importing_files(client, db):
+    await login_as(client, db)
+    sim = await create_sim(client)
+    await client.post("/api/sources", json={"name": "imports", "connector_type": "file"})
+    everything = await client.post("/api/sources/test-all")
+    assert everything.status_code == 202 and len(everything.json()["job_ids"]) == 1
+    assert await db.fetchval("SELECT params FROM jobs WHERE id = $1", everything.json()["job_ids"][0]) == {"source_id": sim["id"]}
+    audit = await db.fetchval("SELECT detail FROM audit_log WHERE action = 'source.test_all'")
+    assert (json.loads(audit) if isinstance(audit, str) else audit)["sources"] == 1
+
+
 async def test_create_source_encrypts_and_never_returns_the_secret(client, db):
     await login_as(client, db)
     source = await create_sim(client)

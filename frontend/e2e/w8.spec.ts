@@ -184,7 +184,7 @@ test.describe("W8: field diagnostics", () => {
     expect((await page.request.get("/api/diagnostics/report")).status()).toBe(403);
 
     await navLink(page, "Sources").click();
-    const row = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "sim", exact: true }) });
+    const row = page.getByRole("row").filter({ has: page.locator(".cell-name[title=\"sim\"]") });
     await (await rowAction(page, row, "Check connection")).click();
     const dialog = page.getByRole("dialog", { name: "Check connection: sim", exact: true });
     await expect(dialog).toBeVisible();

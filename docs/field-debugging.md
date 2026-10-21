@@ -164,6 +164,90 @@ stays: run the same command again.
 terminal shows both), its exit code when it is not 0, and a new **Summary** report built after the run, so the `history:` line and the
 journal show the state. Never paste anything from `.env`.
 
+**From the Sources page.** **Fill older range...** in a source's row menu (`sources.edit`, only for a source whose connector keeps
+history) starts the same fill in the collector instead of at the command line: the dialog's **Check range** is the dry run, **Start fill**
+the `--yes`, and the dialog follows the job and ends with the same one line of counts. Only one fill runs at a time in total, and a
+collector restart fails a running one: start it again and it adds only what is missing. If it fails, paste back the sentence the dialog
+shows and a new Summary report.
+
+## Importing a file by command
+
+The Sources page imports a CSV export in two steps, **Check file** and **Import N rows** ([how it works](sources-and-discovery.md#importing-readings-from-a-file)).
+The same import runs from the project folder, which is the way to try a file on the laptop without a browser. `N` is the source's number
+as in the history section, and the profile (which columns hold the tag, time and value) is one saved in the dashboard by **Import
+file...**. The file goes in on standard input (`-`), so it is read on your machine, not inside the container:
+
+    docker compose exec -T api python -m dcdash.ingest.importer --source N --profile-name hourly - < export.csv
+    docker compose exec -T api python -m dcdash.ingest.importer --source N --profile-name hourly --yes - < export.csv
+
+PowerShell has no `<`; run the same thing through `cmd`, which also hands the file over byte for byte:
+
+    cmd /c "docker compose exec -T api python -m dcdash.ingest.importer --source N --profile-name hourly - < export.csv"
+
+Without `--yes` it is a **dry run**: it reads the whole file, writes nothing and records nothing, and prints what a real import would do:
+a line naming the source and profile, the one sentence of counts (`12,480 rows read, 12,000 new, 480 already there, 0 differing, 0
+rejected, 3 unknown tags (TAG-A, TAG-B, TAG-C)`), a line for each closed month the rows fall in, one for rows of bad quality, one for rows
+in a stretch whose raw readings the retention removed, the energy counter readings to check (below), and the first 20 rejected lines with their line
+numbers and reasons. It never prints a reading value, except in that counter list. With `--yes` it imports and ends with
+`Done.`; the same file again says `0 new`, so it is safe to repeat. `--profile-file FILE.json` takes a profile from a file instead, but
+the path is read inside the container, so a saved profile and `--profile-name` are the practical way. A file can be at most 20 MB,
+500,000 rows and 4,096 bytes a line, and UTF-8; a refusal is one sentence.
+
+`--refresh` (with `--yes` only) is the repair for an import that was cut off (the server stopped, or Ctrl+C). An import refreshes the
+hourly and minute summaries over the hours of its new rows that are older than a week (the newer ones follow by themselves); a run
+that was cut off before it got there leaves those rows stored, and importing the file again finds them "already there" and refreshes
+nothing. Run the same file with `--yes --refresh` and the summaries over every row of the file older than a week are refreshed, the rows
+already there included. The web page never does this.
+
+**Counter warnings, and repairing a wrong reading.** After the counts the report may say `Check these energy counter readings`: up to 20
+rows of a point mapped as `energy_kwh`, each with its tag, its time, its value and the value before it, where the value is lower than
+the one before it or the step is more than 100 times the point's usual step and more than 1,000. It is information only and never
+blocks: a counter does reset, and a gap is one big honest step. But an import cannot be undone, and the first value stored for a tag
+and a time stays, so a second import does not correct it, and a wrong counter reading is billed in full. A wrong stored row is repaired
+by hand with SQL, under the operator's control. **Take a backup first** ([Backup and restore](backup-and-restore.md)). Open
+`docker compose exec db psql -U dcdash -d dcdash` and list the point's readings in the time range (this only reads; `3` is the source's
+number, `M01.kWh` the tag as in the file):
+
+    SELECT r.ts, r.value, r.quality
+    FROM readings r JOIN points p ON p.id = r.point_id
+    WHERE p.source_id = 3 AND p.address = 'M01.kWh'
+      AND r.ts >= '2026-10-01 00:00+00' AND r.ts < '2026-10-02 00:00+00'
+    ORDER BY r.ts;
+
+Delete the wrong row by its point and time, one row at a time (this changes data). Look the point's number up first and write it into the
+statement as a plain number: a sub-select in the `WHERE` makes the database unpack every compressed block of the chunk, and a chunk
+older than a week is compressed, so that form stops with "tuple decompression limit exceeded". This form was tried on a compressed
+chunk and deleted exactly one row (type `BEGIN;` first and `ROLLBACK;` after the count if you only want to see it):
+
+    SELECT id FROM points WHERE source_id = 3 AND address = 'M01.kWh';
+
+    DELETE FROM readings
+    WHERE point_id = 41   -- the number the SELECT printed
+      AND ts = '2026-10-01 05:00+00';
+
+Then import the corrected file: it stores the deleted row again and refreshes the hourly and minute summaries over the hours of its new
+rows that are older than a week (newer ones follow by themselves). If you delete a row and import no replacement, run a file that holds
+that hour with `--yes --refresh` instead, which recomputes the summaries over all its rows older than a week. The frozen figures of a
+closed month are not affected by any of this.
+
+**Exit codes.** 0: done, or checked. 1: refused or failed (one sentence on the error output: the file, an unknown source, the profile's
+columns missing from the file, a run that stopped half way; what was stored stays). 2: bad arguments, a profile that is not usable, or
+`--refresh` without `--yes`. 3: another import is running; there is one lock for the page and the command, a dry run included, so wait
+for it and run again. 130: Ctrl+C. `echo $?` in bash and `$LASTEXITCODE` in PowerShell show it.
+
+**Where it shows.** A real run writes one audit row `readings.imported` (the Audit page; `via: command`, with no user, the file's
+SHA-256 and the counts, never a value) and one journal event `import.finished` (the JOURNAL part of a report). A dry run writes
+neither.
+
+**What to paste back.** The command line you typed, everything it printed (the refusals come on the error output; the terminal shows
+both), its exit code when it is not 0, and a new Summary report after a real run. The file itself stays on your machine. The reasons of
+the rejected lines are worth reading before pasting: `older_than_stored_raw_readings` (the time is in a stretch whose raw
+readings the retention removed while the summaries are kept, so the row cannot be stored, whatever the retention is now; a row after
+that stretch is stored even when the raw table is empty), `interval_energy_in_counter_point` (energy per period
+into a point mapped as anything but `custom`), `malformed_line` (also a row with a filled cell beyond the header's columns) and `duplicate_in_file`
+(also a repeated line in the hour the clocks go back). An unknown tag marked `[non-ASCII]` holds a look-alike letter. The web page's
+own refusals are 408 (an upload that stopped for 30 seconds) and 403 (a request from another site); the command meets neither.
+
 ## Reading a report (what Claude looks at)
 1. The **header**: build id and time, to know which code produced it.
 2. The **LATEST CHECK** line right after it: the failing step and the OPC UA status, or "all steps OK", or "no connection check has been run".

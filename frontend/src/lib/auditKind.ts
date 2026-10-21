@@ -5,9 +5,12 @@ export type AuditKind = "signin" | "problem" | "create" | "change" | "delete" | 
 const PROBLEMS = new Set(["login.failed", "login.locked", "password.change_failed", "display.claim_blocked"]);
 const SIGN_INS = new Set(["login.succeeded", "setup.completed", "display.connected"]);
 const SETTINGS_PREFIXES = ["settings.", "storage.", "billing."];
-// Actions that add things without ending in ".created": the data-centre starter pack registers kinds.
-const CREATE_ACTIONS = new Set(["kind.starter_pack_added"]);
-const CHANGE_SUFFIXES = [".updated", ".changed", "_changed", ".unblocked", ".default_set", ".renamed", ".moved"];
+// Actions that add things without ending in ".created": the data-centre starter pack registers kinds, an import adds readings and a tag list adds mappings, assets and points.
+const CREATE_ACTIONS = new Set(["kind.starter_pack_added", "readings.imported", "tags.mapped"]);
+// Undoing a tag list takes its mappings and assets away again.
+const DELETE_ACTIONS = new Set(["tags.unmapped"]);
+// A saved import profile is a create or an update in one (a PUT), so it is a change.
+const CHANGE_SUFFIXES = [".updated", ".changed", "_changed", ".unblocked", ".default_set", ".renamed", ".moved", ".saved"];
 
 /**
  * The first rule that matches wins: problem, signin, settings, delete, create, change; anything else (checks, scans, browsing,
@@ -19,7 +22,7 @@ export function auditKind(action: string): AuditKind {
   if (SIGN_INS.has(action)) return "signin";
   if (SETTINGS_PREFIXES.some((prefix) => action.startsWith(prefix))) return "settings";
   // A revoked display link ends for good, like a removal (no other action ends in ".revoked").
-  if (action.endsWith(".deleted") || action.endsWith(".revoked")) return "delete";
+  if (action.endsWith(".deleted") || action.endsWith(".revoked") || DELETE_ACTIONS.has(action)) return "delete";
   if (action.endsWith(".created") || CREATE_ACTIONS.has(action)) return "create";
   if (CHANGE_SUFFIXES.some((suffix) => action.endsWith(suffix))) return "change";
   return "other";

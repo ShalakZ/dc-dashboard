@@ -326,6 +326,16 @@ def test_every_registered_connector_field_is_shown_or_explicitly_excluded_and_no
     )
 
 
+def test_a_source_filled_by_importing_files_is_not_a_problem_for_having_no_status():
+    """A `file` source is never polled, so its status stays "unknown" for good: ranked with the sources that have nothing to see."""
+    data = ReportData(
+        generated_at=NOW, environment=env(),
+        sources=(source(1, connector_type="file", status="unknown", config=()), source(2, status="unknown"), source(3)),
+    )
+    # (rank, source id): the polled source with no status is a problem (rank 1), the online one and the file source are not (rank 2)
+    assert report._Renderer._ranked(data) == [(1, 2), (2, 1), (2, 3)]
+
+
 def test_every_settings_field_is_reported_or_explicitly_excluded():
     declared = set(Settings.model_fields)
     shown, excluded = set(report.REPORT_ENV_FIELDS), set(report.EXCLUDED_ENV_FIELDS)

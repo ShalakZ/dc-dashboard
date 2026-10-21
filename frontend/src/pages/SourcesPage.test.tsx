@@ -138,7 +138,8 @@ describe("SourcesPage", () => {
       expect(triggers).toHaveLength(2);
       expect(screen.getAllByRole("button", { name: /^Delete / })).toHaveLength(2);
       await userEvent.click(triggers[1]);
-      expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Test", "Check connection", "Edit", "Points"]);
+      // (w31: the Import and Map tag list items come after the old four; the fixture has no history, so no Fill older range)
+      expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Test", "Check connection", "Edit", "Points", "Import file...", "Map tag list..."]);
       admin.unmount();
       // (a viewer is not in this loop any more: it holds no permission of this page, so it cannot open it at all, see builtinAccess.test.tsx)
       for (const role of ["operator"]) {
@@ -879,6 +880,14 @@ describe("SourcesPage while the list loads (W7f)", () => {
     const region = screen.getByText(LABEL).parentElement!;
     expect(region).toHaveAttribute("role", "status");
     expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(7); // seven of the table's nine columns: more would run wider than the page
+    // The loaded Name cell has the history line under the name: the placeholder draws both lines, or the page grows by about 24px a row when the list lands.
+    const rows = region.querySelectorAll(".sk-table tbody tr");
+    expect(rows).toHaveLength(5);
+    for (const row of rows) {
+      expect(row.querySelectorAll("td:first-child .sk-line")).toHaveLength(2);
+      expect(row.querySelectorAll("td:first-child > .cell-history .sk-line")).toHaveLength(1);
+      expect(row.querySelectorAll("td:not(:first-child) .cell-history")).toHaveLength(0);
+    }
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
     expect(screen.queryByText("No sources yet.")).not.toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument(); // the placeholder is not a table to assistive technology
@@ -1001,5 +1010,279 @@ describe("SourcesPage controls follow the permissions of the role (a custom role
     await show(["sources.edit"], { "GET /api/connectors": { body: connectors } });
     await userEvent.click(screen.getByRole("button", { name: "Add source" }));
     expect(await screen.findByRole("dialog", { name: "Add source" })).toBeInTheDocument();
+  });
+});
+
+// w31: the three new row-menu items, the second line under a name, the source that is filled by files.
+describe("SourcesPage, importing, mapping a tag list and filling (w31)", () => {
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
+  const history = (over: Record<string, unknown> = {}) => ({
+    supports_history: true, state: "idle", answered_through: minutesAgo(3), last_success_at: minutesAgo(3), next_try_at: null, last_error: null, ...over,
+  });
+  const fileSource = { ...source, id: 5, name: "from-files", connector_type: "file", config: {}, has_secret: false, status: "unknown", polls: false, mapped_points: 0 };
+  const w31Routes = (over: Record<string, unknown> = {}) => ({
+    "GET /api/import-profiles": { body: { profiles: [] } },
+    ...over,
+  });
+  /** The only row's menu, opened: the texts of its items. */
+  const menuTexts = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: /^Actions for / }));
+    return screen.getAllByRole("menuitem").map((el) => el.textContent);
+  };
+  /** A role called "custom" that holds sources.view and `permissions`; `row` is the only row. */
+  const show = async (permissions: PermissionId[], row: Record<string, unknown> = {}, over: Record<string, unknown> = {}) => {
+    const calls = mockFetch({
+      ...routes("custom"), ...w31Routes(),
+      "GET /api/me": { body: userFor("custom", { permissions: ["sources.view", ...permissions] }) },
+      "GET /api/sources": { body: [{ ...source, ...row }] },
+      ...over,
+    });
+    renderWithProviders(<><SourcesPage /><SignedIn /></>, { route: "/sources", path: "/sources" });
+    await screen.findByText(String(row.name ?? "sim"));
+    await accountKnown();
+    return calls;
+  };
+
+  describe("the menu follows the permissions", () => {
+    it("readings.import alone: Import file...", async () => {
+      await show(["readings.import"], { history: history() });
+      expect(await menuTexts()).toEqual(["Import file..."]);
+    });
+
+    it("discovery.accept alone: Map tag list...", async () => {
+      await show(["discovery.accept"], { history: history() });
+      expect(await menuTexts()).toEqual(["Map tag list..."]);
+    });
+
+    it("sources.edit with a source that keeps history: Fill older range... after Edit and Points", async () => {
+      await show(["sources.edit"], { history: history() });
+      expect(await menuTexts()).toEqual(["Edit", "Points", "Fill older range..."]);
+    });
+
+    it("no Fill older range... without sources.edit, for a source without history, or when its row says the connector keeps none", async () => {
+      await show(["readings.import", "discovery.accept"], { history: history() });
+      expect(await menuTexts()).toEqual(["Import file...", "Map tag list..."]);
+    });
+
+    it.each([
+      ["no history field (an older API)", {}],
+      ["a null history", { history: null }],
+      ["a connector that keeps none", { history: history({ supports_history: false, state: "not_supported" }) }],
+    ])("sources.edit with %s: no Fill older range...", async (_name, row) => {
+      await show(["sources.edit"], row);
+      expect(await menuTexts()).toEqual(["Edit", "Points"]);
+    });
+
+    it("every permission: the old four in their order, then Import file..., Map tag list..., Fill older range...", async () => {
+      await show(["sources.test", "diagnostics.run", "sources.edit", "readings.import", "discovery.accept"], { history: history() });
+      expect(await menuTexts()).toEqual(["Test", "Check connection", "Edit", "Points", "Import file...", "Map tag list...", "Fill older range..."]);
+    });
+  });
+
+  describe("a source that is filled by importing files (polls: false)", () => {
+    const all: PermissionId[] = ["sources.test", "diagnostics.run", "sources.edit", "readings.import", "discovery.accept"];
+
+    it("has no Test and no Check connection, whatever the role may do; the other items stay", async () => {
+      await show(all, fileSource);
+      expect(await menuTexts()).toEqual(["Edit", "Points", "Import file...", "Map tag list..."]);
+    });
+
+    it("keeps Test and Check connection for a source whose polls is true or missing", async () => {
+      await show(all, { polls: true });
+      expect(await menuTexts()).toEqual(["Test", "Check connection", "Edit", "Points", "Import file...", "Map tag list..."]);
+    });
+
+    it("says it is filled by file import, in the note style, not 'not polled' and not a chip", async () => {
+      await show(["sources.view"], fileSource);
+      const text = screen.getByText("filled by file import");
+      expect(text).toHaveClass("muted", "st", "st-off", "note");
+      expect(text).not.toHaveClass("chip");
+      expect(screen.queryByText(/not polled/)).not.toBeInTheDocument();
+    });
+
+    it("is left out of Test all: the job ids go to the sources that were tested, by id order, and the file source shows no result", async () => {
+      const result = (status: string) => ({ ok: true, status, latency_ms: 5, message: "" });
+      mockFetch({
+        ...routes("operator"),
+        "GET /api/sources": { body: [
+          { ...source, id: 3, name: "alpha" }, { ...fileSource, id: 2, name: "bravo-files" }, { ...source, id: 1, name: "zed" },
+        ] },
+        "POST /api/sources/test-all": { status: 202, body: { job_ids: [10, 30] } },
+        "GET /api/jobs/10": { body: { id: 10, kind: "test_source", status: "done", result: result("ok-for-zed"), created_at: "t", finished_at: "t" } },
+        "GET /api/jobs/30": { body: { id: 30, kind: "test_source", status: "done", result: result("ok-for-alpha"), created_at: "t", finished_at: "t" } },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await userEvent.click(await screen.findByRole("button", { name: "Test all" }));
+      expect(await screen.findByText("ok-for-zed 5 ms")).toBeInTheDocument();
+      expect(within(screen.getByText("ok-for-zed 5 ms").closest("tr")!).getByText("zed")).toBeInTheDocument();
+      expect(within(screen.getByText("ok-for-alpha 5 ms").closest("tr")!).getByText("alpha")).toBeInTheDocument();
+      expect(within(screen.getByText("bravo-files").closest("tr")!).queryByText(/ms/)).not.toBeInTheDocument();
+    });
+
+    it("leaves Test all waiting when every source is filled by files (the server would test none)", async () => {
+      mockFetch({ ...routes("operator"), "GET /api/sources": { body: [fileSource] } });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await screen.findByText("from-files");
+      expect(screen.getByRole("button", { name: "Test all" })).toBeDisabled();
+    });
+  });
+
+  describe("the second line under the name", () => {
+    const lineOf = (name: string) => within((screen.getByText(name).closest("tr"))!);
+
+    it("shows the history line of a source that keeps history, inside the Name cell, in a muted small line with the full text as its title", async () => {
+      await show(["sources.view"], { history: history() });
+      const line = screen.getByText(/^History: up to date, last fill 3 min ago$/);
+      expect(line).toHaveClass("cell-history", "muted");
+      expect(line).toHaveAttribute("title", "History: up to date, last fill 3 min ago");
+      expect(line.closest("td")).toBe(screen.getByText("sim").closest("td")); // the same cell as the name: the table keeps its nine columns
+      expect(document.querySelectorAll("thead th")).toHaveLength(9);
+      expect(document.querySelectorAll("tbody tr:first-child td")).toHaveLength(9);
+    });
+
+    it("says what the connector reports in each state", async () => {
+      mockFetch({
+        ...routes("operator"),
+        "GET /api/sources": { body: [
+          { ...source, id: 1, name: "fresh", history: history({ state: "never_run", last_success_at: null, answered_through: null }) },
+          { ...source, id: 2, name: "catching", history: history({ state: "filling", answered_through: minutesAgo(300) }) },
+          { ...source, id: 3, name: "refused", history: history({ state: "backing_off", last_error: "the Historian refused: 429" }) },
+        ] },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await screen.findByText("fresh");
+      expect(lineOf("fresh").getByText("History: not started yet")).toBeInTheDocument();
+      expect(lineOf("catching").getByText("History: filling, 5 hours behind")).toBeInTheDocument();
+      expect(lineOf("refused").getByText("History: waiting, the Historian refused: 429")).toBeInTheDocument();
+    });
+
+    it("says a switched-off source that never ran is not filled, rather than 'not started yet' for ever (the automatic fill skips it)", async () => {
+      mockFetch({
+        ...routes("operator"),
+        "GET /api/sources": { body: [
+          { ...source, id: 1, name: "off", enabled: false, history: history({ state: "never_run", last_success_at: null, answered_through: null }) },
+          { ...source, id: 2, name: "on", history: history({ state: "never_run", last_success_at: null, answered_through: null }) },
+        ] },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await screen.findByText("off");
+      expect(lineOf("off").getByText("History: not filled (the source is switched off)")).toHaveClass("cell-history");
+      expect(lineOf("on").getByText("History: not started yet")).toBeInTheDocument();
+    });
+
+    it("says a switched-off source that was backing off has stopped, since nothing retries it", async () => {
+      mockFetch({
+        ...routes("operator"),
+        "GET /api/sources": { body: [
+          { ...source, id: 1, name: "off", enabled: false, history: history({ state: "backing_off", last_error: "the Historian refused: 429" }) },
+          { ...source, id: 2, name: "on", history: history({ state: "backing_off", last_error: "the Historian refused: 429" }) },
+        ] },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await screen.findByText("off");
+      expect(lineOf("off").getByText("History: stopped (the source is switched off), the Historian refused: 429")).toHaveClass("cell-history");
+      expect(lineOf("on").getByText("History: waiting, the Historian refused: 429")).toBeInTheDocument();
+    });
+
+    it("shows nothing for a source whose connector keeps no history, or whose row has none", async () => {
+      mockFetch({
+        ...routes("operator"),
+        "GET /api/sources": { body: [
+          { ...source, id: 1, name: "plain" },
+          { ...source, id: 2, name: "nulled", history: null },
+          { ...source, id: 3, name: "none", history: history({ supports_history: false, state: "not_supported" }) },
+        ] },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await screen.findByText("plain");
+      expect(document.querySelectorAll(".cell-history")).toHaveLength(0);
+      for (const name of ["plain", "nulled", "none"]) expect(screen.getByText(name).closest("td")!.textContent).toBe(name);
+    });
+
+    it("says a source that is filled by files is filled by importing files", async () => {
+      await show(["sources.view"], fileSource);
+      expect(screen.getByText("Filled by importing files")).toHaveClass("cell-history");
+    });
+  });
+
+  describe("the three dialogs", () => {
+    /** The sources list as a variable, so a test can empty it under an open dialog. */
+    let listed: unknown[];
+    beforeEach(() => { listed = [{ ...source, history: history() }]; });
+    const open = async (item: string, title: string) => {
+      mockFetch({ ...routes("admin"), ...w31Routes(), "GET /api/sources": () => ({ body: listed }) });
+      renderWithProviders(<><SourcesPage /><RefetchSources /></>, { route: "/sources", path: "/sources" });
+      const opener = await trigger();
+      await pick(item);
+      const dialog = await screen.findByRole("dialog", { name: title });
+      return { opener, dialog };
+    };
+
+    it.each([
+      ["Import file...", "Import readings: sim", "Close"],
+      ["Map tag list...", "Map tag list: sim", "Cancel"],
+      ["Fill older range...", "Fill an older range: sim", "Close"],
+    ])("%s opens %s, the other row actions wait while it is open, and closing it puts the focus on the row's menu button", async (item, title, closer) => {
+      const { opener, dialog } = await open(item, title);
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      fireEvent.click(screen.getByRole("button", { name: /^Actions for /, hidden: true })); // the backdrop covers the page: no focus move
+      expect(screen.getByRole("menuitem", { name: "Edit", hidden: true })).toBeDisabled();
+      expect(screen.getByRole("menuitem", { name: "Import file...", hidden: true })).toBeDisabled();
+      expect(screen.getByRole("menuitem", { name: "Map tag list...", hidden: true })).toBeDisabled();
+      expect(screen.getByRole("menuitem", { name: "Fill older range...", hidden: true })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Add source", hidden: true })).toBeDisabled();
+      await userEvent.click(within(dialog).getByRole("button", { name: closer }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(opener).toHaveFocus();
+      expect(screen.getByRole("button", { name: "Add source" })).toBeEnabled();
+    });
+
+    it.each([
+      ["Import file...", "Import readings: sim"],
+      ["Map tag list...", "Map tag list: sim"],
+      ["Fill older range...", "Fill an older range: sim"],
+    ])("%s: Escape closes it and the focus goes back to the row's menu button", async (item, title) => {
+      const { opener } = await open(item, title);
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(opener).toHaveFocus();
+    });
+
+    it.each([
+      ["Import file...", "Import readings: sim", "Close"],
+      ["Map tag list...", "Map tag list: sim", "Cancel"],
+      ["Fill older range...", "Fill an older range: sim", "Close"],
+    ])("%s: when the row is gone by the time it closes (the list moved on), the focus goes to the page's heading, not to the body", async (item, title, closer) => {
+      const { dialog } = await open(item, title);
+      listed = [];
+      fireEvent.click(screen.getByRole("button", { name: "refetch sources", hidden: true }));
+      await waitFor(() => expect(screen.getByText("No sources yet.")).toBeInTheDocument());
+      await userEvent.click(within(dialog).getByRole("button", { name: closer }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.getByRole("heading", { level: 1, name: "Sources" })).toHaveFocus();
+    });
+
+    it("the Import dialog is for the source of the row it was opened from, even when the list is replaced under it", async () => {
+      const { dialog } = await open("Import file...", "Import readings: sim");
+      listed = [{ ...source, name: "renamed", history: history() }];
+      fireEvent.click(screen.getByRole("button", { name: "refetch sources", hidden: true }));
+      await waitFor(() => expect(screen.getByText("renamed", { selector: ".cell-name" })).toBeInTheDocument());
+      expect(dialog).toHaveAccessibleName("Import readings: sim");
+    });
+
+    it("Fill older range... posts to the fill route of the row's source", async () => {
+      const calls = mockFetch({
+        ...routes("admin"), ...w31Routes(),
+        "GET /api/sources": { body: [{ ...source, history: history() }] },
+        "POST /api/sources/2/history/fill": { body: { plan: "p", windows: [], expected_rows: 0 } },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await pick("Fill older range...");
+      await userEvent.type(await screen.findByLabelText("Start date"), "2020-03-01");
+      await userEvent.type(screen.getByLabelText("End date"), "2020-03-02");
+      await userEvent.click(screen.getByRole("button", { name: "Check range" }));
+      await screen.findByText("p");
+      expect(calls.filter((c) => c.method === "POST" && c.path === "/api/sources/2/history/fill")).toHaveLength(1);
+    });
   });
 });

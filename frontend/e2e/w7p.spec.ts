@@ -887,6 +887,7 @@ test.describe("W7p: Undo and the audit log", () => {
       await expect(drawer.locator("dd .what")).toHaveText(sentences[0][1]);
       await expect(drawer.getByRole("heading", { name: "What changed", level: 3, exact: true })).toBeVisible();
       await expect(drawer).toContainText(n("Hall A"));
+      await drawer.getByRole("button", { name: "Show the stored JSON" }).click();
       await expect(drawer.locator("pre.entry-json")).toContainText(`"request_id": "${together.request_id}"`);
       await expect(drawer.locator("pre.entry-json")).toContainText('"moved_with": 1');
       await page.keyboard.press("Escape");

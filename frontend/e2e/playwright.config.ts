@@ -414,5 +414,15 @@ export default defineConfig({
       dependencies: ["w28"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1920, height: 1080 } },
     },
+    // Importing readings and mapping tags (w31). It MAKES ITS OWN DATA through the API and the UI (`W31 <run> ...` sources, the top-level asset the tag list creates, the import profile `w31-<run>`, and the accounts and roles of
+    // case 2, which start `w31-`) and removes it all in afterAll, also after a failed case; it needs no scratch stack. Cases: a `file` source made in the Add source dialog, a tag list checked (problem lines, then a clean report)
+    // and created with its Undo toast, a CSV file checked and imported through a new profile and checked again with the saved one (0 new), and the Undo from the Audit drawer (the points stay, a second Undo says it was done);
+    // the three row-menu items per permission; the keyboard and focus of the two dialogs; the Fill older range dialog refusing 400 days back and 51 days in the server's words; and a file source that never polls.
+    {
+      name: "w31",
+      testMatch: "w31.spec.ts",
+      dependencies: ["w29"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

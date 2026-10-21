@@ -600,6 +600,35 @@ describe("SourcePointsPage while the points load (W7f)", () => {
     expect(document.querySelector(".sk-region")).toBeNull();
   });
 
+  describe("a source that is filled by importing files (polls: false)", () => {
+    const fileSource = { id: 2, name: "from-files", connector_type: "file", config: {}, enabled: true, status: "unknown", last_seen: null, last_error: null, has_secret: false, polls: false };
+
+    it("has no Browse points button: there is nothing to browse, and the page says how points come to be", async () => {
+      mockFetch({ ...routes, "GET /api/sources": { body: [fileSource] }, "GET /api/sources/2/points": { body: [] } });
+      page();
+      expect(await screen.findByText(/No points yet\. They are created by mapping a tag list/)).toBeInTheDocument();
+      expect(screen.queryByText(/Browse the source to discover them/)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Browse points" })).not.toBeInTheDocument();
+      expect(screen.getByRole("heading", { level: 1, name: "Points" })).toBeInTheDocument(); // the header and its trail stay
+      expect(screen.getByText("from-files", { selector: "[aria-current]" })).toBeInTheDocument();
+    });
+
+    it("keeps its points and their menu; only the Browse button goes", async () => {
+      mockFetch({ ...routes, "GET /api/sources": { body: [fileSource] } });
+      page();
+      const row = (await screen.findByText("panel1/power")).closest("tr")!;
+      await screen.findByText("from-files", { selector: "[aria-current]" }); // the source list has answered: only then is the page sure it is not polled
+      expect(within(row).getByRole("button", { name: /^Actions for / })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Browse points" })).not.toBeInTheDocument();
+    });
+
+    it("a source that polls (or a row without the field) keeps the button", async () => {
+      mockFetch({ ...routes, "GET /api/sources": { body: [{ ...fileSource, connector_type: "modbus", polls: true }] } });
+      page();
+      expect(await screen.findByRole("button", { name: "Browse points" })).toBeInTheDocument();
+    });
+  });
+
   it("ends with the error alone when the first fetch fails, and no region", async () => {
     mockFetch({ ...routes, "GET /api/sources/2/points": { status: 500, body: { detail: "the source is gone" } } });
     page();

@@ -2,15 +2,15 @@
 
 This page is for the administrator who decides who may do what, and for a developer who calls the API. Every action in the API needs a
 named permission; an account holds one role, and a role is a set of permissions. The screens only hide what the server would refuse.
-The page lists the 32 permissions, the three built-in roles, how to make a role of your own, the safeguards, and the same through the API.
+The page lists the 33 permissions, the three built-in roles, how to make a role of your own, the safeguards, and the same through the API.
 
 ## The permissions
 
 `backend/dcdash/core/permissions.py` is the one list (the `CATALOGUE`); the Roles tab and `GET /api/permissions` draw from it, and
 `frontend/src/lib/permissions.ts` mirrors its ids and labels (`backend/tests/test_permissions_parity.py` fails when the two drift).
-There are 32 permissions, in groups by area. Each has a kind: a **see** permission opens a page, a **change** permission edits what is
+There are 33 permissions, in groups by area. Each has a kind: a **see** permission opens a page, a **change** permission edits what is
 on it, and a **risky** permission is a sensitive action kept apart on purpose (deleting assets, managing asset kinds, choosing the
-default dashboard, managing display screens, exporting billing or the audit log, closing billing months, running scans, accepting scan results, changing sign-in protection, managing
+default dashboard, managing display screens, exporting billing or the audit log, closing billing months, running scans, accepting scan results, importing readings from a file, changing sign-in protection, managing
 roles). The Roles editor shows the risky ones under **Sensitive actions**.
 
 "Also needs" is what the Roles editor suggests ticking with it (`PERMISSION_NEEDS` in `frontend/src/lib/roleEditor.ts`): without
@@ -37,7 +37,8 @@ those, the page or the control shows nothing. The server does not enforce these 
 | | `discovery.view` | See scans and the graph | see | Open the Scans and Discovery pages. | |
 | | `discovery.edit` | Change scan scopes and the graph layout | change | Add, edit and delete scan scopes; save the graph layout; remove discovered sources that have nothing mapped. | `discovery.view` |
 | | `discovery.scan` | Run network scans | risky | Start a scan of a scope (it probes a network). | `discovery.view` |
-| | `discovery.accept` | Accept scan results | risky | Turn scan results into sources, assets and mappings. | `discovery.view` |
+| | `discovery.accept` | Accept scan results | risky | Turn scan results into sources, assets and mappings, and a tag list into points and mappings. | `discovery.view` |
+| | `readings.import` | Import readings from a file | risky | Load readings from a CSV export into a source, and save the import profiles that say how a file is laid out. | `sources.view` |
 | Storage and settings | `storage.view` | See storage | see | Open the Storage page. | |
 | | `storage.edit` | Change storage settings | change | Change retention, compression and disk limits. | `storage.view` |
 | | `settings.view` | See settings | see | Open the Settings page. | |
@@ -50,6 +51,17 @@ those, the page or the control shows nothing. The server does not enforce these 
 | Roles | `roles.manage` | Manage roles | risky | Create, edit and delete roles. Only the built-in Admin role holds it. | |
 | Diagnostics | `diagnostics.view` | See diagnostics | see | Open the Diagnostics page and build a report, which includes settings, retention, the audit tail and each source's security settings. | `sources.view` |
 | | `diagnostics.run` | Run the connection check | change | Run the step-by-step connection check of a source. | `sources.view` |
+
+`readings.import` lets a person write readings into any source from a file and save the import profiles. The report of its dry run can show
+a stored value and the address of its point (five samples at most) where the file disagrees with what is stored, and a tag it does not
+call unknown is an address of that source, so a person without See sources can probe for them; it is for trusted roles, and only the
+built-in Admin holds it until an administrator ticks it on a role. It needs See sources to be of use: **Import file...** is in the
+Sources row menu ([Importing readings from a file](sources-and-discovery.md#importing-readings-from-a-file)).
+`discovery.accept` also gates **Map tag list...** and the Undo of a tag list. The import, the tag list and its Undo also refuse (403)
+a request the browser marks as coming from another site, or from an origin other than the dashboard's own (a page on another port of the
+same host counts): the sign-in cookie alone does not keep that out, and a file sent as plain text needs no preflight, so without this
+rule another web page could make a signed-in administrator import readings. `curl` and the import command send no such mark and are
+not affected.
 
 `billing.close` is held by the built-in Admin only, until an administrator ticks it on a role of their own (unlike `roles.manage` it can
 be ticked on a custom role, as `billing.export` can). Migration `0012` gave it to no role, so after an upgrade nobody but the Admin can

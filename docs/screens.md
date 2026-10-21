@@ -67,8 +67,16 @@ lacks says "No access".
 
 - **Sources** (operators and admins): needs `sources.view`. The data sources with their status, last error and the age of their
   newest reading, and a notice when the collector has gone quiet (see [Health](operating.md#health)). **Test** and **Test all**
-  need `sources.test`; adding, editing and deleting sources needs `sources.edit`. See
-  [Sources and discovery](sources-and-discovery.md).
+  need `sources.test`; adding, editing and deleting sources needs `sources.edit`. A row's menu also has **Import file...**
+  (`readings.import`), **Map tag list...** (`discovery.accept`) and **Fill older range...** (`sources.edit`, and only for a source whose
+  connector keeps history); each shows only to a person who holds its permission. Under a source's name a line gives the state of its history
+  fill ("History: up to date, last fill 3 min ago"); a source of type `file` is never polled, so its status reads "filled by file import",
+  its line "Filled by importing files", and its menu has no **Test** or **Check connection**. **Import file...** opens a dialog that
+  asks for a file and a saved or new profile; **Check file** shows the counts in place and writes nothing, and only then does
+  **Import N rows** store that file. **Map tag list...** opens a dialog where you paste or load the list; **Check list** shows what it
+  would create, and **Create N mappings** works only on a check of the text now shown, with an **Undo** in the toast for 10 seconds.
+  The fill dialog takes a first and a last day, **Check range** shows the plan and **Start fill** queues it. See
+  [Sources and discovery](sources-and-discovery.md#importing-readings-from-a-file).
 - **Points** of a source (admins): the Points item of a source's row menu; needs `sources.edit`. **Browse points** asks the source
   what it offers; **Map** ties a point to an asset, and **Unmap…** (asks first, then offers an Undo for 10 seconds) takes it off. Both need
   `assets.edit` and `assets.view` as well.
@@ -141,7 +149,10 @@ lacks says "No access".
   and keeps the log's filters and page), with **Previous** and **Next** to step through the log and a **Copy** button for the
   entry's number; Esc, Close or the browser's Back brings the log back exactly as it was. The friendly sentences name things
   instead of numbering them ("for asset MV2-R1-LV-Panel-02", or "a deleted asset" once it is gone); the Raw view, the
-  drawer's JSON and the CSV keep every id. What is and is not recorded is listed under
+  drawer's JSON (behind **Show the stored JSON**, closed until you open it) and the CSV keep every id. A `tags.mapped` entry of the
+  last 24 hours has **Undo this tag list** in its drawer for a person with `discovery.accept`; the server refuses it, in words, when
+  anything the list made has changed since. Excel cuts a CSV cell at 32,767 characters, and a `tags.mapped` row can be longer. What is
+  and is not recorded is listed under
   [Discovery](sources-and-discovery.md#discovery).
 - **Diagnostics** (admin): needs `diagnostics.view` and `sources.view`; the connection check needs `diagnostics.run`. Builds a
   report to paste when a real source fails, and runs a step-by-step connection check of one source. See

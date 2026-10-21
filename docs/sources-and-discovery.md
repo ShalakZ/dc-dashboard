@@ -3,7 +3,8 @@
 This page is for the engineer who connects the platform to the field: the data sources it reads (OPC UA, Modbus TCP and the HTTP
 simulator), their settings, the OPC UA client certificate, and Discovery, which finds sources on the network and maps their points to
 assets. What gets recorded in the audit log is listed here too (item 8 of Discovery), and so is how the platform fills the holes an
-outage leaves from a source's own history ([History and backfill](#history-and-backfill)).
+outage leaves from a source's own history ([History and backfill](#history-and-backfill)) and how a file is imported
+([Importing readings from a file](#importing-readings-from-a-file)).
 
 ## Protocols
 
@@ -15,6 +16,8 @@ Every connector is read-only toward the source; only `collector` opens connectio
 secret is sent as the simulator's API key; see [The simulator](install-and-run.md#the-simulator) for the dev
 profile and the key. It is the only connector that can read history, from the stand-in Historian on port 9100
 ([History and backfill](#history-and-backfill)).
+
+**File import** (`file`): no settings; see [below](#importing-readings-from-a-file).
 
 **OPC UA** (`opcua`): `endpoint` (`opc.tcp://...`), `security_policy` (`none` or `basic256sha256`),
 optional `username` (the password is the source secret), `root_node` (default `i=85`, the Objects
@@ -531,7 +534,8 @@ data-retrieval requests the connectors already use, nothing else.
    asset, with its old and new parent, all sharing one request id), mappings,
    sources (create, edit, delete, test, test all, browse), removing unmapped discovered sources (`source.deleted`, `unmapped_only`), tariffs, dashboards, asset kinds (a delete that moves assets records how many and
    where to; adding the starter kinds records which), scopes, scans (start and
-   finish) and accepted discoveries. Never recorded: passwords and password hashes, source secrets and
+   finish), accepted discoveries, a tag list and its Undo (`tags.mapped`, `tags.unmapped`), a file import (`readings.imported`: counts,
+   never a value), import profiles (`import_profile.saved`, `.deleted`) and a requested fill (`history.fill_requested`). Never recorded: passwords and password hashes, source secrets and
    credentials inside a URL (a marker shows that one was set or changed: `secret: set -> changed`, or
    `config_credentials: unchanged -> changed` when the credentials inside a source's URL changed, also when
    other fields changed in the same edit),
@@ -688,6 +692,13 @@ end in the future. The command takes the same per-source lease as the loop, so i
 moves the marks, so the loop is not disturbed. A source whose connector cannot read history is told so and nothing is done. More in
 [Field debugging](field-debugging.md#history-fill).
 
+**Fill an older range from the Sources page.** **Fill older range...** in the row menu (`sources.edit`; only for a connector that keeps
+history, today the stand-in). Choose the first and last day (at most 31 days, none older than the raw retention minus a day), press
+**Check range**, then **Start fill**, which queues it in the collector; the dialog follows it. One fill
+runs at a time in total. A collector restart fails a running fill; run it again and it adds only what is missing. The line under the
+source's name reads "History: not started yet", "filling, 3 hours behind", "up to date, last fill 3 min ago" or "waiting, `<error>`"
+("Filled by importing files" for `file`, nothing for a connector without history).
+
 **Decisions that are still the owner's.** Until the owner decides, the safe default is in force.
 - A reading stored twice makes the update to migration 0016 refuse, with nothing removed ([Upgrading and going back](upgrading.md#duplicate-readings)).
 - Only good quality counts.
@@ -715,5 +726,48 @@ A Historian that answers 503 to every fifth request and 429 above 2 requests a s
 resumes from the saved mark: 77 more requests after the restart instead of about 125 from the start. The live poll of a second source
 (every 5 seconds) was delayed by at most 0.5 seconds during the fill. A 2,000-meter run was not made; the numbers scale with the number of addresses (about 10 times the
 requests and rows of the 217-meter case).
+
+## Importing readings from a file
+
+A source's row menu can load a CSV export (**Import file...**, `readings.import`) and map its tags in one go (**Map tag list...**,
+`discovery.accept`). The questions for a reviewer and a first-day how-to are on [Historian integration](historian-integration.md).
+
+**The `file` source.** Type `file` is never polled: it reads "filled by file import", not online or offline, has no **Test**,
+**Check connection** or **Browse**, and **Test all** leaves it out. The freshness chip and the fleet "stale" mark go by the age of an
+asset's newest reading, so an asset fed only by imports turns stale three mapping intervals (at least a minute) after its newest
+imported time. An import may also target a live source whose tags have the same names.
+
+**Import file...** **Check file** is a dry run (nothing is written or audited); **Import N rows** then stores that same file. A profile,
+saved by name (at most 20), names the tag, time, value and optional unit and quality columns, the delimiter, decimal mark, time format
+and zone, what a value is (counter, power or amount per period) and the good quality codes. The report is one sentence,
+`12,480 rows read, 12,000 new, 480 already there, 0 differing, 0 rejected, 3 unknown tags (TAG-A, TAG-B, TAG-C)`, with rows read = new +
+already there + differing + rejected + rows of unknown tags. Already there: stored with the same value. Differing: another value is
+stored and stays. Rejected: refused, counted by reason.
+- An import never creates a point. The first stored value of a tag and time wins, so a file repeated is safe; the same tag and time twice
+  in one file is rejected after the first (so is a line repeated in the hour the clocks go back, and that hour's genuine second pass
+  with the same value). An import cannot be undone.
+- A quality other than good is stored as bad quality (counted in "new") and counts in no figure.
+- Rows in a closed month are written; its frozen figures do not change. A time older than the raw retention minus a day, or more than 5
+  minutes ahead, is refused; so is one in a stretch whose raw readings the retention removed while it kept the summaries
+  (`older_than_stored_raw_readings`; no later rise of the retention or fill reopens it, and a row after it is stored even when no raw
+  reading is left). A value is stored as written (the mapping's scale converts it for a figure); a unit column is only checked.
+- Also refused: energy per period (`interval`) for any metric but `custom`, and a row with a filled cell beyond the header. Energy counter
+  readings that fall or jump are listed as a warning and stored; a wrong stored row is repaired by hand with SQL. Unknown tags with
+  non-ASCII letters read `[non-ASCII]`.
+- Limits: 20 MB, 500,000 rows, 4,096 bytes a line, 50 columns, UTF-8. One import at a time. An upload that stops for 30 seconds is cut
+  (408); the import, tag list and Undo refuse a request from another site (403).
+  A closed tab does not stop an import; a shutdown does, and may lose its audit row. Command line and the repair:
+  [Field debugging](field-debugging.md#importing-a-file-by-command).
+
+**Map tag list...** A CSV with `tag`, `asset` (a path such as `Hall 1 / Row A / Rack 01`) and `metric`, optionally `unit`, `scale`,
+`interval_seconds`, `kind` (of an asset it creates) and `reading`; at most 1,000 lines. For a `file` source, every power line
+(`active_power_kw`) needs `interval_seconds`: the export's spacing in seconds (3600 for an hourly file), as a power reading becomes
+energy by its spacing. **Check list** is a dry run naming what it
+would create and every problem by line; it is all or nothing, one problem line creates nothing. Missing assets are created only with
+**Create missing assets** ticked. Points are created on `file` sources only; elsewhere an unknown tag is a problem (run Browse first).
+**Create N mappings** goes through only on a check of the text now in the dialog. **Undo** is offered for 10 seconds in the toast and
+for 24 hours as **Undo this tag list** in the Audit drawer. It removes the mappings, the assets the list created and the points that
+hold no readings (a point with readings stays, unmapped). It refuses, undoing nothing, if a mapping was edited or a created asset
+was renamed, moved or given a child, another mapping or a tariff; an edit of a created asset's kind, icon or sort order is not noticed.
 
 Related: [Assets and kinds](assets-and-kinds.md), [Storage](storage.md), [Install and run](install-and-run.md), [Field debugging](field-debugging.md), [Adding a connector](adding-a-connector.md)

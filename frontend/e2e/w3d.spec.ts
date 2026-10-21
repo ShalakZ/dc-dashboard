@@ -44,7 +44,7 @@ async function send<T>(page: Page, method: "post" | "patch" | "delete", path: st
 const userRow = (page: Page, username: string) =>
   page.getByRole("row").filter({ has: page.getByRole("cell", { name: username, exact: true }) });
 const sourceRow = (page: Page, name: string) =>
-  page.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) });
+  page.getByRole("row").filter({ has: page.locator(`.cell-name[title="${name}"]`) });
 
 async function signIn(page: Page, who: Account, role: string) {
   await page.goto("/login");

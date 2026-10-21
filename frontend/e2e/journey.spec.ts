@@ -22,7 +22,7 @@ test("first-run journey: setup, simulator source, map two points, live values", 
   await page.getByLabel(/^Url/i).fill("http://simulator:9000");
   await page.getByLabel("Secret").fill("sim-key");
   await page.getByRole("button", { name: "Save" }).click();
-  const simRow = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "sim", exact: true }) });
+  const simRow = page.getByRole("row").filter({ has: page.locator(".cell-name[title=\"sim\"]") });
   await expect(simRow).toBeVisible();
   await (await rowAction(page, simRow, "Test")).click();
   await expect(simRow).toContainText("online", { timeout: 30_000 });

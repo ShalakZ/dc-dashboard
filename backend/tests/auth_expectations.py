@@ -111,6 +111,9 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
          "GET /api/secret-key/status"),
     # Added in W30 (the history backfill's state of one source): after the freeze, so not in auth_matrix_pre_w9a.json; the gate and isolation tests cover it.
     _all("sources.view", "GET /api/sources/{source_id}/history"),
+    # Added in W31 (plan or queue a history fill of an older range): after the freeze, so not in auth_matrix_pre_w9a.json; the gate and
+    # isolation tests cover it.
+    _all("sources.edit", "POST /api/sources/{source_id}/history/fill"),
     _all("sources.edit", "POST /api/sources", "PATCH /api/sources/{source_id}", "DELETE /api/sources/{source_id}",
          "POST /api/sources/{source_id}/browse", "GET /api/connectors", "GET /api/sources/{source_id}/impact"),
     _all("sources.test", "POST /api/sources/test-all", "POST /api/sources/{source_id}/test"),
@@ -123,11 +126,19 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     _any(("discovery.edit", "discovery.scan"), "GET /api/scopes/{scope_id}/preview"),
     _all("discovery.scan", "POST /api/scopes/{scope_id}/scan"),
     _all("discovery.accept", "POST /api/discovery/accept"),
+    # Added in W31 (a tag list turned into mappings, and its Undo): after the freeze, so not in auth_matrix_pre_w9a.json; the gate and
+    # isolation tests cover them. The list is the request body, so the isolation probe (a JSON body) is refused with a 415, after the gate.
+    _all("discovery.accept", "POST /api/sources/{source_id}/tag-list", "POST /api/tag-lists/{audit_id}/undo"),
     # Added in W7r (removing discovered sources that have nothing mapped): after the freeze, so not in auth_matrix_pre_w9a.json;
     # the gate and isolation tests cover it.
     _all("discovery.edit", "POST /api/discovery/sources/remove"),
     # Added in W7t (Tidy layout: clears every saved node position); after the freeze, like the route above.
     _all("discovery.edit", "DELETE /api/discovery/layout"),
+    # Added in W31 (import profiles; the import route itself and the other W31 routes are listed by their own tasks): after the
+    # freeze, so not in auth_matrix_pre_w9a.json; the gate and isolation tests cover them.
+    _all("readings.import", "GET /api/import-profiles", "PUT /api/import-profiles/{name}", "DELETE /api/import-profiles/{name}"),
+    # The import itself (W31): the file is the request body, so the isolation probe (a JSON body) is refused with a 415, after the gate.
+    _all("readings.import", "POST /api/sources/{source_id}/import"),
     _all("storage.view", "GET /api/storage", "GET /api/storage/rows-per-day", "GET /api/settings/storage"),
     _all("storage.edit", "PUT /api/settings/storage", "PUT /api/settings/storage/default"),
     _all("settings.view", "GET /api/settings/general", "GET /api/settings/sign-in", "GET /api/tls/status"),

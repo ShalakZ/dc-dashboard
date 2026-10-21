@@ -241,6 +241,7 @@ test.describe("W7l: names in the audit log, the audit entry drawer, two cards th
       await openDrawerBox(page);
       await expect(drawer.locator("dd .what")).toContainText(named);
       await expect(drawer.locator("dd .what"), "no # in the drawer's sentence").not.toContainText("#");
+      await drawer.getByRole("button", { name: "Show the stored JSON" }).click();
       await expect(drawer.locator("pre.entry-json"), "the JSON keeps the ids").toContainText(`"asset_id": ${assetId}`);
       await page.keyboard.press("Escape");
       await expect(drawer).toBeHidden();
@@ -290,6 +291,7 @@ test.describe("W7l: names in the audit log, the audit entry drawer, two cards th
       await expect(drawer.locator("dd .what")).not.toContainText("#");
       await expect(drawer.getByRole("heading", { name: "What changed", level: 3, exact: true }), "a rename has its Before/After table").toBeVisible();
       await expect(drawer.getByRole("heading", { name: "Details", level: 3, exact: true })).toBeVisible();
+      await drawer.getByRole("button", { name: "Show the stored JSON" }).click();
       await expect(drawer.locator("pre.entry-json")).toContainText(`"asset_id": ${DRAWER_ASSET}`);
     });
 

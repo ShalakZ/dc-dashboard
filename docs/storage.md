@@ -67,10 +67,14 @@ When a source keeps its own history, the platform can fill the holes an outage l
   If the raw readings of some of those minutes are gone, the refresh would recompute them from nothing and delete real rollup history.
   This was measured: after a raw chunk was dropped, a refresh over its range took the rollup from 21 rows to 0 (1-minute) and from 1 row
   to 0 (hourly). So before it asks the source, the platform checks the 1-minute rollup for minutes in the range whose raw readings are
-  gone, and when it finds one it writes nothing and says so.
+  gone, and when it finds one it writes nothing and says so. A file import follows the same rule: it refuses every row in a stretch whose raw
+  readings the retention removed while the 1-minute rollup kept the summaries (reason `older_than_stored_raw_readings`). The stretch ends at
+  the first whole hour after the newest such minute, no later rise of the retention reopens it, and a row after it is stored even when the
+  raw table is empty.
 - **What to do for an older gap.** Raise the raw retention on the Storage page before the gap becomes older than it, because retention
   drops raw chunks of 7 days at a time and raising it later cannot bring back what was dropped. A longer retention costs space; the
-  page's size projection shows how much. A gap whose raw readings retention has already dropped cannot be filled, whatever you set now.
+  page's size projection shows how much. A gap whose raw readings retention has already dropped cannot be filled, whatever you set now:
+  neither a fill nor a file import reaches it, and raising the retention afterwards does not change that.
 - **Filling into a compressed chunk works.** Readings older than the compression delay (7 days by default) are stored compressed. A
   fill writes into such a chunk, the database checks the new readings against the stored ones, and the chunk stays compressed. It costs
   about 35 ms per 1,000 rows (a few milliseconds per 1,000 in an uncompressed chunk): 20,000 rows take about 0.9 seconds and 60,000

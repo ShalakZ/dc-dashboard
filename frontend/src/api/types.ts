@@ -90,6 +90,21 @@ export interface Source {
   mapped_points?: number;
   /** Config keys whose value had a user name and password removed from it (the `config` here is already masked). */
   hidden_config_keys?: string[];
+  /** The list endpoint only. False for a source that is filled by importing files (`file`): it is never tested, browsed or polled. A missing value counts as true. */
+  polls?: boolean;
+  /** The list endpoint only (w31): how far the history backfill got with this source. Left out by older fixtures; a missing or null value shows no history line. */
+  history?: HistorySummary | null;
+}
+/**
+ * The `history` object of a source list row (GET /api/sources): the part of the `history_status` row the Sources page shows. `supports_history` is the
+ * connector class's flag (false = the backfill never asks this source for history). `state`: `never_run`, `idle` (caught up), `filling` (reading older
+ * hours), `backing_off` (the last try failed; `next_try_at` is the earliest next one) or `not_supported`. The timestamps are ISO times; `last_error` is
+ * already scrubbed of credentials by the server.
+ */
+export type HistoryState = "never_run" | "idle" | "filling" | "backing_off" | "not_supported";
+export interface HistorySummary {
+  supports_history: boolean; state: HistoryState;
+  answered_through: string | null; last_success_at: string | null; next_try_at: string | null; last_error: string | null;
 }
 export interface CollectorStatus { alive: boolean; age_seconds: number | null }
 /**
@@ -131,7 +146,8 @@ export interface JsonSchemaProperty {
   type?: string; title?: string; description?: string; default?: unknown; format?: string;
   anyOf?: { type?: string; format?: string }[]; minimum?: number; maximum?: number;
 }
-export interface Connector { type: string; config_schema: JsonSchema }
+/** `polls`: false for a type that is filled by importing files (`file`), which is never tested, browsed or polled; the server lists those last. `description`: a sentence for the form, empty for most types. */
+export interface Connector { type: string; config_schema: JsonSchema; polls: boolean; description: string }
 
 export const METRICS = [
   "active_power_kw", "energy_kwh", "voltage_v", "current_a", "power_factor",
@@ -589,3 +605,76 @@ export interface DisplayIn { name: string; playlist_id: number }
 export interface DisplayPatch { name?: string; playlist_id?: number }
 /** The answer to creating a display: `link_secret` is in this one answer and nowhere else. Keep it out of every cache. */
 export interface DisplayCreated { display: DisplayRow; link_secret: string }
+
+// ---- w31: import readings from a file, map a tag list, fill an older range ----
+
+/** What a value column means: a running total (`counter`), an instantaneous power, or a total for one period (`interval`, which needs `period_seconds` and `stamp`). */
+export type ImportReading = "counter" | "power" | "interval";
+/**
+ * One saved layout of a CSV export (GET /api/import-profiles answers `{ profiles: ImportProfile[] }`; PUT /api/import-profiles/{name} takes and answers one,
+ * and the name in the path wins). `tag`, `time`, `value`, `unit` and `quality` are column NAMES of the file's header line. `delimiter` null = found from
+ * the header line. `zone` (an IANA name) is needed only for times written without an offset. The server keeps at most 20 profiles (the 21st is a 409).
+ */
+export interface ImportProfile {
+  name: string; tag: string; time: string; value: string; unit: string | null; quality: string | null;
+  delimiter: string | null; decimal: "." | ","; time_format: string; zone: string | null;
+  reading: ImportReading; period_seconds: number | null; stamp: "start" | "end" | null; good_codes: string[];
+}
+/** A line of the file the importer did not take, with the plain reason code (`rejectedText` in lib/importReport.ts words it). */
+export interface ImportProblem { line: number; reason: string }
+/** A reading the file sent again with another value than the one stored (the stored one is kept). `tag` is clipped by the server; React shows it as text. */
+export interface ImportDifference { tag: string; ts: string; stored: number | null; file: number | null }
+/** An energy counter value that went down, or jumped by a lot, against the one before it in the file (`tag` is clipped by the server; React shows it as text). A check says it will be stored all the same, an import that it was. */
+export interface ImportCounterWarning { tag: string; ts: string; previous: number; value: number }
+export type ImportRefreshState = "not_needed" | "done" | "failed";
+/**
+ * The answer to POST /api/sources/{id}/import (the dry run and the real run have this one shape). `rows_read` = new + already + differing + rejected +
+ * unknown_rows. `rejected_by` counts the rejected rows by reason code; `closed_months` counts the accepted rows that fall in a closed billing month, by
+ * `YYYY-MM`. `problems` holds at most the first 20 lines, `differing_samples` at most 5, `unknown_tags.names` at most 20 (`count` is the true number).
+ * `refresh` is the rollup refresh after a real run. `complete` is false when the run stopped half-way: `error` then says why, and the counts are what was
+ * written so far. `text` is the server's one-sentence summary.
+ */
+export interface ImportReport {
+  dry_run: boolean; source_id: number; profile: string; sha256: string; size: number;
+  rows_read: number; new: number; already: number; differing: number; rejected: number; unknown_rows: number;
+  unknown_tags: { count: number; names: string[] };
+  rejected_by: Record<string, number>;
+  /** Accepted rows that were stored as BAD quality (they are part of `new`, and count in no figure), by the label of their quality code. */
+  bad_quality?: Record<string, number>;
+  closed_months: Record<string, number>;
+  /** The first 20 counter values that go down or jump, and how many there are in all. Optional here so older fixtures compile; the server always sends both. */
+  counter_warnings?: ImportCounterWarning[]; counter_warnings_total?: number; raw_floor?: string | null;
+  differing_samples: ImportDifference[];
+  problems: ImportProblem[]; problems_total: number;
+  refresh: { state: ImportRefreshState; days: number; note: string | null };
+  complete: boolean; error: string | null; text: string;
+}
+
+/** One unit of a tag list and the scale the run will give it (the factor to the metric's base unit). */
+export interface TagListUnit { unit: string | null; metric: Metric; scale: number; count: number }
+/** A line of a tag list that stops the run (any problem line stops it: nothing is written). */
+export interface TagListProblem { line: number; tag: string; reason: string }
+/**
+ * The answer to POST /api/sources/{id}/tag-list (the dry run and the real run have this one shape). `assets_to_create` holds the first 50 paths
+ * (`assets_to_create_total` is the true number), `problems` the first 50 (`problems_total`). `plan_digest` is sent back as `expect_plan` with
+ * `expect_points`, `expect_assets` and `expect_mappings` on the real run. `audit_id` and `undo_until` are set by a real run only.
+ */
+export interface TagListReport {
+  dry_run: boolean; source_id: number; sha256: string; plan_digest: string; lines: number;
+  points_to_create: number; assets_to_create: string[]; assets_to_create_total: number; mappings_to_create: number;
+  units: TagListUnit[]; problems: TagListProblem[]; problems_total: number; ok: boolean; text: string;
+  audit_id: number | null; undo_until: string | null;
+}
+/** The body of the 409 a real tag-list run answers when what it would do differs from the dry run: `detail` is the sentence, the numbers are what it would do now. */
+export interface TagListChanged { detail: string; points: number; assets: number; mappings: number }
+/** The answer to POST /api/tag-lists/{audit_id}/undo: what was removed (`points_kept`: created points that hold readings and stay, unmapped). */
+export interface TagListUndoResult { mappings: number; assets: number; points_removed: number; points_kept: number; text?: string }
+
+/** The body of POST /api/sources/{id}/history/fill: aware ISO times; at most 31 days. */
+export interface HistoryFillIn { start: string; end: string; before_first_reading: boolean }
+/** The answer to POST /api/sources/{id}/history/fill?dry_run=1: nothing is asked of the source. `windows` are the slices a fill would ask, as [start, end] pairs, oldest first. */
+export interface HistoryFillPlan { plan: string; windows: [string, string][]; expected_rows: number }
+/** `result` of a finished `history_fill` job (GET /api/jobs/{id}): the counts and a sentence, or the sentence that stopped it. Narrow with `"error" in result`. */
+export interface HistoryFillDone { ok: true; text: string; read: number; new: number; already: number; differing: number; rejected: number }
+export interface HistoryFillFailed { ok?: false; error: string }
+export type HistoryFillJobResult = HistoryFillDone | HistoryFillFailed;

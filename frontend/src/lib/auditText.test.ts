@@ -19,6 +19,7 @@ const ALL_ACTIONS = [
   "user.created", "user.deleted", "user.updated",
   "playlist.created", "playlist.updated", "playlist.deleted",
   "display.created", "display.updated", "display.revoked", "display.deleted", "display.connected", "display.claim_blocked",
+  "readings.imported", "import_profile.saved", "import_profile.deleted", "tags.mapped", "tags.unmapped", "history.fill_requested",
 ];
 
 describe("humanise", () => {
@@ -884,7 +885,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(62);
+    expect(ALL_ACTIONS).toHaveLength(68);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }
@@ -1366,6 +1367,20 @@ describe("describeAudit: no sentence shows an id", () => {
     "display.deleted": { display_id: DISPLAY, name: "Hall TV", playlist_id: PLAYLIST, playlist: "Wall A" },
     "display.connected": { display_id: DISPLAY, name: "Hall TV", client: "10.0.0.12" },
     "display.claim_blocked": { client: "10.0.0.12" },
+    // The ids sit inside the lists and the id fields on purpose: a count is all the sentence may take from them.
+    "readings.imported": {
+      source_id: SRC, source: "PM-1", profile: "Bapco CSV", sha256: "ab".repeat(32), size: 1048576, via: "web", complete: true,
+      read: 12483, new: 12000, already: 480, differing: 0, rejected: 3, unknown_rows: 0,
+    },
+    "import_profile.saved": { name: "Bapco CSV", before: { zone: "UTC", decimal: "." }, after: { zone: "Asia/Qatar", decimal: "," } },
+    "import_profile.deleted": { name: "Bapco CSV" },
+    "tags.mapped": {
+      source_id: SRC, sha256: "cd".repeat(32), lines: 3, points: [POINT, POINT + 1, POINT + 2],
+      assets: [[A, PARENT, "Panel A"], [A2, A, "Feeder 1"]],
+      mappings: [[MAPPING, POINT, A, "power", 1, 60, null], [MAPPING + 1, POINT + 1, A2, "energy", 1, 900, "kWh"], [MAPPING + 2, POINT + 2, A2, "voltage", 1, 60, null]],
+    },
+    "tags.unmapped": { audit_id: CLOSE, source_id: SRC, mappings: 3, assets: 2, points_removed: 2, points_kept: [POINT] },
+    "history.fill_requested": { source_id: SRC, name: "PM-1", start: "2026-10-01T00:00:00+00:00", end: "2026-10-05T00:00:00+00:00", before_first_reading: false, job_id: JOB },
   };
 
   const present = {
@@ -1594,5 +1609,172 @@ describe("describeAudit: playlists and displays", () => {
   it("never prints the secret, the hash or the link, even if an entry somehow holds them", () => {
     const view = say("display.created", { display_id: 9, name: "Hall TV", playlist: "Wall A", link_secret: "SECRETVALUE", secret_hash: "HASHVALUE" });
     expect([view.summary, view.link?.label, ...view.changes.map((c) => `${c.field}${c.before}${c.after}`)].join(" ")).not.toMatch(/SECRETVALUE|HASHVALUE|secret/i);
+  });
+});
+
+describe("describeAudit: imports, import profiles, tag lists and history fills", () => {
+  const sources = { source: { "2": "Meter 1" } };
+  const say = (action: string, detail: unknown, refs?: AuditEntry["refs"]) => describeAudit(entry(action, detail, refs ? { refs } : {}));
+  const sourcesLink = { to: "/sources", label: "Open Sources" };
+
+  describe("readings.imported", () => {
+    const imported = {
+      source_id: 2, source: "PM-1", profile: "Bapco CSV", sha256: "ab".repeat(32), size: 1048576, via: "web", complete: true,
+      read: 12483, new: 12000, already: 480, differing: 0, rejected: 3, unknown_rows: 0,
+    };
+
+    it("names the source and the counts, leaving out what is zero beyond new and already there", () => {
+      const view = say("readings.imported", imported);
+      expect(view.summary).toBe("Imported readings into source PM-1: 12,000 new, 480 already there, 3 rejected");
+      expect(view.link).toEqual(sourcesLink);
+      expect(view.changes).toEqual([]);
+      expect(say("readings.imported", { ...imported, new: 1, already: 0, rejected: 0 }).summary).toBe("Imported readings into source PM-1: 1 new, 0 already there");
+    });
+
+    it("adds the rows that differ and the rows of unknown tags when there are some", () => {
+      expect(say("readings.imported", { ...imported, differing: 2, unknown_rows: 5 }).summary).toBe(
+        "Imported readings into source PM-1: 12,000 new, 480 already there, 2 differing, 3 rejected, 5 for unknown tags",
+      );
+    });
+
+    it("says it stopped half-way only when the run says it did not complete", () => {
+      expect(say("readings.imported", { ...imported, complete: false }).summary).toBe(
+        "Imported readings into source PM-1: 12,000 new, 480 already there, 3 rejected (stopped half-way)",
+      );
+      const { complete: _complete, ...unknown } = imported;
+      expect(say("readings.imported", unknown).summary).not.toContain("half-way");
+      expect(say("readings.imported", { ...imported, complete: "no" }).summary).not.toContain("half-way");
+    });
+
+    it("keeps the name stored with the entry, else the lookup's, else a plain noun", () => {
+      const bare = { source_id: 2, new: 4, already: 0 };
+      expect(say("readings.imported", bare, sources).summary).toBe("Imported readings into source Meter 1: 4 new, 0 already there");
+      expect(say("readings.imported", imported, sources).summary).toContain("into source PM-1:"); // the stored name is the name at the time
+      expect(say("readings.imported", bare, {}).summary).toBe("Imported readings into a deleted source: 4 new, 0 already there");
+      expect(say("readings.imported", bare).summary).toBe("Imported readings into a source: 4 new, 0 already there");
+      expect(say("readings.imported", {}).summary).toBe("Imported readings into a source");
+    });
+
+    it("claims nothing from counts that are not whole numbers, and never shows the hash, the size or a value", () => {
+      expect(say("readings.imported", { source: "PM-1", new: "12", already: -1, differing: 1.5, rejected: null, unknown_rows: {} }).summary).toBe("Imported readings into source PM-1");
+      const shown = say("readings.imported", { ...imported, values: [231.4, 231.5] }).summary;
+      expect(shown).not.toMatch(/abab|1048576|231/);
+    });
+
+    it("reads a stored name as text, cut at 80 characters", () => {
+      expect(say("readings.imported", { source: "<b>PM</b>", new: 1, already: 0 }).summary).toBe("Imported readings into source <b>PM</b>: 1 new, 0 already there");
+      expect(say("readings.imported", { source: "x".repeat(200) }).summary).toBe(`Imported readings into source ${"x".repeat(80)}…`);
+    });
+  });
+
+  describe("import_profile.saved and import_profile.deleted", () => {
+    const saved = { name: "Bapco CSV", before: { zone: "UTC", decimal: "." }, after: { zone: "Asia/Qatar", decimal: "," } };
+
+    it("names the profile and lists the fields that changed", () => {
+      const view = say("import_profile.saved", saved);
+      expect(view.summary).toBe("Saved import profile Bapco CSV: zone, decimal");
+      expect(view.changes).toEqual([
+        { field: "Zone", before: "UTC", after: "Asia/Qatar" },
+        { field: "Decimal", before: ".", after: "," },
+      ]);
+      expect(view.link).toBeNull();
+    });
+
+    it("reads a new profile, or one whose sides are missing, as a plain save", () => {
+      expect(say("import_profile.saved", { name: "Bapco CSV" }).summary).toBe("Saved import profile Bapco CSV");
+      expect(say("import_profile.saved", { name: "Bapco CSV", after: { zone: "UTC" } }).summary).toBe("Saved import profile Bapco CSV");
+      expect(say("import_profile.saved", {}).summary).toBe("Saved import profile");
+      expect(say("import_profile.saved", { name: 5, before: "x", after: 7 }).summary).toBe("Saved import profile");
+    });
+
+    it("names a deleted profile by its stored name", () => {
+      expect(say("import_profile.deleted", { name: "Bapco CSV" }).summary).toBe("Deleted import profile Bapco CSV");
+      expect(say("import_profile.deleted", { name: "Bapco CSV" }).link).toBeNull();
+      expect(say("import_profile.deleted", {}).summary).toBe("Deleted import profile");
+      expect(say("import_profile.deleted", { name: "x".repeat(200) }).summary).toBe(`Deleted import profile ${"x".repeat(80)}…`);
+    });
+  });
+
+  describe("tags.mapped", () => {
+    const list = (n: number, row: (i: number) => unknown) => Array.from({ length: n }, (_, i) => row(i + 1));
+    const mapped = (mappings: number, assets: number, points: number) => ({
+      source_id: 2, sha256: "cd".repeat(32), lines: mappings,
+      points: list(points, (i) => i),
+      assets: list(assets, (i) => [i, null, `Asset ${i}`]),
+      mappings: list(mappings, (i) => [i, i, 1, "power", 1, 60, null]),
+    });
+
+    it("counts what the list created from the lengths of its lists", () => {
+      const view = say("tags.mapped", mapped(217, 12, 217));
+      expect(view.summary).toBe("Mapped a tag list: 217 mappings, 12 assets and 217 points created");
+      expect(view.link).toEqual(sourcesLink);
+      expect(say("tags.mapped", mapped(1000, 1, 1)).summary).toBe("Mapped a tag list: 1,000 mappings, 1 asset and 1 point created");
+    });
+
+    it("leaves out a list that is empty or absent, and says no more than the plain sentence for an entry without lists", () => {
+      expect(say("tags.mapped", mapped(217, 0, 217)).summary).toBe("Mapped a tag list: 217 mappings and 217 points created");
+      expect(say("tags.mapped", { ...mapped(3, 0, 0), points: undefined }).summary).toBe("Mapped a tag list: 3 mappings created");
+      expect(say("tags.mapped", {}).summary).toBe("Mapped a tag list");
+      expect(say("tags.mapped", { mappings: 5, assets: "2", points: null }).summary).toBe("Mapped a tag list"); // counts are not lists
+    });
+
+    it("shows no id from the lists", () => {
+      const shown = say("tags.mapped", { ...mapped(2, 1, 2), source_id: 90004 }, sources).summary;
+      expect(shown).toBe("Mapped a tag list: 2 mappings, 1 asset and 2 points created");
+    });
+  });
+
+  describe("tags.unmapped", () => {
+    const undone = { audit_id: 31, source_id: 2, mappings: 217, assets: 12, points_removed: 214, points_kept: [5, 6, 7] };
+
+    it("counts what the Undo removed and the points it kept", () => {
+      const view = say("tags.unmapped", undone);
+      expect(view.summary).toBe("Undid a tag list: 217 mappings and 12 assets removed (3 points kept: they hold readings)");
+      expect(view.link).toEqual(sourcesLink);
+    });
+
+    it("reads one kept point in the singular and leaves out what is zero or absent", () => {
+      expect(say("tags.unmapped", { ...undone, points_kept: [5] }).summary).toBe("Undid a tag list: 217 mappings and 12 assets removed (1 point kept: it holds readings)");
+      expect(say("tags.unmapped", { ...undone, points_kept: [] }).summary).toBe("Undid a tag list: 217 mappings and 12 assets removed");
+      expect(say("tags.unmapped", { ...undone, assets: 0, points_kept: undefined }).summary).toBe("Undid a tag list: 217 mappings removed");
+      expect(say("tags.unmapped", { ...undone, mappings: 1, assets: 1 }).summary).toBe("Undid a tag list: 1 mapping and 1 asset removed (3 points kept: they hold readings)");
+      expect(say("tags.unmapped", { points_kept: [5, 6] }).summary).toBe("Undid a tag list (2 points kept: they hold readings)");
+    });
+
+    it("claims nothing from an entry it cannot read", () => {
+      expect(say("tags.unmapped", {}).summary).toBe("Undid a tag list");
+      expect(say("tags.unmapped", { mappings: "3", assets: -1, points_kept: "x" }).summary).toBe("Undid a tag list");
+    });
+  });
+
+  describe("history.fill_requested", () => {
+    const fill = { source_id: 2, name: "PM-1", start: "2026-10-01T00:00:00+00:00", end: "2026-10-05T00:00:00+00:00", before_first_reading: false, job_id: 9 };
+
+    it("names the source and the range", () => {
+      const view = say("history.fill_requested", fill);
+      expect(view.summary).toBe("Asked for a history fill of source PM-1, 2026-10-01 00:00 UTC to 2026-10-05 00:00 UTC");
+      expect(view.link).toEqual(sourcesLink);
+    });
+
+    it("keeps an offset that is not UTC and drops the seconds", () => {
+      expect(say("history.fill_requested", { ...fill, start: "2026-10-01T00:00:00+03:00", end: "2026-10-05T06:30:15Z" }).summary).toBe(
+        "Asked for a history fill of source PM-1, 2026-10-01 00:00 +03:00 to 2026-10-05 06:30 UTC",
+      );
+    });
+
+    it("names the source from the lookup when the entry kept no name, and says so when it is gone", () => {
+      const bare = { source_id: 2, start: fill.start, end: fill.end };
+      expect(say("history.fill_requested", bare, sources).summary).toContain("history fill of source Meter 1, ");
+      expect(say("history.fill_requested", bare, {}).summary).toContain("history fill of a deleted source, ");
+      expect(say("history.fill_requested", bare).summary).toContain("history fill of a source, ");
+    });
+
+    it("leaves the range out when it is missing and shows a time it cannot read as text", () => {
+      expect(say("history.fill_requested", { source_id: 2, name: "PM-1" }).summary).toBe("Asked for a history fill of source PM-1");
+      expect(say("history.fill_requested", { name: "PM-1", start: "2026-10-01T00:00:00Z" }).summary).toBe("Asked for a history fill of source PM-1");
+      expect(say("history.fill_requested", { name: "PM-1", start: 5, end: {} }).summary).toBe("Asked for a history fill of source PM-1");
+      expect(say("history.fill_requested", { name: "PM-1", start: "last week", end: "today" }).summary).toBe("Asked for a history fill of source PM-1, last week to today");
+      expect(say("history.fill_requested", {}).summary).toBe("Asked for a history fill of a source");
+    });
   });
 });
