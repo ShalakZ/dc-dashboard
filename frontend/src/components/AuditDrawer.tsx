@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
-import type { AuditEntry } from "../api/types";
+import { api } from "../api/client";
+import { useInvalidate } from "../api/queries";
+import type { AuditEntry, TagListUndoResult } from "../api/types";
+import { useAuth } from "../auth/AuthProvider";
 import { copyText } from "../lib/diagnostics";
 import { describeAudit } from "../lib/auditText";
 import { relativeTime } from "../lib/relativeTime";
 import { formatSiteDateTime } from "../lib/siteTime";
+import { TAG_LIST_REFRESHED, undoSentence } from "../lib/tagListUndo";
 import { KindTile, UserLabel } from "./AuditCells";
 import { Drawer } from "./Drawer";
 import { Skeleton, SkeletonRegion } from "./Skeleton";
@@ -23,6 +27,72 @@ function EntrySkeleton() {
       </dl>
       <Skeleton variant="block" height={120} />
     </SkeletonRegion>
+  );
+}
+
+/** The server takes a tag list back for this long after it was applied (api/tag_lists.py UNDO_HOURS). The server decides; this only keeps a button off an entry that is certainly too old. */
+const UNDO_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The raw JSON of an entry, collapsed. It is built only while it is open: the detail of a tag list holds one entry per mapping (thousands of lines), and a drawer
+ * that stringified it for every visit would stall. The caller keys it by the entry, so stepping to another entry closes it again.
+ */
+function RawJson({ detail }: { detail: unknown }) {
+  const [open, setOpen] = useState(false);
+  const bodyId = useId();
+  return (
+    <>
+      <button type="button" aria-expanded={open} aria-controls={open ? bodyId : undefined} onClick={() => setOpen((was) => !was)}>
+        {open ? "Hide the stored JSON" : "Show the stored JSON"}
+      </button>
+      {/* The stored JSON, ids and all: the friendly text above never shows one. */}
+      {open && <pre id={bodyId} className="entry-json">{JSON.stringify(detail, null, 2)}</pre>}
+    </>
+  );
+}
+
+/**
+ * "Undo this tag list" for a tags.mapped entry of the last 24 hours, to a person who may accept discovery results (the permission the tag list itself needs;
+ * seeing the audit log is not enough). It calls the same route as the Undo of the toast. The server decides whether it still can: its refusals ("already
+ * undone", "changed since ...") are shown in place, in a slot that is always there. After it worked the button stays (it only waits), so the focus does not
+ * fall to the page. The hooks live in the inner part so that an entry of any other action asks for neither the account nor the query client.
+ */
+function TagListUndo({ entry, now }: { entry: AuditEntry; now: Date }) {
+  const { can } = useAuth();
+  const recent = Date.parse(entry.ts) > now.getTime() - UNDO_WINDOW_MS;
+  return can("discovery.accept") && recent ? <UndoThisList entryId={entry.id} /> : null;
+}
+
+function UndoThisList({ entryId }: { entryId: number }) {
+  const toast = useToast();
+  const invalidate = useInvalidate();
+  const running = useRef(false);
+  const [state, setState] = useState<{ phase: "idle" | "busy" | "done"; text: string | null; refused: boolean }>({ phase: "idle", text: null, refused: false });
+
+  async function undo() {
+    if (running.current || state.phase === "done") return;
+    running.current = true;
+    setState({ phase: "busy", text: "Undoing the tag list...", refused: false });
+    try {
+      const text = undoSentence(await api.post<TagListUndoResult>(`/api/tag-lists/${entryId}/undo`));
+      toast.success(text);
+      setState({ phase: "done", text, refused: false });
+    } catch (error) {
+      setState({ phase: "idle", text: error instanceof Error ? error.message : String(error), refused: true });
+    } finally {
+      try { await invalidate(...TAG_LIST_REFRESHED); } catch { /* the lists fetch themselves again on their next visit */ }
+      running.current = false;
+    }
+  }
+
+  return (
+    <div className="audit-undo">
+      <button type="button" aria-disabled={state.phase === "idle" ? undefined : true} onClick={() => void undo()}>Undo this tag list</button>
+      <p className="muted">Takes back the mappings, and the assets and points this list created, if none of them has changed since. Possible for 24 hours.</p>
+      <div className="audit-undo-slot">
+        {state.text !== null && (state.refused ? <p role="alert">{state.text}</p> : <p>{state.text}</p>)}
+      </div>
+    </div>
   );
 }
 
@@ -75,6 +145,8 @@ function EntryView({ entry, timezone, now }: { entry: AuditEntry; timezone: stri
       </dl>
       {/* The field copyText copies from when the clipboard API is missing: inside the panel (so inside the focus trap), out of sight and out of the Tab order. */}
       <textarea ref={area} className="copy-field" readOnly tabIndex={-1} aria-hidden="true" value={number} />
+      {/* Keyed by the entry (and apart from RawJson's key: two siblings with one key leave the old one mounted): Previous and Next keep this component, and a finished or refused Undo belongs to the entry it was pressed on. */}
+      {entry.action === "tags.mapped" && <TagListUndo key={`undo-${entry.id}`} entry={entry} now={now} />}
       {changes.length > 0 && (
         <>
           <h3 className="section-title">What changed</h3>
@@ -96,8 +168,7 @@ function EntryView({ entry, timezone, now }: { entry: AuditEntry; timezone: stri
         </>
       )}
       <h3 className="section-title">Details</h3>
-      {/* The stored JSON, ids and all: the friendly text above never shows one. */}
-      <pre className="entry-json">{JSON.stringify(entry.detail, null, 2)}</pre>
+      <RawJson key={`json-${entry.id}`} detail={entry.detail} />
     </div>
   );
 }

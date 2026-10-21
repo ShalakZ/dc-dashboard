@@ -1,3 +1,55 @@
 @layer w6 {
-  /* w31: the rules of the Map tag list... dialog (components/TagListDialog.tsx) go here, under the page class .taglist-dialog. Tokens only. */
+  /* w31: the Map tag list... dialog (components/TagListDialog.tsx) and the Undo block of the Audit drawer (components/AuditDrawer.tsx). Tokens only; every rule is
+     scoped by a class this piece owns (taglist-*, audit-undo*). The dialog carries .dialog (app.css's) beside its own class and never names it: other page files
+     write .dialog bare and app.css.test.ts refuses a second file that names it. */
+
+  /* A column, not the dialog's grid: the report box has a height of its own, so with a long list the field, the status line and the buttons stay in sight. */
+  .taglist-dialog { display: flex; flex-direction: column; gap: 12px; width: min(52rem, 100%); }
+  .taglist-dialog > * { flex: none; }
+  .taglist-dialog h2 { overflow-wrap: anywhere; }
+  .taglist-dialog > .row { justify-content: flex-end; }
+
+  .taglist-input { resize: vertical; }
+  .taglist-help { display: grid; gap: 4px; }
+  .taglist-help p { font-size: var(--fs-xs); overflow-wrap: anywhere; }
+
+  /* The file chooser and the option side by side; they wrap in a narrow window. */
+  .taglist-options { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 32px; }
+  .taglist-options > .field { min-width: 0; }
+  .taglist-file { font-size: var(--fs-xs); overflow-wrap: anywhere; }
+  .taglist-create { display: flex; align-items: center; gap: 6px; min-height: var(--ctl-h); }
+
+  /* The one line that speaks for the dialog (checking, the sentence of a check, the reason it stopped): a FIXED three lines, so that a long sentence never
+     moves the box under it or the buttons (a longer text scrolls inside it, as the Bulk create dialog's does). */
+  .taglist-status { height: 3lh; overflow: auto; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+  .taglist-status[data-tone="error"] { color: var(--crit); font-weight: 600; }
+
+  /* The report: a box of a FIXED height that scrolls (it is a tab stop, so the keyboard can scroll it). A report arriving, or a longer one replacing a shorter, moves nothing. */
+  .taglist-report { display: grid; gap: 14px; align-content: start; height: min(20rem, 34vh); overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); }
+  .taglist-report:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .taglist-report h3 { margin: 0 0 4px; font-size: var(--fs-sm); font-weight: 600; }
+  .taglist-report table { margin: 0; }
+  .taglist-report p { margin: 0; font-size: var(--fs-sm); }
+  .taglist-cell { overflow-wrap: anywhere; }
+
+  .taglist-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+  .taglist-tiles > div { padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); }
+  .taglist-tiles dt { color: var(--text-2); font-size: var(--fs-xs); }
+  .taglist-tiles dd { margin: 0; font-size: var(--fs-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .taglist-paths { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); }
+  .taglist-paths li { overflow-wrap: anywhere; }
+
+  /* The buttons that wait do so with aria-disabled, not disabled (the person is on one of them when a call starts): they look the way a disabled button does and do nothing. */
+  .taglist-go { min-width: 11rem; }
+  .taglist-go[aria-disabled="true"], .taglist-go[aria-disabled="true"]:hover { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); cursor: not-allowed; }
+  .taglist-check[aria-disabled="true"], .taglist-cancel[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+
+  /* The Audit drawer's "Undo this tag list" (a tags.mapped entry of the last 24 hours). The slot under the button is always two lines tall: the server's refusal
+     arriving moves nothing below it. */
+  .audit-undo { display: grid; gap: 6px; justify-items: start; }
+  .audit-undo p { margin: 0; font-size: var(--fs-sm); }
+  .audit-undo-slot { min-height: 2lh; width: 100%; overflow-wrap: anywhere; }
+  .audit-undo-slot > p[role="alert"] { color: var(--crit); font-weight: 600; }
+  .audit-undo > button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
 }

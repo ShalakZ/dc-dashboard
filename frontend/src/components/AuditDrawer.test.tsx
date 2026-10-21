@@ -1,9 +1,15 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AuditEntry } from "../api/types";
+import { AuthProvider } from "../auth/AuthProvider";
+import type { PermissionId } from "../lib/permissions";
+import { mockFetch, type Routes } from "../test/fetchMock";
+import { accountKnown, SignedIn } from "../test/signedIn";
 import { spyToasts } from "../test/toasts";
+import { userFor } from "../test/users";
 import { AuditDrawer } from "./AuditDrawer";
 
 const NOW = new Date("2026-10-07T12:00:00Z");
@@ -74,12 +80,38 @@ describe("AuditDrawer: an entry", () => {
     expect(facts(dialog())["What happened"].textContent).not.toMatch(/#\d/);
   });
 
-  it("shows the stored JSON as it is, ids and all, under Details", () => {
+  it("keeps the stored JSON behind a button under Details, closed to begin with and not built while it is closed", () => {
+    const stringify = vi.spyOn(JSON, "stringify");
     const { dialog } = show(drawer());
     expect(within(dialog()).getByRole("heading", { name: "Details" })).toBeInTheDocument();
+    const toggle = within(dialog()).getByRole("button", { name: "Show the stored JSON" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).not.toHaveAttribute("aria-controls");
+    expect(dialog().querySelector("pre")).toBeNull();
+    expect(stringify.mock.calls.some(([value]) => value === tariff)).toBe(false);
+  });
+
+  it("shows the stored JSON as it is, ids and all, once opened, and hides it again", async () => {
+    const { dialog } = show(drawer());
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Show the stored JSON" }));
     const json = dialog().querySelector("pre")!;
     expect(json.textContent).toBe(JSON.stringify(tariff, null, 2));
     expect(json).toHaveTextContent('"asset_id": 7');
+    const toggle = within(dialog()).getByRole("button", { name: "Hide the stored JSON" });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAttribute("aria-controls", json.id);
+    await userEvent.click(toggle);
+    expect(dialog().querySelector("pre")).toBeNull();
+    expect(toggle).toHaveFocus();
+  });
+
+  it("closes the JSON again when the drawer steps to another entry (a long detail must not open by itself)", async () => {
+    const { dialog, rerender, toasts } = show(drawer());
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Show the stored JSON" }));
+    expect(dialog().querySelector("pre")).not.toBeNull();
+    rerender(<MemoryRouter>{toasts.wrap(drawer({ entry: stored({ id: 50, action: "scan.started", detail: { scan_id: 50 }, refs: {} }) }))}</MemoryRouter>);
+    expect(dialog().querySelector("pre")).toBeNull();
+    expect(within(dialog()).getByRole("button", { name: "Show the stored JSON" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("shows no table for an entry that changed nothing", () => {
@@ -247,5 +279,113 @@ describe("AuditDrawer: Copy entry number", () => {
       expect(document.execCommand).toHaveBeenCalledWith("copy");
       await waitFor(() => expect(toasts.calls).toEqual([{ kind: "info", text: "Entry number copied" }]));
     });
+  });
+});
+
+describe("AuditDrawer: Undo this tag list", () => {
+  const TAGS_AT = "2026-10-07T10:00:00Z"; // 2 hours before NOW
+  const mapped = (extra: Partial<AuditEntry> = {}) =>
+    stored({ id: 80, action: "tags.mapped", detail: { source_id: 5, points: [1, 2], assets: [[9, null, "Hall 1"]], mappings: [[1, 1, 9, "energy_kwh", 1, 60, null]] }, refs: {}, ts: TAGS_AT, ...extra });
+  const SENTENCE_BACK = "Removed 1 mapping, 1 asset and 2 points.";
+
+  /** The drawer over an account holding `permissions`, once the account is known (the button is absent until /api/me has answered). */
+  async function showAs(permissions: PermissionId[], entry: AuditEntry, routes: Routes = {}) {
+    const toasts = spyToasts();
+    mockFetch({ "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("custom", { permissions }) }, ...routes });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const refreshed = vi.spyOn(client, "invalidateQueries");
+    const view = render(
+      <QueryClientProvider client={client}>
+        <AuthProvider>
+          <MemoryRouter>{toasts.wrap(<><SignedIn />{drawer({ entry })}</>)}</MemoryRouter>
+        </AuthProvider>
+      </QueryClientProvider>,
+    );
+    await accountKnown();
+    const dialog = screen.getByRole("dialog", { name: "Audit entry" });
+    return { ...view, dialog, toasts, refreshed, undo: () => within(dialog).queryByRole("button", { name: "Undo this tag list" }) };
+  }
+
+  it("is offered to an account with discovery.accept, for a tag list of the last 24 hours", async () => {
+    const { undo, dialog } = await showAs(["discovery.accept", "audit.view"], mapped());
+    expect(undo()).toBeInTheDocument();
+    expect(undo()).toHaveAttribute("type", "button");
+    expect(dialog).toHaveTextContent("Possible for 24 hours.");
+  });
+
+  it("is not offered to an account that can see the audit log but not accept discovery results", async () => {
+    const { undo } = await showAs(["audit.view", "assets.edit", "readings.import"], mapped());
+    expect(undo()).toBeNull();
+  });
+
+  it("is offered for a tag list 23 hours old and not for one 25 hours old (NOW is 2026-10-07 12:00 UTC)", async () => {
+    expect((await showAs(["discovery.accept"], mapped({ ts: "2026-10-06T13:00:00Z" }))).undo()).toBeInTheDocument();
+    cleanup();
+    expect((await showAs(["discovery.accept"], mapped({ ts: "2026-10-06T11:00:00Z" }))).undo()).toBeNull();
+  });
+
+  it("is offered only for a tags.mapped entry, not for its Undo or any other action", async () => {
+    const { undo } = await showAs(["discovery.accept"], stored({ id: 81, action: "tags.unmapped", detail: { audit_id: 80, mappings: 1, assets: 1, points_removed: 2, points_kept: [] }, refs: {}, ts: TAGS_AT }));
+    expect(undo()).toBeNull();
+    cleanup();
+    expect((await showAs(["discovery.accept"], stored())).undo()).toBeNull();
+  });
+
+  it("posts the Undo of this entry, tells the server's sentence in place and in a toast, keeps the button (waiting) and the focus on it, and reads the lists again", async () => {
+    const { undo, dialog, toasts, refreshed } = await showAs(["discovery.accept"], mapped(), {
+      "POST /api/tag-lists/80/undo": { body: { mappings: 1, assets: 1, points_removed: 2, points_kept: 0, text: SENTENCE_BACK } },
+    });
+    await userEvent.click(undo()!);
+    await waitFor(() => expect(dialog.querySelector(".audit-undo-slot")).toHaveTextContent(SENTENCE_BACK));
+    expect(toasts.calls).toEqual([{ kind: "success", text: SENTENCE_BACK }]);
+    expect(vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url) === "/api/tag-lists/80/undo" && (init as RequestInit).method === "POST")).toHaveLength(1);
+    expect(undo()).toHaveAttribute("aria-disabled", "true");
+    expect(undo()).toHaveFocus();
+    await waitFor(() => expect(refreshed.mock.calls.map(([f]) => (f as { queryKey: readonly unknown[] }).queryKey[0])).toEqual(expect.arrayContaining(["audit", "sources", "assets", "graph", "billing"])));
+    // a second press does nothing
+    await userEvent.click(undo()!);
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/tag-lists/80/undo")).toHaveLength(1);
+  });
+
+  it("shows the server's refusal in place, as an alert, with no toast, and lets the person try again", async () => {
+    const { undo, dialog, toasts, refreshed } = await showAs(["discovery.accept"], mapped(), {
+      "POST /api/tag-lists/80/undo": { status: 409, body: { detail: "this tag list was already undone" } },
+    });
+    await userEvent.click(undo()!);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("this tag list was already undone");
+    expect(toasts.calls).toEqual([]);
+    expect(undo()).not.toHaveAttribute("aria-disabled");
+    await waitFor(() => expect(refreshed).toHaveBeenCalled()); // the lists are out of date after a refusal too
+  });
+
+  it("holds a slot for the message that stays when there is none, and says the refusal of the changed-since case in full", async () => {
+    const changed = 'the asset "Hall 1" was renamed or moved after the list created it; the list cannot be undone as a whole';
+    const { undo, dialog } = await showAs(["discovery.accept"], mapped(), { "POST /api/tag-lists/80/undo": { status: 409, body: { detail: changed } } });
+    expect(dialog.querySelector(".audit-undo-slot")).toBeEmptyDOMElement();
+    await userEvent.click(undo()!);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(changed);
+  });
+
+  it("forgets a refusal when the drawer steps to another entry", async () => {
+    const { undo, dialog, rerender, toasts } = await showAs(["discovery.accept"], mapped(), { "POST /api/tag-lists/80/undo": { status: 409, body: { detail: "already undone" } } });
+    await userEvent.click(undo()!);
+    expect(await within(dialog).findByRole("alert")).toBeInTheDocument();
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <AuthProvider>
+          <MemoryRouter>{toasts.wrap(<><SignedIn />{drawer({ entry: mapped({ id: 79 }) })}</>)}</MemoryRouter>
+        </AuthProvider>
+      </QueryClientProvider>,
+    );
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+    expect(dialog.querySelectorAll(".audit-undo")).toHaveLength(1); // the old block is unmounted, not left beside the new one
+  });
+
+  it("keeps the raw JSON of a tag list closed, so a 1,000-line detail is never built until it is asked for", async () => {
+    const big = { source_id: 5, mappings: Array.from({ length: 1000 }, (_, i) => [i, i, i, "energy_kwh", 1, 60, null]) };
+    const stringify = vi.spyOn(JSON, "stringify");
+    const { dialog } = await showAs(["discovery.accept"], mapped({ detail: big }));
+    expect(dialog.querySelector("pre")).toBeNull();
+    expect(stringify.mock.calls.some(([value]) => value === big)).toBe(false);
   });
 });
