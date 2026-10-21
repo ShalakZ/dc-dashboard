@@ -647,8 +647,9 @@ platform does not change what it counts.
 interval). A history that is denser than the mapping must not add samples to an hour the estimate already counts, or the estimate
 would move. So the history of a point that is not mapped as an energy counter is thinned. A history sample is kept only when no stored
 good sample of that point lies within one whole mapping interval of it, and it is at least 0.9 of an interval after the previous
-sample kept. So only a gap of more than two intervals is filled (a single missing live sample is not: it would move the estimate of an
-hour the poll already covers). Holes fill at the mapping's density and a covered hour never changes. A sample at a time that is already stored is not
+sample kept. So a hole of two intervals or more is filled, while a poll that merely drifted (two samples 6 minutes apart on a
+5-minute mapping) is not: that would move the estimate of an hour the poll already covers. Holes fill at the mapping's density and a
+covered hour never changes. A sample at a time that is already stored is not
 thinned; it is counted as already there or differing. Samples thinned away are counted as rejected. Energy counters keep every sample.
 
 **Where to see it.**
