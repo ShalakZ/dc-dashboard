@@ -391,7 +391,7 @@ async def summaries_of(db, point: int) -> tuple[list, list]:
 async def test_rows_before_the_oldest_raw_reading_are_refused_when_the_rollups_keep_minutes_there_and_nothing_is_deleted(db, first):
     """C1 of the adversarial pass: the rollup guard was judged AFTER the import had written, so rows at or before the dropped minutes
     hid them, and the refresh deleted every other meter's minutes and hours there. The floor is read before the first write, rows
-    before it are refused (also in the check), and the refresh is judged against that floor."""
+    before it are refused (also in the check), up to the end of the stretch whose raw readings are gone."""
     now = datetime(2026, 10, 14, 12, tzinfo=UTC)
     source, ids, floor = await history_whose_raw_readings_were_dropped(db, newer_raw=True)
     before = await summaries_of(db, ids["P0"])
@@ -407,9 +407,18 @@ async def test_rows_before_the_oldest_raw_reading_are_refused_when_the_rollups_k
     assert await summaries_of(db, ids["P0"]) == before  # no history was deleted
     assert real.as_dict()["raw_floor"] == reject_before.isoformat()
     assert any("lie before 2026-10-01 02:00 UTC, the end of the summaries whose raw readings are gone" in line for line in importer.report_lines(real))
-    assert importer.REASON_TEXT[importer.OLDER_THAN_RAW] == (
-        "The time is in a stretch whose raw readings the retention removed; the summaries there are kept, so nothing can be added"
+    assert importer.REASON_TEXT[importer.OLDER_THAN_RAW] == (  # lower case like its siblings; the browser's text has its own capital
+        "the time is in a stretch whose raw readings the retention removed; the summaries there are kept, so nothing can be added"
     )
+
+
+def test_the_refusal_line_says_lies_for_one_row_and_lie_for_more():
+    one = importer.ImportReport(dry_run=True, source_id=1, profile="hourly", sha256="", size=0, rejected_by={importer.OLDER_THAN_RAW: 1})
+    one.raw_floor = datetime(2026, 10, 1, 2, tzinfo=UTC)
+    many = importer.ImportReport(dry_run=True, source_id=1, profile="hourly", sha256="", size=0, rejected_by={importer.OLDER_THAN_RAW: 2})
+    many.raw_floor = one.raw_floor
+    assert importer.report_lines(one)[0].startswith("1 row of the file lies before 2026-10-01 02:00 UTC")
+    assert importer.report_lines(many)[0].startswith("2 rows of the file lie before 2026-10-01 02:00 UTC")
 
 
 async def test_summaries_right_up_to_the_oldest_raw_reading_still_refuse_every_row_below_it(db):
@@ -486,20 +495,16 @@ async def test_nothing_changes_for_a_database_whose_rollups_hold_nothing_below_t
     assert fresh.rejected_by == {} and fresh.raw_floor is None
 
 
-async def test_the_guard_of_the_refresh_can_be_given_the_floor_the_caller_saw_before_it_wrote(db):
-    """`pending_drop_range(floor=...)`: rows written since lower `min(ts)`, which is what hid the dropped minutes in C1."""
-    source, ids, _ = await history_whose_raw_readings_were_dropped(db, newer_raw=True)
-    lo, hi = datetime(2026, 10, 1, 1, tzinfo=UTC), datetime(2026, 10, 1, 2, tzinfo=UTC)
-    assert await rollups.pending_drop_range(db, lo, hi) is not None
-    await insert_readings(db, ids["P1"], datetime(2026, 10, 1, 0, 59, tzinfo=UTC), 60, [1.0] * 5)  # what the import used to leave behind
-    assert await rollups.pending_drop_range(db, lo, hi) is None  # the hole: the minimum is now 00:59
-    assert await rollups.pending_drop_range(db, lo, hi, floor=datetime(2026, 10, 12, tzinfo=UTC)) is not None
-    assert await rollups.pending_drop_range(db, lo, hi, floor=None) is not None  # no raw reading at all: every minute lacks its raw data
-    assert await rollups.pending_drop_range(db, lo, hi, floor=datetime(2026, 10, 1, 0, 59, tzinfo=UTC)) is None
-    assert await rollups.pending_drop_range(db, lo, hi, floor=datetime(2026, 10, 1, 1, 0, 30, tzinfo=UTC)) is None  # 01:00 is not below 01:00:30's minute
+def test_the_newest_summary_below_the_floor_is_one_ordered_row_not_a_max():
+    """A `max()` there is a scan of every old minute of the rollup (measured: 2.6 million index rows in 158 ms; in the field hundreds
+    of days of minutes per meter lie below the raw floor); the ordered form reads one row (0.23 ms)."""
+    sql = " ".join(importer._NEWEST_SUMMARY_BELOW.split())
+    assert "ORDER BY bucket DESC LIMIT 1" in sql and "max(" not in sql.lower()
 
 
-async def test_the_refresh_is_judged_against_the_end_of_the_lost_summaries_read_before_the_first_write_when_there_are_any(db, monkeypatch):
+async def test_the_refresh_asks_the_guard_without_a_floor_so_it_reads_the_oldest_raw_reading_when_it_asks(db, monkeypatch):
+    """Every window of a stored row starts at or after the end of the lost stretch, which lies above every orphaned minute, so a floor
+    handed to the guard could never fire; read at the time of the question it also sees a retention drop that lands during the run."""
     now = datetime(2026, 10, 21, 12, tzinfo=UTC)
     source, ids, _ = await history_whose_raw_readings_were_dropped(db, newer_raw=True)
     asked: list = []
@@ -511,27 +516,18 @@ async def test_the_refresh_is_judged_against_the_end_of_the_lost_summaries_read_
 
     monkeypatch.setattr(rollups, "pending_drop_range", spy)
     report = await run(db, source, text("P1,2026-10-12T00:10:00Z,3,kW,good", "P1,2026-10-12T05:10:00Z,3,kW,good"), dry=False, now=now)
-    assert report.new == 2 and report.refresh_state == "done"
-    reject_before = datetime(2026, 10, 1, 2, tzinfo=UTC)  # the newest summary minute is 01:29: not the run's own minimum, and not the oldest raw reading
-    assert asked and all(kwargs == {"floor": reject_before} for kwargs in asked)
+    assert report.new == 2 and report.refresh_state == "done" and report.raw_floor == datetime(2026, 10, 1, 2, tzinfo=UTC)
+    assert asked and all(kwargs == {} for kwargs in asked)
 
 
-async def test_without_summaries_below_the_floor_the_guard_reads_the_minimum_itself(db, monkeypatch):
-    """The rows such a run stores below the floor are backed by raw readings of their own, and the view's real-time part shows their
-    minutes (the watermark of a database that was never refreshed): a floor given to the guard would take them for lost ones."""
+async def test_without_summaries_below_the_floor_a_row_below_the_oldest_raw_reading_is_stored_and_refreshed(db):
+    """The rows such a run stores below the oldest raw reading are backed by raw readings of their own, and the view's real-time part
+    shows their minutes (the watermark of a database that was never refreshed): the guard must not take them for lost ones."""
     now = datetime(2026, 10, 21, 12, tzinfo=UTC)
     source, ids = await make_world(db, {"A": ("active_power_kw", 1.0), "B": ("active_power_kw", 1.0)})
     await insert_readings(db, ids["A"], datetime(2026, 10, 12, tzinfo=UTC), 60, [1.0] * 5)
-    asked: list = []
-    real = rollups.pending_drop_range
-
-    async def spy(pool, lo, hi, **kwargs):
-        asked.append(kwargs)
-        return await real(pool, lo, hi, **kwargs)
-
-    monkeypatch.setattr(rollups, "pending_drop_range", spy)
     report = await run(db, source, text("B,2026-09-24T10:20:00Z,1,kW,good"), dry=False, now=now)
-    assert (report.new, report.refresh_state, report.raw_floor) == (1, "done", None) and asked == [{}]
+    assert (report.new, report.refresh_state, report.raw_floor) == (1, "done", None)
 
 
 async def test_a_refresh_that_would_delete_history_is_not_run_and_the_report_says_so_in_true_words(db):

@@ -13,7 +13,6 @@ import asyncio
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any
 from zoneinfo import ZoneInfo
 
 import asyncpg
@@ -125,27 +124,9 @@ WHERE bucket >= $1 AND bucket < $2
 """
 
 
-# The same question against a floor the caller took earlier: $3 is the oldest raw reading it saw (NULL: there was none, so every
-# rollup minute lacks its raw readings).
-_MINUTES_BELOW_FLOOR = """
-SELECT min(bucket) FROM readings_1m
-WHERE bucket >= $1 AND bucket < $2
-  AND bucket < coalesce(time_bucket(INTERVAL '1 minute', $3::timestamptz), 'infinity'::timestamptz)
-"""
-
-_READ_NOW: Any = object()  # `pending_drop_range(floor=...)` not given: the oldest raw reading is read when the question is asked
-
-
-async def pending_drop_range(pool: asyncpg.Pool, lo: datetime, hi: datetime, *, floor: datetime | None = _READ_NOW) -> str | None:
-    """Why a refresh over [hour_floor(lo), hi] would be unsafe, as a sentence without a full stop at its end, or None.
-
-    `floor` is for a caller that WRITES raw readings before it asks (an import): the rows it stored have lowered `min(ts)`, which
-    hides the minutes that lie below the raw data it found. It passes the instant it read before its first write, from which on
-    no minute has lost its raw readings (the import's end of the lost stretch; None: no raw reading at all, every minute counts)."""
-    if floor is _READ_NOW:
-        oldest = await pool.fetchval(_MINUTES_WITHOUT_RAW, hour_floor(lo), hi)
-    else:
-        oldest = await pool.fetchval(_MINUTES_BELOW_FLOOR, hour_floor(lo), hi, floor)
+async def pending_drop_range(pool: asyncpg.Pool, lo: datetime, hi: datetime) -> str | None:
+    """Why a refresh over [hour_floor(lo), hi] would be unsafe, as a sentence without a full stop at its end, or None."""
+    oldest = await pool.fetchval(_MINUTES_WITHOUT_RAW, hour_floor(lo), hi)
     if oldest is None:
         return None
     return (
