@@ -14,7 +14,7 @@ What a cycle does for one source (the one that holds its lease):
   what it did. A slice starts AT the previous slice's end, and a cut answer continues AT its `complete_until`: the source's window is
   inclusive, and the store absorbs the row read twice.
 - nothing is stored that the engine would misread: not before a point's first hour in `readings_1h` (that would move a parent's past
-  figures), not older than the raw retention, not from the future, and a mapped metric that is not energy keeps a sample only where no
+  figures), not older than the raw retention, not from the future, and a mapped metric (energy counters too) keeps a sample only where no
   stored one covers its time (see `thin`). Nothing is ever updated, notified or deleted.
 
 A failure never moves a mark past data that was not answered. Transient trouble (timeout, unreachable, rate limited, a malformed
@@ -222,8 +222,9 @@ def thin(
     """The samples of ONE point that may be stored, and how many were dropped. `samples` ascend by time; `stored` holds every time
     the point has a reading at, `stored_good` the good ones, ascending.
 
-    A power-only estimate counts samples times the mapping's interval, so a history that is denser than the mapping must not thicken
-    an hour the engine already counts, and a hole must fill at the mapping's density and no denser. A sample is therefore dropped when
+    A power-only estimate counts samples times the mapping's interval, and a counter's energy of an hour is its last value less the
+    last value before it, so a history that is denser than the mapping must not thicken an hour the engine already counts (nor move
+    an hour's last value): this holds for every metric. A hole must fill at the mapping's density and no denser. A sample is therefore dropped when
     a good stored sample lies STRICTLY less than one full interval from it (so a live poll that drifted, with two stamps six minutes
     apart on a five-minute mapping, gets nothing added and its hour keeps its figure), or when the last good sample KEPT is less than
     0.9 intervals before it (a bad sample is held to the last bad one kept instead: it covers nothing). A stored sample exactly one
@@ -873,27 +874,24 @@ class Backfill:
         return result, thinned, len(rows) - len({(row[0], row[1]) for row in rows})
 
     async def _rows(self, run: _Run, chosen: list[tuple[Mapped, PointValue]]) -> tuple[list[Row], int]:
-        """The rows to store and how many samples were thinned away. Energy counters keep every sample; any other metric goes
-        through `thin` against what the point already has stored around the answer's time range."""
+        """The rows to store and how many samples were thinned away: every metric, energy counters included, goes through `thin`
+        against what the point already has stored around the answer's time range. A counter is no exception: a Historian denser than
+        the mapping would otherwise add the density ratio in raw rows for every polled minute, and move each hour's last value (the
+        counter's energy of an hour is its last value less the previous hour's) from the poll's last stamp to the history's."""
         rows: list[Row] = []
         thinned = 0
-        others: dict[Mapped, list[PointValue]] = defaultdict(list)
+        series: dict[Mapped, list[PointValue]] = defaultdict(list)
         for mapped, value in chosen:
-            if mapped.metric == "energy_kwh":
-                rows.append((mapped.point_id, value.ts, value.value, value.quality))
-            else:
-                others[mapped].append(value)
-        if not others:
-            return rows, thinned
-        reach = timedelta(seconds=max(m.interval for m in others) * COVERED)
-        times = [value.ts for values in others.values() for value in values]
+            series[mapped].append(value)
+        reach = timedelta(seconds=max(m.interval for m in series) * COVERED)
+        times = [value.ts for values in series.values() for value in values]
         every: dict[int, set[datetime]] = defaultdict(set)
         good: dict[int, list[datetime]] = defaultdict(list)
-        for stored in await run.conn.fetch(_STORED, [m.point_id for m in others], min(times) - reach, max(times) + reach):
+        for stored in await run.conn.fetch(_STORED, [m.point_id for m in series], min(times) - reach, max(times) + reach):
             every[stored["point_id"]].add(stored["ts"])
             if stored["quality"] == GOOD:
                 good[stored["point_id"]].append(stored["ts"])
-        for mapped, values in others.items():
+        for mapped, values in series.items():
             values.sort(key=lambda value: value.ts)
             kept, dropped = thin(values, mapped.interval, every[mapped.point_id], sorted(good[mapped.point_id]))
             thinned += dropped
