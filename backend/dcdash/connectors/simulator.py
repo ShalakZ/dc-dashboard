@@ -66,19 +66,20 @@ def _convert(items: list[Any], previous: dict[str, datetime], live: bool) -> tup
     for item in items:
         if not isinstance(item, dict):
             rejected += 1
-        elif live and _EXTRA.isdisjoint(item):
-            values.append(_plain(item))
-        elif not isinstance(item.get("address"), str):
+            continue
+        try:
+            if live and _EXTRA.isdisjoint(item):
+                kept = _plain(item)
+            elif isinstance(item.get("address"), str):
+                kept = _normalised(item, previous)
+            else:
+                kept = None
+        except Exception:  # whatever a source sends that no rule above is written for: one bad item is rejected, never the whole answer
+            kept = None
+        if kept is None:
             rejected += 1
         else:
-            try:
-                kept = _normalised(item, previous)
-            except Exception:  # whatever a source sends that no rule above is written for: one bad item is rejected, never the whole answer
-                kept = None
-            if kept is None:
-                rejected += 1
-            else:
-                values.append(kept)
+            values.append(kept)
     return values, rejected
 
 

@@ -479,6 +479,25 @@ async def test_items_that_no_rule_is_written_for_do_not_fail_a_live_read_either(
     assert [v.address for v in values] == ["a"]
 
 
+PLAIN_GARBAGE = [  # the same, for an item with none of the per-value fields, which takes the plain simulator's conversion
+    {"address": "z", "ts": "2026-03-01T11:03:00+00:00", "value": 10**400},  # a number that no float holds
+    {"address": "z", "ts": "2026-03-01T11:04:00+00:00"},                    # no value
+    {"address": "z", "value": 1.0},                                         # no ts
+    {"address": "z", "ts": 5, "value": 1.0},                                # a ts that is not text
+    {"ts": "2026-03-01T11:05:00+00:00", "value": 1.0},                      # no address
+]
+
+
+async def test_plain_items_that_no_rule_is_written_for_do_not_fail_a_live_read_either():
+    # The plain branch must not be the one way a single bad item still takes the whole poll group offline.
+    body = {"values": [GOOD_ITEM, *PLAIN_GARBAGE, *GARBAGE]}
+    values = await mocked(lambda request: httpx.Response(200, json=body)).read(["a", "z"])
+    assert [v.address for v in values] == ["a"]
+    plain = {"address": "p", "ts": "2026-03-01T11:00:00+00:00", "value": 2.5}
+    values = await mocked(lambda request: httpx.Response(200, json={"values": [*PLAIN_GARBAGE, plain]})).read(["p", "z"])
+    assert [(v.address, v.value, v.quality) for v in values] == [("p", 2.5, GOOD)]
+
+
 async def test_a_plain_simulator_item_goes_through_the_old_conversion_in_a_live_read():
     plain = {"address": "p", "ts": "2026-03-01T11:00:00+00:00", "value": 2.5}  # none of the per-value fields
     values = await mocked(lambda request: httpx.Response(200, json={"values": [plain]})).read(["p"])
