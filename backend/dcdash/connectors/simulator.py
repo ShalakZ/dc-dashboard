@@ -95,7 +95,7 @@ def _normalised(item: dict[str, Any], previous: dict[str, datetime]) -> PointVal
     previous[address] = moment  # what the caller gets back as `ts`, and so what it will hand in again as `after`
     raw = item.get("value")
     numeric = isinstance(raw, (int, float)) and not isinstance(raw, bool)
-    code, label = normalise.quality(item["quality"]) if "quality" in item else (GOOD, None)
+    code, label = normalise.quality(item.get("quality"))  # no quality is not good: only a good code is
     if not numeric:
         return PointValue(address, moment, None, BAD, label)
     return PointValue(address, moment, float(raw), code, label)  # a bad-quality number is kept as evidence, out of every figure
@@ -221,9 +221,12 @@ class SimulatorConnector(Connector):
         first, last = _utc("start", start), _utc("end", end)
         if resolution is not None:
             raise ConnectorError("not_supported", "this source answers raw samples only")
-        # `after` is the last instant received per address. When it is not before `start`, the caller is re-reading what it already
-        # has, so only the lower bound `start` is known: an item can be no earlier than that.
-        previous = {address: min(_utc("after", seen), first - timedelta(microseconds=1)) for address, seen in (after or {}).items()}
+        # An address in `after` continues a series the caller already holds, so its first item here is simply the first at or after
+        # `start`: the order evidence is `start` itself, never the older (or, in a re-read, later) instant `after` names. Without
+        # `after` the first item of an address has no evidence, and an ambiguous local time is refused rather than guessed.
+        for seen in (after or {}).values():
+            _utc("after", seen)  # a naive instant is a caller's mistake, whatever it would be used for
+        previous = {address: first - timedelta(microseconds=1) for address in after or {}}
         values: list[PointValue] = []
         rejected = 0
         unknown: list[str] = []

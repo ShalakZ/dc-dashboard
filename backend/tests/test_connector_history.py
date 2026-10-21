@@ -200,6 +200,13 @@ async def test_a_window_that_starts_inside_the_repeated_hour_is_refused_without_
     assert told.rejected == 0 and [v.ts for v in told.values] == [start + i * MINUTE for i in range(241)]
 
 
+async def test_a_stale_after_does_not_pull_a_second_pass_time_back_onto_the_first_pass():
+    c = connector(Clock(at("2026-10-26")))
+    start, end = at("2026-10-25", "01:00"), at("2026-10-25", "02:00")  # the second pass of 02:00-03:00 Berlin
+    page = await c.read_history(["LOCAL_kWh"], start, end, after={"LOCAL_kWh": at("2026-10-24", "22:00")})
+    assert [v.ts for v in page.values] == [start + i * MINUTE for i in range(61)] and page.rejected == 0  # nothing at 00:xx
+
+
 async def test_a_page_cut_inside_the_repeated_hour_continues_without_a_gap_or_a_mistake():
     clock = Clock(at("2026-10-26"))
     start, end = at("2026-10-24", "23:00"), at("2026-10-25", "04:00")
@@ -395,17 +402,18 @@ async def test_items_the_rules_refuse_are_dropped_and_counted():
     assert [v.ts for v in page.values] == [at("2026-03-01", "11:00")] and page.rejected == 9 and page.unknown == ("z",)
 
 
-async def test_a_value_that_is_not_a_number_is_bad_and_a_missing_quality_is_not_a_complaint():
+async def test_a_value_that_is_not_a_number_is_bad_and_so_is_a_value_with_no_quality():
     items = [
         {"address": "a", "ts": "2026-03-01T11:00:00+00:00", "value": None, "quality": "good"},
-        {"address": "a", "ts": "2026-03-01T11:01:00+00:00", "value": True},
+        {"address": "a", "ts": "2026-03-01T11:01:00+00:00", "value": True, "quality": "good"},
         {"address": "a", "ts": "2026-03-01T11:02:00+00:00", "value": 4, "quality": 0},
         {"address": "a", "ts": "2026-03-01T11:03:00+00:00", "value": 5.0, "quality": 192},
+        {"address": "a", "ts": "2026-03-01T11:04:00+00:00", "value": 6.0},  # only a good code is good
     ]
     body = {"values": items, "complete_until": "2026-03-01T12:00:00+00:00"}
     page = await mocked(lambda request: httpx.Response(200, json=body)).read_history(["a"], NOW - timedelta(hours=2), NOW)
     assert [(v.value, v.quality, v.status) for v in page.values] == [
-        (None, BAD, None), (None, BAD, None), (4.0, GOOD, None), (5.0, BAD, "unknown:192"),
+        (None, BAD, None), (None, BAD, None), (4.0, GOOD, None), (5.0, BAD, "unknown:192"), (6.0, BAD, "unknown:none"),
     ]
 
 
