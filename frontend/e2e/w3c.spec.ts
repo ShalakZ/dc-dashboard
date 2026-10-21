@@ -105,6 +105,7 @@ test("W3c: the audit screen filters, links, exports and pages, and is for admins
     await expect(page).toHaveURL(/\/audit\/\d+\?.*q=W3c/);
     await expect(drawer.locator("dl.kv")).toContainText(/#\d+/);
     await expect(drawer.locator("dd .what")).toContainText(GONE);
+    await drawer.getByRole("button", { name: "Show the stored JSON" }).click();
     await expect(drawer.locator("pre")).toContainText('"name"');
     await page.keyboard.press("Escape");
     await expect(drawer).toBeHidden();
