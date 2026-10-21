@@ -383,6 +383,79 @@ async def test_a_slice_whose_rollups_could_not_be_refreshed_does_not_move_the_ma
     assert ranges[0][0] <= NOW - 2 * HOUR and ranges[0][1] >= NOW + HOUR  # the retry refreshed what the failed try had stored, too
 
 
+async def test_a_refresh_that_fails_while_another_error_ends_the_cycle_is_owed_and_done_with_the_next_try(db, monkeypatch):
+    real, ranges, broken = rollups.refresh_range, [], {"on": True}
+
+    async def flaky(pool, lo, hi, now):
+        ranges.append((lo, hi))
+        if broken["on"]:
+            raise RuntimeError("the refresh timed out")
+        return await real(pool, lo, hi, now)
+
+    async def refused_for_the_second_address(call, number):
+        if broken["on"] and call.addresses == ("NOPE_kWh",):
+            raise ConnectorError("auth_failed", "credentials rejected")
+
+    monkeypatch.setattr(rollups, "refresh_range", flaky)
+    first = NOW - 2 * HOUR + timedelta(seconds=17)
+    world = await make_world(
+        db, {"M001_kWh": KWH, "NOPE_kWh": KWH}, {"M001_kWh": first, "NOPE_kWh": first}, settings=settings_with(max_rows=100),
+        script=refused_for_the_second_address,
+    )  # one-hour slices, one address to a batch
+    result = await world.cycle()
+    assert result.state == "backing_off" and "credentials" in result.reason  # M001's first hour was stored, then the next batch ended the cycle
+    assert len(await world.stored("M001_kWh")) == 1 + 61 and ranges  # and the refresh of what was stored was tried, in vain
+    broken["on"] = False
+    ranges.clear()
+    world.clock.now = result.next_try_at
+    assert (await world.cycle()).state == "idle"  # the retry finds every row of that hour already there ...
+    assert ranges[0][0] == NOW - 2 * HOUR and ranges[0][1] >= NOW - HOUR  # ... and still refreshes the hour, first
+    assert world.engine._owed == {}
+
+
+async def test_what_a_failed_refresh_left_owed_is_refreshed_on_its_own_and_not_merged_into_the_next_slice(db, monkeypatch):
+    real, ranges, broken = rollups.refresh_range, [], {"on": False}
+
+    async def flaky(pool, lo, hi, now):
+        ranges.append((lo, hi))
+        if broken["on"] and lo < NOW - HOUR:  # the range of the late pass, not the frontier's
+            raise RuntimeError("the refresh timed out")
+        return await real(pool, lo, hi, now)
+
+    monkeypatch.setattr(rollups, "refresh_range", flaky)
+    world = await make_world(db, {"M001_kWh": KWH})
+    assert (await world.cycle()).state == "idle"
+    # some rows of the stretch the late pass will look at again are missing here (as if they had arrived late at the source)
+    await db.execute(
+        "DELETE FROM readings WHERE point_id = $1 AND ts BETWEEN $2 AND $3", world.points["M001_kWh"], NOW - 3 * HOUR, NOW - 3 * HOUR + 10 * MINUTE
+    )
+    broken["on"] = True
+    world.clock.now = NOW + 10 * MINUTE
+    result = await world.cycle()  # the frontier's refresh works; the late pass stores the rows, and its refresh fails
+    assert result.state == "backing_off" and "the rollups could not be refreshed" in result.reason
+    broken["on"] = False
+    ranges.clear()
+    world.clock.now = result.next_try_at
+    assert (await world.cycle()).state == "idle"
+    assert ranges[0] == (NOW - 3 * HOUR, NOW - 2 * HOUR + 10 * MINUTE)  # the owed range, alone and first ...
+    assert len(ranges) == 2 and max(hi - lo for lo, hi in ranges) <= 2 * HOUR  # ... then the frontier's own: never one from three hours back
+
+
+async def test_a_range_owed_by_a_failed_refresh_is_checked_for_rollup_minutes_without_raw_readings_before_anything_is_asked(db):
+    await db.execute("UPDATE settings SET value = jsonb_set(value, '{raw_retention_days}', '40') WHERE key = 'storage'")
+    old = datetime(2026, 2, 23, 12, 0, 17, tzinfo=UTC)  # outside the two-day lookback, in a chunk the next step drops
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": None})
+    await insert_readings(db, world.points["M001_kWh"], old, 60, [float(i) for i in range(180)])
+    await settle_rollups(db)
+    await db.execute("SELECT drop_chunks('readings', older_than => TIMESTAMPTZ '2026-03-02')")  # what the retention policy does
+    world.engine._owed[world.source] = [(old, old + 3 * HOUR)]  # a refresh of that stretch failed long ago and is still owed
+    result = await world.cycle()
+    assert (result.state, world.calls) == ("backing_off", [])
+    assert "(readings_1m)" in result.reason and "so nothing is written" in result.reason
+    [event] = await world.events(HISTORY_FAILED)
+    assert event["code"] == "pending_drop"
+
+
 async def test_values_the_source_was_not_asked_for_are_not_stored_and_do_not_count_as_received(db):
     async def strays(call, number):
         if number == 5:  # the first batch of the third slice, M001 from 08:00 to 09:00

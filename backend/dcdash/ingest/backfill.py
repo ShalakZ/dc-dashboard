@@ -347,7 +347,7 @@ class Backfill:
         self._failed_cycles: dict[int, int] = defaultdict(int)  # cycles in a row that ended in trouble, per source
         self._episodes: dict[int, int] = defaultdict(int)  # a new episode of trouble gets its own journal gate
         self._strikes: dict[tuple, int] = {}  # failed tries of one batch of one slice
-        self._owed: dict[int, tuple[datetime, datetime]] = {}  # per source, the range whose rollup refresh failed (lost on a restart)
+        self._owed: dict[int, list[tuple[datetime, datetime]]] = {}  # per source, the ranges whose rollup refresh failed (lost on a restart)
 
     # ---- the automatic cycle -----------------------------------------------------------------------------------------------
 
@@ -538,8 +538,10 @@ class Backfill:
         late_to = min(now - reread_after, start)  # the late pass stops where this cycle's new window starts
         late_from = None if reread is None else max(reread, floor)
         late = late_from is not None and late_from < late_to
-        # Before anything is asked: would a refresh over what is about to be filled delete rollup history whose raw data is gone?
-        unsafe = await rollups.pending_drop_range(self._pool, late_from if late else start, now)
+        # Before anything is asked: would a refresh over what is about to be filled (or over a range an earlier failed refresh still
+        # owes) delete rollup history whose raw data is gone?
+        lowest = min([late_from if late else start, *(first for first, _ in self._owed.get(sid, ()))])
+        unsafe = await rollups.pending_drop_range(self._pool, lowest, now)
         if unsafe is not None:
             raise _Halt("backing_off", "pending_drop", unsafe, FAILED_REPEAT_SECONDS)
         if mark is None and reread is None:
@@ -633,35 +635,53 @@ class Backfill:
 
         A refresh that fails ends the cycle BEFORE the slice's mark is saved (the caller saves it after this returns): the slice is
         asked again, its rows are "already there", and the range that could not be refreshed is remembered (`_owed`) and refreshed
-        with the next try, which would otherwise see no new row in it. A refresh that fails while another error is already on its
-        way is only logged, so that it cannot hide the first one."""
+        with the next try, which would otherwise see no new row in it. That holds for a refresh that fails while another error is
+        already on its way as well: it is only logged, so that it cannot hide the first error, but it is remembered too. A range
+        that is owed is refreshed first and on its own, never merged into the range of the slice that happens to come next: a late
+        pass's hours from long ago would make one refresh span days."""
         sid = run.source.id
+        if not failing:
+            for span in list(self._owed.get(sid, ())):
+                await self._refresh_span(run, span)
+                self._settle(sid, span)
         if wrote.first is not None and wrote.last is not None:
-            first, last = rollups.hour_floor(wrote.first), wrote.last + rollups.HOUR
+            await self._refresh_span(run, (rollups.hour_floor(wrote.first), wrote.last + rollups.HOUR), failing=failing)
         elif run.strict and not failing:
-            first, last = lo, hi
-        else:
-            first = last = None
-        owed = None if failing else self._owed.get(sid)
-        if owed is not None:
-            first, last = owed if first is None or last is None else (min(first, owed[0]), max(last, owed[1]))
-        if first is None or last is None:
-            return
+            await self._refresh_span(run, (lo, hi))
+
+    async def _refresh_span(self, run: _Run, span: tuple[datetime, datetime], *, failing: bool = False) -> None:
+        sid = run.source.id
         try:
-            await rollups.refresh_range(self._pool, first, last, self._clock())
+            await rollups.refresh_range(self._pool, span[0], span[1], self._clock())
         except Exception as exc:
+            self._owe(sid, span)
             if failing:
                 log.warning("could not refresh the rollups after a history fill of source %s: %s", sid, exc)
                 return
             if run.strict:
                 raise FillRefused(f"the rows were stored, but the rollups could not be refreshed: {exc}") from exc
-            self._owed[sid] = (first, last)
             raise _Halt(
                 "backing_off", "refresh_failed", f"the rows were stored, but the rollups could not be refreshed: {type(exc).__name__}: {exc}",
                 self._giveup_wait(sid, None),
             ) from None
-        if not failing:
-            self._owed.pop(sid, None)
+
+    def _owe(self, source_id: int, span: tuple[datetime, datetime]) -> None:
+        """Remember a range whose refresh failed. A range that touches one already owed is one range with it."""
+        first, last = span
+        kept: list[tuple[datetime, datetime]] = []
+        for other in self._owed.get(source_id, ()):
+            if other[0] <= last and first <= other[1]:
+                first, last = min(first, other[0]), max(last, other[1])
+            else:
+                kept.append(other)
+        self._owed[source_id] = [*kept, (first, last)]
+
+    def _settle(self, source_id: int, span: tuple[datetime, datetime]) -> None:
+        owed = self._owed.get(source_id, [])
+        if span in owed:
+            owed.remove(span)
+        if not owed:
+            self._owed.pop(source_id, None)
 
     async def _batch(self, run: _Run, batch: list[Mapped], lo: datetime, hi: datetime, wrote: _Span) -> datetime | None:
         """One batch of addresses over one slice. Returns how far the source vouched for it, or None when it was set aside."""
