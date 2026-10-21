@@ -543,6 +543,39 @@ async def test_a_range_owed_by_a_failed_refresh_that_would_delete_history_is_dro
     assert (await world.cycle()).state == "idle" and len(await world.events(HISTORY_FAILED)) == 1  # told once
 
 
+async def test_a_journal_report_that_fails_keeps_neither_the_later_reports_nor_the_other_dropped_ranges_untold(db, monkeypatch, caplog):
+    await db.execute("UPDATE settings SET value = jsonb_set(value, '{raw_retention_days}', '40') WHERE key = 'storage'")
+    old = datetime(2026, 2, 23, 12, 0, 17, tzinfo=UTC)
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": None})
+    await insert_readings(db, world.points["M001_kWh"], old, 60, [float(i) for i in range(180)])
+    await settle_rollups(db)
+    await db.execute("SELECT drop_chunks('readings', older_than => TIMESTAMPTZ '2026-03-02')")
+    first, second = (old, old + HOUR), (old + 2 * HOUR, old + 3 * HOUR)  # two ranges that do not touch, both unsafe to refresh
+    world.engine._owed[world.source] = [first, second]
+
+    async def report_fails(self, run, **kwargs):
+        raise RuntimeError("the database went away")
+
+    real_at, asked = engine_module._at, []
+
+    def at_fails_once(moment):
+        asked.append(moment)
+        if len(asked) == 1:  # the sentence of the first dropped range cannot be written
+            raise ValueError("cannot be shown")
+        return real_at(moment)
+
+    monkeypatch.setattr(Backfill, "_report_new", report_fails)  # the first report of the cycle fails ...
+    monkeypatch.setattr(engine_module, "_at", at_fails_once)  # ... and so does the first range of the last one
+    with caplog.at_level(logging.WARNING, logger=engine_module.log.name):
+        result = await world.cycle()
+    assert result.state == "idle" and world.engine._owed == {}
+    [event] = await world.events(HISTORY_FAILED)  # the second range is told, whatever happened to the reports before it
+    assert (event["code"], event["detail"]["from"]) == ("owed_range_dropped", second[0].isoformat())
+    told = [record.getMessage() for record in caplog.records]
+    assert any(f"source {world.source}" in text and "the database went away" in text for text in told)
+    assert any(f"source {world.source}" in text and first[0].isoformat() in text and "cannot be shown" in text for text in told)  # and the lost one is named
+
+
 async def test_values_the_source_was_not_asked_for_are_not_stored_and_do_not_count_as_received(db):
     async def strays(call, number):
         if number == 5:  # the first batch of the third slice, M001 from 08:00 to 09:00

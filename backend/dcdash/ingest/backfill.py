@@ -981,12 +981,13 @@ class Backfill:
         when the trouble begins, then at most every 15 minutes). A journal that cannot be written never fails a cycle."""
         sid = source.id
         known = journal.known_for(source.config, source.secret)
+        if run is not None:
+            for report in (self._report_new, self._report_aside, self._report_unknown, self._report_dropped):
+                try:  # each on its own: one that fails must not keep the others, nor the failure line below, from being told
+                    await report(run)
+                except Exception as exc:
+                    log.warning("could not journal the history cycle of source %s: %s", sid, exc)
         try:
-            if run is not None:
-                await self._report_new(run)
-                await self._report_aside(run)
-                await self._report_unknown(run)
-                await self._report_dropped(run)
             if result.state == "not_supported":
                 if journal.allow((HISTORY_FAILED, sid, "not_supported"), NOT_SUPPORTED_WAIT_SECONDS):
                     await journal.record(
@@ -1047,13 +1048,19 @@ class Backfill:
         """A range whose rollup refresh failed once and that can never be refreshed now (its raw readings are gone): given up, told
         once, because the range is not owed any more."""
         for (first, last), why in run.dropped:
-            await journal.record(
-                self._pool, "collector", HISTORY_FAILED,
-                f"the rollups over {_at(first)} to {_at(last)}, whose refresh failed earlier, are left as they are: {why}",
-                level="warning", source_id=run.source.id, code="owed_range_dropped",
-                known=journal.known_for(run.source.config, run.source.secret),
-                detail={"from": first.isoformat(), "to": last.isoformat()},
-            )
+            try:  # a range is not owed any more: this line is its only record, so one that cannot be written must not cost the others
+                await journal.record(
+                    self._pool, "collector", HISTORY_FAILED,
+                    f"the rollups over {_at(first)} to {_at(last)}, whose refresh failed earlier, are left as they are: {why}",
+                    level="warning", source_id=run.source.id, code="owed_range_dropped",
+                    known=journal.known_for(run.source.config, run.source.secret),
+                    detail={"from": first.isoformat(), "to": last.isoformat()},
+                )
+            except Exception as exc:
+                log.warning(
+                    "could not journal the dropped rollup range %s to %s of source %s (%s): %s",
+                    first.isoformat(), last.isoformat(), run.source.id, clip_error(why, 200), exc,
+                )
 
     async def _report_aside(self, run: _Run) -> None:
         if not run.tally.set_aside or not journal.allow((HISTORY_FAILED, run.source.id, "set_aside"), FAILED_REPEAT_SECONDS):
