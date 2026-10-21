@@ -536,7 +536,7 @@ class Backfill:
         result.through = through
         if through > start:
             result.short_hours = await self._short_hours(run, start, through)
-        if late and through >= now - SKEW:  # only after the frontier: the new data comes before the old data's second look
+        if late:  # after the frontier (the new data comes before the old data's second look), also when a lagging source vouched for less
             assert late_from is not None
             if await self._window(run, late_from, late_to, self._saver(sid, "reread_through")) < late_to:
                 return
@@ -662,11 +662,16 @@ class Backfill:
             until = page.complete_until
             if until >= hi:
                 return hi
+            newest = hi >= run.now
+            if newest and not run.strict:
+                # The newest part of the window: a source whose clock is behind ours (a historian that buffers is often a quarter of
+                # an hour behind) is complete only up to its own "now", which is no failure and no cut. Vouch for that much, however
+                # little it is, and ask the rest next cycle: asking again now would meet the same answer. (A fill ignores what a
+                # window vouched for, so there the rules below stay: a request that gains nothing is a failure it can report.)
+                return max(until, start)
             if until <= start:
                 raise _NoProgress(f"the source answered up to {until.isoformat()} for a request that started at {start.isoformat()}")
-            if hi >= run.now and hi - until <= SKEW:
-                # The newest part of the window: a source whose clock is a little behind ours is complete only up to its own "now".
-                # Vouch for that much and ask the rest next cycle, instead of asking again for nothing.
+            if newest and hi - until <= SKEW:
                 return until
             cursor[0] = until
 

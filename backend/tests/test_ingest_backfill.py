@@ -398,7 +398,7 @@ async def test_a_plain_simulator_source_becomes_not_supported_for_a_day_with_one
 
 async def test_a_batch_that_makes_no_progress_is_set_aside_after_three_tries_and_never_holds_the_mark(db):
     async def stuck(call, number):
-        if call.addresses == ("M001_kWh",):
+        if call.addresses == ("M001_kWh",) and call.end < NOW:  # the two older slices; the newest one is answered
             return HistoryPage([], call.start)  # "complete up to where you started": nothing was gained
 
     first = NOW - 3 * HOUR + timedelta(seconds=17)
@@ -406,12 +406,29 @@ async def test_a_batch_that_makes_no_progress_is_set_aside_after_three_tries_and
         db, {"M001_kWh": KWH, "M002_kWh": KWH}, {"M001_kWh": first, "M002_kWh": first}, settings=settings_with(max_rows=100), script=stuck
     )  # a cap of 100 rows: one-hour slices, one address to a batch
     result = await world.cycle()
-    assert (result.state, result.set_aside, result.failures) == ("idle", 3, 3)  # one batch per slice, three slices
-    assert len([call for call in world.calls if call.addresses == ("M001_kWh",)]) == 9  # three tries in each
+    assert (result.state, result.set_aside, result.failures) == ("idle", 2, 2)  # one batch per older slice
+    assert len([call for call in world.calls if call.addresses == ("M001_kWh",) and call.end < NOW]) == 6  # three tries in each
     assert (await world.status())["answered_through"] == NOW
-    assert len(await world.stored("M001_kWh")) == 1 and len(await world.stored("M002_kWh")) > 100
-    [event] = await world.events(HISTORY_FAILED)  # one event for the three of them
-    assert (event["code"], event["level"], event["detail"]["groups"], event["detail"]["addresses"]) == ("set_aside", "warning", 3, ["M001_kWh"] * 3)
+    assert len(await world.stored("M001_kWh")) == 1 + 61 and len(await world.stored("M002_kWh")) > 100
+    [event] = await world.events(HISTORY_FAILED)  # one event for the two of them
+    assert (event["code"], event["level"], event["detail"]["groups"], event["detail"]["addresses"]) == ("set_aside", "warning", 2, ["M001_kWh"] * 2)
+
+
+async def test_a_request_that_gains_nothing_in_the_newest_slice_is_not_yet_and_no_strike(db):
+    async def frozen(call, number):
+        if call.addresses == ("M001_kWh",):
+            return HistoryPage([], call.start)  # a source whose clock stands still: complete up to where we started, at every try
+
+    first = NOW - 2 * HOUR + timedelta(seconds=17)
+    world = await make_world(
+        db, {"M001_kWh": KWH, "M002_kWh": KWH}, {"M001_kWh": first, "M002_kWh": first}, settings=settings_with(max_rows=100), script=frozen
+    )
+    result = await world.cycle()
+    assert (result.state, result.set_aside) == ("idle", 1)  # the older slice [-2 h, -1 h] is a real failure: it ends before now
+    assert (await world.status())["answered_through"] == NOW - HOUR  # the newest slice waits for the source
+    for _ in range(3):
+        assert (await world.cycle()).set_aside == 0  # asked once a cycle, never struck
+    assert len(await world.events(HISTORY_FAILED)) == 1 and (await world.status())["answered_through"] == NOW - HOUR
 
 
 async def test_a_batch_the_source_answers_with_a_protocol_error_in_three_cycles_in_a_row_is_set_aside(db):
@@ -471,6 +488,25 @@ async def test_a_stuck_batch_in_the_newest_slice_is_set_aside_though_the_window_
     result = await world.cycle()  # the window is [the mark, now] every time and its end moves: the mark is what identifies the batch
     assert result.set_aside == 1
     assert (await world.status())["answered_through"] == world.clock.now
+
+
+async def test_a_source_that_vouches_only_up_to_a_quarter_hour_ago_is_no_failure_and_the_mark_follows_it(db):
+    clock = Clock()
+    # a historian that buffers: its own "now" is fifteen minutes behind ours, so it is complete only up to there
+    behind = create_historian_app(HistorianConfig(meters=2), clock=lambda: clock.now - 15 * MINUTE, api_key=KEY)
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 6 * HOUR}, clock=clock, app=behind)
+    result = await world.cycle()
+    assert (result.state, result.set_aside, result.failures, len(world.calls)) == ("idle", 0, 0, 1)  # one request, not three wasted ones
+    assert (await world.status())["answered_through"] == NOW - 15 * MINUTE
+    done = len(world.calls)
+    clock.now += 10 * MINUTE
+    result = await world.cycle()
+    assert (result.state, result.set_aside, result.failures) == ("idle", 0, 0)
+    # the next cycle asks from where the source vouched, and the late pass still runs although the frontier is not up to now
+    assert world.requests(done) == [(NOW - 15 * MINUTE, NOW + 10 * MINUTE), (NOW - 3 * HOUR, NOW - 3 * HOUR + 10 * MINUTE)]
+    assert (await world.status())["answered_through"] == NOW - 5 * MINUTE
+    assert await world.events(HISTORY_FAILED) == []  # no warning at every cycle
+    assert len(await world.stored("M001_kWh")) == 356  # every minute from the first hour (the live row is its twin) to the source's own now, five minutes before ours
 
 
 async def test_trouble_that_ends_resets_the_back_off_and_a_new_trouble_is_journaled_at_once(db):
