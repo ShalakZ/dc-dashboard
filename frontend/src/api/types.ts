@@ -624,6 +624,8 @@ export interface ImportProfile {
 export interface ImportProblem { line: number; reason: string }
 /** A reading the file sent again with another value than the one stored (the stored one is kept). `tag` is clipped by the server; React shows it as text. */
 export interface ImportDifference { tag: string; ts: string; stored: number | null; file: number | null }
+/** An energy counter value that went down, or jumped by a lot, against the one before it in the file (`tag` is clipped by the server; React shows it as text). The reading is stored all the same. */
+export interface ImportCounterWarning { tag: string; ts: string; previous: number; value: number }
 export type ImportRefreshState = "not_needed" | "done" | "failed";
 /**
  * The answer to POST /api/sources/{id}/import (the dry run and the real run have this one shape). `rows_read` = new + already + differing + rejected +
@@ -640,6 +642,8 @@ export interface ImportReport {
   /** Accepted rows that were stored as BAD quality (they are part of `new`, and count in no figure), by the label of their quality code. */
   bad_quality?: Record<string, number>;
   closed_months: Record<string, number>;
+  /** The first 20 counter values that go down or jump, and how many there are in all. Optional here so older fixtures compile; the server always sends both. */
+  counter_warnings?: ImportCounterWarning[]; counter_warnings_total?: number;
   differing_samples: ImportDifference[];
   problems: ImportProblem[]; problems_total: number;
   refresh: { state: ImportRefreshState; days: number; note: string | null };

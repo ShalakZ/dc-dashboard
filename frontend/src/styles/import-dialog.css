@@ -12,8 +12,9 @@
   .import-dialog .import-label-row > .tip { flex: none; height: calc(var(--fs-sm) * 1.4); }
   .import-dialog .import-hint { font-size: var(--fs-xs); }
 
-  /* The report holds its room (ten lines) from the start, so the lines that arrive late do not move the buttons under it; a long report scrolls inside it. */
-  .import-dialog .import-report { min-height: 10lh; max-height: 40vh; overflow: auto; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: var(--fs-sm); }
+  /* The report is a box of one fixed size (a height, not a minimum) from the start, so the report that arrives after a check does not grow the dialog or move the buttons under it; a long report scrolls inside it. It is a tab stop, so the keyboard can scroll it. */
+  .import-dialog .import-report { height: min(24rem, 40vh); overflow: auto; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: var(--fs-sm); }
+  .import-dialog .import-report:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
   .import-dialog .import-body { display: grid; gap: 12px; }
   .import-dialog .import-body > div { display: grid; gap: 2px; }
   .import-dialog .import-head { font-weight: 600; }

@@ -1,11 +1,13 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
 import { useState } from "react";
 import { useSources } from "../api/queries";
 import type { ImportProfile, ImportReport } from "../api/types";
 import { probeFetches, CacheProbes, probeRoutes } from "../test/cacheProbes";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
+import { parseRules, stripComments } from "../test/cssTools";
 import { renderWithProviders } from "../test/render";
 import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
@@ -477,6 +479,128 @@ describe("ImportDialog: the report", () => {
     const area = screen.getByRole("dialog").querySelector(".import-report");
     expect(area).not.toBeNull();
     expect(area).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("gives the report a size, not a minimum: a height in the stylesheet, so the check's report does not move the buttons (the e2e measures it)", () => {
+    const rule = parseRules(stripComments(readFileSync("src/styles/import-dialog.css", "utf8"))).find((r) => r.selector.endsWith(".import-report"));
+    expect(rule, "the .import-report rule").toBeDefined();
+    expect(rule?.body).toMatch(/(^|[;\s])height:\s*min\(24rem,\s*40vh\)/);
+    expect(rule?.body).not.toMatch(/min-height/);
+    expect(rule?.body).toMatch(/overflow:\s*auto/);
+  });
+
+  it("makes the report a named region that is a tab stop with a visible focus ring, so the keyboard can scroll a long report", async () => {
+    await open();
+    const region = screen.getByRole("region", { name: "Report of the check" });
+    expect(region).toHaveClass("import-report");
+    expect(region).toHaveAttribute("tabindex", "0");
+    expect(region).toHaveAttribute("aria-live", "polite");
+    region.focus();
+    expect(region).toHaveFocus();
+    await userEvent.tab();
+    expect(closeButton()).toHaveFocus(); // the report sits between the profile controls and the footer, one stop of its own
+    await userEvent.tab({ shift: true });
+    expect(region).toHaveFocus();
+    const ring = parseRules(stripComments(readFileSync("src/styles/import-dialog.css", "utf8"))).find((r) => r.selector.endsWith(".import-report:focus-visible"));
+    expect(ring?.body).toMatch(/outline:\s*2px solid var\(--ring\)/);
+  });
+
+  it("keeps the report a region with the same name and tab stop while it holds a report", async () => {
+    await checked();
+    const region = screen.getByRole("region", { name: "Report of the check" });
+    expect(within(region).getByText(/^Checked:/)).toBeInTheDocument();
+    expect(region).toHaveAttribute("tabindex", "0");
+  });
+
+  it("has one live region: the report; the file note and the profile note are plain text that the controls are described by", async () => {
+    await open();
+    const dialog = screen.getByRole("dialog");
+    const lives = () => [...dialog.querySelectorAll("[aria-live], [role=status], [role=alert]")];
+    expect(lives()).toEqual([dialog.querySelector(".import-report")]);
+    await chooseFile();
+    expect(fileInput()).toHaveAccessibleDescription(`export.csv (${CSV.length} bytes)`);
+    await userEvent.selectOptions(profileSelect(), "");
+    await userEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    expect(await screen.findByText("Name the profile, so it can be saved and used for the check.")).toBeInTheDocument();
+    expect(profileSelect()).toHaveAccessibleDescription("Name the profile, so it can be saved and used for the check.");
+    expect(screen.getByLabelText("Profile name")).toHaveAccessibleDescription("Name the profile, so it can be saved and used for the check.");
+    expect(lives()).toEqual([dialog.querySelector(".import-report")]);
+  });
+});
+
+describe("ImportDialog: counter values to look at", () => {
+  const warnings = (n: number) => Array.from({ length: n }, (_, i) => ({ tag: `kWh-${i}`, ts: `2026-01-01T0${i % 10}:00:00Z`, previous: 1000 + i, value: 12 + i }));
+
+  it("lists the counter values that go down or jump, with the sentence and the first 20 of N, and never blocks the import", async () => {
+    await checked(importRoute(report({ counter_warnings: warnings(20), counter_warnings_total: 47 })));
+    const section = screen.getByText("Counter values to look at").parentElement as HTMLElement;
+    expect(section).toHaveTextContent("These energy counter values go down, or jump by a lot. They are stored all the same; check the file before you import it.");
+    const items = within(section).getAllByRole("listitem").map((li) => li.textContent);
+    expect(items).toHaveLength(20);
+    expect(items[0]).toBe("kWh-0 at 2026-01-01T00:00:00Z: 12 after 1000");
+    expect(items[19]).toBe("kWh-19 at 2026-01-01T09:00:00Z: 31 after 1019");
+    expect(section).toHaveTextContent("The first 20 of 47 are shown.");
+    expect(goButton()).toHaveTextContent("Import 12,000 rows");
+    expect(goButton()).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("says nothing about counters when the total is 0, and shows no 'first N of N' line when every one is listed", async () => {
+    await checked(importRoute(report({ counter_warnings: [], counter_warnings_total: 0 })));
+    expect(screen.queryByText("Counter values to look at")).not.toBeInTheDocument();
+  });
+
+  it("shows a hostile tag as text and no 'first' line when all of them are listed; a report without the fields shows no block", async () => {
+    await checked(importRoute(report({ counter_warnings: [{ tag: HOSTILE, ts: "2026-01-01T00:00:00Z", previous: 5, value: 1 }], counter_warnings_total: 1 })));
+    const dialog = screen.getByRole("dialog");
+    const section = within(dialog).getByText("Counter values to look at").parentElement as HTMLElement;
+    expect(within(section).getAllByText(HOSTILE)).toHaveLength(1);
+    expect(dialog.querySelector("img")).toBeNull();
+    expect(section).not.toHaveTextContent("are shown");
+    expect(section).not.toHaveTextContent("is shown");
+  });
+
+  it("shows no block when the report has no counter fields at all (an older server)", async () => {
+    await checked();
+    expect(screen.queryByText("Counter values to look at")).not.toBeInTheDocument();
+  });
+});
+
+describe("ImportDialog: singular and plural in the report's sentences", () => {
+  it("says '1 row carries' and '6 rows carry' for the rows that differ", async () => {
+    await checked(importRoute(report({ differing: 1, differing_samples: [] })));
+    expect(screen.getByText("1 row carries another value for a time that is stored already. The stored value is kept.")).toBeInTheDocument();
+  });
+
+  it.each([
+    [1, 1, "1 row for 1 tag is skipped: an import never creates a point."],
+    [1, 3, "1 row for 3 tags is skipped: an import never creates a point."],
+    [17, 1, "17 rows for 1 tag are skipped: an import never creates a point."],
+    [17, 25, "17 rows for 25 tags are skipped: an import never creates a point."],
+  ])("says %i row(s) for %i tag(s) with the verb that goes with the rows", async (rows, tags, sentence) => {
+    await checked(importRoute(report({ unknown_rows: rows, unknown_tags: { count: tags, names: [] } })));
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+  });
+
+  it("speaks of one row, or of several, in the quality block", async () => {
+    await checked(importRoute(report({ bad_quality: { Uncertain: 1 } })));
+    expect(screen.getByText("This row of the file has a quality other than good. If it is new, it is stored as bad quality and counts in no figure.")).toBeInTheDocument();
+    expect(screen.getByText("Uncertain: 1 row")).toBeInTheDocument();
+  });
+
+  it("speaks of several rows in the quality block when the counts add up to more than one", async () => {
+    await checked(importRoute(report({ bad_quality: { Uncertain: 1, Bad: 1 } })));
+    expect(screen.getByText("These rows of the file have a quality other than good. The new ones are stored as bad quality and count in no figure.")).toBeInTheDocument();
+  });
+
+  it("says 'The first 1 of 3 is shown' when a single problem line is listed", async () => {
+    await checked(importRoute(report({ problems: [{ line: 4, reason: "not_a_time" }], problems_total: 3 })));
+    expect(screen.getByText("The first 1 of 3 is shown.")).toBeInTheDocument();
+  });
+
+  it("counts one rejected row and one closed-month row in the singular", async () => {
+    await checked(importRoute(report({ rejected: 1, rejected_by: { empty_value: 1 }, closed_months: { "2026-09": 1 } })));
+    expect(screen.getByText("The value is empty: 1 row")).toBeInTheDocument();
+    expect(screen.getByText("1 row in the closed month 2026-09")).toBeInTheDocument();
   });
 });
 

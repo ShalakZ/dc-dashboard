@@ -82,6 +82,9 @@ function ReportView({ report }: { report: ImportReport }) {
   const badQuality = Object.entries(report.bad_quality ?? {}).filter(([, n]) => n > 0).sort(([a, x], [b, y]) => y - x || a.localeCompare(b));
   const names = report.unknown_tags.names;
   const valueText = (v: number | null) => (v === null ? "no value" : String(v));
+  const badQualityRows = badQuality.reduce((sum, [, n]) => sum + n, 0);
+  const counterWarnings = report.counter_warnings ?? [];
+  const counterWarningsTotal = report.counter_warnings_total ?? 0;
   return (
     <div className="import-body">
       <p className={report.complete ? "import-sentence" : "import-sentence import-warn"}>
@@ -95,7 +98,7 @@ function ReportView({ report }: { report: ImportReport }) {
       {report.differing > 0 && (
         <div>
           <p className="import-head">Different from what is stored</p>
-          <p className="muted">{rowsText(report.differing)} carry another value for a time that is stored already. The stored value is kept.</p>
+          <p className="muted">{rowsText(report.differing)} {report.differing === 1 ? "carries" : "carry"} another value for a time that is stored already. The stored value is kept.</p>
           {report.differing_samples.length > 0 && (
             <ul className="import-list">
               {report.differing_samples.map((s, i) => (
@@ -118,14 +121,34 @@ function ReportView({ report }: { report: ImportReport }) {
       {badQuality.length > 0 && (
         <div>
           <p className="import-head">Quality other than good</p>
-          <p className="muted">These rows of the file have a quality other than good. The new ones are stored as bad quality and count in no figure.</p>
+          <p className="muted">
+            {badQualityRows === 1
+              ? "This row of the file has a quality other than good. If it is new, it is stored as bad quality and counts in no figure."
+              : "These rows of the file have a quality other than good. The new ones are stored as bad quality and count in no figure."}
+          </p>
           <ul className="import-list">{badQuality.map(([label, n]) => <li key={label}>{label}: {rowsText(n)}</li>)}</ul>
+        </div>
+      )}
+      {counterWarningsTotal > 0 && (
+        <div>
+          <p className="import-head">Counter values to look at</p>
+          <p className="muted">These energy counter values go down, or jump by a lot. They are stored all the same; check the file before you import it.</p>
+          {counterWarnings.length > 0 && (
+            <ul className="import-list">
+              {counterWarnings.map((w, i) => (
+                <li key={`${w.tag}-${w.ts}-${i}`}>
+                  <span className="import-cell">{w.tag}</span> at {w.ts}: {valueText(w.value)} after {valueText(w.previous)}
+                </li>
+              ))}
+            </ul>
+          )}
+          {counterWarningsTotal > counterWarnings.length && <p className="muted">The first {num(counterWarnings.length)} of {num(counterWarningsTotal)} {counterWarnings.length === 1 ? "is" : "are"} shown.</p>}
         </div>
       )}
       {report.unknown_rows > 0 && (
         <div>
           <p className="import-head">Tags this source does not have</p>
-          <p className="muted">{rowsText(report.unknown_rows)} for {plural(report.unknown_tags.count, "tag")} are skipped: an import never creates a point.</p>
+          <p className="muted">{rowsText(report.unknown_rows)} for {plural(report.unknown_tags.count, "tag")} {report.unknown_rows === 1 ? "is" : "are"} skipped: an import never creates a point.</p>
           {names.length > 0 && (
             <ul className="import-list">
               {names.map((tag, i) => <li key={`${tag}-${i}`}><span className="import-cell">{tag}</span></li>)}
@@ -147,7 +170,7 @@ function ReportView({ report }: { report: ImportReport }) {
           <ul className="import-list">
             {report.problems.map((p, i) => <li key={`${p.line}-${i}`}>Line {num(p.line)}: {rejectedText(p.reason)}</li>)}
           </ul>
-          {report.problems_total > report.problems.length && <p className="muted">The first {num(report.problems.length)} of {num(report.problems_total)} are shown.</p>}
+          {report.problems_total > report.problems.length && <p className="muted">The first {num(report.problems.length)} of {num(report.problems_total)} {report.problems.length === 1 ? "is" : "are"} shown.</p>}
         </div>
       )}
       {!report.dry_run && report.refresh.state === "failed" && (
@@ -414,7 +437,7 @@ export function ImportDialog({ source, onClose }: { source: { id: number; name: 
             ref={fileInput} id={id("file")} type="file" accept=".csv,.txt,text/csv,text/plain" disabled={busy !== null}
             aria-describedby={id("file-note")} onChange={pick}
           />
-          <div id={id("file-note")} className="import-slot" aria-live="polite">
+          <div id={id("file-note")} className="import-slot">
             {fileNote ? <p className="error">{fileNote}</p>
               : file ? <p>{clipName(file.name)} ({sizeText(file.size)})</p>
               : <p className="muted">A CSV file with a header line, up to {MAX_BYTES / (1024 * 1024)} MB.</p>}
@@ -425,7 +448,7 @@ export function ImportDialog({ source, onClose }: { source: { id: number; name: 
           <div className="import-pair">
             <div className="field">
               <label htmlFor={id("profile")}>Profile</label>
-              <select id={id("profile")} value={selected} disabled={busy !== null} onChange={(e) => choose(e.target.value)}>
+              <select id={id("profile")} value={selected} disabled={busy !== null} aria-describedby={id("profile-note")} onChange={(e) => choose(e.target.value)}>
                 <option value="">New profile</option>
                 {options.map((n) => <option key={n} value={n}>{n}</option>)}
               </select>
@@ -435,12 +458,13 @@ export function ImportDialog({ source, onClose }: { source: { id: number; name: 
                 <label htmlFor={id("name")}>Profile name</label>
                 <input
                   id={id("name")} value={name} maxLength={MAX_PROFILE_NAME} disabled={busy !== null} autoComplete="off"
-                  aria-invalid={profileNote?.error && name.trim() === "" ? true : undefined} onChange={(e) => changeName(e.target.value)}
+                  aria-invalid={profileNote?.error && name.trim() === "" ? true : undefined} aria-describedby={id("profile-note")}
+                  onChange={(e) => changeName(e.target.value)}
                 />
               </div>
             )}
           </div>
-          <div className="import-slot" aria-live="polite">
+          <div id={id("profile-note")} className="import-slot">
             {shownProfileNote && <p className={shownProfileNote.error ? "error" : "muted"}>{shownProfileNote.text}</p>}
           </div>
           <div className="row import-tools">
@@ -461,7 +485,10 @@ export function ImportDialog({ source, onClose }: { source: { id: number; name: 
           )}
         </div>
 
-        <div className="import-report" aria-live="polite" aria-busy={busy === "check" || busy === "import" ? true : undefined}>
+        <div
+          className="import-report" role="region" aria-label="Report of the check" tabIndex={0} aria-live="polite"
+          aria-busy={busy === "check" || busy === "import" ? true : undefined}
+        >
           {busy === "check" ? <p className="muted">Checking the file…</p>
             : busy === "import" ? <p className="muted">Importing… a large file can take a minute. Keep this window open.</p>
             : runError ? <p className="error">{runError}</p>

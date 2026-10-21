@@ -3,7 +3,7 @@ import { CLOSED_MONTH_NOTE, closedMonthLines, importButtonText, importSentence, 
 
 const CODES = [
   "naive_time_without_zone", "local_time_does_not_exist", "ambiguous_local_time", "later_than_now_plus_5_minutes", "older_than_raw_retention",
-  "not_a_time", "not_a_number", "value_out_of_range", "empty_value", "unit_differs_from_mapping", "unit_not_valid_for_metric",
+  "older_than_stored_raw_readings", "not_a_time", "not_a_number", "value_out_of_range", "empty_value", "unit_differs_from_mapping", "unit_not_valid_for_metric",
   "interval_energy_in_counter_point", "point_deleted", "duplicate_in_file", "conflicting_duplicate_in_file", "malformed_line", "bad_tag",
 ];
 
@@ -30,7 +30,14 @@ describe("rejectedText", () => {
   it("says what is wrong with a time that has no zone, a duplicate and an energy-per-period reading", () => {
     expect(rejectedText("naive_time_without_zone")).toBe("The time has no zone and the profile names none");
     expect(rejectedText("conflicting_duplicate_in_file")).toContain("first one is used");
-    expect(rejectedText("interval_energy_in_counter_point")).toContain("running energy counter");
+    expect(rejectedText("interval_energy_in_counter_point")).toBe("Energy per period cannot go into a point read as a running counter or as a power");
+  });
+
+  it("tells a time before the oldest stored raw reading from a time older than the readings are kept", () => {
+    expect(rejectedText("older_than_stored_raw_readings")).toBe(
+      "The time is before the oldest raw reading still stored; the summaries there are kept, so nothing can be added",
+    );
+    expect(rejectedText("older_than_raw_retention")).toBe("The time is older than the readings are kept");
   });
 
   it("shows a code it does not know, clipped to 40 characters", () => {
