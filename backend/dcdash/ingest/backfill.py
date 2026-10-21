@@ -882,6 +882,7 @@ class Backfill:
             raise FillRefused(f"source {source_id}: {source}")
         points = await self._points(source_id)
         first = await self._first_buckets(self._pool, points)
+        mapped_total = len(points)
         if not before_first_reading:
             points = [m for m in points if m.point_id in first]  # the rest has no first reading: nothing of it may be stored
             if not points:
@@ -893,7 +894,7 @@ class Backfill:
         expected = round(sum((hi - lo).total_seconds() / m.interval for lo, hi in windows for m in points))
         if dry:
             return FillReport(
-                text=self._plan_text(source_id, points, windows, expected, start, end, before_first_reading, len(first)),
+                text=self._plan_text(source_id, points, windows, expected, start, end, before_first_reading, mapped_total),
                 windows=windows, expected_rows=expected, dry_run=True,
             )
         unsafe = await rollups.pending_drop_range(self._pool, start, now)
@@ -946,7 +947,7 @@ class Backfill:
 
     def _plan_text(
         self, source_id: int, points: Sequence[Mapped], windows: Sequence[tuple[datetime, datetime]], expected: int, start: datetime,
-        end: datetime, lifted: bool, with_readings: int,
+        end: datetime, lifted: bool, mapped_total: int,
     ) -> str:
         text = (
             f"Source {source_id}: {len(points)} mapped point(s), {_at(start)} to {_at(end)}, asked in {len(windows)} window(s) of at "
@@ -961,7 +962,7 @@ class Backfill:
         else:
             text += (
                 " Samples before the first reading of a point are left out, so no past figure of any asset changes."
-                + ("" if with_readings == len(points) else " Points with no reading yet are not asked for.")
+                + ("" if mapped_total == len(points) else " Points with no reading yet are not asked for.")
             )
         return text + " Confirm the fill to run it."
 

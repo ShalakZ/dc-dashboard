@@ -747,3 +747,275 @@ async def test_the_loop_is_off_when_every_is_zero_and_ends_on_stop_or_cancel(db)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+# ---- closed months, Billing and Check month (R9): a fill changes the readings and nothing else -------------------------------
+
+COSTS, CHECK = "/api/billing/costs", "/api/billing/month-check"
+
+
+async def minute_meter(db, now: datetime, first: datetime, hole: tuple[datetime, datetime], monkeypatch) -> World:
+    """A power-only meter (the stand-in's M001_kW, mapped at 60 s) polled every minute from `first` to `now` but for the `hole`
+    [from, to): the rollups are settled, so a row written into the hole later is below their watermark and shows only after a refresh."""
+    from billing_helpers import add_tariff, set_currency, set_zone
+    from dcdash.simulator.historian import ANCHOR
+
+    monkeypatch.setattr("dcdash.api.billing._now", lambda: now)
+    await set_zone(db, "UTC")
+    await set_currency(db, "USD")
+    await add_tariff(db, 0.10, "2026-01-01")
+    world = await make_world(db, {"M001_kW": KW}, {"M001_kW": None}, clock=Clock(now))
+    historian = world.app.state.historian
+    rows, moment = [], first
+    while moment <= now:
+        if not hole[0] <= moment < hole[1]:
+            value, _ = historian.measure(historian.by_name["M001_kW"], int((moment - ANCHOR) / MINUTE))
+            rows.append((world.points["M001_kW"], moment, value, 0))
+        moment += MINUTE
+    await db.executemany("INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)", rows)
+    await settle_rollups(db)
+    return world
+
+
+async def get_json(client, url: str, month: str) -> dict:
+    response = await client.get(url, params={"month": month})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def gap_hours(check: dict, asset: int) -> int | None:
+    return next((item["hours"] for item in check["groups"]["gaps"]["items"] if item["asset_id"] == asset), None)
+
+
+async def test_a_fill_into_an_open_month_makes_billing_equal_a_cold_computation_and_check_month_forgets_the_hole(client, db, monkeypatch):
+    from dcdash.core import figure_cache
+    from helpers import login_as
+
+    hole = (datetime(2026, 3, 10, 9, tzinfo=UTC), datetime(2026, 3, 10, 12, tzinfo=UTC))  # ten days before the clock
+    world = await minute_meter(db, datetime(2026, 3, 20, 10, 20, tzinfo=UTC), datetime(2026, 3, 9, tzinfo=UTC), hole, monkeypatch)
+    await login_as(client, db, "admin")
+    asset = world.assets["M001_kW"]
+    before, check_before = await get_json(client, COSTS, "2026-03"), await get_json(client, CHECK, "2026-03")
+    assert before["closed"] is None and gap_hours(check_before, asset) == 3
+
+    report = await world.engine.fill_range(world.source, hole[0] - HOUR, hole[1] + HOUR, dry_run=False, yes=True)
+    assert (report.new, report.differing, report.rejected) == (180, 0, 0)
+    assert report.text == f"{report.read} rows read, 180 new, {report.already} already there, 0 differing, 0 rejected"
+
+    after, check_after = await get_json(client, COSTS, "2026-03"), await get_json(client, CHECK, "2026-03")
+    assert after != before  # the hole has energy in it now
+    assert gap_hours(check_after, asset) is None  # and Check month no longer lists it
+    await figure_cache.aclear()
+    await db.execute("DELETE FROM figure_ledger")
+    await settle_rollups(db)  # a full refresh from the raw rows: the cold computation
+    assert await get_json(client, COSTS, "2026-03") == after
+    assert await get_json(client, CHECK, "2026-03") == check_after
+    assert await world.events(HISTORY_CLOSED_MONTH) == []  # the month is open: nothing to tell
+
+
+async def test_a_fill_into_a_closed_month_leaves_its_frozen_figures_alone_and_tells_the_journal_once(client, db, monkeypatch):
+    from helpers import login_as
+
+    hole = (datetime(2026, 3, 31, 9, tzinfo=UTC), datetime(2026, 3, 31, 12, tzinfo=UTC))  # ten days before the clock, in March
+    world = await minute_meter(db, datetime(2026, 4, 10, 10, 20, tzinfo=UTC), datetime(2026, 3, 29, tzinfo=UTC), hole, monkeypatch)
+    await login_as(client, db, "admin")
+    assert (await client.post("/api/billing/months/2026-03/close", json={})).status_code == 201
+    frozen = await db.fetchval("SELECT figures FROM billing_closes WHERE month = '2026-03'")
+    before = await get_json(client, COSTS, "2026-03")
+    assert before["closed"] is not None and before["live"]["differs"] is False
+
+    report = await world.engine.fill_range(world.source, hole[0] - HOUR, hole[1] + HOUR, dry_run=False, yes=True)
+    assert report.new == 180
+
+    after = await get_json(client, COSTS, "2026-03")
+    assert {k: v for k, v in after.items() if k != "live"} == {k: v for k, v in before.items() if k != "live"}  # the bill did not move
+    assert await db.fetchval("SELECT figures FROM billing_closes WHERE month = '2026-03'") == frozen
+    assert after["live"]["differs"] is True and after["live"]["delta_kwh"] > 0  # today's figures differ, and the page says so
+    [closed] = await world.events(HISTORY_CLOSED_MONTH)
+    assert (closed["level"], closed["source_id"], closed["detail"]["month"]) == ("info", world.source, "2026-03")
+    [filled] = await world.events(HISTORY_FILLED)
+    assert filled["detail"]["new"] == 180 and filled["detail"]["by_command"] is True
+    check = await get_json(client, CHECK, "2026-03")
+    assert gap_hours(check, world.assets["M001_kW"]) is None
+    assert (await world.status()) is None  # a fill moves no mark and makes no status row
+
+
+# ---- the explicit range (the fill command's engine) -------------------------------------------------------------------------
+
+
+async def test_the_dry_run_asks_nothing_writes_nothing_and_says_in_plain_words_what_it_would_do(db):
+    world = await make_world(db, {"M001_kWh": KWH})
+    rows_before = await db.fetchval("SELECT count(*) FROM readings")
+    report = await world.engine.fill_range(world.source, NOW - 12 * HOUR, NOW)
+    assert (report.dry_run, world.calls) == (True, [])
+    assert await db.fetchval("SELECT count(*) FROM readings") == rows_before and await world.status() is None
+    assert report.windows == [(NOW - 12 * HOUR, NOW - 6 * HOUR), (NOW - 6 * HOUR, NOW)] and report.expected_rows == 720
+    assert "Nothing has been asked and nothing has been written." in report.text and "about 720 rows expected" in report.text
+    assert "BEFORE the first reading" not in report.text and "no past figure of any asset changes" in report.text
+    # a dry run that is asked for twice, and one that also says yes=False, is the same thing
+    assert (await world.engine.fill_range(world.source, NOW - 12 * HOUR, NOW, dry_run=True, yes=False)).text == report.text
+    lifted = await world.engine.fill_range(world.source, NOW - 12 * HOUR, NOW, before_first_reading=True)
+    assert "BEFORE the first reading of a point" in lifted.text and "changes the past figures of the assets above it" in lifted.text
+    assert lifted.windows[0] == (NOW - 12 * HOUR, NOW - 6 * HOUR)  # (the default first reading is 30 hours back: nothing is cut off here)
+
+
+async def test_a_dry_run_cuts_the_range_at_the_first_reading_and_names_the_points_that_have_none(db):
+    world = await make_world(db, {"M001_kWh": KWH, "M002_kWh": KWH}, {"M001_kWh": NOW - 3 * HOUR + timedelta(seconds=17), "M002_kWh": None})
+    report = await world.engine.fill_range(world.source, NOW - 12 * HOUR, NOW)
+    assert report.windows == [(NOW - 3 * HOUR, NOW)] and report.expected_rows == 180
+    assert "1 mapped point(s)" in report.text and "Points with no reading yet are not asked for" in report.text
+
+
+async def test_a_fill_stores_nothing_before_a_points_first_reading_unless_it_is_told_to(db):
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 3 * HOUR + timedelta(seconds=17)})
+    report = await world.engine.fill_range(world.source, NOW - 6 * HOUR, NOW, dry_run=False, yes=True)
+    assert (report.new, report.rejected, report.dry_run) == (181, 0, False)  # from the first hour, so the six hours are cut to three
+    assert (await world.stored("M001_kWh"))[0]["ts"] == NOW - 3 * HOUR
+    lifted = await world.engine.fill_range(world.source, NOW - 6 * HOUR, NOW, before_first_reading=True, yes=True)
+    assert (lifted.new, lifted.already) == (180, 181)
+    assert (await world.stored("M001_kWh"))[0]["ts"] == NOW - 6 * HOUR
+    assert await world.status() is None  # no mark moved, no status row was made
+
+
+async def test_a_fill_refreshes_the_rollups_over_every_slice_even_when_nothing_in_it_is_new(db, monkeypatch):
+    ranges = []
+    real = rollups.refresh_range
+
+    async def spy(pool, lo, hi, now):
+        ranges.append((lo, hi))
+        return await real(pool, lo, hi, now)
+
+    monkeypatch.setattr(rollups, "refresh_range", spy)
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 8 * HOUR + timedelta(seconds=17)})
+    await world.engine.fill_range(world.source, NOW - 8 * HOUR, NOW, yes=True)
+    ranges.clear()
+    again = await world.engine.fill_range(world.source, NOW - 8 * HOUR, NOW, yes=True)
+    assert again.new == 0 and again.already > 400
+    assert ranges == [(NOW - 8 * HOUR, NOW - 2 * HOUR), (NOW - 2 * HOUR, NOW)]  # an interrupted earlier fill may have left unrefreshed hours
+
+
+async def test_a_fill_that_stops_says_so_after_telling_the_journal_what_it_did(db):
+    async def unreachable_from_the_second_slice(call, number):
+        if number >= 2:
+            raise ConnectorError("unreachable", "no route to host")
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 8 * HOUR + timedelta(seconds=17)}, script=unreachable_from_the_second_slice)
+    with pytest.raises(FillRefused, match=r"the fill stopped early \(unreachable: no route to host\); until then: 361 rows read, 361 new"):
+        await world.engine.fill_range(world.source, NOW - 8 * HOUR, NOW, yes=True)
+    assert len(await world.stored("M001_kWh")) == 361 + 1  # the first slice stayed
+    [event] = await world.events(HISTORY_FILLED)
+    assert event["detail"]["new"] == 361
+
+
+async def test_a_fill_says_no_in_plain_words(db):
+    world = await make_world(db, {"M001_kWh": KWH})
+    fill = world.engine.fill_range
+    with pytest.raises(FillRefused, match="nothing older than 2026-02-09 12:00 UTC can be added.*raw retention is 30 days"):
+        await fill(world.source, NOW - 40 * 24 * HOUR, NOW)
+    with pytest.raises(FillRefused, match="is in the future"):
+        await fill(world.source, NOW - HOUR, NOW + HOUR)
+    with pytest.raises(FillRefused, match="the range is empty"):
+        await fill(world.source, NOW - HOUR, NOW - HOUR)
+    with pytest.raises(FillRefused, match="there is no such source"):
+        await fill(world.source + 1000, NOW - HOUR, NOW)
+    with pytest.raises(ValueError, match="UTC offset"):
+        await fill(world.source, datetime(2026, 3, 10, 10, 0), NOW)
+    with pytest.raises(ValueError, match="pass yes=True"):
+        await fill(world.source, NOW - HOUR, NOW, dry_run=False)
+    assert world.calls == [] and await db.fetchval("SELECT count(*) FROM readings") == 1
+    plc = await make_source(db, name="plc", connector_type="opcua", config={"endpoint": "opc.tcp://nowhere:4840"})
+    await make_mapping(db, await make_point(db, plc, "p"), await make_asset(db, "a"), "energy_kwh", 60)
+    with pytest.raises(FillRefused, match="opcua source keeps no history"):
+        await fill(plc, NOW - HOUR, NOW)
+    exact = await fill(world.source, NOW - 29 * 24 * HOUR, NOW - 29 * 24 * HOUR + HOUR)  # the limit itself is allowed (retention minus a day)
+    assert exact.dry_run
+
+
+# ---- the pure rules ---------------------------------------------------------------------------------------------------------
+
+
+def sample(minutes: float, quality: int = 0, value: float | None = 1.0) -> PointValue:
+    return PointValue("a", NOW + timedelta(minutes=minutes), value, quality)
+
+
+def test_thinning_drops_what_a_stored_sample_covers_and_passes_what_is_already_stored():
+    stored = {NOW, NOW + 5 * MINUTE}
+    kept, dropped = thin([sample(i) for i in range(6)], 300, stored, sorted(stored))
+    assert [row.ts for row in kept] == [NOW, NOW + 5 * MINUTE] and dropped == 4  # the two twins go to the store, which counts them
+    kept, dropped = thin([sample(2.5), sample(2.6)], 300, {NOW, NOW + 5 * MINUTE}, [NOW, NOW + 5 * MINUTE])  # 150 s from a stored one is covered
+    assert (kept, dropped) == ([], 2)
+    kept, _ = thin([sample(2.6)], 300, {NOW}, [NOW])  # 156 s from the only stored sample: further than half an interval, so it fills
+    assert len(kept) == 1
+
+
+def test_thinning_fills_a_hole_at_the_mapped_density_and_keeps_a_jittery_series():
+    kept, dropped = thin([sample(i) for i in range(21)], 300, set(), [])
+    assert [(row.ts - NOW) // MINUTE for row in kept] == [0, 5, 10, 15, 20] and dropped == 16
+    jittery = [sample(i * 4.6) for i in range(6)]  # 276 s apart: close enough to the mapped 300 s
+    assert len(thin(jittery, 300, set(), [])[0]) == 6
+    assert len(thin([sample(i * 4) for i in range(6)], 300, set(), [])[0]) == 3  # 240 s apart is denser than the mapping: every other one
+    energy_like = thin([sample(i) for i in range(5)], 60, set(), [])  # on a one-minute mapping a one-minute series is all kept
+    assert len(energy_like[0]) == 5
+
+
+def test_a_bad_sample_covers_nothing_and_a_sample_sent_twice_is_passed_on_for_the_store_to_absorb():
+    series = [sample(0, quality=1, value=None), sample(1), sample(1), sample(1.2, quality=1, value=None)]
+    kept, dropped = thin(series, 300, set(), [])
+    assert [(row.ts - NOW) // MINUTE for row in kept] == [0, 1, 1] and dropped == 1  # the second bad one is within the spacing of the first
+    assert [row.quality for row in kept] == [1, 0, 0]
+
+
+def test_the_batches_hold_at_most_200_addresses_and_at_most_the_expected_rows():
+    from dcdash.ingest.backfill import Mapped
+
+    engine = Backfill(None, settings=settings_with(max_rows=20_000))
+    points = [Mapped(i, f"a{i}", "energy_kwh", 60) for i in range(450)]
+    batches = engine._batches(points, NOW, NOW + 6 * HOUR)
+    assert [len(batch) for batch in batches] == [55] * 8 + [10]  # 55 addresses x 360 rows is the most that fits 20,000
+    assert [len(batch) for batch in Backfill(None, settings=settings_with(max_rows=10**9))._batches(points, NOW, NOW + HOUR)] == [200, 200, 50]
+    assert len(Backfill(None, settings=settings_with(max_rows=100))._batches(points[:3], NOW, NOW + 6 * HOUR)) == 3  # one address is a batch however big
+    assert engine._batches([], NOW, NOW + HOUR) == []
+
+
+def test_a_slice_is_whole_hours_up_to_six_and_shorter_when_the_rows_demand_it():
+    from dcdash.ingest.backfill import Mapped
+
+    minute, second = [Mapped(1, "a", "energy_kwh", 60)], [Mapped(1, "a", "energy_kwh", 1)]
+    engine = Backfill(None, settings=settings_with(max_rows=20_000))
+    assert engine._slice_end(minute, NOW - 8 * HOUR + 17 * MINUTE, NOW) == NOW - 2 * HOUR  # to the hour, six hours on from the next hour
+    assert engine._slice_end(minute, NOW - 8 * HOUR, NOW) == NOW - 2 * HOUR  # on an hour: that hour counts as the first
+    assert engine._slice_end(minute, NOW - 30 * MINUTE, NOW - 10 * MINUTE) == NOW - 10 * MINUTE  # never past the end
+    assert engine._slice_end(second, NOW - 8 * HOUR, NOW) == NOW - 3 * HOUR  # 3,600 rows an hour: five hours fit 20,000
+    assert Backfill(None, settings=settings_with(max_rows=100))._slice_end(second, NOW - 8 * HOUR, NOW) == NOW - 7 * HOUR  # but never under an hour
+
+
+async def test_the_request_pace_sleeps_at_most_once_a_request_and_never_loops_on_a_clock_that_stands_still():
+    from dcdash.ingest.backfill import _Pace
+
+    sleeper, clock = Sleeper(), Clock()
+    pace = _Pace(30, clock, sleeper)  # one request every two seconds
+    for _ in range(3):
+        await pace.wait()
+    assert sleeper.sleeps == [2.0, 2.0]  # the first goes at once; a clock that never moves gets the full gap each time
+    clock.now += timedelta(seconds=5)
+    await pace.wait()
+    clock.now += timedelta(seconds=1.5)
+    await pace.wait()
+    assert sleeper.sleeps == [2.0, 2.0, pytest.approx(0.5)]
+
+
+async def test_one_source_that_breaks_does_not_stop_the_others(db, monkeypatch):
+    world = await make_world(db, {"M001_kWh": KWH})
+    other = await make_source(db, name="other", config={"url": "http://hist"}, secret=KEY)
+    point = await make_point(db, other, "M002_kWh")
+    await make_mapping(db, point, await make_asset(db, "second"), "energy_kwh", 60)
+    await insert_readings(db, point, NOW - 2 * HOUR, 1, [1.0])
+    real = world.engine.run_cycle
+
+    async def breaking(source_id):
+        if source_id == world.source:
+            raise RuntimeError("boom")
+        return await real(source_id)
+
+    monkeypatch.setattr(world.engine, "run_cycle", breaking)
+    assert [(r.source_id, r.state) for r in await world.engine.run_all()] == [(other, "idle")]
