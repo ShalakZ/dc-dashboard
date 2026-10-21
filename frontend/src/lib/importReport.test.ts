@@ -35,7 +35,7 @@ describe("rejectedText", () => {
 
   it("tells a time before the oldest stored raw reading from a time older than the readings are kept", () => {
     expect(rejectedText("older_than_stored_raw_readings")).toBe(
-      "The time is before the oldest raw reading still stored; the summaries there are kept, so nothing can be added",
+      "The time is in a stretch whose raw readings the retention removed; the summaries there are kept, so nothing can be added",
     );
     expect(rejectedText("older_than_raw_retention")).toBe("The time is older than the readings are kept");
   });

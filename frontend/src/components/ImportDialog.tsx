@@ -132,7 +132,12 @@ function ReportView({ report }: { report: ImportReport }) {
       {counterWarningsTotal > 0 && (
         <div>
           <p className="import-head">Counter values to look at</p>
-          <p className="muted">These energy counter values go down, or jump by a lot. They are stored all the same; check the file before you import it.</p>
+          <p className="muted">
+            These energy counter values go down, or jump by a lot.{" "}
+            {report.dry_run
+              ? "They will be stored all the same; check the file before you import it."
+              : "They were stored all the same; a second import does not correct them."}
+          </p>
           {counterWarnings.length > 0 && (
             <ul className="import-list">
               {counterWarnings.map((w, i) => (

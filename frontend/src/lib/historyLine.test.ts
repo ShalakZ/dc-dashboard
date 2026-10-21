@@ -55,8 +55,16 @@ describe("historyLine", () => {
     it("leaves the other states as the history says them, but a fill that was cut by switching the source off is paused, not \"N hours behind\" for ever", () => {
       expect(historyLine(off("filling", { answered_through: hoursAgo(5) }), NOW)).toBe("History: paused (the source is switched off)");
       expect(historyLine(off("idle", { last_success_at: minutesAgo(3) }), NOW)).toBe("History: up to date, last fill 3 min ago");
-      expect(historyLine(off("backing_off", { last_error: "no answer" }), NOW)).toBe("History: waiting, no answer");
       expect(historyLine(off("not_supported"), NOW)).toBeNull();
+    });
+
+    it("backing_off reads as stopped, not 'waiting' for ever, with the clipped error when there is one; a source that is on keeps 'waiting'", () => {
+      expect(historyLine(off("backing_off"), NOW)).toBe("History: stopped (the source is switched off)");
+      expect(historyLine(off("backing_off", { last_error: "no answer" }), NOW)).toBe("History: stopped (the source is switched off), no answer");
+      expect(historyLine(off("backing_off", { last_error: "  \n " }), NOW)).toBe("History: stopped (the source is switched off)");
+      expect(historyLine(off("backing_off", { last_error: "e".repeat(81) }), NOW)).toBe(`History: stopped (the source is switched off), ${"e".repeat(79)}…`);
+      expect(historyLine(row({ enabled: true, history: history({ state: "backing_off", last_error: "no answer" }) }), NOW)).toBe("History: waiting, no answer");
+      expect(historyLine(row({ enabled: undefined, history: history({ state: "backing_off", last_error: "no answer" }) }), NOW)).toBe("History: waiting, no answer");
     });
 
     it("shows nothing for a switched-off connector that keeps no history, and still says a file source is filled by files", () => {

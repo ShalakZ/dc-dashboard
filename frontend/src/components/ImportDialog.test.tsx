@@ -534,7 +534,7 @@ describe("ImportDialog: counter values to look at", () => {
   it("lists the counter values that go down or jump, with the sentence and the first 20 of N, and never blocks the import", async () => {
     await checked(importRoute(report({ counter_warnings: warnings(20), counter_warnings_total: 47 })));
     const section = screen.getByText("Counter values to look at").parentElement as HTMLElement;
-    expect(section).toHaveTextContent("These energy counter values go down, or jump by a lot. They are stored all the same; check the file before you import it.");
+    expect(section).toHaveTextContent("These energy counter values go down, or jump by a lot. They will be stored all the same; check the file before you import it.");
     const items = within(section).getAllByRole("listitem").map((li) => li.textContent);
     expect(items).toHaveLength(20);
     expect(items[0]).toBe("kWh-0 at 2026-01-01T00:00:00Z: 12 after 1000");
@@ -542,6 +542,17 @@ describe("ImportDialog: counter values to look at", () => {
     expect(section).toHaveTextContent("The first 20 of 47 are shown.");
     expect(goButton()).toHaveTextContent("Import 12,000 rows");
     expect(goButton()).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("words the block in the past tense after an import: the values were stored, and a second import does not correct them", async () => {
+    const warned = { counter_warnings: warnings(2), counter_warnings_total: 2 };
+    await checked(importRoute(report(warned), done(warned)));
+    await userEvent.click(goButton());
+    await screen.findByText(/^Imported:/);
+    const section = screen.getByText("Counter values to look at").parentElement as HTMLElement;
+    expect(section).toHaveTextContent("These energy counter values go down, or jump by a lot. They were stored all the same; a second import does not correct them.");
+    expect(section).not.toHaveTextContent("check the file before you import it");
+    expect(section).not.toHaveTextContent("will be stored");
   });
 
   it("says nothing about counters when the total is 0, and shows no 'first N of N' line when every one is listed", async () => {

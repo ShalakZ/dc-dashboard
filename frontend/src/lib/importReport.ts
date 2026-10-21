@@ -7,7 +7,7 @@ const REJECTED: Record<string, string> = {
   ambiguous_local_time: "The local time is ambiguous (the clocks went back)",
   later_than_now_plus_5_minutes: "The time is more than 5 minutes in the future",
   older_than_raw_retention: "The time is older than the readings are kept",
-  older_than_stored_raw_readings: "The time is before the oldest raw reading still stored; the summaries there are kept, so nothing can be added",
+  older_than_stored_raw_readings: "The time is in a stretch whose raw readings the retention removed; the summaries there are kept, so nothing can be added",
   not_a_time: "The time cannot be read",
   not_a_number: "The value is not a number",
   value_out_of_range: "The value is out of range",

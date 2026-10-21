@@ -16,7 +16,8 @@ function hoursSince(since: string | null, now: number): number | null {
 /**
  * The second line under a source's name on the Sources page: how far its history backfill got, or null when there is nothing to say (a connector that keeps
  * no history, which is every real source today, shows nothing). A source that is filled by importing files is never polled and keeps no history, and says so.
- * A switched-off source that never ran says it is not filled, since nothing starts its fill.
+ * A switched-off source that never ran says it is not filled, since nothing starts its fill; one that was cut in the middle of a fill says paused, and one that was
+ * backing off says stopped, since nothing retries it.
  * The times in `history` are the server's, `now` is the browser's clock (epoch ms, as `ageNow` takes it): a clock that is off shifts the figures, never the state.
  */
 export function historyLine(row: Pick<Source, "connector_type" | "polls" | "enabled" | "history">, now: number): string | null {
@@ -41,7 +42,9 @@ export function historyLine(row: Pick<Source, "connector_type" | "polls" | "enab
     }
     case "backing_off": {
       const error = (history.last_error ?? "").replace(/\s+/g, " ").trim();
-      return error ? `History: waiting, ${clipped(error)}` : "History: waiting";
+      // Nothing retries a switched-off source, so "waiting" would stay on screen for ever; the error is still the last thing that happened.
+      const lead = row.enabled === false ? "History: stopped (the source is switched off)" : "History: waiting";
+      return error ? `${lead}, ${clipped(error)}` : lead;
     }
     default:
       return null; // not_supported, or a state a newer server sends: nothing is better than a wrong word

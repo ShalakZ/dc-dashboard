@@ -1170,6 +1170,20 @@ describe("SourcesPage, importing, mapping a tag list and filling (w31)", () => {
       expect(lineOf("on").getByText("History: not started yet")).toBeInTheDocument();
     });
 
+    it("says a switched-off source that was backing off has stopped, since nothing retries it", async () => {
+      mockFetch({
+        ...routes("operator"),
+        "GET /api/sources": { body: [
+          { ...source, id: 1, name: "off", enabled: false, history: history({ state: "backing_off", last_error: "the Historian refused: 429" }) },
+          { ...source, id: 2, name: "on", history: history({ state: "backing_off", last_error: "the Historian refused: 429" }) },
+        ] },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await screen.findByText("off");
+      expect(lineOf("off").getByText("History: stopped (the source is switched off), the Historian refused: 429")).toHaveClass("cell-history");
+      expect(lineOf("on").getByText("History: waiting, the Historian refused: 429")).toBeInTheDocument();
+    });
+
     it("shows nothing for a source whose connector keeps no history, or whose row has none", async () => {
       mockFetch({
         ...routes("operator"),
