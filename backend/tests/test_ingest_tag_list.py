@@ -68,7 +68,7 @@ def test_a_trailing_delimiter_is_fine_but_a_surplus_cell_is_a_problem_line():
 
 
 def test_unbalanced_quotes_are_a_problem_line_not_a_refusal():
-    result = planned('"A,Hall,energy_kwh', 'B,Hall,active_power_kw')
+    result = planned('"A,Hall,energy_kwh', 'B,Hall,voltage_v')
     assert reasons(result) == [(2, "the quotes in this line do not balance")]
 
 
@@ -121,8 +121,9 @@ def test_the_sha256_is_of_the_bytes_received():
 def test_a_good_list_creates_points_assets_and_mappings_with_scales_from_the_units():
     result = planned(
         "M1.kWh,Hall 1 / Row A / Meter 01,energy_kwh,Wh,meter",
-        "M1.kW,Hall 1 / Row A / Meter 01,active_power_kw,kW,meter",
-        "M2.kW,Hall 1 / Row A / Meter 02,active_power_kw,MW,",
+        "M1.kW,Hall 1 / Row A / Meter 01,active_power_kw,kW,meter,3600",
+        "M2.kW,Hall 1 / Row A / Meter 02,active_power_kw,MW,,3600",
+        header=f"{HEADER},interval_seconds",
     )
     assert result.ok and result.problems == ()
     assert [p.address for p in result.points] == ["M1.kWh", "M1.kW", "M2.kW"]
@@ -130,7 +131,7 @@ def test_a_good_list_creates_points_assets_and_mappings_with_scales_from_the_uni
         ("Hall 1", "generic"), ("Row A", "generic"), ("Meter 01", "meter"), ("Meter 02", "generic"),
     ]
     assert [(m.metric, m.scale, m.interval_seconds) for m in result.mappings] == [
-        ("energy_kwh", 0.001, 60), ("active_power_kw", 1.0, 5), ("active_power_kw", 1000.0, 5),
+        ("energy_kwh", 0.001, 60), ("active_power_kw", 1.0, 3600), ("active_power_kw", 1000.0, 3600),
     ]
     assert [(u["unit"], u["scale"], u["count"]) for u in result.units] == [("kW", 1.0, 1), ("MW", 1000.0, 1), ("Wh", 0.001, 1)]
 
@@ -160,6 +161,45 @@ def test_a_missing_interval_takes_the_metric_default_and_a_given_one_is_kept():
     assert [m.interval_seconds for m in result.mappings] == [60, 30]
 
 
+SPACING = (
+    "give interval_seconds: the spacing of the export in seconds (3600 for an hourly file), because a power reading is turned "
+    "into energy by its spacing"
+)
+
+
+@pytest.mark.parametrize("header, line", [
+    ("tag,asset,metric,interval_seconds", "A,Hall,active_power_kw,"),  # the column is there, the cell is empty
+    ("tag,asset,metric", "A,Hall,active_power_kw"),  # the column is missing altogether
+    ("tag,asset,metric,interval_seconds", "A,Hall,ACTIVE_POWER_KW, "),  # the metric is matched as the planner reads it
+])
+def test_a_power_line_on_a_file_source_must_give_the_spacing_of_the_export(header, line):
+    # Without it the mapping would take the metric's 5-second poll interval, and the figure engine would count one hourly sample as
+    # 1/60 of an hour: a meter loaded from an hourly export would get 1/60 of its energy, and nothing would say so.
+    result = planned(line, "B,Hall,voltage_v,", header=header)
+    assert reasons(result) == [(2, SPACING)]
+    assert [m.tag for m in result.mappings] == ["B"]
+
+
+def test_a_power_line_with_a_spacing_is_kept_and_a_bad_spacing_still_has_its_own_sentence():
+    header = "tag,asset,metric,interval_seconds"
+    result = planned("A,Hall,active_power_kw,3600", "B,Hall 2,active_power_kw,900", "C,Hall 3,active_power_kw,0", header=header)
+    assert [m.interval_seconds for m in result.mappings] == [3600, 900]
+    assert [p.line for p in result.problems] == [4] and "from 1 to" in result.problems[0].reason
+
+
+def test_only_power_on_a_file_source_needs_the_spacing_every_other_line_keeps_its_default():
+    header = "tag,asset,metric,interval_seconds"
+    result = planned("A,Hall,energy_kwh,", "B,Hall,voltage_v,", "C,Hall,reactive_power_kvar,", header=header)
+    assert result.ok and [m.interval_seconds for m in result.mappings] == [60, 5, 5]
+
+
+def test_a_power_line_on_a_live_source_keeps_the_poll_interval_default():
+    # A live source's default IS its poll interval, so the list may leave the column out there.
+    header = "tag,asset,metric,interval_seconds"
+    result = planned("A,Hall,active_power_kw,", "B,Hall 2,active_power_kw", connector="modbus", points={"A": 1, "B": 2}, header=header)
+    assert result.ok and [m.interval_seconds for m in result.mappings] == [5, 5]
+
+
 def test_a_custom_metric_takes_its_unit_and_may_repeat_on_one_asset():
     result = planned("A,Hall,custom,rpm,", "B,Hall,custom,bar,")
     assert result.ok
@@ -167,8 +207,8 @@ def test_a_custom_metric_takes_its_unit_and_may_repeat_on_one_asset():
 
 
 def test_a_scale_without_a_unit_is_taken_and_neither_means_the_base_unit():
-    header = "tag,asset,metric,scale"
-    result = planned("A,Hall,active_power_kw,0.001", "B,Hall,voltage_v,", header=header)
+    header = "tag,asset,metric,scale,interval_seconds"
+    result = planned("A,Hall,active_power_kw,0.001,3600", "B,Hall,voltage_v,", header=header)
     assert [m.scale for m in result.mappings] == [0.001, 1.0]
 
 
@@ -249,7 +289,7 @@ def test_the_scale_and_the_unit_must_agree_and_each_must_be_a_number_in_range():
     header = "tag,asset,metric,unit,scale,interval_seconds"
     result = planned(
         "A,Hall,active_power_kw,kW,0.001,",
-        "B,Hall,active_power_kw,W,0.001,",
+        "B,Hall,active_power_kw,W,0.001,3600",
         "C,Hall,active_power_kw,,abc,",
         "D,Hall,active_power_kw,,0,",
         "E,Hall,active_power_kw,,-1,",
@@ -271,9 +311,9 @@ def test_the_scale_and_the_unit_must_agree_and_each_must_be_a_number_in_range():
 
 
 def test_an_interval_tag_cannot_be_mapped_as_cumulative_energy():
-    header = "tag,asset,metric,unit,reading"
+    header = "tag,asset,metric,unit,reading,interval_seconds"
     result = planned(
-        "A,Hall,energy_kwh,kWh,interval", "B,Hall,active_power_kw,kW,interval", "C,Hall,voltage_v,V,weekly",
+        "A,Hall,energy_kwh,kWh,interval", "B,Hall,active_power_kw,kW,interval,3600", "C,Hall,voltage_v,V,weekly",
         "D,Hall,current_a,A,counter", header=header,
     )
     assert [p.line for p in result.problems] == [2, 4]

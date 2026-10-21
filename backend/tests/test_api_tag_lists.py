@@ -3,19 +3,26 @@ locks (test_api_tag_lists_undo.py has the Undo). The pure rules are in test_inge
 import asyncio
 import contextlib
 import json
+from datetime import UTC, datetime
 
 import pytest
 
+import importer_helpers
 from dcdash.core.pg import CONFIG_CHANNEL
-from helpers import listening, login_as, make_asset, make_mapping, make_point, make_role, make_source
+from dcdash.ingest import importer
+from helpers import listening, login_as, make_asset, make_mapping, make_point, make_role, make_source, settle_rollups
 
-HEADER = "tag,asset,metric,unit,kind"
+HEADER = "tag,asset,metric,unit,kind,interval_seconds"  # a power line on a file source must give the spacing of the export
 LIST = [
     "M1.kWh,Hall 1 / Row A / Meter 01,energy_kwh,kWh,meter",
-    "M1.kW,Hall 1 / Row A / Meter 01,active_power_kw,kW,meter",
+    "M1.kW,Hall 1 / Row A / Meter 01,active_power_kw,kW,meter,3600",
     "M2.kWh,Hall 1 / Row A / Meter 02,energy_kwh,Wh,meter",
-    "M2.kW,Hall 1 / Row B / Meter 03,active_power_kw,MW,",
+    "M2.kW,Hall 1 / Row B / Meter 03,active_power_kw,MW,,3600",
 ]
+SPACING = (
+    "give interval_seconds: the spacing of the export in seconds (3600 for an hourly file), because a power reading is turned into "
+    "energy by its spacing"
+)
 WAIT = 15  # seconds a request may take once a holder lets go: finite so a hang fails the test instead of hanging it
 
 
@@ -180,7 +187,7 @@ async def test_the_real_run_creates_exactly_what_the_dry_run_showed_and_audits_i
         )
     }
     assert [(mappings[t]["metric"], mappings[t]["scale"], mappings[t]["interval_seconds"]) for t in ("M1.kWh", "M1.kW", "M2.kWh", "M2.kW")] == [
-        ("energy_kwh", 1.0, 60), ("active_power_kw", 1.0, 5), ("energy_kwh", 0.001, 60), ("active_power_kw", 1000.0, 5),
+        ("energy_kwh", 1.0, 60), ("active_power_kw", 1.0, 3600), ("energy_kwh", 0.001, 60), ("active_power_kw", 1000.0, 3600),
     ]
     assert mappings["M1.kW"]["asset_id"] == assets["Meter 01"]["id"] and mappings["M2.kW"]["asset_id"] == assets["Meter 03"]["id"]
     row = await db.fetchrow("SELECT user_id, action, detail FROM audit_log WHERE action = 'tags.mapped'")
@@ -218,6 +225,63 @@ async def test_a_list_on_a_live_source_maps_its_browsed_points_and_creates_no_po
     assert await db.fetchval("SELECT count(*) FROM points") == 2
     assert {r["point_id"]: r["asset_id"] for r in await db.fetch("SELECT point_id, asset_id FROM mappings")}[p1] == hall
     assert p2 in {r["point_id"] for r in await db.fetch("SELECT point_id FROM mappings")}
+
+
+async def test_a_power_line_on_a_live_source_may_leave_the_interval_out_and_takes_the_poll_interval(client, db):
+    await login_as(client, db)
+    source = await make_source(db, "modbus", "modbus", {"host": "10.0.0.1", "port": 502})
+    await make_point(db, source, "40001")
+    await apply(client, source, "40001,Hall 1,active_power_kw,kW,")
+    assert await db.fetchval("SELECT interval_seconds FROM mappings") == 5
+
+
+async def test_a_power_line_on_a_file_source_without_the_spacing_is_a_problem_line_in_the_dry_run_and_the_real_run(client, db):
+    await login_as(client, db)
+    source = await make_source(db, "files", "file")
+    body = body_of("P1,Hall,active_power_kw,kW,,", "V1,Hall,voltage_v,V,,")
+    report = (await dry(client, source, body)).json()
+    assert report["ok"] is False and report["problems"] == [{"line": 2, "tag": "P1", "reason": SPACING}]
+    assert (report["mappings_to_create"], report["text"]) == (1, "1 line to fix; nothing is created until the list has no problems")
+    response = await real(client, source, body, report)
+    assert response.status_code == 422 and response.json()["detail"] == f"line 2: {SPACING}"
+    assert await counts(db) == {"assets": 0, "points": 0, "mappings": 0, "audit": 0}
+    # With the spacing the same list is accepted, and the mapping carries it.
+    await apply(client, source, "P1,Hall,active_power_kw,kW,,900", "V1,Hall,voltage_v,V,,")
+    assert {r["metric"]: r["interval_seconds"] for r in await db.fetch("SELECT metric, interval_seconds FROM mappings")} == {
+        "active_power_kw": 900, "voltage_v": 5,
+    }
+
+
+async def test_an_hourly_power_only_meter_gets_all_its_energy_only_because_the_list_gives_the_spacing(client, db, monkeypatch):
+    """Why the rule exists, end to end. The figure engine takes the coverage of a power hour from the minutes that hold a sample
+    when the mapping's interval is a minute or less, so an hourly export mapped at the metric's 5-second default counts one sample
+    as 1/60 of an hour. The same 24 hourly readings of 60 kW are read through two mappings: the one the list gives (3600) and the
+    one the list used to default to (5)."""
+    now = datetime(2026, 3, 10, 23, 30, tzinfo=UTC)  # the site zone is UTC in these tests; the day's 24 hourly rows are all in the past
+    monkeypatch.setattr("dcdash.api.data._now", lambda: now)
+    await login_as(client, db)
+    source = await make_source(db, "files", "file")
+    await apply(client, source, "P.hourly,Hall / Hourly meter,active_power_kw,kW,,3600")
+    by_default = await make_asset(db, "Default meter")
+    await make_mapping(db, await make_point(db, source, "P.default"), by_default, metric="active_power_kw", interval=5)
+    rows = [f"{tag},2026-03-10T{hour:02d}:00:00Z,60,kW,good" for tag in ("P.hourly", "P.default") for hour in range(24)]
+    scan = importer.pre_scan(("\n".join([importer_helpers.HEADER, *rows]) + "\n").encode())
+    profile = importer_helpers.make_profile()
+    done = await importer.run_import(
+        db, source_id=source, profile=profile, scan=scan, layout=importer.resolve_layout(scan, profile), dry_run=False, now=now,
+    )
+    assert (done.rows_read, done.new, done.rejected) == (48, 48, 0)
+    await settle_rollups(db)
+
+    async def energy_today(name: str) -> dict:
+        asset = await db.fetchval("SELECT id FROM assets WHERE name = $1", name)
+        response = await client.get(f"/api/assets/{asset}/summary")
+        assert response.status_code == 200, response.text
+        return response.json()["energy_today"]
+
+    hourly = await energy_today("Hourly meter")
+    assert hourly == {"kwh": pytest.approx(24 * 60.0), "estimated": True, "no_data": False}
+    assert (await energy_today("Default meter"))["kwh"] == pytest.approx(24 * 60.0 / 60)  # 1/60 of it: the silent error the rule prevents
 
 
 @pytest.mark.parametrize("origin, enabled_after", [("discovered", True), ("manual", False)])
@@ -491,11 +555,11 @@ async def test_a_thousand_lines_with_realistic_names_are_created_and_their_audit
     await login_as(client, db)
     source = await make_source(db, "files", "file")
     lines = [
-        f"SITE.H{i // 100:02d}.R{i // 10:03d}.M{i:04d}.{metric},Site / Hall {i // 100:02d} / Row {i // 10:03d} / Meter {i:04d},{metric},{unit}"
-        for i in range(500) for metric, unit in (("energy_kwh", "kWh"), ("active_power_kw", "kW"))
+        f"SITE.H{i // 100:02d}.R{i // 10:03d}.M{i:04d}.{metric},Site / Hall {i // 100:02d} / Row {i // 10:03d} / Meter {i:04d},{metric},{unit},{spacing}"
+        for i in range(500) for metric, unit, spacing in (("energy_kwh", "kWh", ""), ("active_power_kw", "kW", 3600))
     ]
     assert len(lines) == 1000
-    done = await apply(client, source, *lines, header="tag,asset,metric,unit")
+    done = await apply(client, source, *lines, header="tag,asset,metric,unit,interval_seconds")
     assert (done["mappings_to_create"], done["points_to_create"]) == (1000, 1000)
     size = await db.fetchval("SELECT length(detail::text) FROM audit_log WHERE action = 'tags.mapped'")
     assert size < 80_000, size  # short names, small ids: what a real list looks like; the next test is the bound

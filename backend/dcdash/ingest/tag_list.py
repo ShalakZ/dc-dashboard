@@ -6,6 +6,8 @@ The file: a header line naming at least `tag`, `asset` and `metric` (case does n
 `kind` and `reading` are optional; any other column is ignored), then one line per tag. `asset` is a path written
 `Hall 1 / Row A / Rack 01`; each part is a name among its siblings. `kind` is the kind of the asset the line points at, and only
 for an asset the run creates (an asset that exists is left as it is; the parts above a created asset are `generic`).
+`interval_seconds` is the mapping's polling interval, and the metric's default when it is left out, except on a `file` source (never
+polled): there it is the spacing of the export, and an `active_power_kw` line must give it.
 
 Everything a person can get wrong becomes a PROBLEM with its line number, in file order, and a list with any problem creates
 nothing (the route enforces that; this module only reports). One line gives at most one problem: the first thing wrong with it.
@@ -439,9 +441,16 @@ class _Planner:
         scale = given if given is not None else from_unit if from_unit is not None else 1.0
         return scale, None, unit or unit_for(metric, None), unit
 
-    @staticmethod
-    def _interval(metric: Metric, text: str) -> int:
+    def _interval(self, metric: Metric, text: str) -> int:
         if not text:
+            # A file source is never polled, so the metric's default (its poll interval) means nothing there, and for power it is
+            # wrong: the figure engine turns a power reading into energy by the spacing of its samples (core/energy.py power_hours),
+            # so an hourly export mapped at 5 seconds would give 1/60 of its energy, silently. The file's own spacing is needed.
+            if self.connector_type == "file" and metric is Metric.ACTIVE_POWER_KW:
+                raise _Bad(
+                    "give interval_seconds: the spacing of the export in seconds (3600 for an hourly file), because a power "
+                    "reading is turned into energy by its spacing"
+                )
             return default_interval(metric)
         if not _WHOLE.fullmatch(text) or not 1 <= int(text) <= MAX_INTERVAL:
             raise _Bad(f'interval_seconds "{echo(text)}" is not a whole number of seconds from 1 to {MAX_INTERVAL}')
