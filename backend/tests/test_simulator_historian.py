@@ -4,6 +4,7 @@ No Docker, no sockets: the app is driven through httpx.ASGITransport with a fake
 SIM_HISTORIAN_ variables are in test_simulator_faults_isolation.py.
 """
 import asyncio
+import signal
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -657,6 +658,9 @@ async def test_stats_counts_requests_by_route_rows_served_and_the_refusals():
 
 async def test_serve_starts_the_historian_on_its_own_port_when_given_one():
     from dcdash.simulator.main import serve
+    # two uvicorn servers in one process each install the signal handlers and put back what they found, in the order they stop: the
+    # second to stop can put back the first one's dead handler, which would swallow a Ctrl-C in the rest of the test session
+    saved = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
     http, ua_port, mb_port, hist = free_ports(4)
     task = asyncio.create_task(serve(http_port=http, opcua_port=ua_port, modbus_port=mb_port, host="127.0.0.1", api_key="sim-key",
                                      historian_port=hist, historian=HistorianConfig(meters=3)))
@@ -675,3 +679,6 @@ async def test_serve_starts_the_historian_on_its_own_port_when_given_one():
             assert "history" not in (await c.get("/")).json()  # the plain simulator on 9000 is still the plain one
     finally:
         task.cancel()
+        await asyncio.gather(task, return_exceptions=True)  # let the servers unwind before the handlers are put back
+        for sig, handler in saved.items():
+            signal.signal(sig, handler)
