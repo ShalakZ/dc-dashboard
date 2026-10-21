@@ -53,7 +53,7 @@ export function importSentence(report: Pick<ImportReport, "dry_run" | "complete"
 }
 
 /** What to tell a person whose rows fell into a closed billing month. */
-export const CLOSED_MONTH_NOTE = "A closed month keeps its frozen figures: these rows are stored, but the closed bill does not change.";
+export const CLOSED_MONTH_NOTE = "A closed month keeps its frozen figures: the new rows are stored, but the closed bill does not change. The counts are rows of the file, whether they were new or already there.";
 
 /** One line for each closed month that took rows ("3 rows in the closed month 2026-09"), oldest month first; none when no row fell in one. */
 export function closedMonthLines(report: Pick<ImportReport, "closed_months">): string[] {

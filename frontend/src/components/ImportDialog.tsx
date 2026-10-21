@@ -117,8 +117,8 @@ function ReportView({ report }: { report: ImportReport }) {
       )}
       {badQuality.length > 0 && (
         <div>
-          <p className="import-head">Stored with bad quality</p>
-          <p className="muted">These rows are part of the new rows and are kept, but they do not count in any figure.</p>
+          <p className="import-head">Quality other than good</p>
+          <p className="muted">These rows of the file have a quality other than good. The new ones are stored as bad quality and count in no figure.</p>
           <ul className="import-list">{badQuality.map(([label, n]) => <li key={label}>{label}: {rowsText(n)}</li>)}</ul>
         </div>
       )}
