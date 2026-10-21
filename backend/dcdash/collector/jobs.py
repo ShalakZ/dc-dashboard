@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import os
 from collections.abc import Iterable
 from dataclasses import asdict
+from datetime import datetime
 from typing import Any
 
 import asyncpg
@@ -10,10 +12,13 @@ from dcdash.collector.browse import browse_source, connector_for
 from dcdash.collector.scan import run_scan
 from dcdash.collector.scheduler import mark_source
 from dcdash.connectors.base import ConnectorFactory, create_connector
-from dcdash.core import journal
+from dcdash.core import journal, pg
 from dcdash.core.audit import audit_pool, clip_error, scrub_strings, scrub_url_credentials
+from dcdash.core.config import get_settings
 from dcdash.core.crypto import decrypt
 from dcdash.diagnostics.check import CheckResult
+from dcdash.ingest.backfill import Backfill, FillRefused, LeaseHeld
+from dcdash.ingest.settings import HistorySettings
 
 log = logging.getLogger(__name__)
 
@@ -111,7 +116,65 @@ async def _check_connection(
     return result.to_json()
 
 
-_HANDLERS = {"test_source": _test_source, "browse_source": _browse_source, "scan": _scan, "check_connection": _check_connection}
+FILL_POOL_SIZE = 2  # the lease's connection and one for everything else the engine asks the database meanwhile
+FILL_LEASE_RETRIES = 3  # the automatic cycle of the same source holds its lease while it fills: wait and ask again, this many times
+FILL_LEASE_WAIT_SECONDS = 30.0
+
+
+async def _fill_sleep(seconds: float) -> None:
+    """Every wait of a fill job (the engine's request pace and the lease retries). A module-level name so that a test replaces it."""
+    await asyncio.sleep(seconds)
+
+
+async def _history_fill(
+    pool: asyncpg.Pool, params: dict[str, Any], factory: ConnectorFactory, job_id: int, known: Iterable[str]
+) -> dict[str, Any]:
+    """Fill [start, end] of one source from the history it keeps (the work of `POST /api/sources/{id}/history/fill`).
+
+    The fill runs on a small pool of its own, as the fill command opens its own: a fill can last an hour, and it must not take the
+    collector's shared connections from the poll loop and the other jobs. A restart of the collector fails a running fill
+    (`fail_stale_jobs`); running the same fill again adds only what is missing. What the engine refuses, or stops with, becomes the
+    job's error: the runner stores `{"error": sentence}` for an exception, scrubbed of the source's credentials."""
+    settings = HistorySettings.from_env(os.environ)  # a ValueError names the variable that is wrong
+    known = list(known)
+    start, end = datetime.fromisoformat(params["start"]), datetime.fromisoformat(params["end"])
+    try:
+        own = await asyncpg.create_pool(
+            get_settings().database_url, min_size=1, max_size=FILL_POOL_SIZE, init=pg._init_connection
+        )
+    except Exception as exc:  # no database: the class says which; the message could quote the connection string
+        raise RuntimeError(f"could not open the database for the fill: {type(exc).__name__}") from None
+    try:
+        engine = Backfill(own, factory, settings, sleep=_fill_sleep)
+        for attempt in range(FILL_LEASE_RETRIES + 1):
+            try:
+                report = await engine.fill_range(
+                    params["source_id"], start, end, before_first_reading=bool(params.get("before_first_reading")),
+                    dry_run=False, yes=True,
+                )
+                break
+            except LeaseHeld:
+                if attempt == FILL_LEASE_RETRIES:
+                    raise
+                await _fill_sleep(FILL_LEASE_WAIT_SECONDS)
+    except FillRefused as refused:  # LeaseHeld included, once the retries are used up: the engine's own sentence
+        raise RuntimeError(clip_error(scrub_url_credentials(str(refused), known))) from None
+    except Exception as exc:  # whatever else: a sentence with the class, scrubbed, never a traceback that could quote a credential
+        raise RuntimeError(
+            f"the fill failed: {type(exc).__name__}: {clip_error(scrub_url_credentials(str(exc), known), 300)}"
+        ) from None
+    finally:
+        await own.close()
+    return {
+        "ok": True, "text": report.text, "read": report.read, "new": report.new, "already": report.already,
+        "differing": report.differing, "rejected": report.rejected,
+    }
+
+
+_HANDLERS = {
+    "test_source": _test_source, "browse_source": _browse_source, "scan": _scan, "check_connection": _check_connection,
+    "history_fill": _history_fill,
+}
 
 
 def _stored_result(result: Any, known: Iterable[str] = ()) -> Any:

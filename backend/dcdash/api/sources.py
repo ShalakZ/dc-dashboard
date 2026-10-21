@@ -74,10 +74,22 @@ class SourceOut(BaseModel):
         )
 
 
+class SourceHistoryLine(BaseModel):
+    """The part of the history backfill's state that the Sources page shows under a source's name (the list's `history`)."""
+
+    supports_history: bool
+    state: str  # never_run | idle | filling | backing_off | not_supported
+    answered_through: datetime | None = None
+    last_success_at: datetime | None = None
+    next_try_at: datetime | None = None
+    last_error: str | None = None
+
+
 class SourceListOut(SourceOut):
     last_reading_age_seconds: float | None = None  # newest stored reading of any of its points; None = none yet
     mapped_points: int = 0  # points of this source that have a mapping
     polls: bool = True  # the connector class's flag: false for a source that is filled by importing files, which is never tested or polled
+    history: SourceHistoryLine | None = None  # never null in an answer: list_sources fills it for every row (the default only lets `of` validate)
 
 
 class SourceHistoryOut(BaseModel):
@@ -180,6 +192,19 @@ def _values(source: Source) -> dict[str, Any]:
     }
 
 
+def _history_line(source: Source, row: Any, types: dict[str, Any]) -> SourceHistoryLine:
+    """The list's `history` of one source: its `history_status` row, or "never_run" when it has none yet (as the `/history` route
+    answers). `last_error` is scrubbed with the source's own hidden values, exactly as that route does it."""
+    kind = types.get(source.connector_type)
+    supports = bool(kind is not None and kind.supports_history)
+    if row is None:
+        return SourceHistoryLine(supports_history=supports, state="never_run")
+    values = {key: value for key, value in dict(row).items() if key != "source_id"}
+    if values["last_error"] is not None:
+        values["last_error"] = scrub_url_credentials(values["last_error"], hidden_values(source.config))
+    return SourceHistoryLine(supports_history=supports, **values)
+
+
 def non_polling_types() -> list[str]:
     """The connector types whose sources are never asked for values: they are filled by importing files."""
     return [name for name, cls in connector_types().items() if not cls.polls]
@@ -219,11 +244,25 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
             )
         ).all()
     )
+    # One query for all the listed sources, never one per row. Plain SQL: the models live in core/ (see source_history).
+    history = {
+        row["source_id"]: row
+        for row in (
+            await db.execute(
+                text(
+                    "SELECT source_id, state, answered_through, last_success_at, next_try_at, last_error "
+                    "FROM history_status WHERE source_id = ANY(:ids)"
+                ),
+                {"ids": [s.id for s in sources]},
+            )
+        ).mappings()
+    }
     types = connector_types()
     return [
         SourceListOut.of(
             s, last_reading_age_seconds=ages.get(s.id), mapped_points=int(counts.get(s.id, 0)),
             polls=getattr(types.get(s.connector_type), "polls", True),  # a type this build does not know counts as polling
+            history=_history_line(s, history.get(s.id), types),
         )
         for s in sources
     ]
