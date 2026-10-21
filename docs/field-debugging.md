@@ -186,8 +186,9 @@ PowerShell has no `<`; run the same thing through `cmd`, which also hands the fi
 
 Without `--yes` it is a **dry run**: it reads the whole file, writes nothing and records nothing, and prints what a real import would do:
 a line naming the source and profile, the one sentence of counts (`12,480 rows read, 12,000 new, 480 already there, 0 differing, 0
-rejected, 3 unknown tags (TAG-A, TAG-B, TAG-C)`), a line for each closed month the rows fall in, one for rows of bad quality, and the
-first 20 rejected lines with their line numbers and reasons. It never prints a reading value. With `--yes` it imports and ends with
+rejected, 3 unknown tags (TAG-A, TAG-B, TAG-C)`), a line for each closed month the rows fall in, one for rows of bad quality, one for rows
+older than the oldest raw reading stored, the energy counter readings to check (below), and the first 20 rejected lines with their line
+numbers and reasons. It never prints a reading value, except in that counter list. With `--yes` it imports and ends with
 `Done.`; the same file again says `0 new`, so it is safe to repeat. `--profile-file FILE.json` takes a profile from a file instead, but
 the path is read inside the container, so a saved profile and `--profile-name` are the practical way. A file can be at most 20 MB,
 500,000 rows and 4,096 bytes a line, and UTF-8; a refusal is one sentence.
@@ -197,6 +198,32 @@ hourly and minute summaries over the hours of its new rows that are older than a
 that was cut off before it got there leaves those rows stored, and importing the file again finds them "already there" and refreshes
 nothing. Run the same file with `--yes --refresh` and the summaries over every row of the file older than a week are refreshed, the rows
 already there included. The web page never does this.
+
+**Counter warnings, and repairing a wrong reading.** After the counts the report may say `Check these energy counter readings`: up to 20
+rows of a point mapped as `energy_kwh`, each with its tag, its time, its value and the value before it, where the value is lower than
+the one before it or the step is more than 100 times the point's usual step and more than 1,000. It is information only and never
+blocks: a counter does reset, and a gap is one big honest step. But an import cannot be undone, and the first value stored for a tag
+and a time stays, so a second import does not correct it, and a wrong counter reading is billed in full. A wrong stored row is repaired
+by hand with SQL, under the operator's control. **Take a backup first** ([Backup and restore](backup-and-restore.md)). Open
+`docker compose exec db psql -U dcdash -d dcdash` and list the point's readings in the time range (this only reads; `3` is the source's
+number, `M01.kWh` the tag as in the file):
+
+    SELECT r.ts, r.value, r.quality
+    FROM readings r JOIN points p ON p.id = r.point_id
+    WHERE p.source_id = 3 AND p.address = 'M01.kWh'
+      AND r.ts >= '2026-10-01 00:00+00' AND r.ts < '2026-10-02 00:00+00'
+    ORDER BY r.ts;
+
+Delete the wrong row by its point and time, one row at a time (this changes data):
+
+    DELETE FROM readings
+    WHERE point_id = (SELECT id FROM points WHERE source_id = 3 AND address = 'M01.kWh')
+      AND ts = '2026-10-01 05:00+00';
+
+Then import the corrected file: it stores the deleted row again and refreshes the hourly and minute summaries over the hours of its new
+rows that are older than a week (newer ones follow by themselves). If you delete a row and import no replacement, run a file that holds
+that hour with `--yes --refresh` instead, which recomputes the summaries over all its rows older than a week. The frozen figures of a
+closed month are not affected by any of this.
 
 **Exit codes.** 0: done, or checked. 1: refused or failed (one sentence on the error output: the file, an unknown source, the profile's
 columns missing from the file, a run that stopped half way; what was stored stays). 2: bad arguments, a profile that is not usable, or
@@ -208,7 +235,12 @@ SHA-256 and the counts, never a value) and one journal event `import.finished` (
 neither.
 
 **What to paste back.** The command line you typed, everything it printed (the refusals come on the error output; the terminal shows
-both), its exit code when it is not 0, and a new Summary report after a real run. The file itself stays on your machine.
+both), its exit code when it is not 0, and a new Summary report after a real run. The file itself stays on your machine. The reasons of
+the rejected lines are worth reading before pasting: `older_than_stored_raw_readings` (the raw retention already removed the raw
+readings there, so the row cannot be stored, whatever the retention is now), `interval_energy_in_counter_point` (energy per period
+into a point mapped as anything but `custom`), `malformed_line` (also a row with more cells than the header) and `duplicate_in_file`
+(also a repeated line in the hour the clocks go back). An unknown tag marked `[non-ASCII]` holds a look-alike letter. The web page's
+own refusals are 408 (an upload that stopped for 30 seconds) and 403 (a request from another site); the command meets neither.
 
 ## Reading a report (what Claude looks at)
 1. The **header**: build id and time, to know which code produced it.

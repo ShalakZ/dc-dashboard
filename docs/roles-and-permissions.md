@@ -57,7 +57,11 @@ a stored value and the address of its point (five samples at most) where the fil
 call unknown is an address of that source, so a person without See sources can probe for them; it is for trusted roles, and only the
 built-in Admin holds it until an administrator ticks it on a role. It needs See sources to be of use: **Import file...** is in the
 Sources row menu ([Importing readings from a file](sources-and-discovery.md#importing-readings-from-a-file)).
-`discovery.accept` also gates **Map tag list...** and the Undo of a tag list.
+`discovery.accept` also gates **Map tag list...** and the Undo of a tag list. The import, the tag list and its Undo also refuse (403)
+a request the browser marks as coming from another site, or from an origin other than the dashboard's own (a page on another port of the
+same host counts): the sign-in cookie alone does not keep that out, and a file sent as plain text needs no preflight, so without this
+rule another web page could make a signed-in administrator import readings. `curl` and the import command send no such mark and are
+not affected.
 
 `billing.close` is held by the built-in Admin only, until an administrator ticks it on a role of their own (unlike `roles.manage` it can
 be ticked on a custom role, as `billing.export` can). Migration `0012` gave it to no role, so after an upgrade nobody but the Admin can

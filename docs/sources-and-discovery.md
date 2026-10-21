@@ -744,12 +744,19 @@ and zone, what a value is (counter, power or amount per period) and the good qua
 already there + differing + rejected + rows of unknown tags. Already there: stored with the same value. Differing: another value is
 stored and stays. Rejected: refused, counted by reason.
 - An import never creates a point. The first stored value of a tag and time wins, so a file repeated is safe; the same tag and time twice
-  in one file is rejected after the first.
+  in one file is rejected after the first (so is a line repeated in the hour the clocks go back, and that hour's genuine second pass
+  with the same value). An import cannot be undone.
 - A quality other than good is stored as bad quality (counted in "new") and counts in no figure.
 - Rows in a closed month are written; its frozen figures do not change. A time older than the raw retention minus a day, or more than 5
-  minutes ahead, is refused. A value is stored as written (the mapping's scale converts it for a figure); a unit column is only checked.
-- Limits: 20 MB, 500,000 rows, 4,096 bytes a line, 50 columns, UTF-8. One import at a time.
-  A closed tab does not stop an import; a shutdown does, and may lose its audit row. Command line:
+  minutes ahead, is refused; so is one older than the oldest raw reading stored where the retention already dropped raw data but kept
+  its summaries (`older_than_stored_raw_readings`), which no later rise of the retention or fill reopens. A value is stored as written
+  (the mapping's scale converts it for a figure); a unit column is only checked.
+- Also refused: energy per period (`interval`) for any metric but `custom`, and a row with more cells than the header. Energy counter
+  readings that fall or jump are listed as a warning and stored; a wrong stored row is repaired by hand with SQL. Unknown tags with
+  non-ASCII letters read `[non-ASCII]`.
+- Limits: 20 MB, 500,000 rows, 4,096 bytes a line, 50 columns, UTF-8. One import at a time. An upload that stops for 30 seconds is cut
+  (408); the import, tag list and Undo refuse a request from another site (403).
+  A closed tab does not stop an import; a shutdown does, and may lose its audit row. Command line and the repair:
   [Field debugging](field-debugging.md#importing-a-file-by-command).
 
 **Map tag list...** A CSV with `tag`, `asset` (a path such as `Hall 1 / Row A / Rack 01`) and `metric`, optionally `unit`, `scale`,
