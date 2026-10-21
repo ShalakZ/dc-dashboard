@@ -437,6 +437,33 @@ async def test_items_the_rules_refuse_are_dropped_and_counted():
     assert [v.ts for v in page.values] == [at("2026-03-01", "11:00")] and page.rejected == 9 and page.unknown == ("z",)
 
 
+GARBAGE = [  # items of a source with a history interface that no rule is written for: each is the source's problem, never the caller's
+    {"address": "z", "ts": "2026-03-01T11:01:00", "value": 1.0, "quality": "good", "zone": 5},         # a zone that is a number
+    {"address": "z", "ts": "2026-03-01T11:02:00", "value": 1.0, "quality": "good", "zone": ["x"]},     # ... or a list
+    {"address": "z", "ts": "2026-03-01T11:03:00+00:00", "value": 10**400, "quality": "good"},          # a number that no float holds
+]
+GOOD_ITEM = {"address": "a", "ts": "2026-03-01T11:00:00+00:00", "value": 1.0, "quality": "good"}
+
+
+async def test_items_that_no_rule_is_written_for_are_dropped_and_counted_in_a_history_answer():
+    body = {"values": [GOOD_ITEM, *GARBAGE], "complete_until": "2026-03-01T12:00:00+00:00"}
+    page = await mocked(lambda request: httpx.Response(200, json=body)).read_history(["a"], NOW - timedelta(hours=2), NOW)
+    assert [v.ts for v in page.values] == [at("2026-03-01", "11:00")] and page.rejected == 3
+
+
+async def test_items_that_no_rule_is_written_for_do_not_fail_a_live_read_either():
+    # The poll group of a source is read in one call: one bad item must not take every point of the group offline.
+    body = {"values": [GOOD_ITEM, *GARBAGE]}
+    values = await mocked(lambda request: httpx.Response(200, json=body)).read(["a", "z"])
+    assert [v.address for v in values] == ["a"]
+
+
+async def test_a_plain_simulator_item_goes_through_the_old_conversion_in_a_live_read():
+    plain = {"address": "p", "ts": "2026-03-01T11:00:00+00:00", "value": 2.5}  # none of the per-value fields
+    values = await mocked(lambda request: httpx.Response(200, json={"values": [plain]})).read(["p"])
+    assert [(v.address, v.value, v.quality) for v in values] == [("p", 2.5, GOOD)]
+
+
 async def test_a_value_that_is_not_a_number_is_bad_and_so_is_a_value_with_no_quality():
     items = [
         {"address": "a", "ts": "2026-03-01T11:00:00+00:00", "value": None, "quality": "good"},

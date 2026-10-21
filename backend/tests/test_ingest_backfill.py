@@ -306,12 +306,12 @@ async def test_across_many_cycles_no_instant_is_asked_more_than_twice_and_steady
 
 async def test_slices_keep_the_frontier_so_an_interruption_continues_where_it_stopped(db):
     async def break_in_the_third_slice(call, number):
-        if number == 3:
-            raise RuntimeError("the connection dropped")
+        if number >= 3:  # the request and its three retries
+            raise ConnectorError("unreachable", "the connection dropped")
 
     world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 20 * HOUR + timedelta(seconds=17)}, script=break_in_the_third_slice)
     result = await world.cycle()
-    assert result.state == "backing_off" and "RuntimeError: the connection dropped" in result.reason
+    assert result.state == "backing_off" and "unreachable: the connection dropped" in result.reason
     row = await world.status()
     assert row["answered_through"] == NOW - 8 * HOUR  # slices of six whole hours: 20 to 14 hours back, 14 to 8, then the broken one
     assert row["state"] == "backing_off" and row["next_try_at"] is not None and "dropped" in row["last_error"]
@@ -325,8 +325,8 @@ async def test_slices_keep_the_frontier_so_an_interruption_continues_where_it_st
 
 async def test_a_first_run_that_halted_does_not_re_read_what_it_asked_when_that_was_already_old(db):
     async def break_in_the_third_slice(call, number):
-        if number == 3:
-            raise RuntimeError("the connection dropped")
+        if 3 <= number <= 6:  # the request and its three retries; the next cycle gets through
+            raise ConnectorError("unreachable", "the connection dropped")
 
     world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 20 * HOUR + timedelta(seconds=17)}, script=break_in_the_third_slice)
     result = await world.cycle()
@@ -347,8 +347,8 @@ async def test_a_first_run_that_halted_does_not_re_read_what_it_asked_when_that_
 
 async def test_a_first_run_that_halted_owes_a_second_look_for_what_it_asked_while_that_was_young(db):
     async def break_in_the_second_slice(call, number):
-        if number == 2:
-            raise RuntimeError("the connection dropped")
+        if 2 <= number <= 5:  # the request and its three retries; the next cycle gets through
+            raise ConnectorError("unreachable", "the connection dropped")
 
     world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 8 * HOUR + timedelta(seconds=17)}, script=break_in_the_second_slice)
     result = await world.cycle()
@@ -670,6 +670,72 @@ async def test_a_batch_the_source_answers_with_a_protocol_error_in_three_cycles_
     assert (result.state, result.set_aside) == ("idle", 1)
     assert (await world.status())["answered_through"] == FRONT
     assert [event["code"] for event in await world.events(HISTORY_FAILED)] == ["protocol_error", "set_aside"]
+
+
+async def test_items_no_rule_is_written_for_are_rejected_and_counted_and_never_fail_the_cycle(db):
+    first = NOW - 2 * HOUR
+    stamp = lambda minutes: (first + minutes * MINUTE).isoformat()  # noqa: E731
+    items = [
+        {"address": "M001_kWh", "ts": stamp(2), "value": 2.0, "quality": "good"},
+        {"address": "M001_kWh", "ts": stamp(3).replace("+00:00", ""), "value": 3.0, "quality": "good", "zone": 5},  # a zone that is a number
+        {"address": "M001_kWh", "ts": stamp(4).replace("+00:00", ""), "value": 4.0, "quality": "good", "zone": ["x"]},  # ... or a list
+        {"address": "M001_kWh", "ts": stamp(5), "value": 10**400, "quality": "good"},  # a number that no float holds
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"values": items, "complete_until": request.url.params["end"]})
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": first})
+    world.engine = Backfill(
+        db, lambda kind, config, secret: Watched(SimulatorConfig(**config), secret, httpx.MockTransport(handler), world.calls),
+        settings_with(), clock=world.clock, sleep=world.sleeper,
+    )
+    result = await world.cycle()
+    assert (result.state, result.new, result.rejected, result.failures, result.set_aside) == ("idle", 1, 3, 0, 0)
+    assert [row["ts"] for row in await world.stored("M001_kWh")] == [first, first + 2 * MINUTE]
+
+
+@pytest.mark.parametrize(
+    "failure", [AttributeError("'int' object has no attribute 'strip'"), TypeError("unhashable type: 'list'"), OverflowError("int too large")]
+)
+async def test_an_answer_the_connector_chokes_on_is_struck_like_a_protocol_error_and_the_batch_is_set_aside_after_three(db, failure):
+    async def choking(call, number):
+        raise failure
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR}, script=choking)
+    for waited in (240, 480):
+        result = await world.cycle()
+        assert (result.state, result.next_try_at, result.failures) == ("backing_off", NOW + timedelta(seconds=waited), 4)
+        assert result.reason == f"protocol_error: {type(failure).__name__}: {failure}"
+        await db.execute("UPDATE history_status SET next_try_at = NULL WHERE source_id = $1", world.source)
+    result = await world.cycle()  # the third strike: given up, counted, and the rest of the source goes on
+    assert (result.state, result.set_aside, result.failures) == ("idle", 1, 5)
+    assert world.sleeper.waits == [30.0, 60.0, 120.0] * 3
+    assert (await world.status())["answered_through"] == FRONT
+    assert [event["code"] for event in await world.events(HISTORY_FAILED)] == ["protocol_error", "set_aside"]
+
+
+async def test_a_cancelled_request_is_not_a_failure_of_the_source(db):
+    async def cancelled(call, number):
+        raise asyncio.CancelledError
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR}, script=cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        await world.cycle()
+    assert (len(world.calls), world.sleeper.waits, world.engine._strikes) == (1, [], {})  # not retried, not struck
+
+
+async def test_an_unexpected_error_outside_the_request_ends_the_cycle_with_its_name_and_no_strike(db, monkeypatch):
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR})
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(world.engine, "_first_buckets", broken)
+    result = await world.cycle()
+    assert (result.state, result.next_try_at) == ("backing_off", NOW + timedelta(seconds=240))
+    assert result.reason == "RuntimeError: the database went away" and world.engine._strikes == {}
+    assert (await world.status())["state"] == "backing_off"
 
 
 async def test_a_stuck_batch_in_the_first_slice_of_a_first_run_is_set_aside_though_the_floor_moves_with_the_clock(db):
@@ -1407,13 +1473,33 @@ async def test_a_fill_that_stops_says_so_after_telling_the_journal_what_it_did(d
     assert event["detail"]["new"] == 361
 
 
-async def test_a_fill_that_dies_on_an_unexpected_error_tells_the_journal_what_it_stored_and_says_so_in_one_sentence(db):
+async def test_a_fill_whose_connector_chokes_on_an_answer_stops_early_naming_the_error_and_tells_the_journal_what_it_stored(db):
     async def breaks_from_the_second_slice(call, number):
         if number >= 2:
             raise RuntimeError("the connection dropped")
 
     world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 8 * HOUR + timedelta(seconds=17)}, script=breaks_from_the_second_slice)
-    with pytest.raises(FillRefused, match=r"the fill stopped early \(RuntimeError: the connection dropped\); until then: 361 rows read, 361 new"):
+    with pytest.raises(
+        FillRefused, match=r"the fill stopped early \(protocol_error: RuntimeError: the connection dropped\); until then: 361 rows read, 361 new"
+    ):
+        await world.engine.fill_range(world.source, NOW - 8 * HOUR, NOW, yes=True)
+    [event] = await world.events(HISTORY_FILLED)
+    assert event["detail"]["new"] == 361 and event["detail"]["by_command"] is True
+    assert len(await world.stored("M001_kWh")) == 361 + 1
+
+
+async def test_a_fill_that_dies_on_an_unexpected_error_tells_the_journal_what_it_stored_and_says_so_in_one_sentence(db, monkeypatch):
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 8 * HOUR + timedelta(seconds=17)})
+    real, writes = world.engine._write, []
+
+    async def second_write_fails(run, chosen):
+        writes.append(len(chosen))
+        if len(writes) == 2:
+            raise RuntimeError("the connection dropped")
+        return await real(run, chosen)
+
+    monkeypatch.setattr(world.engine, "_write", second_write_fails)
+    with pytest.raises(FillRefused, match=r"the fill stopped early \(RuntimeError: the connection dropped\); until then: 482 rows read, 361 new"):
         await world.engine.fill_range(world.source, NOW - 8 * HOUR, NOW, yes=True)
     [event] = await world.events(HISTORY_FILLED)
     assert event["detail"]["new"] == 361 and event["detail"]["by_command"] is True

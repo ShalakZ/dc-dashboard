@@ -100,11 +100,16 @@ def quality(code: object) -> tuple[int, str | None]:
     return BAD, f"unknown:{str(code).strip().lower()}"[:LABEL_MAX]
 
 
-@lru_cache(maxsize=64)
-def _zone(name: str | None) -> ZoneInfo | None:
+def _zone(name: object) -> ZoneInfo | None:
     """The zone, or None when there is none or the name is not one (a typo in a tag's zone is every reading's problem, and
-    it must be a counted rejection, not an exception in a poll)."""
-    if not name or not name.strip():
+    it must be a counted rejection, not an exception in a poll). A name is whatever a source sent: a number or a list is no name
+    either, and the cache behind this must never be handed something it cannot hash."""
+    return _named_zone(name) if isinstance(name, str) else None
+
+
+@lru_cache(maxsize=64)
+def _named_zone(name: str) -> ZoneInfo | None:
+    if not name.strip():
         return None
     try:
         return ZoneInfo(name.strip())

@@ -64,6 +64,11 @@ def test_a_zone_that_is_not_a_zone_is_a_rejection_not_an_exception(zone):
     assert parse_time("2026-07-01T12:00:00", zone) is Rejected.NO_ZONE
 
 
+@pytest.mark.parametrize("zone", [5, 1.5, True, ["Europe/Berlin"], {"name": "UTC"}, b"UTC"])
+def test_a_zone_that_is_not_even_a_string_is_a_rejection_too(zone):
+    assert parse_time("2026-07-01T12:00:00", zone) is Rejected.NO_ZONE  # a list cannot be hashed by the cache behind the lookup
+
+
 @pytest.mark.parametrize("value", [
     "", "   ", "garbage", "2026-13-45T00:00:00", "2026-10-25T25:00:00", "12:30", "2026-10-25",  # a day is not an instant
     "20261025", None, 1.5, 1_792_000_000, True, b"2026-10-25T02:30:00Z", ["2026-10-25T02:30:00Z"],

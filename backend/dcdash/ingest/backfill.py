@@ -18,7 +18,7 @@ What a cycle does for one source (the one that holds its lease):
   stored one covers its time (see `thin`). Nothing is ever updated, notified or deleted.
 
 A failure never moves a mark past data that was not answered. Transient trouble (timeout, unreachable, rate limited, a malformed
-answer) is retried inside the cycle after 30, 60 and 120 seconds (what the source asked for wins when larger, up to 15 minutes; a
+answer, a connector that breaks on one) is retried inside the cycle after 30, 60 and 120 seconds (what the source asked for wins when larger, up to 15 minutes; a
 longer wait ends the cycle at once) and then ends the cycle in `backing_off` with a `next_try_at`; a source that refuses our
 credentials waits 15 minutes; a source that cannot answer a history read waits a day. Only a batch that three tries in a row could
 not get an answer for (a cut that makes no progress, or the same bad answer in three cycles) is SET ASIDE: counted and journaled,
@@ -318,6 +318,21 @@ _FINISH = """
         last_error = $13, updated_at = $3
     WHERE source_id = $1
 """
+
+
+async def _read_history(
+    connector: Connector, addresses: list[str], lo: datetime, hi: datetime, after: dict[str, datetime], limit: int
+) -> HistoryPage:
+    """`read_history`, but whatever a connector raises that is not its own `ConnectorError` counts as a protocol error. A connector
+    that breaks on an answer it has no rule for has not answered: the batch is struck and set aside after three cycles like any
+    other bad answer, instead of an exception that ends every cycle with no strike and pins the whole source for ever. (A stop,
+    `CancelledError`, is no `Exception` and passes through.)"""
+    try:
+        return await connector.read_history(addresses, lo, hi, after=after, limit=limit)
+    except ConnectorError:
+        raise
+    except Exception as exc:
+        raise ConnectorError("protocol_error", f"{type(exc).__name__}: {clip_error(str(exc), 200)}") from exc
 
 
 def _copy_counts(source: Tally, target: Tally) -> None:
@@ -775,7 +790,7 @@ class Backfill:
             await self._paces[sid].wait()
             run.tally.requests += 1
             try:
-                return await run.connector.read_history(addresses, lo, hi, after=after, limit=limit)
+                return await _read_history(run.connector, addresses, lo, hi, after, limit)
             except ConnectorError as exc:
                 run.tally.failures += 1
                 if exc.status == "auth_failed":

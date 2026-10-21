@@ -58,8 +58,8 @@ def _plain(item: dict[str, Any]) -> PointValue:
 
 
 def _convert(items: list[Any], previous: dict[str, datetime], live: bool) -> tuple[list[PointValue], int]:
-    """(values, how many items had a time the rules refuse). `previous` is the last instant kept per address, the order evidence
-    for the repeated autumn hour; the items of one address must arrive in ascending order (a history answer does). `live`
+    """(values, how many items the rules refuse, or that no rule is written for). `previous` is the last instant kept per address, the
+    order evidence for the repeated autumn hour; the items of one address must arrive in ascending order (a history answer does). `live`
     lets a plain simulator item (none of the per-value fields) keep the old conversion."""
     values: list[PointValue] = []
     rejected = 0
@@ -71,7 +71,10 @@ def _convert(items: list[Any], previous: dict[str, datetime], live: bool) -> tup
         elif not isinstance(item.get("address"), str):
             rejected += 1
         else:
-            kept = _normalised(item, previous)
+            try:
+                kept = _normalised(item, previous)
+            except Exception:  # whatever a source sends that no rule above is written for: one bad item is rejected, never the whole answer
+                kept = None
             if kept is None:
                 rejected += 1
             else:
@@ -92,13 +95,14 @@ def _normalised(item: dict[str, Any], previous: dict[str, datetime]) -> PointVal
             return None  # a stamp that is neither: the value cannot be placed in time
     except (normalise.NormaliseError, TypeError, ValueError, OverflowError):  # no period, a period of zero or beyond the calendar
         return None
-    previous[address] = moment  # what the caller gets back as `ts`, and so what it will hand in again as `after`
     raw = item.get("value")
     numeric = isinstance(raw, (int, float)) and not isinstance(raw, bool)
+    number = float(raw) if numeric else None  # before the order evidence moves: an integer beyond a float raises here
     code, label = normalise.quality(item.get("quality"))  # no quality is not good: only a good code is
-    if not numeric:
+    previous[address] = moment  # what the caller gets back as `ts`, and so what it will hand in again as `after`
+    if number is None:
         return PointValue(address, moment, None, BAD, label)
-    return PointValue(address, moment, float(raw), code, label)  # a bad-quality number is kept as evidence, out of every figure
+    return PointValue(address, moment, number, code, label)  # a bad-quality number is kept as evidence, out of every figure
 
 
 async def _convert_off_loop(items: list[Any], previous: dict[str, datetime], live: bool) -> tuple[list[PointValue], int]:
