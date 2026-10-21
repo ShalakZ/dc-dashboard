@@ -36,16 +36,16 @@ Brief: `.waves/w30.md` (rulings R1 to R13 are the spec; this plan adds the decis
 
 ## Tasks (one commit each; fresh Sonnet implementers; briefs `.waves/w30/brief-*.md` plus `brief-foldin.md`, which overrides them)
 Order: scaffold (done) -> **A** (T1, T3, T4a in parallel, disjoint files) -> **B** (T2 after T1; T4b after T3 and T4a) -> **C** (T5) -> **D** (T6). Per-task Opus reviews: T1, T2, T5, T6.
-- [ ] **T0 Baseline** (controller): stacks, golden before, write-speed baseline, probes (done).
-- [ ] **T1 Migration 0016** (D2, D3): `0016_history_unique_key.py`, `tests/conftest.py` TABLES, `tests/test_schema_history.py` (a duplicate planted inside a COMPRESSED segment before the upgrade is refused with the plain message; the savepoint path; up, down, up; lossless), `test_schema_displays.py:177` and the snapshot tests that compare the `readings` index (`test_schema_figure_ledger.py:212-253`, `test_schema_displays.py:450-497`). + Opus review.
-- [ ] **T3 Normalisation** (R6): `ingest/normalise.py`, `unit_samples.json`, `test_ingest_normalise.py`.
-- [ ] **T4a Stand-in** (R5, D9): `simulator/historian.py`, `simulator/main.py` (`serve(..., historian_port: int | None = None)`; `main()` passes 9100), `compose.yaml`, tests, walls.
-- [ ] **T2 Write path** (D4): `ingest/store.py`, `collector/writer.py`, `seed/history.py` (only `Writer(pool, notify=False)`), tests. + Opus review.
-- [ ] **T4b Interface** (D10): `connectors/base.py`, `connectors/simulator.py`, `test_connector_history.py`.
-- [ ] **T5 Backfill engine** (D5 to D8, D12, D13, D15, D16, D18, D19): `ingest/{kinds,settings,rollups,backfill}.py`, `seed/history.py` (wrappers), `collector/main.py`, `compose.yaml`, `test_compose_config.py`, `test_collector_main.py`, tests per rule. + Opus review.
-- [ ] **T6 Status and fill command** (D11, D14, D17): `api/sources.py` route, `diagnostics/report.py` line, the CLI, `tests/auth_expectations.py`, `test_route_gates.py`, `test_auth_matrix.py`. Nothing under `core/` or `figures/`. + Opus review.
-- [ ] **T7 Measure** (controller): R2b dev-copy drill (D2's order), pilot-hall seed, R8, R12, golden after, `docker stats`.
-- [ ] **T8 Docs and close-out.**
+- [x] **T0 Baseline** (controller): stacks, golden before, write-speed baseline, probes (done).
+- [x] **T1 Migration 0016** (D2, D3): `0016_history_unique_key.py`, `tests/conftest.py` TABLES, `tests/test_schema_history.py` (a duplicate planted inside a COMPRESSED segment before the upgrade is refused with the plain message; the savepoint path; up, down, up; lossless), `test_schema_displays.py:177` and the snapshot tests that compare the `readings` index (`test_schema_figure_ledger.py:212-253`, `test_schema_displays.py:450-497`). + Opus review.
+- [x] **T3 Normalisation** (R6): `ingest/normalise.py`, `unit_samples.json`, `test_ingest_normalise.py`.
+- [x] **T4a Stand-in** (R5, D9): `simulator/historian.py`, `simulator/main.py` (`serve(..., historian_port: int | None = None)`; `main()` passes 9100), `compose.yaml`, tests, walls.
+- [x] **T2 Write path** (D4): `ingest/store.py`, `collector/writer.py`, `seed/history.py` (only `Writer(pool, notify=False)`), tests. + Opus review.
+- [x] **T4b Interface** (D10): `connectors/base.py`, `connectors/simulator.py`, `test_connector_history.py`.
+- [x] **T5 Backfill engine** (D5 to D8, D12, D13, D15, D16, D18, D19): `ingest/{kinds,settings,rollups,backfill}.py`, `seed/history.py` (wrappers), `collector/main.py`, `compose.yaml`, `test_compose_config.py`, `test_collector_main.py`, tests per rule. + Opus review.
+- [x] **T6 Status and fill command** (D11, D14, D17): `api/sources.py` route, `diagnostics/report.py` line, the CLI, `tests/auth_expectations.py`, `test_route_gates.py`, `test_auth_matrix.py`. Nothing under `core/` or `figures/`. + Opus review.
+- [x] **T7 Measure** (controller): R2b dev-copy drill (D2's order), pilot-hall seed, R8, R12, golden after, `docker stats`.
+- [x] **T8 Docs and close-out.**
 
 ## Existing tests that will change (A1)
 - `test_schema_displays.py:177`; snapshot tests comparing at-head and lower-revision snapshots (they see `readings_point_ts_key` vs `readings_point_ts`): `test_schema_figure_ledger.py:212-253`, `test_schema_displays.py:450-497`; later-table exclusions (`test_schema_figure_ledger.py:35,71`, `test_schema_billing_closes.py:48`, `test_schema_widget_text.py:44`); `conftest.py:17` TABLES.
@@ -60,4 +60,7 @@ Order: scaffold (done) -> **A** (T1, T3, T4a in parallel, disjoint files) -> **B
 5. Nothing under `core/` or `figures/` changed (engine id).
 
 ## Execution log
-(filled in at close-out)
+Attempt 1, started 2026-10-21 01:48. Order as planned: baseline and probes; plan; Opus plan review (2 Critical, 13 Important, 14 Minor, folded in as plan v2); wave A (T3 `ba8903e`, T1 `ef2f789`, T4a `8de7a3d` in parallel); T1 review (0 Critical, 2 Important: the refusal wording and the lock window; fixed `3d7b4cb`); T2 `0c6833f` and its review (0 Critical, 1 Important: a non-UTC aware time; fixed `65fb2f2`); T4b `c023f65`; T5 (`145c3e9` to `b62343b`); T6 `3310caa`; T8 docs `5b71540`.
+Reviews after the engine: the T5 review (0 Critical, 5 Important) and its fix wave (`18d85db` to `d7d29c9`); the scoped re-review of that wave (0 Critical, 4 Important) and the second fix wave (`1dd0f27` to `28f41cd`); the whole-wave review (0 Critical, 5 Important) with the second re-review (0 Critical, 3 Important) and the third fix wave (`efd48cb` to `7bb47ed`); the third re-review (0 Critical, 2 Important) and the fourth fix (`39eb614` to `5efa57b`); the fourth re-review (0 Critical, 0 Important, 1 Minor). The T6 review (0 Critical, 1 Important) was fixed in `01e6e65`. One cost worth knowing: each logic fix to the engine produced its own Important finding in the next review, four rounds in all, which is what LESSONS C says to expect.
+Measured: the unique key builds over compressed chunks on 2.30.2 (probes); the migration takes 4.2 s on 4.27 million readings (a writer waited at most 0.89 s), the downgrade 1.9 s, every table identical after a round trip; the write path is about 3 times faster than before (1,000-row flush 57 ms to 18 ms, bulk 18,300 to 53,000 rows a second); R8 (a) to (d) as the brief assumed (a 3-day-old row reaches the hourly rollup by itself in 10 minutes, a 10-day-old row only after a refresh, a refresh over dropped raw data deletes rollup rows, a compressed chunk takes about 35 ms per 1,000 rows); R12 against the stand-in with 217 meters (a to d) in `.waves/w30/history-numbers.md`; the four golden states hash the same before and after (R13). The 2,000-meter run of R12 was parked to w31 by the brief's cut line.
+Gates: the chunked backend suite (13 groups, frozen at `7bb47ed`) plus the 46 test files that import the fourth fix's code (4 chunks, frozen at `5efa57b`); the front-end suite, type check and build (frontend/ is unchanged); the isolated Playwright run.

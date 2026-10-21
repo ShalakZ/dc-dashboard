@@ -699,6 +699,21 @@ Measured numbers: see below.
 
 ### Measured against the stand-in
 
-<!-- w30 R12: the controller adds the table of numbers measured against the stand-in here. -->
+Measured in wave w30 against the stand-in with 217 meters (449 tags, one sample a minute), on a machine that was busy with other work
+(the times are about 2 to 4 times worse than an idle machine; the request and row counts do not depend on load):
+
+| Measure | First fill, 6.5 days | Afterwards (default pace) |
+|---|---|---|
+| Requests to the Historian | about 325, all `GET /history`, at most 200 addresses and 20,000 expected rows each | 36 an hour (3 for the new minutes and 3 for the one late-pass hour, every 10 minutes) |
+| Rows received | 4.2 million (about 92 bytes each as JSON, about 390 MB) | about 54,000 an hour (5 MB) |
+| Time | 18 minutes (10 minutes on an idle machine) | a few seconds a cycle |
+| Stored | 4.18 million new readings, 2.5 MB to 508 MB of database (about 121 bytes a reading with both indexes) | almost all "already there", late data as new rows |
+| Collector | CPU at most 49 percent, memory 115 MB | idle between cycles |
+
+A Historian that answers 503 to every fifth request and 429 above 2 requests a second still finished its 24-hour range (10 minutes,
+12 and 10 failed requests, all retried after their back-off, none lost, no storm). A restart of the collector in the middle of a fill
+resumes from the saved mark: 77 more requests after the restart instead of about 125 from the start. The live poll of a second source
+(every 5 seconds) was delayed by at most 0.5 seconds during the fill. A 2,000-meter run was not made; the numbers scale with the number of addresses (about 10 times the
+requests and rows of the 217-meter case).
 
 Related: [Assets and kinds](assets-and-kinds.md), [Storage](storage.md), [Install and run](install-and-run.md), [Field debugging](field-debugging.md), [Adding a connector](adding-a-connector.md)
