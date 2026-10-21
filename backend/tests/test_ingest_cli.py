@@ -58,7 +58,7 @@ async def test_the_dry_run_prints_the_plan_asks_nothing_and_writes_nothing_anywh
         "Windows (1), each asked in turn, oldest first:",
         "    1. 2026-03-10 06:00 UTC to 2026-03-10 12:00 UTC",
         "About 360 rows are expected.",
-        "Nothing was written; run again with --yes to fill it.",
+        "Dry run: nothing was written; run again with --yes to fill it.",
     ]
 
 
@@ -89,7 +89,7 @@ async def test_the_dry_run_says_what_the_first_reading_rule_does_and_what_liftin
     assert await command(world, "--start", "2026-03-10T06:00:00Z", "--end", CLOCK, "--before-first-reading") == 0
     lifted = capsys.readouterr().out
     assert "BEFORE the first reading of a point" in lifted and "changes the past figures of the assets above it" in lifted
-    assert lifted.rstrip().endswith("Nothing was written; run again with --yes to fill it.")
+    assert lifted.rstrip().endswith("Dry run: nothing was written; run again with --yes to fill it.")
     assert world.calls == []
 
 
@@ -98,7 +98,7 @@ async def test_a_source_nobody_has_read_yet_has_nothing_to_fill_and_the_command_
     said = "Nothing to fill: no mapped point of this source has a reading yet."
     assert await command(world, "--start", "2026-03-10T06:00:00Z", "--end", CLOCK) == 0
     out, err = lines(capsys)
-    assert err == [] and out[-2:] == [said, "Nothing was written."]  # a plan with no window has no "run again with --yes" to offer
+    assert err == [] and out[-2:] == [said, "Dry run: nothing was written."]  # a plan with no window has no "run again with --yes" to offer
     assert await command(world, "--start", "2026-03-10T06:00:00Z", "--end", CLOCK, "--yes") == 0
     assert lines(capsys) == ([said], [])
     assert world.calls == []

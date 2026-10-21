@@ -1393,13 +1393,27 @@ def test_a_history_that_could_not_be_read_is_one_line_and_the_health_lines_stay(
     assert lines[0].startswith('#3 "Main SCADA": 12.0 reads/min') and lines[1] == "   history: unavailable (ProgrammingError (UndefinedTableError))"
 
 
-def test_the_history_line_is_dropped_with_the_health_block_of_a_source_that_has_no_problem():
-    base = busy(200, 500, failing=133)
-    data = replace(base, health=tuple(SourceHealth(i, 120, 3, 2.0, history()) for i in range(1, 201)))
-    lines = lines_of(render(data, "summary", ident), "SOURCE HEALTH")
-    heads = [i for i, line in enumerate(lines) if line.startswith("#")]
-    assert 0 < len(heads) < 200  # the sources that look healthy were left out of a report that did not fit
-    assert [line for line in lines if "history:" in line] == [lines[i + 1] for i in heads]  # one under each kept health line, none left over
+def test_a_busy_summary_with_a_history_line_on_every_source_still_keeps_every_source_in_one_part():
+    """The 40-source summary of the M7 test fits only once the health lines of the healthy sources are gone. A line of history on every
+    source must not push it past that point (into dropping sources): the lines of a backfill that is fine go next, and the lines
+    that say something is wrong stay."""
+    def state(i: int) -> HistoryInfo:
+        if i == 33:  # the source whose check fails
+            return history("backing_off", failures=4, next_try_at=THROUGH + timedelta(minutes=30), last_error="unreachable: no route")
+        return history("not_supported") if i == 6 else history()
+
+    data = replace(busy(40, 500, failing=33), health=tuple(SourceHealth(i, 120, 3, 2.0, state(i)) for i in range(1, 41)))
+    body = render(data, "summary", ident)
+    parts = finalize(body, "abc1234-dirty", NOW)
+    assert len(parts.parts) == 1 and len(parts.parts[0].text) <= 12_000 and verify_paste(parts.text()).ok
+    assert len([line for line in lines_of(body, "SOURCES") if line.startswith("#")]) == 40 and "more sources omitted" not in body
+    lines = lines_of(body, "SOURCE HEALTH")
+    assert any(line.startswith("... health of ") and "without a problem omitted" in line for line in lines)  # the healthy blocks went
+    mine = [(lines[i - 1].split(":")[0], line.split(",")[0]) for i, line in enumerate(lines) if line.startswith("   history:")]
+    assert mine == [('#6 "Plant 6"', "   history: not supported"), ('#33 "Plant 33"', "   history: backing off")]  # each under its own source
+    # and with room to spare every source keeps its line, the idle ones too
+    roomy = render(data, "summary", ident, max_chars=60_000)
+    assert len([line for line in lines_of(roomy, "SOURCE HEALTH") if line.startswith("   history:")]) == 40
 
 
 def test_the_history_line_keeps_a_source_that_has_no_row_out_of_the_pair_of_lines():

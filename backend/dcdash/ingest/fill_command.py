@@ -158,9 +158,9 @@ async def _fill(
             elif number == head + 1:
                 _say(f"       ... {shown - head - tail} more windows ...")
         _say(f"About {report.expected_rows:,} rows are expected.")
-        _say("Nothing was written; run again with --yes to fill it.")
+        _say("Dry run: nothing was written; run again with --yes to fill it.")
     else:
-        _say("Nothing was written.")
+        _say("Dry run: nothing was written.")
     return 0
 
 

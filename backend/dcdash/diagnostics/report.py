@@ -80,10 +80,12 @@ CAPS: dict[str, tuple[int, int]] = {
     "journal": (30, 100), "points": (10, 20), "audit": (10, 20), "api_errors": (5, 20), "scans": (3, 5), "health_errors": (3, 10),
 }
 # How a body that is too long is cut down, in order: (knob, floor); a knob is halved until it reaches its floor. The tails go first
-# (M7), then the health lines of healthy sources, and only then the sources themselves (`source_limit`), which M7 wants kept whole.
+# (M7), then the health lines of healthy sources, then the history lines of the sources whose backfill is fine (w30: a line each, so
+# a few dozen of them must not be what pushes a report into dropping sources), and only then the sources themselves (`source_limit`),
+# which M7 wants kept whole.
 TRIM_STEPS = (
-    ("journal", 5), ("audit", 2), ("scans", 1), ("api_errors", 2), ("points", 3), ("health_sources", 0), ("health_errors", 1),
-    ("journal", 0), ("audit", 0), ("scans", 0), ("api_errors", 0), ("points", 0), ("health_errors", 0),
+    ("journal", 5), ("audit", 2), ("scans", 1), ("api_errors", 2), ("points", 3), ("health_sources", 0), ("history_lines", 0),
+    ("health_errors", 1), ("journal", 0), ("audit", 0), ("scans", 0), ("api_errors", 0), ("points", 0), ("health_errors", 0),
 )
 SUMMARY_CONFIG_FIELDS = ("endpoint", "url", "host", "port", "unit_id", "security_policy")  # what a summary shows of a config
 JOURNAL_FETCH = (300, 1000)  # events read (summary, full): the journal lines and the distinct errors per source come from these
@@ -1353,7 +1355,9 @@ class _Renderer:
                 bad = f", {item.bad / item.reads:.1%} bad" if item.reads else ""
                 reads = f"{item.reads / HEALTH_WINDOW_MINUTES:.1f} reads/min"
             lines.append(f"{self.src(item.source_id)}: {reads}{bad}, {newest}")
-            if item.history is not None:  # a source the backfill never ran for says nothing: every older report stays as it was
+            # A source the backfill never ran for says nothing: every older report stays as it was. A tight report keeps only the
+            # history lines that say something is wrong (see TRIM_STEPS).
+            if item.history is not None and (self.caps["history_lines"] or self._history_trouble(item.history)):
                 lines.append(self._history_line(item.history))
             if isinstance(events, Unavailable):
                 lines.append(f"   errors: journal unavailable ({events.error})")
@@ -1370,6 +1374,12 @@ class _Renderer:
         if healthy_left_out:
             lines.append(f"... health of {healthy_left_out} sources without a problem omitted to fit one part")
         return lines or ["no sources"]
+
+    @staticmethod
+    def _history_trouble(info: HistoryInfo | Unavailable) -> bool:
+        """A history that is not simply idle or filling: the backfill is backing off or cannot read history, has an error on record,
+        or could not be read at all."""
+        return isinstance(info, Unavailable) or info.state in ("backing_off", "not_supported") or bool(info.last_error)
 
     def _history_line(self, info: HistoryInfo | Unavailable) -> str:
         """One line under a source's health: where the history backfill stands, in plain words and UTC."""
@@ -1694,6 +1704,7 @@ def render(data: ReportData, detail: Detail, transform: Transform, *, masked: bo
     column = detail == "full"
     caps = {name: pair[column] for name, pair in CAPS.items()}
     caps["health_sources"] = 1  # 0: only the sources with a problem keep their SOURCE HEALTH lines
+    caps["history_lines"] = 1  # 0: only the history lines of a backfill in trouble stay
     source_limit: int | None = None
     count = 0 if isinstance(data.sources, Unavailable) else len(data.sources)
     memo: dict[str, str] = {}  # one transform per distinct text, however many times the body is rebuilt
