@@ -19,6 +19,7 @@ from dcdash.core import journal
 from dcdash.core.build import build_info
 from dcdash.core.config import get_settings
 from dcdash.core.pg import CONFIG_CHANNEL, JOBS_CHANNEL, create_pool, listen_forever
+from dcdash.ingest.backfill import backfill_loop
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +93,7 @@ async def run(stop: asyncio.Event | None = None, factory: ConnectorFactory = cre
         asyncio.create_task(reload_loop()),
         asyncio.create_task(run_job_loop(pool, factory, jobs_ready, stop)),
         asyncio.create_task(housekeeping_loop(pool, stop=stop)),
+        asyncio.create_task(backfill_loop(pool, factory, stop)),  # fills holes from a source's history; off when DCDASH_HISTORY_EVERY <= 0
         asyncio.create_task(heartbeat_loop(pool, stop=stop)),
         asyncio.create_task(certificate_loop(pool, os.environ.get("DCDASH_TLS_CERT", ""), stop)),
     ]

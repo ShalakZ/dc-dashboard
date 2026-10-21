@@ -12,6 +12,12 @@ from dcdash.simulator.model import Simulator
 from helpers import make_asset, make_mapping, make_point, make_source, sim_factory, wait_for
 
 
+@pytest.fixture(autouse=True)
+def _no_history_backfill(monkeypatch):
+    """The history loop (w30) has its own tests (test_ingest_backfill.py); in these tests it stays switched off."""
+    monkeypatch.setenv("DCDASH_HISTORY_EVERY", "0")
+
+
 async def test_collector_runs_jobs_and_collects_after_config_change(db):
     sim_app = create_sim_app(Simulator(), api_key="k")
     source = await make_source(db, secret="k")
@@ -284,3 +290,43 @@ async def test_close_down_cancels_the_journal_writes_in_flight_before_it_closes_
     pool = Pool()
     await collector_main._close_down([], _Scheduler(), _Writer(), pool)
     assert seen == [0] and pool.closed
+
+
+async def test_run_starts_the_history_loop_and_stops_it_within_the_shutdown_time(db, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from dcdash.simulator.historian import HistorianConfig, create_historian_app
+    from helpers import insert_readings
+
+    monkeypatch.setenv("DCDASH_HISTORY_EVERY", "0.2")  # a cycle five times a second, the first one after the first wait
+    historian = create_historian_app(HistorianConfig(meters=1), api_key="k")  # the real clock, as the collector's own
+    source = await make_source(db, config={"url": "http://hist"}, secret="k")
+    point = await make_point(db, source, "M001_kWh")
+    await make_mapping(db, point, await make_asset(db, "M001"), "energy_kwh", 60)
+    await insert_readings(db, point, datetime.now(timezone.utc) - timedelta(hours=3, seconds=-17), 1, [1.0])  # its first live reading
+    stop = asyncio.Event()
+    task = asyncio.create_task(run(stop, sim_factory(historian)))
+    try:
+        async def filled() -> str:
+            return await db.fetchval("SELECT state || ':' || (answered_through IS NOT NULL) FROM history_status WHERE source_id = $1", source)
+
+        await wait_for(filled, "idle:true")
+        assert await db.fetchval("SELECT rows_new FROM history_status WHERE source_id = $1", source) > 100
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=collector_main.SHUTDOWN_SECONDS)
+
+
+async def test_a_wrong_history_setting_is_logged_and_does_not_stop_the_collector(db, monkeypatch, caplog):
+    monkeypatch.setenv("DCDASH_HISTORY_EVERY", "often")
+    stop = asyncio.Event()
+    task = asyncio.create_task(run(stop, sim_factory(create_sim_app(Simulator(), api_key="k"))))
+    try:
+        async def beats() -> int:
+            return await db.fetchval("SELECT count(*) FROM settings WHERE key = 'collector_heartbeat'")
+
+        await wait_for(beats, 1)  # the collector came up anyway
+        assert "the history backfill is off: DCDASH_HISTORY_EVERY must be a number, not 'often'." in caplog.text
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=collector_main.SHUTDOWN_SECONDS)
