@@ -13,8 +13,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError
 
 from dcdash.api import (
-    asset_kinds, asset_move, assets, audit, auth, billing, billing_check, dashboards, data, diagnostics, discovery, display, displays, health, jobs,
-    mappings, roles, scans, settings, site, sources, storage, stream, tariffs, tls, users, widget_data,
+    asset_kinds, asset_move, assets, audit, auth, billing, billing_check, dashboards, data, diagnostics, discovery, display, displays, health,
+    history_fill, imports, jobs,
+    mappings, roles, scans, settings, site, sources, storage, stream, tag_lists, tariffs, tls, users, widget_data,
 )
 from dcdash.api.error_recorder import ErrorRecorder
 from dcdash.api.settings import seed_general
@@ -140,6 +141,7 @@ def create_app() -> FastAPI:
         mappings.router, data.router, stream.router, users.router, settings.router, storage.router,
         scans.router, discovery.router, audit.router, site.router, tariffs.router, billing.router, billing_check.router,
         dashboards.router, widget_data.router, tls.router, diagnostics.router, roles.router, display.router, displays.router,
+        imports.router, tag_lists.router, history_fill.router,
     ):
         app.include_router(router)
     return app

@@ -16,3 +16,8 @@ HISTORY_FAILED = "history.failed"
 # history.closed_month: NEW readings landed in a month an administrator has closed. The readings are stored, the frozen figures of
 # the closed month do not change (Billing shows "today's figures differ"); the detail names the month. One per month and cycle. info.
 HISTORY_CLOSED_MONTH = "history.closed_month"
+
+# import.finished: one real import of a file into a source finished (or stopped half-way); the detail holds the counts (read, new,
+# already, differing, rejected, unknown rows), the closed months it wrote into and whether it was complete. Never a value. info
+# (warning when it stopped half-way).
+IMPORT_FINISHED = "import.finished"
