@@ -307,8 +307,9 @@ class ParseContext:
     retention_days: int
     closed: frozenset[str] = frozenset()  # the closed billing months, "YYYY-MM"
     site_zone: ZoneInfo | None = None  # needed only when there are closed months
-    # Set when the rollups keep minutes older than the oldest raw reading stored before the run: a row before it is rejected, because
-    # storing it would lower that floor and let a refresh delete the summaries of the other meters (C1 of the adversarial pass).
+    # Set when the rollups keep minutes whose raw readings are gone: the first whole hour after the newest of them. A row before it is
+    # rejected, because storing it would lower the floor of the raw readings and let a refresh delete the summaries of the other
+    # meters (C1 of the adversarial pass).
     reject_before: datetime | None = None
 
 
