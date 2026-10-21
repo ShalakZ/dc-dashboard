@@ -18,8 +18,10 @@ What a cycle does for one source (the one that holds its lease):
 A failure never moves a mark past data that was not answered. Transient trouble (timeout, unreachable, rate limited, a malformed
 answer) is retried inside the cycle after 30, 60 and 120 seconds (what the source asked for wins when larger, up to 15 minutes; a
 longer wait ends the cycle at once) and then ends the cycle in `backing_off` with a `next_try_at`; a source that refuses our
-credentials waits 15 minutes; a source that cannot answer a history read waits a day. Only a batch that three tries in a row could not get an answer for (a cut that makes no progress, or the same bad
-answer in three cycles) is SET ASIDE: counted and journaled, so one poisoned address cannot hold a whole source for ever.
+credentials waits 15 minutes; a source that cannot answer a history read waits a day. Only a batch that three tries in a row could
+not get an answer for (a cut that makes no progress, or the same bad answer in three cycles) is SET ASIDE: counted and journaled,
+so one poisoned address cannot hold a whole source for ever. In the newest part of the window (up to now) a source that is complete
+only up to its own, earlier "now" is not struck: the mark follows what it vouched for and the rest is asked next cycle.
 
 The status states are the four the table allows (`idle`, `filling`, `backing_off`, `not_supported`): there is no `failed`, a failure is
 `backing_off` with `last_error` and `next_try_at`."""
@@ -939,9 +941,10 @@ class Backfill:
         (clamped, slice by slice), journals what it filled like a cycle does, and returns the counts and the sentence
         `12,480 rows read, 12,000 new, 480 already there, 0 differing, 0 rejected`.
 
-        Refused with FillRefused (LeaseHeld, a FillRefused, when the lease is taken), in plain words: a start older than the raw retention minus a day, an end in the future, an empty
-        range, a source that cannot read history, and a refresh that would delete history. Before a point's first reading nothing
-        is stored unless `before_first_reading` is set; the dry run then says that it changes the past figures of a parent."""
+        Refused with FillRefused (LeaseHeld, a FillRefused, when the lease is taken), in plain words: a start older than the raw
+        retention minus a day, an end in the future, an empty range, a source that cannot read history, and a refresh that would
+        delete history. Before a point's first reading nothing is stored unless `before_first_reading` is set; the dry run then says
+        that it changes the past figures of a parent."""
         dry = dry_run and not yes
         if not dry and not yes:
             raise ValueError("a fill writes readings: pass yes=True to confirm it, or keep dry_run on to see what it would do")
