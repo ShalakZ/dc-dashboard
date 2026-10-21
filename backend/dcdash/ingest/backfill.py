@@ -23,7 +23,8 @@ longer wait ends the cycle at once) and then ends the cycle in `backing_off` wit
 credentials waits 15 minutes; a source that cannot answer a history read waits a day. Only a batch that three tries in a row could
 not get an answer for (a cut that makes no progress, or the same bad answer in three cycles) is SET ASIDE: counted and journaled,
 so one poisoned address cannot hold a whole source for ever. In the newest part of the window (up to now) a source that is complete
-only up to its own, earlier "now" is not struck: the mark follows what it vouched for and the rest is asked next cycle.
+only up to its own, earlier "now" is not struck: the mark follows what it vouched for and the rest is asked next cycle (also
+when a batch has been asked five pages there already, whatever the pages held: a lagging, dense source gains seconds a page).
 
 The status states are the four the table allows (`idle`, `filling`, `backing_off`, `not_supported`): there is no `failed`, a failure is
 `backing_off` with `last_error` and `next_try_at`."""
@@ -66,6 +67,7 @@ AUTH_WAIT_SECONDS = 900.0
 NOT_SUPPORTED_WAIT_SECONDS = 86_400.0
 FAILED_REPEAT_SECONDS = 900  # history.failed is repeated at most this often while a failure lasts
 STRIKES = 3  # failed tries of one batch before it is set aside
+NEWEST_CONTINUATIONS = 5  # pages after the first that a batch is asked in the newest slice of a cycle; the rest is for the next cycle
 COVERED = 1.0  # a stored good sample STRICTLY closer than this (in mapping intervals) already covers a sample: a full interval, because the live poll drifts
 SPACING = 0.9  # kept samples are at least this far apart (in mapping intervals): holes fill at the mapping's density
 SKEW = normalise.SKEW  # how far a source's idea of "now" may lag ours before a short answer counts as a cut
@@ -181,6 +183,15 @@ class _Span:
         if first is not None and last is not None:
             self.first = first if self.first is None else min(self.first, first)
             self.last = last if self.last is None else max(self.last, last)
+
+
+@dataclass
+class _Cursor:
+    """Where the next request of one batch starts, and how many pages after the first it has been asked for in the newest slice.
+    Kept across the tries of a batch, so that a retry continues where the failed one stopped and does not start the count again."""
+
+    at: datetime
+    continued: int = 0
 
 
 @dataclass
@@ -743,7 +754,7 @@ class Backfill:
         # not `hi`: the first slice of a first run starts at "now - lookback" and the newest slice ends at "now", and both move with
         # the clock, so the strikes would never add up to three.
         key = (run.source.id, rollups.hour_floor(lo), tuple(m.point_id for m in batch))
-        cursor = [lo]  # kept across tries, so a retry continues where the failed one stopped
+        cursor = _Cursor(lo)
         while True:
             try:
                 reached = await self._pages(run, batch, cursor, hi, wrote)
@@ -762,12 +773,12 @@ class Backfill:
             self._strikes.pop(key, None)
             return reached
 
-    async def _pages(self, run: _Run, batch: list[Mapped], cursor: list[datetime], hi: datetime, wrote: _Span) -> datetime:
-        """The answers for one batch from cursor[0] to `hi`, each continued from the previous one's `complete_until`."""
+    async def _pages(self, run: _Run, batch: list[Mapped], cursor: _Cursor, hi: datetime, wrote: _Span) -> datetime:
+        """The answers for one batch from `cursor.at` to `hi`, each continued from the previous one's `complete_until`."""
         addresses = [m.address for m in batch]
         limit = self._settings.max_rows  # what the batch was sized for; a source denser than its mapping is cut here, not by memory
         while True:
-            start = cursor[0]
+            start = cursor.at
             # Every address gets an `after`, also the first time: the connector needs it to tell the repeated autumn hour's second
             # pass from its first when a window starts inside it.
             page = await self._ask(run, addresses, start, hi, {a: run.received.get(a, start) for a in addresses}, limit)
@@ -796,7 +807,15 @@ class Backfill:
                 return max(until, start)
             if until <= start:
                 raise _NoProgress(f"the source answered up to {until.isoformat()} for a request that started at {start.isoformat()}")
-            cursor[0] = until
+            if newest and not run.strict:
+                # A source that lags and is dense gains a couple of seconds of rows a page (its clock moves while we ask), and every
+                # page holds rows, so none of them is "not yet": without a bound a cycle would ask once for every few seconds of the
+                # window, with every source after this one waiting. A cap of its own is a few minutes a page, so a few pages catch up.
+                # The mark follows what the source vouched for and the rest is asked next cycle: no strike, nothing is lost.
+                if cursor.continued >= NEWEST_CONTINUATIONS:
+                    return until
+                cursor.continued += 1
+            cursor.at = until
 
     async def _ask(
         self, run: _Run, addresses: list[str], lo: datetime, hi: datetime, after: dict[str, datetime], limit: int

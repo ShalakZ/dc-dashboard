@@ -941,6 +941,23 @@ async def test_a_source_that_cuts_at_a_smaller_row_cap_of_its_own_is_followed_to
     assert stored == [NOW - 4 * HOUR + k * MINUTE for k in range(2, 239)]  # (the two samples around the live row at 08:00:17 are covered by it)
 
 
+async def test_a_dense_source_that_lags_is_asked_at_most_six_times_a_batch_in_the_newest_slice_and_the_rest_is_left_for_the_next_cycle(db):
+    # A source whose clock is behind ours and that has a row in every other second: each page it answers holds a row and gains two
+    # seconds (its own "now" moves with the requests), so asking until it catches up would be a request per two seconds of the window.
+    async def lagging(call, number):
+        if number > 40:
+            raise ConnectorError("auth_failed", "runaway")  # keeps the test short on an engine that does not stop
+        world.clock.now += timedelta(seconds=2)
+        return HistoryPage([PointValue("M001_kWh", call.start + timedelta(seconds=1), 5.0)], call.start + timedelta(seconds=2))
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - HOUR}, script=lagging)
+    result = await world.cycle()
+    assert (result.state, result.set_aside, result.failures, len(world.calls)) == ("idle", 0, 0, 6)  # the first and five continuations
+    assert (await world.status())["answered_through"] == NOW - HOUR + timedelta(seconds=12) and world.engine._strikes == {}  # what it vouched for
+    assert (await world.cycle()).state == "idle"
+    assert len(world.calls) == 12 and world.calls[6].start == NOW - HOUR + timedelta(seconds=12)  # the next cycle goes on from there
+
+
 async def test_trouble_that_ends_resets_the_back_off_and_a_new_trouble_is_journaled_at_once(db):
     failing = {"on": True}
 
