@@ -7,6 +7,8 @@ import json
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from fastapi import HTTPException
+from starlette.requests import ClientDisconnect
 
 from dcdash.api import history_fill
 from dcdash.ingest.backfill import FillRefused
@@ -174,6 +176,82 @@ async def test_a_body_far_too_large_is_a_413_before_anything_else(client, db, po
     assert response.status_code == 413
 
 
+async def test_a_chunked_body_is_cut_when_it_passes_the_cap_not_read_whole(client, db, pooled):
+    await login_as(client, db)
+    source = await mapped_source(db)
+    pulled = 0
+
+    async def endless():
+        nonlocal pulled
+        for _ in range(200):
+            pulled += 1
+            yield b" " * 1000
+
+    response = await client.post(URL.format(source), content=endless(), headers={"content-type": "application/json"})  # no Content-Length
+    assert response.status_code == 413 and "far too large" in response.json()["detail"]
+    assert pulled <= 6  # the cap is 4096 bytes: the rest of the stream was never asked for
+    assert await db.fetchval("SELECT count(*) FROM jobs") == 0
+
+
+class Stream:
+    """The part of a request that `_read_body` uses: headers and a body that arrives in the chunks given."""
+
+    def __init__(self, parts, *, headers: dict | None = None, then=None) -> None:
+        self.headers, self._parts, self._then = headers or {}, parts, then
+
+    async def stream(self):
+        for part in self._parts:
+            yield part
+        if self._then is not None:
+            await self._then()
+
+
+async def test_a_body_that_trickles_in_is_cut_after_the_deadline(monkeypatch):
+    monkeypatch.setattr(history_fill, "BODY_SECONDS", 0.1)
+
+    async def stuck():
+        await asyncio.sleep(30)
+
+    with pytest.raises(HTTPException) as caught:
+        await history_fill._read_body(Stream([b"{"], then=stuck))
+    assert caught.value.status_code == 408 and "did not arrive in time" in caught.value.detail
+
+
+async def test_a_client_that_hangs_up_while_the_body_arrives_is_a_400(monkeypatch):
+    async def hang_up():
+        raise ClientDisconnect()
+
+    with pytest.raises(HTTPException) as caught:
+        await history_fill._read_body(Stream([b"{"], then=hang_up))
+    assert caught.value.status_code == 400 and "interrupted" in caught.value.detail
+
+
+async def test_a_declared_length_over_the_cap_is_refused_before_a_byte_is_read():
+    class Untouched(Stream):
+        async def stream(self):
+            raise AssertionError("the body was read")
+            yield b""
+
+    with pytest.raises(HTTPException) as caught:
+        await history_fill._read_body(Untouched([], headers={"content-length": "4097"}))
+    assert caught.value.status_code == 413
+
+
+async def test_the_session_is_in_no_transaction_while_the_body_is_read(client, db, pooled, monkeypatch):
+    await login_as(client, db)
+    source = await mapped_source(db)
+    real = history_fill._read_body
+    idle: list[int] = []
+
+    async def watching(request):
+        idle.append(await db.fetchval("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state = 'idle in transaction'"))
+        return await real(request)
+
+    monkeypatch.setattr(history_fill, "_read_body", watching)
+    assert (await request(client, source, body())).status_code == 202
+    assert idle == [0]  # a slow client would otherwise hold a database connection for as long as it takes
+
+
 async def test_a_source_whose_connector_keeps_no_history_is_refused_with_the_engines_sentence(client, db, pooled):
     await login_as(client, db)
     plc = await make_source(db, "plc", "opcua", {"endpoint": "opc.tcp://plc:4840"})
@@ -281,9 +359,16 @@ async def test_when_the_job_has_finished_the_next_request_is_accepted(client, db
         first = accepted.json()["job_id"]
 
 
-async def test_two_requests_at_once_make_one_job_and_one_409(client, db, pooled):
+async def test_requests_at_once_make_one_job_and_the_rest_a_409_because_of_the_lock(client, db, pooled, monkeypatch):
     await login_as(client, db)
     source = await mapped_source(db)
+    real = history_fill.enqueue
+
+    async def slowly(*args, **kwargs):
+        await asyncio.sleep(0.05)  # the window between the count and the insert: without the lock every request would see no job
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(history_fill, "enqueue", slowly)
     answers = await asyncio.gather(*(request(client, source, body()) for _ in range(4)))
     assert sorted(answer.status_code for answer in answers) == [202, 409, 409, 409]
     assert await db.fetchval("SELECT count(*) FROM jobs WHERE kind = 'history_fill'") == 1

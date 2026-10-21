@@ -8,8 +8,12 @@ collector (the job holds the source's lease and talks to the Historian; this pro
 At most ONE fill is waiting or running in total: a fill reads a Historian at the pace of its settings, and two at once would double
 that load on a device that is not ours. The request takes FILL_LOCK before it counts the jobs, so two requests cannot both pass.
 
+A collector restart fails a running fill (`fail_stale_jobs` marks the job as failed); running the same fill again adds only what is
+missing and refreshes the rollups once more, because a fill refreshes whole slices.
+
 Checks run cheapest first, so a request that cannot succeed costs the least: the content type, then the source (404, through the
 session), then the body, and only then the pool (503 when this process has none, as an isolation probe's app has not)."""
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -19,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import ClientDisconnect
 
 from dcdash.api.deps import current_user, get_db, require_permission
 from dcdash.api.jobs import enqueue
@@ -33,6 +38,7 @@ router = APIRouter(prefix="/api", tags=["history-fill"])
 FILL_LOCK = 7_312_002  # advisory-lock namespace (first int); the second is 0: one fill request at a time, whatever the source
 MAX_DAYS = 31  # the longest range one request may ask for; a longer one is filled in parts
 MAX_BODY_BYTES = 4096  # the body is two times and a flag
+BODY_SECONDS = 10  # two times and a flag: a slower upload than this is stuck
 FIELDS = ("start", "end", "before_first_reading")
 EXAMPLE = "2026-10-20T08:00:00Z or 2026-10-20T10:00:00+02:00"
 
@@ -77,6 +83,32 @@ def _read_request(body: Any) -> tuple[datetime, datetime, bool]:
     return start, end, lifted
 
 
+def _too_large() -> HTTPException:
+    return HTTPException(413, "that request is far too large for a fill")
+
+
+async def _read_body(request: Request) -> bytes:
+    """The body, read with a running cap and a short deadline: a declared length over the cap is refused before a byte is read, a body
+    that grows past it (a chunked one declares nothing) or trickles in is cut. (The idea of `api/tag_lists.py`, with this route's size.)"""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+        raise _too_large()
+    chunks: list[bytes] = []
+    size = 0
+    try:
+        async with asyncio.timeout(BODY_SECONDS):
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_BODY_BYTES:
+                    raise _too_large()
+                chunks.append(chunk)
+    except TimeoutError:
+        raise HTTPException(408, "the request did not arrive in time; try again") from None
+    except ClientDisconnect:
+        raise HTTPException(400, "the request was interrupted") from None
+    return b"".join(chunks)
+
+
 def _pool(request: Request) -> asyncpg.Pool:
     """The API process's asyncpg pool; 503 with a sentence when it has none (an app that was never started)."""
     pool = getattr(request.app.state, "pool", None)
@@ -97,12 +129,8 @@ async def fill_history(
     if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
         raise HTTPException(415, "send the range as JSON (Content-Type: application/json)")
     source = await get_source(db, source_id)  # 404
-    declared = request.headers.get("content-length", "")
-    if declared.isdigit() and int(declared) > MAX_BODY_BYTES:  # before the body is read at all
-        raise HTTPException(413, "that request is far too large for a fill")
-    raw = await request.body()
-    if len(raw) > MAX_BODY_BYTES:
-        raise HTTPException(413, "that request is far too large for a fill")
+    await db.commit()  # the session holds no transaction while the body is read: a slow client must not pin a connection
+    raw = await _read_body(request)
     try:
         body = json.loads(raw)
     except ValueError:

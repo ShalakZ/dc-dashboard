@@ -3,7 +3,7 @@ import logging
 import os
 from collections.abc import Iterable
 from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -17,6 +17,7 @@ from dcdash.core.audit import audit_pool, clip_error, scrub_strings, scrub_url_c
 from dcdash.core.config import get_settings
 from dcdash.core.crypto import decrypt
 from dcdash.diagnostics.check import CheckResult
+from dcdash.ingest import rollups
 from dcdash.ingest.backfill import Backfill, FillRefused, LeaseHeld
 from dcdash.ingest.settings import HistorySettings
 
@@ -119,11 +120,40 @@ async def _check_connection(
 FILL_POOL_SIZE = 2  # the lease's connection and one for everything else the engine asks the database meanwhile
 FILL_LEASE_RETRIES = 3  # the automatic cycle of the same source holds its lease while it fills: wait and ask again, this many times
 FILL_LEASE_WAIT_SECONDS = 30.0
+FILL_CLOSE_SECONDS = 10.0  # as the collector's own shutdown: a database that never answers must not hold a job worker
+FILL_START_MARGIN = timedelta(hours=1)  # a start less than this before the retention bound is moved up to it (see _inside_retention)
+FILL_BOUND_SLACK = timedelta(minutes=1)  # the engine reads its clock a moment after this module did: land a little inside the bound
 
 
 async def _fill_sleep(seconds: float) -> None:
     """Every wait of a fill job (the engine's request pace and the lease retries). A module-level name so that a test replaces it."""
     await asyncio.sleep(seconds)
+
+
+async def _inside_retention(pool: asyncpg.Pool, start: datetime) -> datetime:
+    """`start`, moved up to the engine's bound (`now - (retention - 1) days`, the oldest it accepts) when it is less than FILL_START_MARGIN
+    before it. The route accepted `start` at its request; the queue and the lease retries (up to 90 s each try) have moved the bound
+    forward since, and a fill that was accepted must not be refused for the minutes it waited. A start further before the bound is left
+    as it is, so the engine refuses it in its own words."""
+    retention = await rollups.raw_retention_days(pool)
+    oldest = datetime.now(UTC) - timedelta(days=retention - 1)
+    return max(start, oldest + FILL_BOUND_SLACK) if oldest - start < FILL_START_MARGIN else start
+
+
+async def _close_fill_pool(pool: asyncpg.Pool) -> None:
+    """Close the fill's own pool. asyncpg waits for the database without a deadline (see `collector.main._close_down`): after
+    FILL_CLOSE_SECONDS, or when the job is cancelled meanwhile, the connections are aborted instead."""
+    closing = asyncio.ensure_future(pool.close())
+    done: set[asyncio.Future] = set()
+    try:
+        done, _ = await asyncio.wait({closing}, timeout=FILL_CLOSE_SECONDS)
+    finally:
+        if not done:
+            log.warning("closing the pool of a history fill did not finish in %.0f s: aborting its connections", FILL_CLOSE_SECONDS)
+            pool.terminate()
+            closing.cancel()
+    if done and closing.exception() is not None:  # retrieved, so that it is not reported as never retrieved
+        log.warning("closing the pool of a history fill failed: %s", type(closing.exception()).__name__)
 
 
 async def _history_fill(
@@ -137,7 +167,11 @@ async def _history_fill(
     job's error: the runner stores `{"error": sentence}` for an exception, scrubbed of the source's credentials."""
     settings = HistorySettings.from_env(os.environ)  # a ValueError names the variable that is wrong
     known = list(known)
-    start, end = datetime.fromisoformat(params["start"]), datetime.fromisoformat(params["end"])
+    try:  # the route wrote these; a job row that was written by hand may lack them
+        source_id = params["source_id"]
+        start, end = datetime.fromisoformat(params["start"]), datetime.fromisoformat(params["end"])
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError("the fill job does not say which source and which range (source_id, start and end): ask for the fill again") from None
     try:
         own = await asyncpg.create_pool(
             get_settings().database_url, min_size=1, max_size=FILL_POOL_SIZE, init=pg._init_connection
@@ -149,8 +183,8 @@ async def _history_fill(
         for attempt in range(FILL_LEASE_RETRIES + 1):
             try:
                 report = await engine.fill_range(
-                    params["source_id"], start, end, before_first_reading=bool(params.get("before_first_reading")),
-                    dry_run=False, yes=True,
+                    source_id, await _inside_retention(own, start), end,
+                    before_first_reading=bool(params.get("before_first_reading")), dry_run=False, yes=True,
                 )
                 break
             except LeaseHeld:
@@ -160,11 +194,13 @@ async def _history_fill(
     except FillRefused as refused:  # LeaseHeld included, once the retries are used up: the engine's own sentence
         raise RuntimeError(clip_error(scrub_url_credentials(str(refused), known))) from None
     except Exception as exc:  # whatever else: a sentence with the class, scrubbed, never a traceback that could quote a credential
+        # The runner logs only the sentence: the stack stays in the collector's log, which hides URL credentials (install_log_scrub).
+        log.warning("history fill of source %s failed", source_id, exc_info=True)
         raise RuntimeError(
             f"the fill failed: {type(exc).__name__}: {clip_error(scrub_url_credentials(str(exc), known), 300)}"
         ) from None
     finally:
-        await own.close()
+        await _close_fill_pool(own)
     return {
         "ok": True, "text": report.text, "read": report.read, "new": report.new, "already": report.already,
         "differing": report.differing, "rejected": report.rejected,

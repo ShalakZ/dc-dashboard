@@ -15,7 +15,9 @@ from dcdash.connectors.base import ConnectorError
 from dcdash.core.crypto import encrypt
 from dcdash.ingest.backfill import LEASE_KEY
 from dcdash.simulator.historian import HistorianConfig, create_historian_app
-from test_ingest_backfill import HOUR, KWH, Clock, Sleeper, factory_for, make_world
+from test_ingest_backfill import HOUR, KWH, MINUTE, Clock, Sleeper, factory_for, make_world
+
+DAY = timedelta(days=1)
 
 SECRET = "hist-key-Zq9-secret"
 LEASE_SENTENCE = "the history backfill (or another fill) is working on this source right now; wait for it to finish and run the fill again"
@@ -121,6 +123,95 @@ async def test_the_job_runs_on_a_pool_of_its_own_with_two_connections_and_closes
     assert own.is_closing()  # closed in `finally`, so the collector keeps no connection of the fill
 
 
+def spy_on_pools(monkeypatch) -> list[asyncpg.Pool]:
+    """The pools the job opens for itself, in order."""
+    made: list[asyncpg.Pool] = []
+    real = asyncpg.create_pool
+
+    def spy(*args, **kwargs):
+        async def make():
+            made.append(await real(*args, **kwargs))
+            return made[-1]
+
+        return make()
+
+    monkeypatch.setattr(jobs_module.asyncpg, "create_pool", spy)
+    return made
+
+
+async def test_the_pool_is_closed_whatever_ends_the_fill(db, monkeypatch):
+    world_, now = await world(db)
+    made = spy_on_pools(monkeypatch)
+    refused = await add_job(db, world_.source, now - timedelta(days=45), now - timedelta(days=44))  # the engine refuses it
+    await run(db, world_)
+    assert (await finished(db, refused))["status"] == "failed"
+    rejected = await add_job(db, world_.source, now - 8 * HOUR, now)  # the source refuses our key at the first request
+
+    async def refuse_key(call, number):
+        raise ConnectorError("auth_failed", "the key was refused")
+
+    await asyncio.wait_for(run_pending_jobs(db, factory_for(world_.app, world_.calls, refuse_key)), 120)
+    assert (await finished(db, rejected))["status"] == "failed"
+    assert len(made) == 2 and all(pool.is_closing() for pool in made)
+
+
+async def test_an_unexpected_error_is_logged_with_its_stack_and_the_job_gets_a_sentence(db, monkeypatch, caplog):
+    world_, now = await world(db)
+    made = spy_on_pools(monkeypatch)
+
+    async def broken(self, *args, **kwargs):
+        raise KeyError("an engine bug")
+
+    monkeypatch.setattr(jobs_module.Backfill, "fill_range", broken)
+    job_id = await add_job(db, world_.source, now - 8 * HOUR, now)
+    with caplog.at_level("WARNING", logger=jobs_module.log.name):
+        await run(db, world_)
+    row = await finished(db, job_id)
+    assert row["status"] == "failed" and row["result"] == {"error": "the fill failed: KeyError: 'an engine bug'"}  # no stack in the stored text
+    [record] = [r for r in caplog.records if r.getMessage() == f"history fill of source {world_.source} failed"]
+    assert record.exc_info and record.exc_info[0] is KeyError  # the stack is in the log
+    assert made[0].is_closing()
+
+
+class HangingClose:
+    """A pool whose close() never answers, as with a database that accepted the connection and went quiet."""
+
+    def __init__(self, pool: asyncpg.Pool) -> None:
+        self._pool = pool
+        self.terminated = False
+
+    def __getattr__(self, name: str):
+        return getattr(self._pool, name)
+
+    async def close(self) -> None:
+        await asyncio.Event().wait()
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self._pool.terminate()
+
+
+async def test_a_pool_that_will_not_close_is_aborted_after_the_deadline_and_the_job_keeps_its_result(db, monkeypatch):
+    world_, now = await world(db)
+    monkeypatch.setattr(jobs_module, "FILL_CLOSE_SECONDS", 0.2)
+    made: list[HangingClose] = []
+    real = asyncpg.create_pool
+
+    def spy(*args, **kwargs):
+        async def make():
+            made.append(HangingClose(await real(*args, **kwargs)))
+            return made[-1]
+
+        return make()
+
+    monkeypatch.setattr(jobs_module.asyncpg, "create_pool", spy)
+    job_id = await add_job(db, world_.source, now - 8 * HOUR, now)
+    await run(db, world_, wait=30)  # without the deadline this waits for ever
+    row = await finished(db, job_id)
+    assert row["status"] == "done" and row["result"]["ok"] is True and row["result"]["new"] > 400
+    assert made[0].terminated
+
+
 async def test_a_job_that_cannot_open_its_pool_says_the_class_and_nothing_else(db, monkeypatch):
     world_, now = await world(db)
 
@@ -192,6 +283,51 @@ async def test_a_range_the_engine_refuses_fails_the_job_with_its_sentence(db):
     row = await finished(db, job_id)
     assert row["status"] == "failed" and set(row["result"]) == {"error"}
     assert "the raw retention is 30 days" in row["result"]["error"]
+    assert world_.calls == []
+
+
+async def test_a_start_just_before_the_retention_bound_is_moved_up_so_a_wait_does_not_turn_it_into_a_refusal(db):
+    world_, now = await world(db)
+    bound = datetime.now(UTC) - timedelta(days=29)  # 30 days of raw retention, minus a day: the oldest start the engine accepts
+    job_id = await add_job(db, world_.source, bound - 30 * MINUTE, bound + 2 * HOUR)  # accepted by the route a little while ago
+    await run(db, world_)
+    row = await finished(db, job_id)
+    assert row["status"] == "done" and row["result"]["ok"] is True and row["result"]["text"].startswith("Nothing to fill")
+
+
+async def test_only_a_start_within_an_hour_of_the_bound_is_moved(db):
+    bound = datetime.now(UTC) - timedelta(days=29)
+    for before in (MINUTE, 30 * MINUTE, 59 * MINUTE):
+        moved = await jobs_module._inside_retention(db, bound - before)
+        assert bound <= moved <= bound + 2 * MINUTE
+    for start in (bound - 61 * MINUTE, bound - 2 * HOUR, bound - timedelta(days=40), bound + HOUR, bound + 5 * DAY):
+        assert await jobs_module._inside_retention(db, start) == start  # earlier or later: as it came
+
+
+async def test_a_start_further_before_the_bound_still_gets_the_engines_sentence(db):
+    world_, now = await world(db)
+    bound = datetime.now(UTC) - timedelta(days=29)
+    job_id = await add_job(db, world_.source, bound - 2 * HOUR, bound + 2 * HOUR)
+    await run(db, world_)
+    row = await finished(db, job_id)
+    assert row["status"] == "failed" and "the raw retention is 30 days" in row["result"]["error"]
+    assert world_.calls == []
+
+
+async def test_a_job_row_without_its_range_gets_a_sentence_not_a_bare_key_error(db):
+    world_, now = await world(db)
+    sentence = "the fill job does not say which source and which range (source_id, start and end): ask for the fill again"
+    for params in (
+        {"source_id": world_.source, "end": now.isoformat()},  # no start
+        {"source_id": world_.source, "start": now.isoformat()},  # no end
+        {"start": (now - HOUR).isoformat(), "end": now.isoformat()},  # no source
+        {"source_id": world_.source, "start": 7, "end": now.isoformat()},  # not a time
+        {"source_id": world_.source, "start": "last week", "end": now.isoformat()},
+    ):
+        job_id = await db.fetchval("INSERT INTO jobs (kind, params) VALUES ('history_fill', $1) RETURNING id", params)
+        await run(db, world_)
+        row = await finished(db, job_id)
+        assert row["status"] == "failed" and row["result"] == {"error": sentence}, params
     assert world_.calls == []
 
 
