@@ -22,7 +22,16 @@ export function mockFetch(routes: Routes) {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const method = (init?.method ?? "GET").toUpperCase();
       const path = url.replace(/^https?:\/\/[^/]+/, "").split("?")[0];
-      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      // A raw body (the CSV of an import or a tag list) is not JSON: a test sees it as the text that was sent.
+      const sent = init?.body ? String(init.body) : undefined;
+      let body: unknown = sent;
+      if (sent !== undefined) {
+        try {
+          body = JSON.parse(sent);
+        } catch {
+          body = sent;
+        }
+      }
       calls.push({ method, path, body });
       const handler = routes[`${method} ${path}`];
       if (handler === undefined) {
