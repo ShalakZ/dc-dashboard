@@ -637,6 +637,8 @@ export interface ImportReport {
   rows_read: number; new: number; already: number; differing: number; rejected: number; unknown_rows: number;
   unknown_tags: { count: number; names: string[] };
   rejected_by: Record<string, number>;
+  /** Accepted rows that were stored as BAD quality (they are part of `new`, and count in no figure), by the label of their quality code. */
+  bad_quality?: Record<string, number>;
   closed_months: Record<string, number>;
   differing_samples: ImportDifference[];
   problems: ImportProblem[]; problems_total: number;

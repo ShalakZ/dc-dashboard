@@ -79,6 +79,7 @@ interface Note { text: string; error: boolean }
 function ReportView({ report }: { report: ImportReport }) {
   const closed = closedMonthLines(report);
   const reasons = Object.entries(report.rejected_by).filter(([, n]) => n > 0).sort(([a, x], [b, y]) => y - x || a.localeCompare(b));
+  const badQuality = Object.entries(report.bad_quality ?? {}).filter(([, n]) => n > 0).sort(([a, x], [b, y]) => y - x || a.localeCompare(b));
   const names = report.unknown_tags.names;
   const valueText = (v: number | null) => (v === null ? "no value" : String(v));
   return (
@@ -112,6 +113,13 @@ function ReportView({ report }: { report: ImportReport }) {
           <ul className="import-list">
             {reasons.map(([code, n]) => <li key={code}>{rejectedText(code)}: {rowsText(n)}</li>)}
           </ul>
+        </div>
+      )}
+      {badQuality.length > 0 && (
+        <div>
+          <p className="import-head">Stored with bad quality</p>
+          <p className="muted">These rows are part of the new rows and are kept, but they do not count in any figure.</p>
+          <ul className="import-list">{badQuality.map(([label, n]) => <li key={label}>{label}: {rowsText(n)}</li>)}</ul>
         </div>
       )}
       {report.unknown_rows > 0 && (

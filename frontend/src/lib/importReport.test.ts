@@ -4,7 +4,7 @@ import { CLOSED_MONTH_NOTE, closedMonthLines, importButtonText, importSentence, 
 const CODES = [
   "naive_time_without_zone", "local_time_does_not_exist", "ambiguous_local_time", "later_than_now_plus_5_minutes", "older_than_raw_retention",
   "not_a_time", "not_a_number", "value_out_of_range", "empty_value", "unit_differs_from_mapping", "unit_not_valid_for_metric",
-  "interval_energy_in_counter_point", "point_deleted", "duplicate_in_file", "conflicting_duplicate_in_file",
+  "interval_energy_in_counter_point", "point_deleted", "duplicate_in_file", "conflicting_duplicate_in_file", "malformed_line", "bad_tag",
 ];
 
 const report = (over: Partial<ImportReport> = {}): ImportReport => ({

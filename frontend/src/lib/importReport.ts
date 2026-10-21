@@ -14,6 +14,8 @@ const REJECTED: Record<string, string> = {
   unit_differs_from_mapping: "The unit differs from the unit the point is mapped with",
   unit_not_valid_for_metric: "The unit is not valid for the point's metric",
   interval_energy_in_counter_point: "Energy per period cannot go into a point mapped as a running energy counter",
+  malformed_line: "The line is not a well-formed row (an unbalanced quote, or too few or too many cells)",
+  bad_tag: "The tag is empty or too long",
   point_deleted: "The point was deleted while the file was being read",
   duplicate_in_file: "The same reading is in the file more than once",
   conflicting_duplicate_in_file: "The same time is in the file again with another value (the first one is used)",

@@ -744,3 +744,18 @@ describe("ImportDialog: profiles", () => {
     expect(screen.getByRole("button", { name: "Profile fields" })).toHaveAttribute("aria-expanded", "true");
   });
 });
+
+describe("ImportDialog: rows stored with bad quality", () => {
+  it("lists them by quality label and says they count in no figure", async () => {
+    await checked(importRoute(report({ new: 5, bad_quality: { uncertain: 3, "unknown:7": 2 } })));
+    const dialog = screen.getByRole("dialog");
+    const section = within(dialog).getByText("Stored with bad quality").parentElement as HTMLElement;
+    expect(section).toHaveTextContent("do not count in any figure");
+    expect(within(section).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["uncertain: 3 rows", "unknown:7: 2 rows"]);
+  });
+
+  it("shows no such block when no row was stored with bad quality", async () => {
+    await checked(importRoute(report({ new: 5 })));
+    expect(within(screen.getByRole("dialog")).queryByText("Stored with bad quality")).toBeNull();
+  });
+});
