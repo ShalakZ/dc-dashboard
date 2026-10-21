@@ -753,7 +753,9 @@ stored and stays. Rejected: refused, counted by reason.
   [Field debugging](field-debugging.md#importing-a-file-by-command).
 
 **Map tag list...** A CSV with `tag`, `asset` (a path such as `Hall 1 / Row A / Rack 01`) and `metric`, optionally `unit`, `scale`,
-`interval_seconds`, `kind` (of an asset it creates) and `reading`; at most 1,000 lines. **Check list** is a dry run naming what it
+`interval_seconds`, `kind` (of an asset it creates) and `reading`; at most 1,000 lines. For a `file` source, every power line
+(`active_power_kw`) needs `interval_seconds`: the export's spacing in seconds (3600 for an hourly file), as a power reading becomes
+energy by its spacing. **Check list** is a dry run naming what it
 would create and every problem by line; it is all or nothing, one problem line creates nothing. Missing assets are created only with
 **Create missing assets** ticked. Points are created on `file` sources only; elsewhere an unknown tag is a problem (run Browse first).
 **Create N mappings** goes through only on a check of the text now in the dialog. **Undo** is offered for 10 seconds in the toast and
