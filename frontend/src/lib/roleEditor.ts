@@ -58,6 +58,8 @@ export const PERMISSION_NEEDS: Record<PermissionId, readonly PermissionId[]> = {
   "discovery.edit": ["discovery.view"],
   "discovery.scan": ["discovery.view"],
   "discovery.accept": ["discovery.view"],
+  // an import names a source and its points: the dialog lists the sources. There is no readings.view, so the area check in roleEditor.test.ts makes it an exception
+  "readings.import": ["sources.view"],
   "storage.view": [],
   "storage.edit": ["storage.view"],
   "settings.view": [],

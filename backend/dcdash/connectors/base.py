@@ -90,6 +90,10 @@ class Connector(ABC):
     config_schema: ClassVar[type[BaseModel]]
     default_ports: ClassVar[tuple[int, ...]] = ()
     supports_history: ClassVar[bool] = False
+    # False for a source that is never asked for values (the `file` type is filled by importing files): the poll loop skips it, and
+    # Test, Check connection and Browse neither run nor change its status.
+    polls: ClassVar[bool] = True
+    description: ClassVar[str] = ""  # one sentence under the type in the "Add source" form; empty for the types that explain themselves
 
     @classmethod
     async def probe(cls, host: str, port: int, timeout: float = 3.0) -> Claim | None:

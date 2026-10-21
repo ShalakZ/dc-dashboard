@@ -34,5 +34,6 @@ async def browse_source(pool: asyncpg.Pool, source_id: int, factory: ConnectorFa
     await pool.executemany(
         _UPSERT_POINT, [(source_id, d.address, d.name, d.data_type, d.unit_hint) for d in descriptors]
     )
-    await mark_source(pool, source_id, True)
+    if getattr(connector, "polls", True):  # a source that is never polled (`file`) keeps its status
+        await mark_source(pool, source_id, True)
     return len(descriptors)

@@ -46,7 +46,10 @@ async def _test_source(
         check = await connector.test()
     finally:
         await connector.close()
-    await mark_source(pool, source_id, check.ok, None if check.ok else scrub_url_credentials(check.message, known))
+    # A source that is never polled (`file`) keeps its status: "offline" or "online" would say something about a connection it does not have.
+    # getattr: a test factory may hand back a connector that is not a Connector subclass.
+    if getattr(connector, "polls", True):
+        await mark_source(pool, source_id, check.ok, None if check.ok else scrub_url_credentials(check.message, known))
     return asdict(check)
 
 
@@ -101,7 +104,7 @@ async def _check_connection(
         # The session was skipped because a step before it failed (dns, tcp, endpoints, certificates): the source cannot be reached,
         # and the first failed step says why. A failed diagnostic step while the session RAN decides nothing (handled above).
         decisive = next((step for step in result.steps if step.ok is False), None)
-    if decisive is not None and decisive.ok is not None:
+    if decisive is not None and decisive.ok is not None and getattr(connector, "polls", True):  # as in _test_source
         error = decisive.error or {}
         reason = error.get("message") or error.get("class") or "connection check failed"
         await mark_source(pool, source_id, decisive.ok, None if decisive.ok else scrub_url_credentials(reason, known))

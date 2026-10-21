@@ -61,10 +61,11 @@ REPORT_CONFIG_FIELDS: dict[str, tuple[str, ...]] = {
     "opcua": ("endpoint", "security_policy", "root_node", "timeout_seconds", "client_cert"),
     "modbus": ("host", "port", "unit_id", "profile", "timeout_seconds"),
     "simulator": ("url", "timeout_seconds"),
+    "file": (),  # a source filled by importing files has no configuration
 }
 # Fields that are deliberately never shown: "username" is half a credential (the report says only whether one is set), the key
 # path of the client certificate is of no use to a reader.
-EXCLUDED_CONFIG_FIELDS: dict[str, tuple[str, ...]] = {"opcua": ("username", "client_key"), "modbus": (), "simulator": ()}
+EXCLUDED_CONFIG_FIELDS: dict[str, tuple[str, ...]] = {"opcua": ("username", "client_key"), "modbus": (), "simulator": (), "file": ()}
 AUTH_FIELDS: dict[str, str] = {"opcua": "username"}  # the config field whose value means "username/password"
 HOST_FIELDS = ("endpoint", "url", "host")  # config fields that hold a host: fed to the masker
 
@@ -1116,6 +1117,11 @@ class _Renderer:
         check = checks.get(source.id)
         if check is not None and check.state in ("failed", "job_failed", "running", "queued"):
             return 0
+        from dcdash.connectors.base import connector_types  # lazy: this module does not otherwise import the connectors
+
+        # A source that is filled by importing files is never polled, so its status stays "unknown": that is not a problem.
+        if not getattr(connector_types().get(source.connector_type or ""), "polls", True):
+            return 2
         return 1 if source.enabled and source.status != "online" else 2
 
     @classmethod

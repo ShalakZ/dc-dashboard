@@ -77,6 +77,7 @@ class SourceOut(BaseModel):
 class SourceListOut(SourceOut):
     last_reading_age_seconds: float | None = None  # newest stored reading of any of its points; None = none yet
     mapped_points: int = 0  # points of this source that have a mapping
+    polls: bool = True  # the connector class's flag: false for a source that is filled by importing files, which is never tested or polled
 
 
 class SourceHistoryOut(BaseModel):
@@ -179,11 +180,17 @@ def _values(source: Source) -> dict[str, Any]:
     }
 
 
+def non_polling_types() -> list[str]:
+    """The connector types whose sources are never asked for values: they are filled by importing files."""
+    return [name for name, cls in connector_types().items() if not cls.polls]
+
+
 @router.get("/connectors", dependencies=[Depends(require_permission("sources.edit"))])
 async def list_connectors() -> list[dict[str, Any]]:
+    # The types that poll come first: the source form starts on the first entry, and that must stay a type with an address to fill in.
     return [
-        {"type": name, "config_schema": cls.config_schema.model_json_schema()}
-        for name, cls in sorted(connector_types().items())
+        {"type": name, "config_schema": cls.config_schema.model_json_schema(), "polls": cls.polls, "description": cls.description}
+        for name, cls in sorted(connector_types().items(), key=lambda item: (not item[1].polls, item[0]))
     ]
 
 
@@ -212,8 +219,12 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
             )
         ).all()
     )
+    types = connector_types()
     return [
-        SourceListOut.of(s, last_reading_age_seconds=ages.get(s.id), mapped_points=int(counts.get(s.id, 0)))
+        SourceListOut.of(
+            s, last_reading_age_seconds=ages.get(s.id), mapped_points=int(counts.get(s.id, 0)),
+            polls=getattr(types.get(s.connector_type), "polls", True),  # a type this build does not know counts as polling
+        )
         for s in sources
     ]
 
@@ -359,7 +370,12 @@ async def delete_source(
 async def test_all_sources(
     user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
 ) -> dict[str, list[int]]:
-    ids = (await db.scalars(select(Source.id).where(Source.enabled).order_by(Source.id))).all()
+    # A source that is filled by importing files has no connection to test: it is left out, not counted.
+    ids = (
+        await db.scalars(
+            select(Source.id).where(Source.enabled, Source.connector_type.notin_(non_polling_types())).order_by(Source.id)
+        )
+    ).all()
     job_ids = [await enqueue(db, "test_source", {"source_id": i}, user) for i in ids]
     await audit(db, user.id, "source.test_all", {"sources": len(ids), "job_ids": job_ids})
     await db.commit()

@@ -128,6 +128,9 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     _all("discovery.edit", "POST /api/discovery/sources/remove"),
     # Added in W7t (Tidy layout: clears every saved node position); after the freeze, like the route above.
     _all("discovery.edit", "DELETE /api/discovery/layout"),
+    # Added in W31 (import profiles; the import route itself and the other W31 routes are listed by their own tasks): after the
+    # freeze, so not in auth_matrix_pre_w9a.json; the gate and isolation tests cover them.
+    _all("readings.import", "GET /api/import-profiles", "PUT /api/import-profiles/{name}", "DELETE /api/import-profiles/{name}"),
     _all("storage.view", "GET /api/storage", "GET /api/storage/rows-per-day", "GET /api/settings/storage"),
     _all("storage.edit", "PUT /api/settings/storage", "PUT /api/settings/storage/default"),
     _all("settings.view", "GET /api/settings/general", "GET /api/settings/sign-in", "GET /api/tls/status"),

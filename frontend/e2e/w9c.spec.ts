@@ -570,16 +570,19 @@ test.describe("W9c: the Roles editor offers what a permission needs", () => {
 
   // 7 ---------------------------------------------------------------------------------------------------------------------------
 
-  // Six boxes at different places: the See column (left), the Change column (right, one of them with the widest label) and the Sensitive
-  // actions box (several columns, so left, middle and right). Their needs are all different and none is ticked, so each card has the
-  // sentence below whatever was ticked before it.
+  // Seven boxes at different places: the See column (left), the Change column (right, one of them with the widest label) and the Sensitive
+  // actions box (three columns at both widths, filled row by row from the 11 risky ids in catalogue order: Accept scan results is the
+  // 8th, so in the middle column; Import readings from a file the 9th, right; Change sign-in protection the 10th, left; Export the
+  // audit log the 11th, middle). Their needs are all different and none is ticked, so each card has the sentence below whatever was
+  // ticked before it.
   const PLACES = [
     { label: "See tariffs", sentence: "See tariffs also needs See the Assets Tree to show anything.", where: "see-column" },
     { label: "Change users", sentence: "Change users also needs See users to show anything.", where: "change-column" },
     { label: "Change scan scopes and the graph layout", sentence: "Change scan scopes and the graph layout also needs See scans and the graph to show anything.", where: "change-column-widest" },
     { label: "Accept scan results", sentence: "Accept scan results also needs See scans and the graph to show anything.", where: "sensitive-middle" },
-    { label: "Change sign-in protection", sentence: "Change sign-in protection also needs See settings to show anything.", where: "sensitive-right" },
-    { label: "Export the audit log", sentence: "Export the audit log also needs See the audit log to show anything.", where: "sensitive-left" },
+    { label: "Import readings from a file", sentence: "Import readings from a file also needs See sources to show anything.", where: "sensitive-right" },
+    { label: "Change sign-in protection", sentence: "Change sign-in protection also needs See settings to show anything.", where: "sensitive-left" },
+    { label: "Export the audit log", sentence: "Export the audit log also needs See the audit log to show anything.", where: "sensitive-last" },
   ] as const;
 
   test("at 1024 and 1440 wide the card stays whole inside the window for a box in the See column, the Change column and Sensitive actions", async ({ browser }) => {

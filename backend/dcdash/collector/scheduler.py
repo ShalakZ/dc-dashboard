@@ -26,13 +26,14 @@ NO_VALUE = "no value returned"
 MAX_STATUSES_LISTED = 10
 MAX_SAMPLE_ADDRESSES = 5
 
+# A `file` source is filled by importing files (Connector.polls is False for it), so the poll loop never groups its points.
 _MAPPED_POINTS = """
     SELECT s.id AS source_id, s.connector_type, s.config, s.secret,
            m.interval_seconds, p.id AS point_id, p.address
     FROM mappings m
     JOIN points p ON p.id = m.point_id
     JOIN sources s ON s.id = p.source_id
-    WHERE s.enabled
+    WHERE s.enabled AND s.connector_type <> 'file'
     ORDER BY s.id, m.interval_seconds, p.id
 """
 
