@@ -603,6 +603,33 @@ async def test_a_stuck_batch_in_the_newest_slice_is_set_aside_though_the_window_
     assert (await world.status())["answered_through"] == world.clock.now
 
 
+async def test_a_stuck_batch_among_several_in_the_newest_slice_is_set_aside_though_the_window_grows_past_a_capacity_step(db):
+    broken = {"on": False}
+
+    async def sometimes(call, number):
+        if broken["on"] and "M005_kWh" in call.addresses:
+            raise ConnectorError("protocol_error", "HTTP 500")
+
+    tags = {f"M00{n}_kWh": KWH for n in range(1, 7)}
+    first = {tag: NOW - HOUR + timedelta(seconds=17) for tag in tags}
+    # A cap of 130 rows: over a whole hour two addresses fit one request (2 x 60 expected), so six addresses are three batches. Sized
+    # over the window up to NOW (10, 30, 50 minutes) the batches would be one of six, then 4 and 2, then 2, 2 and 2: the stuck batch
+    # would never have the same addresses twice. Sized over the hour the window ends in, they are the same three every time.
+    world = await make_world(db, tags, first, meters=6, settings=settings_with(max_rows=130), script=sometimes)
+    assert (await world.cycle()).state == "idle"
+    broken["on"] = True
+    for later in (10, 30):
+        world.clock.now = NOW + later * MINUTE
+        await db.execute("UPDATE history_status SET next_try_at = NULL WHERE source_id = $1", world.source)
+        assert (await world.cycle()).state == "backing_off"
+    world.clock.now = NOW + 50 * MINUTE
+    await db.execute("UPDATE history_status SET next_try_at = NULL WHERE source_id = $1", world.source)
+    result = await world.cycle()  # the third strike of the same batch
+    assert (result.state, result.set_aside) == ("idle", 1)
+    assert (await world.status())["answered_through"] == world.clock.now
+    assert {call.addresses for call in world.calls if "M005_kWh" in call.addresses} == {("M005_kWh", "M006_kWh")}
+
+
 async def test_a_source_that_vouches_only_up_to_a_quarter_hour_ago_is_no_failure_and_the_mark_follows_it(db):
     clock = Clock()
     # a historian that buffers: its own "now" is fifteen minutes behind ours, so it is complete only up to there
@@ -1302,6 +1329,7 @@ def test_the_batches_hold_at_most_200_addresses_and_at_most_the_expected_rows():
     assert len(Backfill(None, settings=settings_with(max_rows=100))._batches(points[:3], NOW, NOW + 6 * HOUR)) == 3  # one address is a batch however big
     assert engine._batches([], NOW, NOW + HOUR) == []
     assert engine._batches(points, NOW + 17 * MINUTE, NOW + 6 * HOUR) == batches  # sized from the whole hour: a floor that moves changes nothing
+    assert engine._batches(points, NOW, NOW + 6 * HOUR - 20 * MINUTE) == batches  # ... and so does an end (a "now") that moves within its hour
 
 
 def test_a_slice_is_whole_hours_up_to_six_and_shorter_when_the_rows_demand_it():

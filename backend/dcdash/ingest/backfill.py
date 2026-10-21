@@ -569,9 +569,10 @@ class Backfill:
         """The addresses of a slice in groups for one request each: at most MAX_ADDRESSES, and at most `max_rows` rows expected
         (addresses times seconds over the mapping's interval). One address is a batch of its own however many rows it needs: the
         source cuts the answer and the engine continues from there. The rows are counted over the slice's whole hours (from the hour
-        `lo` is in), not from `lo`: the first slice of a first run starts at a floor that moves with the clock, and the same batches
-        must come out at every cycle, because a batch is recognised by its addresses."""
-        seconds = max((hi - rollups.hour_floor(lo)).total_seconds(), 1.0)
+        `lo` is in to the end of the hour `hi` is in), not from `lo` to `hi`: the first slice of a first run starts at a floor and the
+        newest slice ends at a `now` that both move with the clock, and the same batches must come out at every cycle, because a
+        batch is recognised by its addresses (a stuck one reaches its third strike only when it is the same batch each time)."""
+        seconds = max((rollups.hour_ceil(hi) - rollups.hour_floor(lo)).total_seconds(), 1.0)
         batches: list[list[Mapped]] = []
         current: list[Mapped] = []
         rows = 0.0
