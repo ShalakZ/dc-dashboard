@@ -52,8 +52,8 @@ describe("historyLine", () => {
       expect(historyLine(row({ enabled: undefined, history: history({ state: "never_run" }) }), NOW)).toBe("History: not started yet");
     });
 
-    it("leaves every other state as the history says it (a fill started by hand on a switched-off source is real)", () => {
-      expect(historyLine(off("filling", { answered_through: hoursAgo(5) }), NOW)).toBe("History: filling, 5 hours behind");
+    it("leaves the other states as the history says them, but a fill that was cut by switching the source off is paused, not \"N hours behind\" for ever", () => {
+      expect(historyLine(off("filling", { answered_through: hoursAgo(5) }), NOW)).toBe("History: paused (the source is switched off)");
       expect(historyLine(off("idle", { last_success_at: minutesAgo(3) }), NOW)).toBe("History: up to date, last fill 3 min ago");
       expect(historyLine(off("backing_off", { last_error: "no answer" }), NOW)).toBe("History: waiting, no answer");
       expect(historyLine(off("not_supported"), NOW)).toBeNull();

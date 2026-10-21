@@ -28,6 +28,8 @@ export function historyLine(row: Pick<Source, "connector_type" | "polls" | "enab
       // The automatic fill only takes sources that are switched on, so a switched-off one that never ran stays at never_run until somebody fills it by hand.
       return row.enabled === false ? "History: not filled (the source is switched off)" : "History: not started yet";
     case "filling": {
+      // The automatic fill takes only sources that are switched on: a source switched off in the middle of a fill stands still, and "N hours behind" would grow for ever.
+      if (row.enabled === false) return "History: paused (the source is switched off)";
       const hours = hoursSince(history.answered_through, now);
       if (hours === null) return "History: filling";
       if (hours === 0) return "History: filling, less than an hour behind";
