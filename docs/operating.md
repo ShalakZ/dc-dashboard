@@ -1,7 +1,7 @@
 # Operating the stack
 
 This page is for whoever keeps a running install healthy: where the logs are, what to do when a container restarts
-forever, how the stack stops, what the health checks mean, what the collector cleans up by itself, and how to get back in when
+forever, how the stack stops, what the health checks mean, what the collector cleans up by itself, how it fills the holes an outage leaves, and how to get back in when
 an account is blocked after wrong passwords. Installing is on [Install and run](install-and-run.md), backups on
 [Backup and restore](backup-and-restore.md).
 
@@ -92,6 +92,46 @@ a setting.
   time (about 9 times in 10 at 60 seconds, about half at 110 seconds).
 
 The check you can run yourself, and what to paste back to Claude, is in [Field debugging](field-debugging.md#the-figures-check).
+
+## Background history fill
+
+The collector runs one more loop, beside the polls and the housekeeping: every 10 minutes it asks each enabled source that can read
+history for the readings it missed (an outage, values the source stored late). What it fills, what it never fills and how politely it
+asks are on [Sources and discovery](sources-and-discovery.md#history-and-backfill). Today only a source of type `simulator` that points
+at the stand-in Historian (dev profile) can answer; for every other source the loop does nothing.
+
+- **Settings.** Put them in `.env` (Compose passes them to the api, the collector and the figures service; an empty or missing value
+  means the default; run `docker compose up -d` after a change).
+
+  | Variable | Default | Meaning |
+  |---|---|---|
+  | `DCDASH_HISTORY_EVERY` | `600` | seconds between two cycles; `0` (or less) switches the loop off |
+  | `DCDASH_HISTORY_MAX_ROWS` | `20000` | rows expected in one request (at least 100); a longer window is cut into several requests |
+  | `DCDASH_HISTORY_RATE` | `30` | requests a minute to one source (at least 1) |
+  | `DCDASH_HISTORY_LOOKBACK_DAYS` | `7` | how far back an automatic fill goes (at least 1); never further than two days inside the raw retention |
+  | `DCDASH_HISTORY_REREAD_HOURS` | `3` | how old an hour must be before it is asked a second time for late values (0 or more) |
+
+  A value that is not a number, or is below its minimum, is refused with a sentence that names the variable, and the loop stays off: the
+  collector logs `the history backfill is off: DCDASH_HISTORY_RATE must be a whole number, not 'abc'.` once, at start
+  (`docker compose logs --tail 80 collector`). The rest of the collector keeps running.
+- **When it starts.** The loop waits one full cycle after the collector starts, so a restart does not start every fill at once. The
+  totals in the status count since that start. A cycle that a stop cut off is not resumed; the next cycle continues from the saved mark.
+- **Switching it off is safe.** `DCDASH_HISTORY_EVERY=0` stops new fills and keeps every mark. When you switch it on again, the first
+  cycle fills what is missing, up to the lookback.
+- **One run per source.** A cycle takes a lock on the source for as long as it works on it. A second collector, or the fill command
+  ([Field debugging](field-debugging.md#history-fill)), finds the lock taken: the loop skips that source for that cycle, and the
+  command refuses with a sentence and does nothing.
+- **Where to look.**
+  - The `history:` line of the source in SOURCE HEALTH of the Diagnostics report, and `GET /api/sources/{id}/history` (permission
+    `sources.view`), say the state (`idle`, `filling`, `backing_off` or `not_supported`), how far the source has been answered, the
+    totals since the collector started, the next try and the last error.
+  - The journal (the JOURNAL section of the report) has `history.filled` (a cycle or a fill stored new readings),
+    `history.failed` (a source could not be read; written when the trouble begins and then at most every 15 minutes, with a code
+    such as `auth_failed`, `not_supported`, `pending_drop` or `set_aside`), `history.closed_month` (new readings landed in a month
+    that is closed) and `readings.conflict` (the same reading arrived again with another value; the stored value was kept).
+- **A source waiting.** `backing_off` with a `next_try_at` is normal after trouble: the loop leaves the source alone until then (4, 8,
+  then 15 minutes after a failed cycle, 15 minutes after refused credentials, a day after "no history here"). Fixing the cause does
+  not shorten the wait; the fill command ignores it.
 
 ## If you are blocked from signing in
 

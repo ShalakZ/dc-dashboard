@@ -88,10 +88,85 @@ for PowerShell on the workstation):
 
 If the figure differs between the two, that is the finding: paste both numbers and the output of the first command.
 
+## History fill
+When a source keeps its own history, the platform fills the holes an outage leaves by itself
+([what it fills and what it never fills](sources-and-discovery.md#history-and-backfill)). This section is for reading its state in a
+report and for filling a range by hand. Until a connector for a real Historian exists, only a source of type `simulator` that points at
+the stand-in Historian (dev profile) can answer; an OPC UA or Modbus source has no history to read.
+
+**The `history:` line.** In SOURCE HEALTH, under a source's line, there is one more line for every source the fill has run for. A source it
+has never run for (all OPC UA and Modbus sources) has none, so a report from a site without a Historian looks as it always did.
+
+    history: idle, answered through 2026-10-21 12:00 UTC, since restart 14,200 new / 480 already / 0 differing / 2 rejected, 3 hours short, 12 requests, 0 failed
+
+- `idle`, `filling`, `backing off` or `not supported`. Idle: waiting for the next cycle (every 10 minutes). Filling: a cycle is working.
+  Backing off: trouble, and the source is left alone until the `next try` time. Not supported: the source answered that it has no
+  history interface; it is asked again after a day.
+- `answered through <time>`: everything before it was asked from the source once. When all is well it stays within one cycle of now, plus
+  however late the source is. `nothing answered yet` means no cycle got an answer yet.
+- `since restart N new / N already / N differing / N rejected`: totals since the collector started. New: readings stored. Already: readings
+  the database had with the same value. **Differing**: readings the database had with another value or quality; the stored one was kept
+  and the journal has a `readings.conflict` line. A number above zero here deserves a look. Rejected: readings refused (a time outside
+  the window, a time the rules refuse, or thinned away because the hour is already covered).
+- `N hours short`: hours behind the mark (of the last window it filled) in which a point has fewer than half the samples its mapping
+  promises. The source had nothing more for them, and they are not asked again. A Historian that stores only on change makes many.
+- `N requests, N failed`: requests sent to the source since the restart, and the failed ones plus the groups of points set aside.
+- `, next try <time>`: shown while backing off. `, last error: <text>`: the reason, with credentials removed; it starts with the
+  status (`unreachable`, `timeout`, `rate_limited`, `auth_failed`, `protocol_error`, `pending_drop`).
+- `history: unavailable (<error>)`: the report could not read the status table, as on a database older than migration 0016.
+
+The same numbers come from `GET /api/sources/{id}/history`, and the journal part of the report has the events `history.filled`,
+`history.failed`, `history.closed_month` and `readings.conflict`.
+
+**The fill command.** To fill one range by hand, run this in the project folder. `N` is the number the report shows before the source's
+name (`#3 "Main historian"` is source 3):
+
+    docker compose exec api python -m dcdash.ingest.backfill --source N
+
+Without anything else it is a **dry run** over the last days (the lookback of the loop). It asks the source nothing and writes nothing,
+creates no status row and moves no mark. It prints the plan:
+
+    Dry run for source 3 (Main historian).
+    Source 3: 12 mapped point(s), <start> UTC to <end> UTC, asked in <n> window(s) of at most 6 hours, about <rows> rows expected. Nothing has been asked and nothing has been written. ... Confirm the fill to run it.
+    Windows (<n>), each asked in turn, oldest first:
+      1. <start> UTC to <end> UTC
+      ...
+    About <rows> rows are expected.
+    Nothing was written; run again with --yes to fill it.
+
+Read the windows, then add `--yes` to fill. A range of your own is `--start 2026-10-14T00:00:00+00:00 --end 2026-10-15T00:00:00+00:00` (an ISO
+time with a UTC offset, both or neither). It must start no earlier than the raw retention minus a day ([Storage](storage.md#filling-older-gaps))
+and must not end in the future. With `--yes` it fills, refreshes the rollups over what it stored and prints one line:
+
+    12,480 rows read, 12,000 new, 480 already there, 0 differing, 0 rejected
+
+Run it a second time and it says `0 new` and the rest as `already there`: a fill can be repeated safely. It asks politely (one request at a
+time, at most 30 a minute), so a week for many meters takes a while; stop it with Ctrl+C and what was stored stays. A hand fill is not
+counted in the `history:` line; the journal records it as `history.filled`.
+
+`--before-first-reading` also fills the time before a point's first reading. That changes the past figures of every asset above the point
+(closed months keep their frozen figures and show that today's figures differ). Its dry run says so in plain words. Use it only when the
+owner has agreed.
+
+**On a source that cannot read history** (today an OPC UA or Modbus source, which is every source on the owner's laptop) the command
+stops at once, with exit code 1:
+
+    source 2 (Main SCADA) is a opcua source; this connector does not read history, so there is nothing to fill
+
+**Exit codes.** 0: done, or planned. 1: refused or failed (one sentence on the error output says why: a range that is too old, one that
+ends in the future or is empty, an unknown source, a source with no mapped point, a connector that cannot read history). 2: bad
+arguments. 3: the loop (or another fill) is working on that source right now; wait a minute and run it again. `echo $?` in bash and
+`$LASTEXITCODE` in PowerShell show it. If the fill stops half way ("the fill stopped early (...); until then: ..."), what was stored
+stays: run the same command again.
+
+**What to paste back.** The command line you typed, everything it printed (the sentences of a refusal come on the error output, and the
+terminal shows both), its exit code when it is not 0, and a new **Summary** report built after the run, so the `history:` line and the
+journal show the state. Never paste anything from `.env`.
+
 ## Reading a report (what Claude looks at)
 1. The **header**: build id and time, to know which code produced it.
 2. The **LATEST CHECK** line right after it: the failing step and the OPC UA status, or "all steps OK", or "no connection check has been run".
-3. **ENVIRONMENT**: versions, the DNS lines and the clock lines. `dns servers: 127.0.0.11` is Docker's embedded resolver: the container cannot see which resolvers it forwards to (those of the Docker host), so compare with the DNS servers in the offline script's NETWORK section. Below it, one `dns lookup <host>: OK in 12 ms -> <addresses>` or `FAILED in 3000 ms: <error>` line per source host that is a name (at most 8, 3 s each, looked up from inside the api container; the collector shares its Docker network and DNS settings, so the answer stands for both), or `dns lookups: none needed (every source host is an address)`. After a failure the report adds why names that only the cluster knows often fail from Docker on Windows. **SOURCES** and **SOURCE HEALTH**: status, last error, reads per minute and error rate. **POINTS**: the worst points. **JOURNAL**: what changed and when (source went offline / came back, bad points, jobs, clock skew). **API ERRORS**, **AUDIT TAIL**, **STORAGE AND RETENTION**, **SCANS**.
+3. **ENVIRONMENT**: versions, the DNS lines and the clock lines. `dns servers: 127.0.0.11` is Docker's embedded resolver: the container cannot see which resolvers it forwards to (those of the Docker host), so compare with the DNS servers in the offline script's NETWORK section. Below it, one `dns lookup <host>: OK in 12 ms -> <addresses>` or `FAILED in 3000 ms: <error>` line per source host that is a name (at most 8, 3 s each, looked up from inside the api container; the collector shares its Docker network and DNS settings, so the answer stands for both), or `dns lookups: none needed (every source host is an address)`. After a failure the report adds why names that only the cluster knows often fail from Docker on Windows. **SOURCES** and **SOURCE HEALTH**: status, last error, reads per minute and error rate, and for a source the history fill has run for a `history:` line ([History fill](#history-fill)). **POINTS**: the worst points. **JOURNAL**: what changed and when (source went offline / came back, bad points, jobs, clock skew). **API ERRORS**, **AUDIT TAIL**, **STORAGE AND RETENTION**, **SCANS**.
 
 ## Rehearsing a failure (development simulator only)
 Before the real SCADA exists the whole loop can be practised against the OPC UA simulator, which can be told to misbehave. Faults exist ONLY in the simulator (the `simulator` service of the `dev` Compose profile; a production `docker compose up` does not start it, and nothing else in the application reads these variables). Set them for one command, never in `.env`, and look for the line `FAULT INJECTION ACTIVE: ...` in `docker compose logs simulator`: a misspelled variable name never reaches the container and the rehearsal would run without the fault.

@@ -231,7 +231,7 @@ of the panels-only case below: `--metering feeds|panels` (default `feeds`) and `
 
 | Path | What it holds |
 |---|---|
-| `backend/` | the Python package `dcdash` (`api`, `collector`, `connectors`, `core`, `diagnostics`, `figures`, `profiles`, `seed`, `simulator`), the Alembic migrations and the tests |
+| `backend/` | the Python package `dcdash` (`api`, `collector`, `connectors`, `core`, `diagnostics`, `figures`, `ingest`, `profiles`, `seed`, `simulator`), the Alembic migrations and the tests. `ingest` holds the one function that writes readings, the normalisation rules and the history backfill (its progress table is `history_status`) |
 | `frontend/` | the React app (`src`), the Playwright specs (`e2e`), the static files (`public`) and the brand script (`scripts`) |
 | `deploy/` | the Caddy configuration (`Caddyfile`, `Caddyfile.tls`, `security-headers.caddy`) and the web image's `entrypoint.sh` |
 | `scripts/` | setup, backup, restore, update, diagnostics and test scripts, bash and PowerShell |
