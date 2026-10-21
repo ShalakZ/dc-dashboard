@@ -7,6 +7,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+import asyncpg
 import httpx
 import pytest
 
@@ -243,6 +244,25 @@ async def test_the_first_run_fills_from_the_first_hour_of_each_point_and_not_bef
     assert row["last_error"] is None and row["next_try_at"] is None and row["last_success_at"] == row["last_cycle_at"]
     [event] = await world.events(HISTORY_FILLED)
     assert event["source_id"] == world.source and event["detail"]["new"] == 2394
+
+
+async def test_a_batch_is_asked_only_from_the_first_hour_of_its_own_points(db):
+    first = {"M001_kWh": NOW - 3 * HOUR + timedelta(seconds=17), "M002_kWh": NOW - HOUR + timedelta(seconds=17)}
+    world = await make_world(db, {"M001_kWh": KWH, "M002_kWh": KWH}, first, settings=settings_with(max_rows=100))  # one address a batch, hour slices
+    result = await world.cycle()
+    assert (result.state, result.rejected - result.thinned) == ("idle", 0)  # nothing is asked that the store would refuse
+    second = [call for call in world.calls if call.addresses == ("M002_kWh",)]
+    assert [(call.start, call.end) for call in second] == [(NOW - HOUR, FRONT)]  # not the two hours before its first, no request at all
+    assert len([call for call in world.calls if call.addresses == ("M001_kWh",)]) == 3
+    assert (await world.status())["answered_through"] == FRONT
+
+
+async def test_a_point_that_may_be_filled_before_its_first_reading_is_asked_from_the_start_of_the_window(db):
+    first = {"M001_kWh": NOW - 3 * HOUR + timedelta(seconds=17), "M002_kWh": NOW - HOUR + timedelta(seconds=17)}
+    world = await make_world(db, {"M001_kWh": KWH, "M002_kWh": KWH}, first, settings=settings_with(max_rows=100))
+    report = await world.engine.fill_range(world.source, NOW - 3 * HOUR, NOW - HOUR, before_first_reading=True, dry_run=False, yes=True)
+    assert [(call.start, call.end) for call in world.calls if call.addresses == ("M002_kWh",)] == [(NOW - 3 * HOUR, NOW - 2 * HOUR), (NOW - 2 * HOUR, NOW - HOUR)]
+    assert report.new > 200 and report.rejected < 10  # the 121 samples of M002 before its first reading are stored, as it was told to
 
 
 async def test_the_lookback_is_the_floor_when_the_first_reading_is_older(db):
@@ -1347,6 +1367,108 @@ async def test_cancelling_a_cycle_gives_the_lease_back(db):
         await conn.execute("SELECT pg_advisory_unlock($1, $2)", LEASE_KEY, world.source)
     assert (await world.status())["state"] == "filling"  # the cut-off cycle never said it ended; the loop's next start puts that right
     await world.engine.reset_totals()
+    assert (await world.status())["state"] == "idle"
+
+
+async def test_a_lease_that_cannot_be_unlocked_is_let_go_with_its_connection_and_the_cycle_ends_cleanly(db, monkeypatch, caplog):
+    real = asyncpg.Connection.execute
+
+    async def half_closed(self, query, *args, **kwargs):
+        if query == "SELECT pg_advisory_unlock($1, $2)":  # the engine's own statement, not the pool's reset
+            raise RuntimeError("the connection is half closed")
+        return await real(self, query, *args, **kwargs)
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR})
+    monkeypatch.setattr(asyncpg.Connection, "execute", half_closed)
+    with caplog.at_level("WARNING", logger="dcdash.ingest.backfill"):
+        result = await world.cycle()
+    assert result.state == "idle" and result.new > 100
+    assert any(r.getMessage().startswith("could not release the history lease of source") for r in caplog.records)
+    monkeypatch.undo()
+    async with db.acquire() as conn:  # handing the connection back is what let the pool drop the lock
+        assert await conn.fetchval("SELECT pg_try_advisory_lock($1, $2)", LEASE_KEY, world.source) is True
+        await conn.execute("SELECT pg_advisory_unlock($1, $2)", LEASE_KEY, world.source)
+
+
+class BrokenClose(Watched):
+    async def close(self):
+        await super().close()
+        raise RuntimeError("the socket is already gone")
+
+
+async def test_a_connector_that_cannot_be_closed_does_not_fail_a_cycle_or_a_fill(db, caplog):
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR})
+    world.engine = Backfill(
+        db, lambda kind, config, secret: BrokenClose(SimulatorConfig(**config), secret, httpx.ASGITransport(app=world.app), world.calls),
+        settings_with(), clock=world.clock, sleep=world.sleeper,
+    )
+    with caplog.at_level("WARNING", logger="dcdash.ingest.backfill"):
+        result = await world.cycle()
+        report = await world.engine.fill_range(world.source, NOW - HOUR, FRONT, dry_run=False, yes=True)
+    assert (result.state, report.new) == ("idle", 0) and result.new > 100
+    assert len([r for r in caplog.records if r.getMessage().startswith("could not close the connector of source")]) == 2
+
+
+async def test_a_deadlock_while_storing_is_retried_once(db, monkeypatch):
+    real, attempts = engine_module.insert_readings, []
+
+    async def deadlocked(conn, rows, **kwargs):
+        attempts.append(len(rows))
+        if len(attempts) == 1:
+            raise asyncpg.DeadlockDetectedError("deadlock detected")
+        return await real(conn, rows, **kwargs)
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR})
+    monkeypatch.setattr(engine_module, "insert_readings", deadlocked)
+    result = await world.cycle()
+    assert (result.state, len(attempts)) == ("idle", 2) and attempts[0] == attempts[1] > 100  # the same rows, once more
+    assert len(await world.stored("M001_kWh")) == 1 + result.new and result.new + result.differing == attempts[0]
+
+
+async def test_a_second_deadlock_while_storing_ends_the_cycle_with_its_name_and_moves_no_mark(db, monkeypatch):
+    attempts = []
+
+    async def always(conn, rows, **kwargs):
+        attempts.append(len(rows))
+        raise asyncpg.DeadlockDetectedError("deadlock detected")
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR})
+    monkeypatch.setattr(engine_module, "insert_readings", always)
+    result = await world.cycle()
+    assert len(attempts) == 2 and result.state == "backing_off"  # one retry, then the error
+    assert result.reason.startswith("DeadlockDetectedError: ") and (await world.status())["answered_through"] is None
+
+
+async def test_a_source_whose_configuration_cannot_be_used_backs_off_for_fifteen_minutes_with_a_sentence_and_one_event(db):
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR})
+    await db.execute("UPDATE sources SET config = $2 WHERE id = $1", world.source, {"url": "not a url"})
+    result = await Backfill(db, settings=settings_with(), clock=world.clock, sleep=world.sleeper).run_cycle(world.source)  # the real factory
+    assert (result.state, result.next_try_at, result.requests) == ("backing_off", NOW + timedelta(minutes=15), 0)
+    assert result.reason.startswith("invalid configuration: ")
+    [event] = await world.events(HISTORY_FAILED)
+    assert (event["code"], event["level"], event["source_id"]) == ("config_invalid", "warning", world.source)
+    assert (await world.status())["state"] == "backing_off"
+
+
+async def test_a_stored_secret_that_cannot_be_decrypted_skips_the_source_in_a_cycle_and_refuses_a_fill_with_the_sentence(db):
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR})
+    await db.execute("UPDATE sources SET secret = 'not a token' WHERE id = $1", world.source)
+    result = await world.cycle()
+    assert (result.state, result.reason, world.calls) == ("skipped", "the stored secret cannot be decrypted", [])
+    assert [r.state for r in await world.engine.run_all()] == ["skipped"]  # the loop meets it the same way
+    with pytest.raises(FillRefused, match=f"source {world.source}: the stored secret cannot be decrypted"):
+        await world.engine.fill_range(world.source, NOW - HOUR, FRONT, dry_run=False, yes=True)
+
+
+async def test_a_stale_filling_state_is_put_right_even_when_the_loop_is_switched_off(db, monkeypatch):
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR})
+    await db.execute("INSERT INTO history_status (source_id, state, rows_new) VALUES ($1, 'filling', 7)", world.source)
+    await asyncio.wait_for(backfill_loop(db, settings=settings_with(every_seconds=0)), 1)  # a crash left it so; the loop is off
+    row = await world.status()
+    assert (row["state"], row["rows_new"]) == ("idle", 0)
+    await db.execute("UPDATE history_status SET state = 'filling'")
+    monkeypatch.setenv("DCDASH_HISTORY_EVERY", "often")  # a value that cannot be read switches the loop off as well
+    await asyncio.wait_for(backfill_loop(db), 1)
     assert (await world.status())["state"] == "idle"
 
 

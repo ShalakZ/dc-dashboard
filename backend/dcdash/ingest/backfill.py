@@ -754,7 +754,15 @@ class Backfill:
         # not `hi`: the first slice of a first run starts at "now - lookback" and the newest slice ends at "now", and both move with
         # the clock, so the strikes would never add up to three.
         key = (run.source.id, rollups.hour_floor(lo), tuple(m.point_id for m in batch))
-        cursor = _Cursor(lo)
+        start = lo
+        firsts = [run.first_bucket[m.point_id] for m in batch if m.point_id in run.first_bucket]
+        if firsts and not run.before_first_reading:
+            # The window starts at the first hour of the OLDEST point of the source; a batch of newer points has nothing to store
+            # before its own first hour, so it is not asked for it (the store would refuse every row, and they would be counted).
+            start = max(lo, rollups.hour_floor(min(firsts)))
+            if start >= hi:
+                return hi  # nothing of this batch lies in the slice; the slice that starts at `hi` asks for it
+        cursor = _Cursor(start)
         while True:
             try:
                 reached = await self._pages(run, batch, cursor, hi, wrote)
@@ -1208,19 +1216,23 @@ async def backfill_loop(
     released on the way out). Returns at once when the settings switch it off, or are wrong: a task that dies in the collector is
     invisible until shutdown, so the sentence goes to the log instead."""
     stop = stop or asyncio.Event()
+    reason = None
     try:
         settings = settings or HistorySettings.from_env(os.environ)
     except ValueError as exc:
-        log.error("the history backfill is off: %s", exc)
-        return
-    if not settings.enabled:
-        log.info("the history backfill is off (DCDASH_HISTORY_EVERY is zero or less)")
-        return
+        settings, reason = HistorySettings(), exc
     engine = Backfill(pool, factory, settings, rng=random.Random())
+    # Also with the loop off: a cycle that a crash cut off left `filling` in the route and the report, and nothing else would put it right.
     try:
         await engine.reset_totals()
     except Exception as exc:
         log.warning("could not reset the history totals: %s", exc)
+    if reason is not None:
+        log.error("the history backfill is off: %s", reason)
+        return
+    if not settings.enabled:
+        log.info("the history backfill is off (DCDASH_HISTORY_EVERY is zero or less)")
+        return
     while not stop.is_set():
         try:
             await asyncio.wait_for(stop.wait(), timeout=settings.every_seconds)
