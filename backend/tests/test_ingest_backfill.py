@@ -358,13 +358,37 @@ async def test_a_429_from_the_stand_in_is_retried_and_ends_the_cycle_when_it_doe
     assert (await busy.status())["answered_through"] is None  # the first batch answered, but the slice did not: no mark
 
 
-async def test_a_wait_longer_than_the_back_off_is_capped_at_an_hour_inside_a_cycle():
+async def test_a_wait_a_source_asks_for_wins_inside_a_cycle_up_to_the_back_off_cap():
     from dcdash.ingest.backfill import backoff_seconds
 
     assert [backoff_seconds(n) for n in range(1, 8)] == [30, 60, 120, 240, 480, 900, 900]
     assert backoff_seconds(1, retry_after=10) == 30 and backoff_seconds(1, retry_after=200) == 200
-    assert backoff_seconds(1, retry_after=86_400) == 3600
+    assert backoff_seconds(1, retry_after=86_400) == 900  # (a cycle never sleeps longer: it ends instead, see below)
     assert backoff_seconds(1, jitter=0.1) == pytest.approx(33)
+
+
+async def test_a_retry_after_above_the_cap_ends_the_cycle_at_once_and_the_wait_goes_into_next_try_at(db):
+    async def throttled(call, number):
+        raise ConnectorError("rate_limited", "slow down", retry_after=3600.0)
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR}, script=throttled)
+    result = await world.cycle()
+    assert (result.state, result.requests, world.sleeper.waits) == ("backing_off", 1, [])  # no sleep: the lease is let go at once
+    assert result.next_try_at == NOW + HOUR
+    row = await world.status()
+    assert (row["state"], row["next_try_at"]) == ("backing_off", NOW + HOUR) and row["last_error"].startswith("rate_limited: slow down")
+    [event] = await world.events(HISTORY_FAILED)
+    assert (event["code"], event["detail"]["next_try_at"]) == ("rate_limited", (NOW + HOUR).isoformat())
+    assert (await world.cycle()).state == "skipped"  # and the source is left alone until then
+
+
+async def test_a_retry_after_of_exactly_the_cap_is_still_waited_for_inside_the_cycle(db):
+    async def throttled(call, number):
+        if number == 1:
+            raise ConnectorError("rate_limited", "slow down", retry_after=900.0)
+
+    world = await make_world(db, {"M001_kWh": KWH}, {"M001_kWh": NOW - 2 * HOUR}, script=throttled)
+    assert (await world.cycle()).state == "idle" and world.sleeper.waits == [900.0]
 
 
 async def test_refused_credentials_wait_fifteen_minutes_and_are_journaled_once(db):

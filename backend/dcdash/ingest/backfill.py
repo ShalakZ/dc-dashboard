@@ -16,9 +16,9 @@ What a cycle does for one source (the one that holds its lease):
   stored one covers its time (see `thin`). Nothing is ever updated, notified or deleted.
 
 A failure never moves a mark past data that was not answered. Transient trouble (timeout, unreachable, rate limited, a malformed
-answer) is retried inside the cycle after 30, 60 and 120 seconds (what the source asked for wins when larger) and then ends the cycle
-in `backing_off` with a `next_try_at`; a source that refuses our credentials waits 15 minutes; a source that cannot answer a history
-read waits a day. Only a batch that three tries in a row could not get an answer for (a cut that makes no progress, or the same bad
+answer) is retried inside the cycle after 30, 60 and 120 seconds (what the source asked for wins when larger, up to 15 minutes; a
+longer wait ends the cycle at once) and then ends the cycle in `backing_off` with a `next_try_at`; a source that refuses our
+credentials waits 15 minutes; a source that cannot answer a history read waits a day. Only a batch that three tries in a row could not get an answer for (a cut that makes no progress, or the same bad
 answer in three cycles) is SET ASIDE: counted and journaled, so one poisoned address cannot hold a whole source for ever.
 
 The status states are the four the table allows (`idle`, `filling`, `backing_off`, `not_supported`): there is no `failed`, a failure is
@@ -57,7 +57,6 @@ SLICE_HOURS = 6  # the longest slice: a mark is saved, and the rollups refreshed
 RETRIES = 3  # of one request, inside a cycle
 BACKOFF_FIRST_SECONDS = 30.0
 BACKOFF_CAP_SECONDS = 900.0
-BACKOFF_LONGEST_SECONDS = 3600.0  # what a source's own Retry-After may make us wait inside a cycle
 AUTH_WAIT_SECONDS = 900.0
 NOT_SUPPORTED_WAIT_SECONDS = 86_400.0
 FAILED_REPEAT_SECONDS = 900  # history.failed is repeated at most this often while a failure lasts
@@ -245,11 +244,12 @@ def thin(
 
 def backoff_seconds(attempt: int, retry_after: float | None = None, jitter: float = 0.0) -> float:
     """The wait before try number `attempt + 1` (attempt counts from 1): 30 s, doubling, at most 15 minutes. What the source asked
-    for (Retry-After) wins when larger, but never more than an hour inside one cycle."""
+    for (Retry-After) wins when larger, up to the same 15 minutes: a source that asks for more makes the cycle end instead (`_ask`),
+    so that a lease and a pooled connection are never held through a long wait."""
     delay = min(BACKOFF_CAP_SECONDS, BACKOFF_FIRST_SECONDS * 2 ** (attempt - 1)) * (1 + jitter)
     if retry_after is not None and retry_after > delay:
         delay = retry_after
-    return min(delay, BACKOFF_LONGEST_SECONDS)
+    return min(delay, BACKOFF_CAP_SECONDS)
 
 
 class _Pace:
@@ -694,6 +694,12 @@ class Backfill:
                 if exc.status == "not_supported":
                     raise _Halt("not_supported", "not_supported", f"{NO_HISTORY} ({exc.message})", NOT_SUPPORTED_WAIT_SECONDS) from None
                 # timeout, unreachable, rate_limited, protocol_error: the same request again after a wait
+                if exc.retry_after is not None and exc.retry_after > BACKOFF_CAP_SECONDS:
+                    # More than a cycle should sleep (it holds the source's lease and one of the pool's connections, and the sources
+                    # are visited one after the other): end the cycle now, and the wait goes into next_try_at.
+                    raise _Halt(
+                        "backing_off", exc.status, f"{exc.status}: {exc.message}", self._giveup_wait(sid, exc.retry_after)
+                    ) from None
                 attempt += 1
                 if attempt > RETRIES:
                     wait, text = self._giveup_wait(sid, exc.retry_after), f"{exc.status}: {exc.message}"
