@@ -113,6 +113,7 @@ name the old README sections; this is where each one is now:
 | Screens | [docs/screens.md](docs/screens.md) | Every screen of the web app, who can open it, and the audit log |
 | Assets and kinds | [docs/assets-and-kinds.md](docs/assets-and-kinds.md) | Asset kinds and their icons, moving assets in the Assets Tree |
 | Sources and discovery | [docs/sources-and-discovery.md](docs/sources-and-discovery.md) | The protocols (simulator, OPC UA, Modbus TCP) and finding sources on a network |
+| Devices that move or disappear | [docs/devices-that-move.md](docs/devices-that-move.md) | What a scan does when a device is gone, "Not seen" and Remove not seen, moving a source to its new address with Undo |
 | Storage | [docs/storage.md](docs/storage.md) | The storage tiers, retention and the Storage page |
 | Dashboards and billing | [docs/dashboards-and-billing.md](docs/dashboards-and-billing.md) | Dashboards and widgets, tariffs, the billing rules and the cost report |
 | Display screens | [docs/display-screens.md](docs/display-screens.md) | Playlists and secret display links for a wall screen that needs no sign-in, revoking a link |

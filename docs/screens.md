@@ -71,7 +71,11 @@ lacks says "No access".
   "and 2 more"): for how long and since when, and the last error, or "has not answered since it was added" for a source that never
   answered, with **See its events** for a person who also has `diagnostics.view`. It needs only `sources.view`; it is a plain notice, not
   an alert, so a screen reader does not read it out again at every refresh. Resting the pointer on an offline source's Status chip says
-  `offline since 18 Oct 07:52`. **Test** and **Test all**
+  `offline since 18 Oct 07:52`. When a scan found the same server again at a new address, the notice adds `A scan found it at
+  172.20.0.5:4840:` and a **Move to new address...** button, and that source's row menu starts with the same item; both need
+  `sources.edit` (without it the sentence stays and there is no button), and with several offline sources the notice only counts how many
+  were found again. Two possible servers give `Two servers could be this one; edit the address by hand` and no button. The dialog, its
+  preview, the Undo and when an offer appears are on [Devices that move or disappear](devices-that-move.md). **Test** and **Test all**
   need `sources.test`; adding, editing and deleting sources needs `sources.edit`. A row's menu also has **Import file...**
   (`readings.import`), **Map tag list...** (`discovery.accept`) and **Fill older range...** (`sources.edit`, and only for a source whose
   connector keeps history); each shows only to a person who holds its permission. The last item, **Events** (`diagnostics.view`), opens
@@ -94,7 +98,15 @@ lacks says "No access".
   says `Dashed means discovered, solid means assets. Drag a group onto an asset to map it.`) shows what was
   found as a graph to map by drag and drop or with the buttons on its nodes, says when a scan last found each source, and lets an
   admin remove discovered sources that have nothing mapped, one by one (**Remove from Discovery…** in the source's `⋯` menu) or all at
-  once (**Clear unmapped** in the bar's **More Discovery actions** menu).
+  once (**Clear unmapped** in the bar's **More Discovery actions** menu). A discovered source that the newest scan of the same range
+  did not find is drawn quieter (a lighter ground and a lighter dashed edge) and its last line reads `Not seen in scan #7 (last seen in
+  #5, 4 days ago)`; while any source is marked, **More Discovery actions** also holds **Turn on Not seen lately** and **Remove not seen
+  (N)...**, which uses the same dialog as Clear unmapped and never removes a mapped or hand-added source (a marked source with
+  something mapped reads `Mapped: move it or delete it on Sources`). A new source that looks like an old one that stopped answering
+  reads `Looks like <that source>` and has **Move...** beside **Details** (needs `sources.edit`); `Two servers could be this one; edit
+  the address by hand` and `A different server answers at this address` take the same line, and the Details panel adds the server's
+  name (`Server: urn:dcdash:simulator:dev`) and its certificate (`certificate 3A:5F:...:91`). What each of these means is on
+  [Devices that move or disappear](devices-that-move.md).
   Dragging a node takes its open children along (hold Alt, Option on a Mac, to move it alone). One bar above the canvas holds the page's
   controls: small counts first (sources, points, mapped, and one for sources that need credentials), then the **View controls**
   (**Collapse all** and **Expand all**, each with a small arrow beside it for just the nodes you selected, or one branch, an **Unmapped
@@ -114,7 +126,7 @@ lacks says "No access".
   **Move to another asset…**, an asset has a **+** that adds a sub-asset (and the menu's **New asset…** items open the same **New asset**
   form as the Assets Tree), several unmapped points of one source dropped on an asset map in one review, and the toast after mapping,
   unmapping or moving carries an **Undo** for 10 seconds. Changing
-  scopes and the layout, and removing unmapped discovered sources, needs `discovery.edit`, running a scan `discovery.scan`,
+  scopes and the layout, and removing unmapped discovered sources (Remove not seen too), needs `discovery.edit`, running a scan `discovery.scan`,
   accepting results (**Map…**, **New asset…**, **Create assets…** for a whole source) `discovery.accept`; unmapping, moving, the Undo
   and the New asset form (also the **+**) need `assets.edit`, the form `assets.view` too. See
   [Discovery](sources-and-discovery.md#discovery).
@@ -158,7 +170,10 @@ lacks says "No access".
   instead of numbering them ("for asset MV2-R1-LV-Panel-02", or "a deleted asset" once it is gone); the Raw view, the
   drawer's JSON (behind **Show the stored JSON**, closed until you open it) and the CSV keep every id. A `tags.mapped` entry of the
   last 24 hours has **Undo this tag list** in its drawer for a person with `discovery.accept`; the server refuses it, in words, when
-  anything the list made has changed since. Excel cuts a CSV cell at 32,767 characters, and a `tags.mapped` row can be longer. What is
+  anything the list made has changed since. A `source.moved` entry ("Moved OPC UA server at 172.20.0.5:4840 from 172.20.0.3:4840 to
+  172.20.0.5:4840 (12 mappings kept, the duplicate removed)") of the last 24 hours has **Undo this move** for a person with
+  `sources.edit`; the server refuses it, in words, when the source or its address has changed since
+  ([Devices that move or disappear](devices-that-move.md#undo)). Excel cuts a CSV cell at 32,767 characters, and a `tags.mapped` row can be longer. What is
   and is not recorded is listed under
   [Discovery](sources-and-discovery.md#discovery). The entry of a started connection check, test or Test all (`source.checked`,
   `source.tested`, `source.test_all`) also says how it ended: in the friendly view a small square tag after the sentence (`passed`,
@@ -184,7 +199,10 @@ lacks says "No access".
   when it began, last failed and ended (one time for an event that is not an incident), source, kind, code, count, duration, the message, **Copy**, **Show the stored JSON** (closed until
   you open it) and **Previous** and **Next**; Esc, Close or Back returns to the list as it was. The page refreshes itself every 10 seconds
   while no To day is set and no drawer is open: counts and closings change in place, and events that are new appear as one button
-  ("3 new events") instead of moving the list. How long events are kept, and the card that changes it, are on Storage (see
+  ("3 new events") instead of moving the list. Two rows say something about a source's server: a warning, `A different server answers at
+  this address` (a scan, Test or connection check met another server where the source remembers one; the source keeps polling), and an
+  information row, `The server's certificate changed` ([Devices that move or disappear](devices-that-move.md#how-a-source-knows-its-server)).
+  How long events are kept, and the card that changes it, are on Storage (see
   [Storage](storage.md#how-long-system-events-are-kept)).
 - **Diagnostics** (admin): needs `diagnostics.view` and `sources.view`; the connection check needs `diagnostics.run`. Builds a
   report to paste when a real source fails, and runs a step-by-step connection check of one source. See
@@ -197,4 +215,4 @@ lacks says "No access".
   browser. It also holds the links to Password and Sign out.
 - **Password** (everyone): change your own password; your other sessions are signed out.
 
-Related: [Install and run](install-and-run.md), [Assets and kinds](assets-and-kinds.md), [Sources and discovery](sources-and-discovery.md), [Dashboards and billing](dashboards-and-billing.md), [Dashboard figures, templates and the guide](dashboard-figures-and-templates.md), [Storage](storage.md), [Roles and permissions](roles-and-permissions.md), [Operating the stack](operating.md), [Field debugging](field-debugging.md).
+Related: [Install and run](install-and-run.md), [Assets and kinds](assets-and-kinds.md), [Sources and discovery](sources-and-discovery.md), [Devices that move or disappear](devices-that-move.md), [Dashboards and billing](dashboards-and-billing.md), [Dashboard figures, templates and the guide](dashboard-figures-and-templates.md), [Storage](storage.md), [Roles and permissions](roles-and-permissions.md), [Operating the stack](operating.md), [Field debugging](field-debugging.md).

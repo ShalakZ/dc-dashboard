@@ -146,7 +146,7 @@ message appeared as described), and lost what came after the dump.
 
 ## Migrations in order
 
-The files are in `backend/migrations/versions/`; each revises the one before it, and `0016` is the head. The release-note entry of a
+The files are in `backend/migrations/versions/`; each revises the one before it, and `0017` is the head. The release-note entry of a
 migration says how to apply it, how to verify it and the commit to go back to.
 
 | Revision | What it does | Downgrade | Release note |
@@ -167,6 +167,7 @@ migration says how to apply it, how to verify it and the commit to go back to.
 | `0014` | the figure ledger: the table `figure_ledger` (derived data: computed figures kept between requests) | lossless except the stored figures, which are recomputed (the downgrade drops the table) | the w26b entry in the [CHANGELOG](../CHANGELOG.md) |
 | `0015` | display screens: three empty tables, `playlists`, `playlist_items` and `displays` | lossless for everything older; the downgrade drops the three tables and loses the playlists and display links | the w28 entry in the [CHANGELOG](../CHANGELOG.md) |
 | `0016` | a unique key on readings (`readings_point_ts_key`, in place of the plain index `readings_point_ts`) and the small table `history_status` (the history fill's progress per source) | lossless: the downgrade builds the plain index again and drops `history_status`, which is derived data | the w30 entry in the [CHANGELOG](../CHANGELOG.md), and [`0016`](#0016-and-the-history-fill-w30) below |
+| `0017` | what a source remembers about its server: one empty column, `sources.identity` | lossless for everything else; the downgrade drops the column and loses the remembered identities, which the next scan, Test or connection check learns again | the w33 entry in the [CHANGELOG](../CHANGELOG.md), and [`0017`](#0017-and-the-source-identity-w33) below |
 
 Waves without a migration also have entries in the CHANGELOG (for example W7p, no migration): read them too, they can name checks.
 
@@ -211,6 +212,28 @@ noted in step 1). The downgrade drops `history_status`, builds the plain index a
 a moment without an index. It took 1.9 seconds on the copy, and every table was identical to its state before the upgrade (counts and row
 hashes). Afterwards a reading can be stored twice again, as before. Upgrading once more (7.0 seconds on the copy) builds the key and an
 empty `history_status`; the history fill then starts again from its lookback, and the store ignores whatever it already has.
+
+### `0017` and the source identity (w33)
+
+**What it changes.** One thing: the nullable column `sources.identity`, empty for every source. No row is read or written, so nothing
+changes on screen, in the polling or in a figure until a scan, **Test** or **Check connection** reaches a server and learns who it is
+([Devices that move or disappear](devices-that-move.md#how-a-source-knows-its-server)). Until then a source that stopped answering is
+offered a move only as a possible match.
+
+**What an update looks like.** The first start of the new `api` runs the migration, in one transaction: adding an empty column does not
+rewrite the table. It waits for a lock on `sources` for at most 30 seconds. If it cannot get one it stops before it has changed
+anything, and the message says so: `migration 0017 could not get the lock it needs on sources within 30 seconds`. Starting the `api`
+again retries; this happens only when another query, or an earlier step of the same update, holds a lock on `sources`.
+
+**The figures are recomputed once.** The new column is declared in a file under `dcdash/core`, and everything stored in the figure
+ledger is tied to a hash of those files. After the update every stored figure counts as stale and the `figures` service writes them
+again; the first pages that show figures can be slower for a few minutes, and nothing is wrong. Nothing else changes: no value, no
+bill, no mapping.
+
+**Going back.** Lossless except for the identities themselves; use option a of step 6 with `alembic downgrade 0016` and the code from
+before w33 (`f7462e8`, or the commit you noted in step 1). The downgrade drops the column and touches nothing else. The remembered
+identities are lost, which only means that the next scan, Test or check learns them again. If a source was moved while the new code
+ran, it stays at the address it was moved to: the move changed the source's address, which the downgrade keeps.
 
 ## Duplicate readings
 

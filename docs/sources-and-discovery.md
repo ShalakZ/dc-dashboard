@@ -407,7 +407,8 @@ data-retrieval requests the connectors already use, nothing else.
 
    Each source node says when a scan last found it (`Seen in scan #6, 10 min ago`), or `Added by hand` for a source you made
    yourself, or `Not seen in a scan yet`. A scan only adds sources and refreshes their points; it never removes one, so a source
-   whose device is gone, or that you deleted on Sources, stays or comes back until you remove it here.
+   whose device is gone or moved, or that you deleted on Sources, stays or comes back until you remove it here
+   ([Devices that move or disappear](devices-that-move.md)).
 
    **Removing leftovers** (needs `discovery.edit`). A discovered source with nothing mapped has **Remove from Discovery…** in its `⋯` menu
    (`Source actions for <name>`, or a right-click on the source; it is no longer a button on the card), and **Clear unmapped (N)** in

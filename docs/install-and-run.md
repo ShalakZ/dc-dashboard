@@ -184,6 +184,15 @@ The simulator's three protocols are added as sources in the app like any other:
   it takes the user `sim` with that password.
 - **Modbus TCP** (`simulator:5020`, unit 1) needs no login.
 
+**Who this simulator is.** `SIM_INSTANCE_ID` (default `dev`; letters, digits, dot, underscore and dash, 1 to 40 characters, anything
+else becomes `dev`) is announced by the HTTP simulator on `GET /` and by its OPC UA server as the application URI
+`urn:dcdash:simulator:<id>`. The platform remembers it, so that when Docker gives the simulator a new address after an update it can
+tell the same simulator from another one and offer to move the source ([Devices that move or disappear](devices-that-move.md)). Set it
+in `.env` if you want another value. **Two stacks on one network need different values**: two simulators left at `dev` look like one
+server that moved. The stand-in Historian announces `<id>:historian`, so it does not clash with the simulator beside it. One caveat: a
+simulator started with `SIM_FAULT_POLICIES=basic256sha256` makes a new certificate at every start, so its certificate thumbprint
+changes each time and the platform never offers to move it; edit the address of its sources by hand.
+
 The simulator can also play faults (a slow server, dropped connections, refused logins and more) for rehearsing a field
 problem: see [Field debugging](field-debugging.md).
 
