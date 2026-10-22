@@ -15,9 +15,11 @@ browses its points. Sources are matched **by address** (host and port), never by
 - A scan **only adds**. It never removes a source, a point or a mapping, and it never changes the address of a source.
 - So a device that is gone leaves its old source behind, and a device that turned up at a new address gets a second, new source
   beside the old one. That is what Discovery then shows: the old items next to the new ones.
-- **Seen in scan #6, 10 min ago** on a source means the newest scan that found a server at that source's address was scan #6.
+- **Seen in scan #6, 10 min ago** on a source means the newest scan whose finding belongs to that source was scan #6.
   **Added by hand** is a source you made yourself on Sources: a scan reports it as an existing source and leaves it alone. **Not seen
-  in a scan yet** means no scan has found it.
+  in a scan yet** means no scan has found it. When a source you added by hand is at the same address as a discovered one, the scan's
+  finding belongs to the hand-added source: the discovered copy still reads as seen (a scan did find a server at its address), but its
+  `Seen in scan` line may be older than the last scan.
 - A closed port leaves no trace. Whether a later scan looked at an old address depends only on that scan's scope, which is why the
   next section compares scans of the same range and nothing else.
 
@@ -34,26 +36,30 @@ A source is marked **Not seen** when a later scan of the same range looked for i
 
 The mark clears by itself when a later scan of the same range finds the server again.
 
-**What you see.** The card is drawn quieter (a lighter ground and a lighter dashed edge; the text does not change). Its last line reads
-`Not seen in scan #7 (last seen in #5, 4 days ago)`, with the same sentence in the tooltip, and the Details panel says it in full.
-**More Discovery actions** gains two items:
+**What you see.** The card is drawn quieter (a lighter ground and a lighter dashed edge; the colours of the text do not change). Its
+last line reads `Not seen in scan #7 (last seen in #5, 4 days ago)`, with the same sentence in the tooltip, and the Details panel says it
+in full. **More Discovery actions** gains two items:
 
-- **Turn on Not seen lately** shows only the marked sources on the canvas (the same item turns it off again).
+- **Turn on Not seen lately** shows only the marked sources on the canvas (the same item turns it off again). While it is on, the bar's
+  summary strip shows the chip `Only not seen lately (2)`, so the canvas never looks empty without a reason.
 - **Remove not seen (3)...** removes the marked sources that have nothing mapped. It asks first, in the same dialog as **Clear
   unmapped**: it names the first five sources and how many more, and it sends exactly that list to the same removal. The server leaves
   alone every source that has a mapped point and every source added by hand, and refuses while a scan is queued or running.
 
-Both items need `discovery.edit` and appear only while at least one source is marked. A marked source that has something mapped is
-never removed this way: its card says `Mapped: move it or delete it on Sources`, because a mapping is work that billing may rest on.
-Either the device moved (see [When a move is offered](#when-a-move-is-offered)) or you delete the source on Sources after checking
-what depends on it. Removing a source only takes it off Discovery: a scan finds the device again if it is still there.
+Both items appear only while at least one source is marked. The filter is for everyone who can open Discovery; **Remove not seen** needs
+`discovery.edit`. A marked source that has something mapped is never removed this way: while it is also offline its card says `Mapped: move
+it or delete it on Sources`, because a mapping is work that billing may rest on. Either the device moved (see [When a move is
+offered](#when-a-move-is-offered)) or you delete the source on Sources after checking what depends on it. Removing a source only takes it
+off Discovery: a scan finds the device again if it is still there.
 
 ## How a source knows its server
 
 A source remembers who its server is in one small record. Nothing in it is secret: the strings the server announces about itself, and
 the thumbprint of its certificate (never the certificate, never a password). The Details panel of a source on Discovery shows it as
 `Server: urn:dcdash:simulator:dev` and `certificate 3A:5F:...:91` (the first five and last two characters; resting the pointer on it
-shows all of it). Sources made before this update know nothing yet.
+shows all of it); an HTTP simulator reads `Simulator instance dev`. Sources made before this update know nothing yet. **Editing a
+source's address by hand clears what it remembered** (it may now be another device); a **Test**, a scan or a connection check learns it
+again.
 
 **When it is learned.** A scan that meets the source, **Test**, and **Check connection** (when the server answered) ask the server who
 it is and remember the answer. The normal polling never does. So after an update, run a scan or **Test all** once while everything is
@@ -71,8 +77,10 @@ is what two servers are compared on.
 - **A renewed certificate is a renewal.** The same URI with another thumbprint, seen at the source's own address, is stored and
   recorded once in System events as `The server's certificate changed`. Nothing else happens.
 - **A server that makes a new certificate at every start** (for example the simulator with `SIM_FAULT_POLICIES=basic256sha256`) has a
-  new thumbprint after every restart. The move rule is that two different certificates never match, so such a server is moved by hand:
-  edit its address on Sources.
+  new thumbprint after every restart. Two different certificates never match, so such a server is never offered as the **same
+  server**; and a source that has already stored its certificate gets no offer at all after a restart. A source that remembers nothing
+  yet (never reached since the update, or its address was just edited) can still be offered as a **possible** match, by its mapped
+  addresses and names and with the tick. Otherwise edit the address on Sources.
 
 **The simulator.** The HTTP simulator announces its **instance id** on `GET /`, and its OPC UA server announces the application URI
 `urn:dcdash:simulator:<id>`. The id is `SIM_INSTANCE_ID` (default `dev`; see [The simulator](install-and-run.md#the-simulator)); it
@@ -86,9 +94,11 @@ in the DHCP server or a fixed address on the device), and when one does change, 
 
 **When a different server answers at a source's address.** If a scan, a Test or a connection check finds a server with another
 identity where a source remembers one, the source **keeps** what it remembered and keeps polling: stopping a meter's readings because
-a certificate was renewed would be worse. Instead, its Discovery card and panel say `A different server answers at this address`, and
-System events gets a warning of the same name that says who it used to be and who it is now (at most once a day for each other
-server). A scan does not refresh the points of a discovered source in that case, because they would come from the wrong server.
+a certificate was renewed would be worse. Instead, its row on Sources says `Another server answers at this address` (resting the pointer
+on it explains; polling continues), its Discovery card and panel say `A different server answers at this address`, and System events
+gets a warning of the same name that says who it used to be and who it is now (at most once a day for each other server). A scan does
+not refresh the points of a discovered source in that case, because they would come from the wrong server. The warning goes when a
+scan, Test or check meets the remembered server again, or when you edit the address by hand (that forgets what the source remembered).
 
 ## When a move is offered
 
@@ -99,10 +109,12 @@ one only when everything below holds. It never moves anything by itself.
 **The old source.** It is an OPC UA or simulator source with at least one mapping, its status is offline, and either its last failure
 was that the server did not answer at all (unreachable or timeout, not a refused login) or Discovery marks it Not seen.
 
-**The new source.** A scan found it, nothing is mapped on it, it holds no readings, and it has the same protocol, the same port and the
-same OPC UA path as the old one. It must have first appeared in a scan that started after the old source's last answer, so a neighbour
-that was already there is never offered. The path is compared exactly, except that an empty path and `/` are the same; a source typed
-by hand as `opc.tcp://host:4840/dcdash` (no closing slash) is therefore never offered, because the scan finds `/dcdash/`.
+**The new source.** A scan found it, nothing is mapped on it, no different server answers at its address, and it has the same protocol,
+the same port and the same OPC UA path as the old one. It must have first appeared in a scan that started after the old source's last
+answer, so a neighbour that was already there is never offered. The path is compared exactly, except that an empty path and `/` are the
+same; a source typed by hand as `opc.tcp://host:4840/dcdash` (no closing slash) is therefore never offered, because the scan finds
+`/dcdash/`. One more condition belongs to the move, not to the offer: the new source must hold **no readings** (otherwise it is not the
+scan's untouched copy). The offer still shows; the dialog, which asks the server, then refuses with a sentence.
 
 **The evidence**, one of two kinds:
 
@@ -112,9 +124,11 @@ by hand as `opc.tcp://host:4840/dcdash` (no closing slash) is therefore never of
   checked that this is the same server`, and every (address, point name) pair mapped on the old source must exist on the new server.
   With equal certificates a few missing pairs are only a warning. A new server that could not be browsed at all (it wants a login the
   scan does not have, so it has no points) cannot be checked this way: the move is still offered, and the dialog says so.
-- **Possibly the same server.** The old source remembers nothing (every source made before this update, until it is reached again).
-  Then the new server must have **every** address mapped on the old source **with the same point name** (numeric node ids repeat
-  across servers of one make, so the address alone proves little), and you must tick `I checked that this is the same device`.
+- **Possibly the same server.** The old source remembers nothing (every source made before this update, until it is reached again,
+  and a source whose address was edited by hand since), or what it remembers says that a different server answers at its address now
+  (then it counts as remembering nothing). Then the new server must have **every** address mapped on the old source **with the same
+  point name** (numeric node ids repeat across servers of one make, so the address alone proves little), and you must tick `I checked
+  that this is the same device`.
 
 **Never:** a different application URI or instance id; different certificates; a default URI as the only evidence; an old source that
 remembers a server while the new one says nothing; a name (two sources with equal names and different servers never match); a Modbus
@@ -183,9 +197,12 @@ puts the old host and port back inside the source's current settings (credential
 identity. It writes its own audit entry (`Undid the move of ...`).
 
 - It does **not** bring the removed duplicate back. The next scan finds the new address again and makes a new source for it.
-- It does **not** undo readings. Readings taken at the new address stay with the source, and the toast says how many when there are any.
-- It refuses, in words, when the entry is older than 24 hours, was undone already, the source was deleted, or its address or name has
-  changed since the move, and it refuses while a scan is queued or running. After that, edit the address by hand on Sources.
+- It does **not** undo readings. Readings taken since the old address last answered stay with the source, and the toast says how many
+  when there are any (`Moved back to 172.20.0.3:4840. 3 readings taken since the last answer from the old address stay.`).
+- It refuses, in words, when the entry is older than 24 hours, was undone already, the source was deleted, its address or name has
+  changed since the move, **another source now holds the old address** (a later scan found another server there; look at Discovery and
+  decide which one keeps it) or **the old name is taken now** (rename that source first), and it refuses while a scan is queued or
+  running. After that, edit the address by hand on Sources.
 
 ## A name instead of a Docker address
 
@@ -197,8 +214,10 @@ the reverse name `dcdash-simulator-1.dcdash_default`: `simulator`, then `dcdash-
 name). Loopback and link-local addresses get no hint, public addresses are never looked up, a scan looks up at most 50 addresses (up to six
 lookups for each, every one given at most 3 seconds), and stops asking after four timeouts in a row.
 
-A hint appears only in the move dialog: the choice is `Use the name simulator (it keeps working when Docker gives the container a new
-address)`, preselected, or `Use the address 172.20.0.5`. With the name, the source's address text holds `simulator` from then on, and a
+A hint appears only in the move dialog: the choice is `Use the name simulator (a name keeps working if the device gets a new
+address)`, preselected, or `Use the address 172.20.0.5`. The hint exists whenever a reverse lookup of the address gives a name that
+resolves back to exactly that address, so on a plant network it can be a DNS name; the Docker service name is only the common case, and
+the wording does not claim it. With the name, the source's address text holds `simulator` from then on, and a
 default name becomes `OPC UA server at simulator:4840`. When the old source is configured by a name, the dialog says `This source
 uses the name ...; the move replaces it with ...`. The hint is only a suggestion; you can ignore it, and you can always type the
 service name yourself in **Edit**.
@@ -230,7 +249,9 @@ wrong machine, and if it has the same node ids the readings look plausible.
 | The old source remembers nothing and a mapped address or name is missing on the new server | Possibly needs every address with its name. |
 | The paths differ, for example `/dcdash` against `/dcdash/` | Compared exactly (an empty path and `/` are the same). |
 | The URI is shared with a source at a third address | A shared URI identifies nothing. |
-| The new source has a mapping or readings | It is no longer the scan's untouched copy. |
+| The new source has a mapping | It is no longer the scan's untouched copy: it is not a candidate. |
+| The new source holds readings | The offer shows, and the dialog refuses to move: something has been using the new source. |
+| A different server answers at the new source's address | Said on its card: it is not a candidate. |
 
 ## Example: the simulator after an update
 
@@ -243,7 +264,7 @@ An update recreated every container, and Docker gave the simulator a new address
    move it or delete it on Sources`; the new one reads `Looks like OPC UA server at 172.20.0.3:4840` and has a **Move...** button.
 3. On Sources the banner ends `A scan found it at 172.20.0.5:4840:` with **Move to new address...**. The old source was made before
    the update and remembers no server, so this is a **possible** match: all 12 mapped addresses and their names exist on the new
-   server, and the dialog asks for the tick `I checked that this is the same device`. When the scan found a Docker name for the new
+   server, and the dialog asks for the tick `I checked that this is the same device`. When the scan found a name for the new
    address, the dialog offers it (`simulator`) as the default choice, with the address as the other.
 4. **Move 12 mappings** moves the source to the name or the address that was chosen. The new source is removed, the old one keeps its
    12 mappings, polls again and turns online, and the toast offers **Undo** for 10 seconds. The source now remembers the simulator

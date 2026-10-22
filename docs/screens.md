@@ -75,7 +75,9 @@ lacks says "No access".
   172.20.0.5:4840:` and a **Move to new address...** button, and that source's row menu starts with the same item; both need
   `sources.edit` (without it the sentence stays and there is no button), and with several offline sources the notice only counts how many
   were found again. Two possible servers give `Two servers could be this one; edit the address by hand` and no button. The dialog, its
-  preview, the Undo and when an offer appears are on [Devices that move or disappear](devices-that-move.md). **Test** and **Test all**
+  preview, the Undo and when an offer appears are on [Devices that move or disappear](devices-that-move.md). A row whose scan, Test or
+  check met a different server at its address shows `Another server answers at this address` in its Status cell (the tooltip says that
+  polling continues and points to System events). **Test** and **Test all**
   need `sources.test`; adding, editing and deleting sources needs `sources.edit`. A row's menu also has **Import file...**
   (`readings.import`), **Map tag list...** (`discovery.accept`) and **Fill older range...** (`sources.edit`, and only for a source whose
   connector keeps history); each shows only to a person who holds its permission. The last item, **Events** (`diagnostics.view`), opens
@@ -102,8 +104,10 @@ lacks says "No access".
   did not find is drawn quieter (a lighter ground and a lighter dashed edge) and its last line reads `Not seen in scan #7 (last seen in
   #5, 4 days ago)`; while any source is marked, **More Discovery actions** also holds **Turn on Not seen lately** and **Remove not seen
   (N)...**, which uses the same dialog as Clear unmapped and never removes a mapped or hand-added source (a marked source with
-  something mapped reads `Mapped: move it or delete it on Sources`). A new source that looks like an old one that stopped answering
-  reads `Looks like <that source>` and has **Move...** beside **Details** (needs `sources.edit`); `Two servers could be this one; edit
+  something mapped and offline reads `Mapped: move it or delete it on Sources`; while **Turn on Not seen lately** is on, the bar's
+  summary strip says `Only not seen lately (2)`, and that filter, unlike **Remove not seen**, needs only `discovery.view`). A new source
+  that looks like an old one that stopped answering reads `Looks like <that source> (12 mappings)` and has **Move...** beside
+  **Details** (needs `sources.edit`); `Two servers could be this one; edit
   the address by hand` and `A different server answers at this address` take the same line, and the Details panel adds the server's
   name (`Server: urn:dcdash:simulator:dev`) and its certificate (`certificate 3A:5F:...:91`). What each of these means is on
   [Devices that move or disappear](devices-that-move.md).
@@ -113,7 +117,8 @@ lacks says "No access".
   only** switch that hides what is already mapped, and **Tidy layout**, which puts every node back in its default column for everyone),
   the **Canvas controls** (**Find**, or Ctrl+K on the canvas, jumps to any source, group, point or asset, and **Snap to grid** lines nodes
   up on an 8 px grid with guides while you drag) and the **Page controls** (**Refresh**, the keyboard button that lists the keys, also
-  opened by `?` on the canvas, and **More Discovery actions**, which holds **Clear unmapped** for an admin). On a narrower window the
+  opened by `?` on the canvas, and **More Discovery actions**, which holds **Clear unmapped** for an admin, and the two Not seen items while a source is marked).
+  On a narrower window the
   controls lose their words one at a time while the counts keep theirs for as long as they fit, and on a still narrower one the less used
   controls move into the More menu. An open group of more than 50 points
   shows 50 and a **Show 50 more** button at the end of its list; an asset with sub-assets has a small arrow to fold them away. Arrow keys

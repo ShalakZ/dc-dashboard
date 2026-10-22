@@ -66,7 +66,8 @@ not affected.
 `sources.edit` also covers moving a source to the address where its device turned up (**Move to new address...** on Sources and **Move...** on
 Discovery) and the Undo of that move, which the toast and the audit entry offer; there is no separate permission, because it only changes the
 address of a source the person may already edit or delete. The move refuses (403) a request marked as coming from another site, as the import
-does. `discovery.edit` also covers **Remove not seen** and the **Not seen lately** filter. See [Devices that move or disappear](devices-that-move.md).
+does. `discovery.edit` also covers **Remove not seen**; the **Not seen lately** filter only hides sources on the canvas, so everyone who
+can open Discovery has it. See [Devices that move or disappear](devices-that-move.md).
 
 `billing.close` is held by the built-in Admin only, until an administrator ticks it on a role of their own (unlike `roles.manage` it can
 be ticked on a custom role, as `billing.export` can). Migration `0012` gave it to no role, so after an upgrade nobody but the Admin can
