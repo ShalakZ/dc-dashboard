@@ -110,7 +110,8 @@ by hand as `opc.tcp://host:4840/dcdash` (no closing slash) is therefore never of
   id), and when both have a certificate the thumbprints are equal. When one side has no certificate, the identity is only a claim: the
   move then says `It is identified by its application URI only.` (for the simulator, `by its instance id only`), needs the tick `I
   checked that this is the same server`, and every (address, point name) pair mapped on the old source must exist on the new server.
-  With equal certificates a few missing pairs are only a warning.
+  With equal certificates a few missing pairs are only a warning. A new server that could not be browsed at all (it wants a login the
+  scan does not have, so it has no points) cannot be checked this way: the move is still offered, and the dialog says so.
 - **Possibly the same server.** The old source remembers nothing (every source made before this update, until it is reached again).
   Then the new server must have **every** address mapped on the old source **with the same point name** (numeric node ids repeat
   across servers of one make, so the address alone proves little), and you must tick `I checked that this is the same device`.
@@ -121,7 +122,9 @@ source. And **never two candidates**: if two servers could be the old source, or
 offered and the card says `Two servers could be this one; edit the address by hand`.
 
 A source whose address is a host **name** (such as `opc.tcp://simulator:4840/dcdash/`) is matched by the scan at wherever the name
-resolves now, so it follows its container by itself, never goes offline for that reason and is never an old source.
+resolves now, so it follows its container by itself and does not go offline when Docker gives the container a new address; it is not
+offered a move for that reason. If the name stops resolving for another reason and the source is moved, the dialog says that the name
+is replaced.
 
 **Where it shows.**
 
@@ -191,8 +194,8 @@ name** (such as `simulator`) always leads to wherever the container is now, so a
 that reason. When a scan finds a server at a private IPv4 address, the platform asks the resolver which name leads back to that address.
 It offers a name only when looking the name up gives **exactly** that address and no other, trying the shortest candidates first (for
 the reverse name `dcdash-simulator-1.dcdash_default`: `simulator`, then `dcdash-simulator`, then `dcdash-simulator-1`, then the full
-name). Loopback and link-local addresses get no hint, public addresses are never looked up, a scan looks up at most 50 addresses,
-each for at most 3 seconds, and stops asking after four timeouts in a row.
+name). Loopback and link-local addresses get no hint, public addresses are never looked up, a scan looks up at most 50 addresses (up to six
+lookups for each, every one given at most 3 seconds), and stops asking after four timeouts in a row.
 
 A hint appears only in the move dialog: the choice is `Use the name simulator (it keeps working when Docker gives the container a new
 address)`, preselected, or `Use the address 172.20.0.5`. With the name, the source's address text holds `simulator` from then on, and a
@@ -240,10 +243,12 @@ An update recreated every container, and Docker gave the simulator a new address
    move it or delete it on Sources`; the new one reads `Looks like OPC UA server at 172.20.0.3:4840` and has a **Move...** button.
 3. On Sources the banner ends `A scan found it at 172.20.0.5:4840:` with **Move to new address...**. The old source was made before
    the update and remembers no server, so this is a **possible** match: all 12 mapped addresses and their names exist on the new
-   server, and the dialog asks for the tick `I checked that this is the same device`. It offers the name `simulator` as the default.
-4. **Move 12 mappings** moves the source to `opc.tcp://simulator:4840/dcdash/` (or to the address, if that is chosen). The new source
-   is removed, the old one keeps its 12 mappings, polls again and turns online, and the toast offers **Undo** for 10 seconds. The source
-   now remembers the simulator (`urn:dcdash:simulator:dev`), so a later move would be a **same server** match.
-5. The leftovers on **Discovery** (for example the unmapped Modbus and HTTP sources at the old address) are marked Not seen.
-   **More Discovery actions**, **Remove not seen**, and confirm. The mapped Modbus source stays: Modbus is never offered a move, so
-   edit its address on Sources.
+   server, and the dialog asks for the tick `I checked that this is the same device`. When the scan found a Docker name for the new
+   address, the dialog offers it (`simulator`) as the default choice, with the address as the other.
+4. **Move 12 mappings** moves the source to the name or the address that was chosen. The new source is removed, the old one keeps its
+   12 mappings, polls again and turns online, and the toast offers **Undo** for 10 seconds. The source now remembers the simulator
+   (`urn:dcdash:simulator:dev`). With the address chosen, a later move would be a **same server** match; with the name chosen, a new
+   address does not take the source offline at all.
+5. Sources that were found at the old address and have nothing mapped read Not seen. **More Discovery actions**, **Remove not seen**,
+   and confirm removes them. A mapped source stays, however it reads: if it is a Modbus source it is never offered a move, so edit its
+   address on Sources.
