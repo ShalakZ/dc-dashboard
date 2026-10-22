@@ -45,6 +45,60 @@ describe("SourcePanel", () => {
     expect(within(panel).getByText("Seen in scan #6, 10 min ago")).toHaveClass("muted");
   });
 
+  // (w33) A source the newest scan of its range did not find: the whole sentence, what to do when something is mapped, and what its server said about itself (read-only).
+  describe("a source that is not seen, and what its server said (w33)", () => {
+    const miss = { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" };
+    const LINE = "Not seen in scan #7 (last seen in #5, 4 days ago)";
+    const identity = {
+      application_uri: "urn:dcdash:simulator:dev", application_name: "DCDash simulator", product_uri: null, instance: null,
+      thumbprint: "3A:5F:C1:0D:22:98:7B:44:E0:AB:12:34:56:78:9A:BC:DE:F0:11:91", usable: true, different: false,
+    };
+    const panel = () => screen.getByRole("complementary", { name: "Source details" });
+
+    it("says the whole sentence: the line, then that a later scan of the same range did not find it", () => {
+      mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+      open(source({ not_seen: miss }), false, () => {}, LINE);
+      expect(within(panel()).getByText(`${LINE}. A later scan of the same range did not find it.`)).toHaveClass("muted");
+    });
+
+    it("a source with something mapped also says what to do, in a line of its own", () => {
+      mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+      const mapped = { id: 1, address: "a1", name: "kW", unit_hint: null, mapping_id: 3, asset_id: 10, mapped_metric: "active_power_kw" as const, suggestion: { metric: "custom" as const, scale: 1, interval_seconds: 5, custom_unit: null } };
+      open(source({ not_seen: miss, ungrouped: [mapped] }), false, () => {}, LINE);
+      expect(within(panel()).getByText("Mapped: move it or delete it on Sources")).toHaveClass("muted");
+    });
+
+    it("an unmapped one has no such line, and a seen one keeps its sentence as it is", () => {
+      mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+      open(source({ not_seen: miss }), false, () => {}, LINE);
+      expect(within(panel()).queryByText(/Mapped: move it/)).not.toBeInTheDocument();
+      expect(within(panel()).queryByText("Seen in scan #6, 10 min ago")).not.toBeInTheDocument();
+    });
+
+    it("shows the server and the certificate when the source has an identity: the URI, and the thumbprint cut short with the whole value in its title", () => {
+      mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+      open(source({ identity }), false);
+      expect(within(panel()).getByText("Server: urn:dcdash:simulator:dev")).toHaveClass("muted", "gsrc-fact");
+      const cert = within(panel()).getByText("certificate 3A:5F:...:91");
+      expect(cert).toHaveClass("muted", "gsrc-fact");
+      expect(cert).toHaveAttribute("title", identity.thumbprint);
+    });
+
+    it("falls back to the instance id, then the application name, and has no certificate line without a thumbprint", () => {
+      mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+      open(source({ identity: { ...identity, application_uri: null, instance: "dev", thumbprint: null } }), false);
+      expect(within(panel()).getByText("Server: dev")).toBeInTheDocument();
+      expect(within(panel()).queryByText(/^certificate/)).not.toBeInTheDocument();
+    });
+
+    it("shows nothing about a server when identity is null or absent, and no edit control for it (read-only)", () => {
+      mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+      open(source({ identity: null }), true);
+      expect(within(panel()).queryByText(/^Server:/)).not.toBeInTheDocument();
+      expect(within(panel()).queryByText(/^certificate/)).not.toBeInTheDocument();
+    });
+  });
+
   it("moves focus to its heading when it opens", () => {
     mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
     open(source(), false);

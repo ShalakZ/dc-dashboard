@@ -132,6 +132,11 @@ export function groupsOf(source: GraphSource): Group[] {
 export interface GraphView {
   /** "Unmapped only": mapped points, groups whose points are all mapped and sources with nothing left to map are not drawn, and no mapped edge is. */
   unmappedOnly: boolean;
+  /**
+   * (w33) "Not seen lately": only the discovered sources the newest done scan of their range did not find are drawn (`isNotSeen`). Optional, so every caller
+   * that builds a view by hand keeps working; absent = off. Session only. The page turns it off by itself when no source is marked any more.
+   */
+  notSeenOnly?: boolean;
   /** Group node id -> how many of its (visible) points the page shows. Absent = `pageSize`. Session only; `pruneShown` drops the entries of closed groups. */
   shown: ReadonlyMap<string, number>;
   /** Asset ids whose sub-assets are hidden. */
@@ -157,8 +162,12 @@ export function groupVisible(group: Group, view: GraphView): boolean {
   return !view.unmappedOnly || group.points.length === 0 || group.points.some((p) => p.asset_id === null);
 }
 
-/** A source is hidden by the filter when it has at least one point and every point is mapped. A source with no points stays (it may need credentials). */
+/**
+ * A source is hidden by "Unmapped only" when it has at least one point and every point is mapped. A source with no points stays (it may need credentials).
+ * (w33) "Not seen lately" hides every source that is not marked not seen; the two filters add up.
+ */
 export function sourceVisible(source: GraphSource, view: GraphView): boolean {
+  if (view.notSeenOnly && !isNotSeen(source)) return false;
   if (!view.unmappedOnly) return true;
   const groups = groupsOf(source);
   const total = groups.reduce((n, g) => n + g.points.length, 0);
@@ -592,9 +601,80 @@ export function isRemovable(source: GraphSource): boolean {
   return source.origin === "discovered" && !pointsOf(source).some((p) => p.mapping_id !== null || p.asset_id !== null);
 }
 
-/** The muted line of a source node and its panel: when a scan last found it. `now` and the site's time zone are passed in (the "ago" part counts on the site's clock). */
+/**
+ * (w33) Whether the server marked this source "not seen": the newest done scan of the same range (the same targets and ports) did not find it. Only a discovered
+ * source can be marked (a source added by hand is never), so a stray field on a hand-added one is ignored here too.
+ */
+export function isNotSeen(source: GraphSource): boolean {
+  return source.origin === "discovered" && source.not_seen != null;
+}
+
+/** (w33) The sources "Remove not seen" may offer: not seen AND nothing mapped (the rule of Remove and Clear unmapped). The server decides again on its own data. */
+export function removableNotSeen(sources: readonly GraphSource[]): GraphSource[] {
+  return sources.filter((s) => isNotSeen(s) && isRemovable(s));
+}
+
+/** (w33) How many sources are marked not seen, mapped or not (the filter "Not seen lately" shows exactly these). */
+export function notSeenCount(sources: readonly GraphSource[]): number {
+  return sources.filter(isNotSeen).length;
+}
+
+/** (w33) What a not-seen source with a mapped point says in place of its seen line: it cannot be removed here; its mappings are moved or the source deleted on Sources. */
+export const MAPPED_NOT_SEEN = "Mapped: move it or delete it on Sources";
+
+/**
+ * (w33) The last line of the source card and its tooltip. The card has no room for a seventh line (SOURCE_H), so a not-seen source with something mapped trades
+ * its seen line for what to do about it; the tooltip keeps both sentences. Every other source shows its seen line as it is.
+ */
+export function seenCard(source: GraphSource, seen: string): { line: string; title: string } {
+  if (isNotSeen(source) && !isRemovable(source)) return { line: MAPPED_NOT_SEEN, title: `${seen}. ${MAPPED_NOT_SEEN}` };
+  return { line: seen, title: seen };
+}
+
+/** (w33) The panel's sentence for the seen line: a not-seen source gets the reason after the line itself. */
+export function notSeenSentence(source: GraphSource, seen: string): string {
+  return isNotSeen(source) ? `${seen}. A later scan of the same range did not find it.` : seen;
+}
+
+/** (w33) "Server: urn:dcdash:simulator:dev": who the server said it is (its application URI, else the simulator's instance id, else its name); null when nothing is known. Read-only. */
+export function serverLine(identity: GraphSource["identity"]): string | null {
+  const who = identity?.application_uri || identity?.instance || identity?.application_name;
+  return who ? `Server: ${who}` : null;
+}
+
+/** The thumbprint kept to its first 5 and last 2 characters (`3A:5F:...:91`); a short one is shown whole. */
+const shortThumbprint = (value: string): string => (value.length > 12 ? `${value.slice(0, 5)}:...:${value.slice(-2)}` : value);
+
+/** (w33) `certificate 3A:5F:...:91` with the whole thumbprint for the tooltip; null without a thumbprint. */
+export function certificateLine(identity: GraphSource["identity"]): { text: string; title: string } | null {
+  const value = identity?.thumbprint;
+  return value ? { text: `certificate ${shortThumbprint(value)}`, title: value } : null;
+}
+
+/** (w33) The source a node belongs to: a source node, a group node or a point node; null for an asset, an unidentified service or an unknown point. */
+export function sourceIdOfNode(model: GraphModel, id: string): number | null {
+  if (id.startsWith("src:") || id.startsWith("cluster:")) {
+    const sourceId = Number(id.split(":")[1]);
+    return Number.isInteger(sourceId) ? sourceId : null;
+  }
+  if (id.startsWith("point:")) {
+    const pointId = Number(id.slice("point:".length));
+    return model.sources.find((s) => pointsOf(s).some((p) => p.id === pointId))?.id ?? null;
+  }
+  return null;
+}
+
+/**
+ * The muted line of a source node and its panel: when a scan last found it. `now` and the site's time zone are passed in (the "ago" part counts on the site's clock).
+ * (w33) A discovered source the server marked not seen says so first: `Not seen in scan #7 (last seen in #5, 4 days ago)`, the ago part counted from the last time it was seen.
+ */
 export function seenLine(source: GraphSource, now: Date, timezone: string): string {
   if (source.origin === "manual") return "Added by hand"; // a scan that meets it only reports "existing source": there is no time worth showing
+  const missed = source.not_seen;
+  if (missed) {
+    const since = relativeTime(missed.last_seen_at, now, timezone);
+    return `Not seen in scan #${missed.scan_id} (last seen in #${missed.last_seen_scan_id}${since ? `, ${since}` : ""})`;
+  }
   const scan = source.last_scan;
   if (!scan) return "Not seen in a scan yet";
   const ago = relativeTime(scan.at, now, timezone);
@@ -649,8 +729,22 @@ function nameList(names: readonly string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-/** The title and the sentence of the delete dialog for Remove (one source) and Clear unmapped (several). The list is the one the person was shown. */
-export function removalDialogText(names: readonly string[]): { title: string; message: string } {
+/**
+ * The title and the sentence of the delete dialog for Remove (one source) and Clear unmapped (several). The list is the one the person was shown.
+ * (w33) `"notSeen"` is Remove not seen: the same dialog with the reason (the latest scan of the same range did not find them) and the promise that mapped and
+ * hand-added sources are never removed. Without a kind the words are the old ones.
+ */
+export function removalDialogText(names: readonly string[], kind?: "notSeen"): { title: string; message: string } {
+  if (kind === "notSeen") {
+    const never = "Mapped sources and sources added by hand are never removed.";
+    if (names.length === 1) {
+      return { title: `Remove "${names[0]}", which the latest scan did not find?`, message: `The latest scan of the same range did not find it. ${never} A scan can find it again.` };
+    }
+    return {
+      title: `Remove ${names.length} sources the latest scan did not find?`,
+      message: `${nameList(names)}. The latest scan of the same range did not find them. ${never} A scan can find these again.`,
+    };
+  }
   if (names.length === 1) {
     return {
       title: `Remove "${names[0]}" from Discovery?`,

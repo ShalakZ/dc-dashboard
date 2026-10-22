@@ -4,6 +4,7 @@ import { api } from "../../api/client";
 import { keys } from "../../api/queries";
 import type { GraphSource } from "../../api/types";
 import { useAction } from "../../hooks/useAction";
+import { certificateLine, isNotSeen, isRemovable, MAPPED_NOT_SEEN, notSeenSentence, serverLine } from "../../lib/graph";
 import { useJob } from "../../hooks/useJob";
 import { JobStatus } from "../JobStatus";
 
@@ -51,6 +52,10 @@ export function SourcePanel({ source, canEdit, seen, onClose }: Props) {
     });
   };
 
+  // (w33) What the source's server said about itself, as the scan or a Test learned it: read-only, nothing at all while it is not known.
+  const server = serverLine(source.identity);
+  const certificate = certificateLine(source.identity);
+
   return (
     <aside
       className="panel gpanel"
@@ -63,7 +68,10 @@ export function SourcePanel({ source, canEdit, seen, onClose }: Props) {
         <button className="quiet" onClick={onClose}>Close</button>
       </div>
       <p className="muted">{source.connector_type} · {source.origin} · {source.status} · {source.point_count} points</p>
-      <p className="muted">{seen}</p>
+      <p className="muted gsrc-fact">{notSeenSentence(source, seen)}</p>
+      {isNotSeen(source) && !isRemovable(source) && <p className="muted">{MAPPED_NOT_SEEN}</p>}
+      {server && <p className="muted gsrc-fact">{server}</p>}
+      {certificate && <p className="muted gsrc-fact" title={certificate.title}>{certificate.text}</p>}
       {source.last_error && <p className="error">Last error: {source.last_error}</p>}
       {source.needs_credentials && <p>This source needs credentials.</p>}
       {canEdit && source.needs_credentials && (

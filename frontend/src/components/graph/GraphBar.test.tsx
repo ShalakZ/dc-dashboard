@@ -420,6 +420,94 @@ describe("GraphBar", () => {
     });
   });
 
+  // (w33) Sources the newest scan of their range did not find: two more items at the END of the overflow menu, offered only while some source is marked. The bar itself is not touched
+  // (its measured width tiers are pinned above), so nothing here may change what the bar draws.
+  describe("not seen: Turn on Not seen lately and Remove not seen (w33)", () => {
+    const notSeen = (over: Partial<NonNullable<React.ComponentProps<typeof GraphBar>["notSeen"]>> = {}) => ({
+      count: 3, filtered: false, onFilter: vi.fn(), removable: 2, onRemove: vi.fn(), ...over,
+    });
+
+    it("come after Clear unmapped, last in the menu", async () => {
+      bar({ snap: false, notSeen: notSeen() });
+      hideNarrow("Unmapped only", "Tidy layout", "Snap to grid");
+      await userEvent.click(overflow());
+      expect(menuItems().map((i) => i.textContent)).toEqual([
+        "Turn on Unmapped only", "Tidy layout", "Turn on Snap to grid", "Clear unmapped (3)", "Turn on Not seen lately", "Remove not seen (2)...",
+      ]);
+    });
+
+    it("are not there while nothing is marked not seen (so the menu is the one it always was), or without the prop", async () => {
+      bar({ notSeen: notSeen({ count: 0, removable: 0 }) });
+      await userEvent.click(overflow());
+      expect(menuItems().map((i) => i.textContent)).toEqual(["Clear unmapped (3)"]);
+    });
+
+    it("are not offered to a role that may not clear unmapped sources: its menu and its narrow-only button stay as they were", async () => {
+      bar({ clear: undefined, notSeen: notSeen() });
+      expect(overflow()).toHaveClass("gbar-overflow", "gbar-overflow-narrow");
+      await userEvent.click(overflow());
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("the filter item says the state in its words and flips it, and the menu gives the focus back to the button first", async () => {
+      const seen: Array<Element | null> = [];
+      const onFilter = vi.fn(() => { seen.push(document.activeElement); });
+      const off = bar({ notSeen: notSeen({ onFilter }) });
+      await userEvent.click(overflow());
+      await userEvent.click(screen.getByRole("menuitem", { name: "Turn on Not seen lately" }));
+      expect(onFilter).toHaveBeenCalledWith(true);
+      expect(seen[0]).toBe(overflow());
+      expect(screen.queryByRole("menu")).toBeNull();
+      off.unmount();
+
+      bar({ notSeen: notSeen({ filtered: true, onFilter }) });
+      await userEvent.click(overflow());
+      await userEvent.click(screen.getByRole("menuitem", { name: "Turn off Not seen lately" }));
+      expect(onFilter).toHaveBeenLastCalledWith(false);
+    });
+
+    it("Remove not seen (N)... counts the sources it could remove, which may be fewer than the ones marked, and calls back once the focus is on the overflow button", async () => {
+      const seen: Array<Element | null> = [];
+      const onRemove = vi.fn(() => { seen.push(document.activeElement); });
+      bar({ notSeen: notSeen({ count: 5, removable: 4, onRemove }) });
+      await userEvent.click(overflow());
+      const item = screen.getByRole("menuitem", { name: "Remove not seen (4)..." });
+      expect(item).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(item);
+      expect(onRemove).toHaveBeenCalledTimes(1);
+      expect(seen[0]).toBe(overflow());
+    });
+
+    it("with marked sources that all have something mapped the item keeps its place, is aria-disabled with the reason, and does nothing", async () => {
+      const onRemove = vi.fn();
+      bar({ notSeen: notSeen({ count: 2, removable: 0, onRemove }) });
+      await userEvent.click(overflow());
+      const item = screen.getByRole("menuitem", { name: /Remove not seen \(0\)\.\.\./ });
+      expect(item).toHaveAttribute("aria-disabled", "true");
+      expect(item).toHaveAttribute("title", "Nothing to remove");
+      expect(item).toHaveTextContent("Nothing to remove");
+      await userEvent.click(item);
+      expect(onRemove).not.toHaveBeenCalled();
+      // the filter item is still usable: the marked sources can be looked at
+      expect(screen.getByRole("menuitem", { name: "Turn on Not seen lately" })).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("a filter that is on keeps its item while the count is 0 (the page switches it off by itself, but the item never vanishes under a person who just used it)", async () => {
+      bar({ notSeen: notSeen({ count: 0, removable: 0, filtered: true }) });
+      await userEvent.click(overflow());
+      expect(menuItems().map((i) => i.textContent)).toEqual(["Clear unmapped (3)", "Turn off Not seen lately"]);
+    });
+
+    it("changes nothing the bar draws: the same markup with or without the prop, so no width tier moves", () => {
+      const markup = () => root().innerHTML.replace(/_r_[0-9a-z]+_/g, "_id_"); // React's generated ids differ from one mount to the next
+      const without = bar();
+      const html = markup();
+      without.unmount();
+      bar({ notSeen: notSeen() });
+      expect(markup()).toBe(html);
+    });
+  });
+
   describe("the Collapse all and Expand all chevrons (the old MoreWays, now BarMenu)", () => {
     it("each is a menu button, collapsed until pressed, beside its button", () => {
       bar();

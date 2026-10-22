@@ -358,6 +358,52 @@ describe("graph nodes", () => {
     });
   });
 
+  // (w33) A discovered source the newest scan of its range did not find is drawn quieter (class gsrc-not-seen: the stylesheet gives it the quieter ground), with its
+  // seen line unchanged in height: one line, the whole sentence in the title. One with something mapped says what to do instead.
+  describe("a source that is not seen (w33)", () => {
+    const miss = { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" };
+    const LINE = "Not seen in scan #7 (last seen in #5, 4 days ago)";
+    const gone: GraphSource = { ...source, not_seen: miss };
+    const mappedPoint: GraphPoint = { ...point, id: 4, asset_id: 10, mapping_id: 1, mapped_metric: "voltage_v" };
+    const lines = () => Array.from(document.querySelectorAll(".gsrc-body > *")).map((line) => line.className.split(" ")[0]);
+
+    it("the card wears the class gsrc-not-seen, and only then (no trailing space in the class list)", () => {
+      renderNode("source", "src:1", { source: gone, expanded: false, seen: LINE });
+      expect(document.querySelector(".gnode")!.className).toBe("gnode gnode-source discovered gsrc-not-seen");
+      cleanup();
+      renderNode("source", "src:1", { source: { ...source, not_seen: null }, expanded: false, seen: "Seen in scan #6, 10 min ago" });
+      expect(document.querySelector(".gnode")!.className).toBe("gnode gnode-source discovered");
+    });
+
+    it("a source added by hand is never drawn as not seen, whatever the field says", () => {
+      renderNode("source", "src:1", { source: { ...gone, origin: "manual" }, expanded: false, seen: "Added by hand" });
+      expect(document.querySelector(".gnode")!.className).toBe("gnode gnode-source manual");
+    });
+
+    it("the seen line is still one muted line with the whole sentence in its title, and the card keeps its other lines", () => {
+      renderNode("source", "src:1", { source: gone, expanded: false, onSelect: vi.fn(), seen: LINE });
+      const line = screen.getByText(LINE);
+      expect(line).toHaveClass("muted", "gsrc-seen");
+      expect(line).toHaveAttribute("title", LINE);
+      expect(lines()).toEqual(["gsrc-head", "gsrc-sub", "gsrc-status", "gsrc-mapped", "gsrc-actions", "gsrc-seen"]);
+    });
+
+    it("with a mapped point the line says what to do, and the title keeps both sentences (the card has no room for a seventh line)", () => {
+      renderNode("source", "src:1", { source: { ...gone, point_count: 1, ungrouped: [mappedPoint] }, expanded: false, seen: LINE });
+      const line = screen.getByText("Mapped: move it or delete it on Sources");
+      expect(line).toHaveClass("muted", "gsrc-seen");
+      expect(line).toHaveAttribute("title", `${LINE}. Mapped: move it or delete it on Sources`);
+      expect(screen.queryByText(LINE)).not.toBeInTheDocument();
+      expect(lines()).toEqual(["gsrc-head", "gsrc-sub", "gsrc-status", "gsrc-mapped", "gsrc-seen"]);
+    });
+
+    it("a seen source with a mapped point keeps its own line", () => {
+      renderNode("source", "src:1", { source: { ...source, ungrouped: [mappedPoint] }, expanded: false, seen: "Seen in scan #6, 10 min ago" });
+      expect(screen.getByText("Seen in scan #6, 10 min ago")).toBeInTheDocument();
+      expect(screen.queryByText(/Mapped: move it/)).not.toBeInTheDocument();
+    });
+  });
+
   describe("a group's mapped progress strip (W7u)", () => {
     const strip = () => document.querySelector(".gprogress") as HTMLElement;
 

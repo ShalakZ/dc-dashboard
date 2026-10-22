@@ -6,6 +6,7 @@ import { AddConnectionLine } from "../components/graph/nodes";
 import { resetUndoForTests, type MappedInfo } from "../hooks/useMappingActions";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
+import { useScans } from "../api/queries";
 import { renderWithProviders } from "../test/render";
 import { spyToasts } from "../test/toasts";
 import { accountKnown, SignedIn } from "../test/signedIn";
@@ -4597,5 +4598,300 @@ describe("DiscoveryPage last value card (W12c)", () => {
     expect(new Set(seen.map((h) => h.enter)).size).toBe(1);
     expect(new Set(seen.map((h) => h.leave)).size).toBe(1);
     expect(new Set(seen.map((h) => h.moveStart)).size).toBe(1);
+  });
+});
+
+// ---- w33: sources the newest scan of their range did not find ----
+describe("DiscoveryPage not seen (w33)", () => {
+  const FOUR_DAYS = new Date(Date.now() - 4 * 86_400_000).toISOString();
+  const miss = { scan_id: 7, at: minutesAgo(60), last_seen_scan_id: 5, last_seen_at: FOUR_DAYS };
+  const LINE = "Not seen in scan #7 (last seen in #5, 4 days ago)";
+  /** A discovered source scan #7 did not find: unmapped, or with `mapped` its one point mapped. */
+  const gone = (id: number, name: string, over: Partial<GraphSource> = {}): GraphSource =>
+    srcOf(id, name, { last_scan: { scan_id: 5, at: FOUR_DAYS }, not_seen: miss, ...over });
+  const goneMapped = (id: number, name: string) => ({ ...mappedSource(id, name), last_scan: { scan_id: 5, at: FOUR_DAYS }, not_seen: miss });
+  const seenNow = (id: number, name: string) => srcOf(id, name, { last_scan: { scan_id: 7, at: minutesAgo(5) }, not_seen: null });
+  const mix = () => [gone(1, "Old A"), goneMapped(2, "Old Mapped"), seenNow(3, "Fresh"), srcOf(4, "Bench", { origin: "manual" }), gone(5, "Old B")];
+  const menuTexts = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((i) => i.textContent);
+  const summaryText = () => (document.querySelector(".graph-summary") as HTMLElement).textContent;
+  const sourceNodes = () => [...document.querySelectorAll('[data-id^="src:"]')].map((el) => el.getAttribute("data-id"));
+
+  it("draws a source the scan did not find quieter, with its sentence on the card's one line and the whole sentence in its title", async () => {
+    serverWith("operator", mix());
+    openToasts();
+    await screen.findByText("Old A");
+    expect(node("src:1")).toBeInTheDocument();
+    expect(node("src:1").querySelector(".gnode")).toHaveClass("gsrc-not-seen");
+    const line = within(node("src:1")).getByText(LINE);
+    expect(line).toHaveClass("gsrc-seen");
+    expect(line).toHaveAttribute("title", LINE);
+    for (const id of ["src:3", "src:4"]) expect(node(id).querySelector(".gnode")).not.toHaveClass("gsrc-not-seen"); // seen, and added by hand
+    expect(within(node("src:3")).getByText(/^Seen in scan #7, /)).toBeInTheDocument();
+  });
+
+  it("a mapped one says what to do, and keeps both sentences in its title", async () => {
+    serverWith("operator", mix());
+    openToasts();
+    await screen.findByText("Old A");
+    const line = within(node("src:2")).getByText("Mapped: move it or delete it on Sources");
+    expect(line).toHaveAttribute("title", `${LINE}. Mapped: move it or delete it on Sources`);
+    expect(node("src:2").querySelector(".gnode")).toHaveClass("gsrc-not-seen");
+  });
+
+  it("the panel says the whole sentence, and for a mapped source what to do; the server and its certificate only when the source has an identity", async () => {
+    const identity = {
+      application_uri: "urn:dcdash:simulator:dev", application_name: null, product_uri: null, instance: null, usable: true, different: false,
+      thumbprint: "3A:5F:C1:0D:22:98:7B:44:E0:AB:12:34:56:78:9A:BC:DE:F0:11:91",
+    };
+    serverWith("operator", [gone(1, "Old A", { identity }), goneMapped(2, "Old Mapped")]);
+    openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Details for Old A" }));
+    let panel = await screen.findByRole("complementary", { name: "Source details" });
+    expect(within(panel).getByText(`${LINE}. A later scan of the same range did not find it.`)).toBeInTheDocument();
+    expect(within(panel).getByText("Server: urn:dcdash:simulator:dev")).toBeInTheDocument();
+    expect(within(panel).getByText("certificate 3A:5F:...:91")).toHaveAttribute("title", identity.thumbprint);
+    expect(within(panel).queryByText(/Mapped: move it/)).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: "Close" }));
+    await userEvent.click(screen.getByRole("button", { name: "Details for Old Mapped" }));
+    panel = await screen.findByRole("complementary", { name: "Source details" });
+    expect(within(panel).getByText("Mapped: move it or delete it on Sources")).toBeInTheDocument();
+    expect(within(panel).queryByText(/^Server:/)).not.toBeInTheDocument();
+  });
+
+  describe("the overflow menu", () => {
+    it("adds the filter and Remove not seen (N)... after Clear unmapped, counting what could go (not the mapped one, not the hand-added one)", async () => {
+      serverWith("admin", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      const menu = await openOverflow();
+      // Clear unmapped (3): Old A, Fresh, Old B (nothing mapped, discovered); Remove not seen (2): Old A, Old B. Three sources are marked, one of them mapped.
+      expect(menuTexts(menu)).toEqual(["Clear unmapped (3)", "Turn on Not seen lately", "Remove not seen (2)..."]);
+    });
+
+    it("offers neither while no source is marked, so the menu is the one it always was", async () => {
+      serverWith("admin", [srcOf(1, "Plant OPC"), seenNow(2, "Fresh")]);
+      openToasts();
+      await screen.findByText("Plant OPC");
+      expect(menuTexts(await openOverflow())).toEqual(["Clear unmapped (2)"]);
+    });
+
+    it("a role that may not remove gets neither item, and its card is still drawn quieter", async () => {
+      serverWith("operator", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      expect(overflowButton()).toHaveClass("gbar-overflow-narrow");
+      await userEvent.click(overflowButton());
+      expect(screen.queryByRole("menu", { name: "Discovery actions" })).not.toBeInTheDocument();
+      expect(node("src:1").querySelector(".gnode")).toHaveClass("gsrc-not-seen");
+    });
+
+    it("when every marked source has something mapped, Remove not seen (0)... keeps its place and says why it does nothing", async () => {
+      serverWith("admin", [goneMapped(2, "Old Mapped"), seenNow(3, "Fresh")]);
+      openToasts();
+      await screen.findByText("Old Mapped");
+      const item = within(await openOverflow()).getByRole("menuitem", { name: /^Remove not seen \(0\)\.\.\./ });
+      expect(item).toHaveAttribute("aria-disabled", "true");
+      expect(item).toHaveTextContent("Nothing to remove");
+      await userEvent.click(item);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Not seen lately (the filter)", () => {
+    const turn = async (word: "on" | "off") => {
+      const menu = await openOverflow();
+      await userEvent.click(within(menu).getByRole("menuitem", { name: `Turn ${word} Not seen lately` }));
+    };
+
+    it("shows only the sources the scan did not find, says so in the announced sentence, and turns off again", async () => {
+      serverWith("admin", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      expect(sourceNodes()).toEqual(["src:1", "src:2", "src:3", "src:4", "src:5"]);
+      expect(summaryText()).toBe("5 sources, 5 points, 1 mapped");
+      await turn("on");
+      expect(sourceNodes()).toEqual(["src:1", "src:2", "src:5"]);
+      expect(summaryText()).toBe("5 sources, 5 points, 1 mapped, showing only sources not seen lately (3)");
+      expect(overflowButton()).toHaveFocus();
+      expect(within(await openOverflow()).getByRole("menuitem", { name: "Turn off Not seen lately" })).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      await turn("off");
+      expect(sourceNodes()).toEqual(["src:1", "src:2", "src:3", "src:4", "src:5"]);
+      expect(summaryText()).toBe("5 sources, 5 points, 1 mapped");
+    });
+
+    it("is not remembered: a page opened again starts with every source", async () => {
+      serverWith("admin", mix());
+      const first = openToasts();
+      await screen.findByText("Old A");
+      await turn("on");
+      first.unmount();
+      serverWith("admin", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      expect(sourceNodes()).toHaveLength(5);
+    });
+
+    it("goes off by itself when the last marked source is gone (a rescan found it, or it was removed), instead of leaving an empty canvas", async () => {
+      const { state } = serverWith("admin", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      await turn("on");
+      expect(sourceNodes()).toEqual(["src:1", "src:2", "src:5"]);
+      state.sources = [seenNow(1, "Old A"), seenNow(2, "Old Mapped"), seenNow(3, "Fresh")]; // a rescan found all three
+      await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await waitFor(() => expect(sourceNodes()).toEqual(["src:1", "src:2", "src:3"]));
+      expect(summaryText()).toBe("3 sources, 3 points, 0 mapped");
+      // ...and it stays off: a later scan that marks a source again does not bring the filter back
+      state.sources = [seenNow(1, "Old A"), gone(2, "Old Mapped"), seenNow(3, "Fresh")];
+      await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await waitFor(() => expect(within(node("src:2")).getByText(LINE)).toBeInTheDocument());
+      expect(sourceNodes()).toEqual(["src:1", "src:2", "src:3"]);
+      expect(within(await openOverflow()).getByRole("menuitem", { name: "Turn on Not seen lately" })).toBeInTheDocument();
+    });
+
+    it("Find on a source the filter hides turns it off first and says so", async () => {
+      serverWith("admin", mix());
+      const { toasts } = openToasts();
+      await screen.findByText("Old A");
+      await turn("on");
+      await userEvent.click(screen.getByRole("button", { name: "Find" }));
+      await userEvent.type(await screen.findByRole("combobox"), "Fresh");
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(sourceNodes()).toContain("src:3"));
+      expect(toasts.calls).toContainEqual({ kind: "info", text: "Not seen lately is off so Fresh can be shown." });
+      expect(within(await openOverflow()).getByRole("menuitem", { name: "Turn on Not seen lately" })).toBeInTheDocument();
+    });
+  });
+
+  describe("Remove not seen (N)...", () => {
+    const pressRemoveNotSeen = async (n: number) => {
+      const menu = await openOverflow();
+      await userEvent.click(within(menu).getByRole("menuitem", { name: `Remove not seen (${n})...` }));
+    };
+
+    it("opens the same confirmation as Clear unmapped, worded for this: the reason, the names, and that mapped and hand-added sources are never removed", async () => {
+      serverWith("admin", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(2);
+      const dialog = await confirmDialog("Remove 2 sources the latest scan did not find?");
+      expect(dialog).toHaveTextContent("Old A and Old B. The latest scan of the same range did not find them.");
+      expect(dialog).toHaveTextContent("Mapped sources and sources added by hand are never removed. A scan can find these again.");
+      expect(dialog).not.toHaveTextContent("Old Mapped");
+      expect(dialog).not.toHaveTextContent("Bench");
+      expect(within(dialog).getByRole("button", { name: "Remove" })).toBeInTheDocument();
+    });
+
+    it("lists the first five names and the rest as a count", async () => {
+      serverWith("admin", Array.from({ length: 7 }, (_, i) => gone(i + 1, `Unit ${i + 1}`)));
+      openToasts();
+      await screen.findByText("Unit 1");
+      await pressRemoveNotSeen(7);
+      const dialog = await confirmDialog("Remove 7 sources the latest scan did not find?");
+      expect(dialog).toHaveTextContent("Unit 1, Unit 2, Unit 3, Unit 4, Unit 5 and 2 more.");
+      expect(dialog).not.toHaveTextContent("Unit 6");
+    });
+
+    it("one source is named in the title", async () => {
+      serverWith("admin", [gone(1, "Old A"), seenNow(3, "Fresh")]);
+      openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(1);
+      expect(await confirmDialog('Remove "Old A", which the latest scan did not find?')).toHaveTextContent("The latest scan of the same range did not find it.");
+    });
+
+    it("sends exactly the ids it listed to the existing remove route (a source marked afterwards is never in the request), removes them, says how many, and gives the focus back to the overflow button", async () => {
+      const { state, calls } = serverWith("admin", mix());
+      const { toasts } = openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(2);
+      const dialog = await confirmDialog("Remove 2 sources the latest scan did not find?");
+      state.sources = [...state.sources, gone(9, "Marked later")];
+      await userEvent.click(screen.getByRole("button", { name: "Refresh" })); // the graph is read again behind the dialog
+      await screen.findByText("Marked later");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(removeCalls(calls)).toHaveLength(1);
+      expect(removeCalls(calls)[0].body).toEqual({ source_ids: [1, 5] });
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Removed 2 sources" }]);
+      expect(screen.queryByText("Old A")).not.toBeInTheDocument();
+      for (const name of ["Old Mapped", "Fresh", "Bench", "Marked later"]) expect(screen.getByText(name)).toBeInTheDocument();
+      expect(overflowButton()).toHaveFocus();
+    });
+
+    it("never sends a mapped or hand-added source, even one the server marks", async () => {
+      const handMarked = srcOf(6, "Bench 2", { origin: "manual", not_seen: miss });
+      const { calls } = serverWith("admin", [gone(1, "Old A"), goneMapped(2, "Old Mapped"), handMarked]);
+      openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(1);
+      await userEvent.click(within(await confirmDialog('Remove "Old A", which the latest scan did not find?')).getByRole("button", { name: "Remove" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(removeCalls(calls)[0].body).toEqual({ source_ids: [1] });
+    });
+
+    it("when one gained a mapping meanwhile, the server keeps it and an error toast says why", async () => {
+      const { state } = serverWith("admin", [gone(1, "Old A"), gone(2, "Old B")]);
+      const { toasts } = openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(2);
+      const dialog = await confirmDialog("Remove 2 sources the latest scan did not find?");
+      state.sources = [goneMapped(1, "Old A"), gone(2, "Old B")];
+      await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(toasts.calls).toEqual([{ kind: "error", text: "Removed 1 source. 1 was kept: it has a mapped point now." }]);
+      expect(screen.getByText("Old A")).toBeInTheDocument();
+      expect(screen.queryByText("Old B")).not.toBeInTheDocument();
+    });
+
+    it("a running scan (409) is the dialog's error line (the server's sentence), and nothing is removed", async () => {
+      const { state } = serverWith("admin", mix(), {}, {
+        "POST /api/discovery/sources/remove": { status: 409, body: { detail: "A scan is running. Remove discovered sources when it has finished." } },
+      });
+      const { toasts } = openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(2);
+      const dialog = await confirmDialog("Remove 2 sources the latest scan did not find?");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent("A scan is running. Remove discovered sources when it has finished.");
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(toasts.calls).toEqual([]);
+      expect(state.sources).toHaveLength(5);
+    });
+
+    it("Escape and Cancel remove nothing", async () => {
+      const { calls } = serverWith("admin", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(2);
+      await confirmDialog("Remove 2 sources the latest scan did not find?");
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(removeCalls(calls)).toHaveLength(0);
+      expect(overflowButton()).toHaveFocus();
+    });
+
+    it("refreshes the graph, the sources and the scans after the answer, and after a refusal too", async () => {
+      const ScansProbe = () => { useScans(); return null; };
+      const scansReads = (calls: { method: string; path: string }[]) => calls.filter((c) => c.method === "GET" && c.path === "/api/scans").length;
+      const refreshedAfter = async (extra: Record<string, unknown>) => {
+        const { calls } = serverWith("admin", mix(), {}, { "GET /api/scans": { body: [] }, "GET /api/sources": { body: [] }, ...extra });
+        const toasts = spyToasts();
+        const view = renderWithProviders(<><main id="main" tabIndex={-1} /><DiscoveryPage /><SignedIn /><ScansProbe /></>, { route: "/discovery", path: "/discovery", toasts: toasts.api });
+        await screen.findByText("Old A");
+        await waitFor(() => expect(scansReads(calls)).toBe(1));
+        const graphReads = () => calls.filter((c) => c.method === "GET" && c.path === "/api/discovery/graph").length;
+        const [graphBefore, sourcesBefore] = [graphReads(), calls.filter((c) => c.path === "/api/sources").length];
+        await pressRemoveNotSeen(2);
+        await userEvent.click(within(await confirmDialog("Remove 2 sources the latest scan did not find?")).getByRole("button", { name: "Remove" }));
+        await waitFor(() => expect(scansReads(calls)).toBe(2));
+        expect(graphReads()).toBeGreaterThan(graphBefore);
+        expect(calls.filter((c) => c.path === "/api/sources").length).toBeGreaterThanOrEqual(sourcesBefore);
+        view.unmount();
+      };
+      await refreshedAfter({});
+      await refreshedAfter({ "POST /api/discovery/sources/remove": { status: 409, body: { detail: "A scan is running." } } });
+    });
   });
 });

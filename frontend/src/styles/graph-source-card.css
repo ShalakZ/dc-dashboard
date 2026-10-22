@@ -39,4 +39,14 @@
 
   .gsrc-actions { display: flex; align-items: center; height: 20px; }
   .gsrc-actions .gsrc-details { height: 20px; }
+
+  /* w33: a discovered source the newest scan of its range did not find (nodes.tsx adds the class). It is drawn quieter by its GROUND and its edge only: --surface instead of --bg, and the
+     lighter --border for the dashed edge (a discovered card is dashed already, app.css `.gnode-source.discovered`). Nothing else changes: no opacity, no colour of its own, so the title
+     and the muted lines keep the colours they have everywhere, and no size, so the card keeps its fixed height (the six lines above). The doubled class beats `.gnode` (app.css: --bg,
+     --border-strong) without naming .gnode here. Measured over the eight looks, light and dark (graph-nodes.css.test.ts keeps these floors): --text on --surface 13.19:1 or more
+     (the same ground as an unidentified service), --text-2 5.54:1 (floor 4.5:1), the status dot tokens 3:1 or more, and the empty track of the mapped bar (--border-strong, decoration, the
+     words say the number) 1.41:1 in the light looks and 1.59:1 in the dark ones (on --bg: 1.50 and 1.73). The ground itself is 1.06:1 (light) and 1.09:1 (dark) from --bg, the edge adds the rest. */
+  .gsrc-not-seen.gsrc-not-seen { background: var(--surface); border-style: dashed; border-color: var(--border); }
+  /* The panel's read-only facts (the seen sentence, the server and its certificate): a long address or URI may break anywhere instead of widening the 320px panel. */
+  .gsrc-fact { overflow-wrap: anywhere; }
 }

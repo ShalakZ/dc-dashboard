@@ -38,7 +38,7 @@ export function GraphBar({
   summary, counts, collapsible, expandable, tidying, unmappedOnly, onUnmappedOnly, onCollapseAll, onExpandAll, onTidy,
   expandSelection, collapseSelection, expandBranch, collapseBranch,
   onExpandSelection, onCollapseSelection, onExpandBranch, onCollapseBranch,
-  snap, onSnap, find, onRefresh, refreshRef, clear, shortcuts, onFindKey,
+  snap, onSnap, find, onRefresh, refreshRef, clear, notSeen, shortcuts, onFindKey,
 }: {
   summary: string;
   counts: GraphCounts;
@@ -67,6 +67,12 @@ export function GraphBar({
   refreshRef?: Ref<HTMLButtonElement>;
   /** Present only for a role that may clear unmapped sources. */
   clear?: { count: number; onClear: () => void };
+  /**
+   * (w33) The sources the newest scan of their range did not find, offered in the overflow menu after Clear unmapped and only to a role that has it (the menu is the only new
+   * thing: nothing in the bar itself changes, so its measured width tiers stand). `count` = how many are marked, `removable` = how many of those Remove not seen would take
+   * (nothing mapped), `filtered` = the canvas shows only the marked ones. Nothing is offered while `count` is 0, except to turn a filter that is on off.
+   */
+  notSeen?: { count: number; filtered: boolean; onFilter: (on: boolean) => void; removable: number; onRemove: () => void };
   /** The shortcuts bubble's trigger, drawn among the page controls. */
   shortcuts: ReactNode;
   /** Ctrl or Cmd + K pressed on the bar (not inside the Find card or a menu): the page opens Find. */
@@ -96,6 +102,17 @@ export function GraphBar({
         state: clear.count === 0 ? { enabled: false, reason: "Nothing to clear" } : ok,
         onSelect: clear.onClear,
       });
+      // (w33) After Clear unmapped, never before an existing item. The filter is worded like Unmapped only (Turn on / Turn off): the menu has one kind of item.
+      if (notSeen && (notSeen.count > 0 || notSeen.filtered)) {
+        items.push({ label: `Turn ${notSeen.filtered ? "off" : "on"} Not seen lately`, state: ok, onSelect: () => notSeen.onFilter(!notSeen.filtered) });
+      }
+      if (notSeen && notSeen.count > 0) {
+        items.push({
+          label: `Remove not seen (${notSeen.removable})...`,
+          state: notSeen.removable === 0 ? { enabled: false, reason: "Nothing to remove" } : ok,
+          onSelect: notSeen.onRemove,
+        });
+      }
     }
     return items;
   };

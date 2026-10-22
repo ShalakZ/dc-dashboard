@@ -1,8 +1,9 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { GraphModel, RemoveSourcesResult } from "../api/types";
 import {
-  BLOCK_GAP, FAN_DASH_LIMIT, LIVE_EDGE_LIMIT, MAX_LAYOUT_ID, NO_VIEW, PAGE_SIZE, SOURCE_H, UNGROUPED, buildGraph, childNodeIds, descendantNodeIds, initialView, isRemovable, layoutBatches,
-  moreNodeIds, nodeId, ownPlaces, removalDialogText, removalOutcome, seenLine, shiftedPlaces, type GraphView, type OpenState, type XY,
+  BLOCK_GAP, FAN_DASH_LIMIT, LIVE_EDGE_LIMIT, MAPPED_NOT_SEEN, MAX_LAYOUT_ID, NO_VIEW, PAGE_SIZE, SOURCE_H, UNGROUPED, buildGraph, certificateLine, childNodeIds, descendantNodeIds,
+  initialView, isNotSeen, isRemovable, layoutBatches, moreNodeIds, nodeId, notSeenCount, notSeenSentence, ownPlaces, removableNotSeen, removalDialogText, removalOutcome, seenCard, seenLine,
+  serverLine, shiftedPlaces, sourceIdOfNode, sourceVisible, type GraphView, type OpenState, type XY,
 } from "./graph";
 import { model, point, source } from "../test/graphFixtures";
 
@@ -793,6 +794,164 @@ describe("seenLine", () => {
   it("a discovered source no scan has found yet says so (null, or a server that does not send the field)", () => {
     expect(seenLine(source(1, { last_scan: null }), now, "UTC")).toBe("Not seen in a scan yet");
     expect(seenLine(source(1), now, "UTC")).toBe("Not seen in a scan yet");
+  });
+});
+
+// (w33) Not seen: a discovered source the newest done scan of the SAME range did not find (the server decides; the page only words it and offers to remove the unmapped ones).
+describe("seenLine of a source that is not seen (w33)", () => {
+  const now = new Date("2026-10-15T12:00:00Z");
+  const gone = (over: object = {}) => source(1, {
+    last_scan: { scan_id: 5, at: "2026-10-11T09:00:00Z" },
+    not_seen: { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" },
+    ...over,
+  });
+
+  it("names the scan that did not find it, the one that last did, and how long ago that was (counted from the last time it was seen)", () => {
+    expect(seenLine(gone(), now, "UTC")).toBe("Not seen in scan #7 (last seen in #5, 4 days ago)");
+    expect(seenLine(gone({ not_seen: { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 6, last_seen_at: "2026-10-14T09:00:00Z" } }), now, "UTC"))
+      .toBe("Not seen in scan #7 (last seen in #6, yesterday)");
+    expect(seenLine(gone({ not_seen: { scan_id: 8, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 7, last_seen_at: "2026-10-15T11:50:00Z" } }), now, "UTC"))
+      .toBe("Not seen in scan #8 (last seen in #7, 10 min ago)");
+  });
+
+  it("drops the ago part for a time over two weeks old or one that cannot be read, as the Seen line does", () => {
+    expect(seenLine(gone({ not_seen: { scan_id: 7, at: "x", last_seen_scan_id: 5, last_seen_at: "2026-09-01T09:00:00Z" } }), now, "UTC")).toBe("Not seen in scan #7 (last seen in #5)");
+    expect(seenLine(gone({ not_seen: { scan_id: 7, at: "x", last_seen_scan_id: 5, last_seen_at: "not a time" } }), now, "UTC")).toBe("Not seen in scan #7 (last seen in #5)");
+  });
+
+  it("comes before the Seen line, and a source added by hand still says Added by hand (the server never marks one)", () => {
+    expect(seenLine(gone(), now, "UTC")).not.toMatch(/^Seen/);
+    expect(seenLine(gone({ origin: "manual" }), now, "UTC")).toBe("Added by hand");
+  });
+
+  it("a null not_seen (the server's answer for a source it did see, or an older server) keeps every old sentence", () => {
+    expect(seenLine(gone({ not_seen: null }), now, "UTC")).toBe("Seen in scan #5, 4 days ago");
+    expect(seenLine(source(1, { last_scan: { scan_id: 6, at: "2026-10-15T11:50:00Z" } }), now, "UTC")).toBe("Seen in scan #6, 10 min ago");
+  });
+});
+
+describe("not seen: isNotSeen, removableNotSeen, notSeenCount (w33)", () => {
+  const miss = { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" };
+  const mapped = point(9, "M kW", { asset_id: 10, mapping_id: 3, mapped_metric: "active_power_kw" });
+  const unmappedMissing = source(1, { not_seen: miss, clusters: [{ key: "A", points: [point(1, "a")] }] });
+  const mappedMissing = source(2, { not_seen: miss, clusters: [{ key: "A", points: [point(2, "a"), mapped] }] });
+  const handMissing = source(3, { origin: "manual", not_seen: miss }); // the server never sends this; the page still never lists one
+  const seenAgain = source(4, { not_seen: null });
+  const oldServer = source(5);
+
+  it("isNotSeen: discovered and marked by the server, nothing else", () => {
+    expect(isNotSeen(unmappedMissing)).toBe(true);
+    expect(isNotSeen(mappedMissing)).toBe(true);
+    expect(isNotSeen(handMissing)).toBe(false);
+    expect(isNotSeen(seenAgain)).toBe(false);
+    expect(isNotSeen(oldServer)).toBe(false);
+  });
+
+  it("removableNotSeen: not seen AND nothing mapped (the same rule as Remove and Clear unmapped); a mapped or hand-added source is never in it", () => {
+    const all = [unmappedMissing, mappedMissing, handMissing, seenAgain, oldServer, source(6, { not_seen: miss })];
+    expect(removableNotSeen(all).map((s) => s.id)).toEqual([1, 6]);
+    expect(removableNotSeen([mappedMissing, handMissing, seenAgain])).toEqual([]);
+    expect(removableNotSeen([])).toEqual([]);
+  });
+
+  it("an asset without a mapping id still counts as mapped", () => {
+    expect(removableNotSeen([source(7, { not_seen: miss, ungrouped: [point(9, "b", { asset_id: 10 })] })])).toEqual([]);
+  });
+
+  it("notSeenCount counts every marked source, mapped or not", () => {
+    expect(notSeenCount([unmappedMissing, mappedMissing, handMissing, seenAgain, oldServer])).toBe(2);
+    expect(notSeenCount([])).toBe(0);
+  });
+});
+
+describe("what the card and the panel say about a source that is not seen (w33)", () => {
+  const miss = { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" };
+  const LINE = "Not seen in scan #7 (last seen in #5, 4 days ago)";
+  const mapped = point(9, "M kW", { asset_id: 10, mapping_id: 3, mapped_metric: "active_power_kw" });
+
+  it("notSeenSentence: the whole sentence of the panel", () => {
+    expect(notSeenSentence(source(1, { not_seen: miss }), LINE)).toBe(`${LINE}. A later scan of the same range did not find it.`);
+    expect(notSeenSentence(source(1), "Seen in scan #6, 10 min ago")).toBe("Seen in scan #6, 10 min ago");
+  });
+
+  it("seenCard: an unmapped one keeps its line and tooltip; a mapped one says what to do instead, with both sentences in the tooltip", () => {
+    expect(seenCard(source(1, { not_seen: miss }), LINE)).toEqual({ line: LINE, title: LINE });
+    expect(seenCard(source(1, { not_seen: miss, ungrouped: [mapped] }), LINE)).toEqual({ line: MAPPED_NOT_SEEN, title: `${LINE}. ${MAPPED_NOT_SEEN}` });
+    expect(MAPPED_NOT_SEEN).toBe("Mapped: move it or delete it on Sources");
+    expect(seenCard(source(1, { ungrouped: [mapped] }), "Seen in scan #6")).toEqual({ line: "Seen in scan #6", title: "Seen in scan #6" }); // seen sources are left alone
+  });
+
+  it("serverLine: the application URI, else the simulator's instance id, else the application name; nothing for no identity", () => {
+    const id = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: false };
+    expect(serverLine({ ...id, application_uri: "urn:dcdash:simulator:dev", instance: "dev", application_name: "Sim" })).toBe("Server: urn:dcdash:simulator:dev");
+    expect(serverLine({ ...id, instance: "dev", application_name: "Sim" })).toBe("Server: dev");
+    expect(serverLine({ ...id, application_name: "Sim" })).toBe("Server: Sim");
+    expect(serverLine(id)).toBeNull();
+    expect(serverLine(null)).toBeNull();
+    expect(serverLine(undefined)).toBeNull();
+  });
+
+  it("certificateLine: the first 5 and the last 2 characters of the thumbprint, the whole value for the tooltip", () => {
+    const id = { application_uri: null, application_name: null, product_uri: null, thumbprint: "3A:5F:C1:0D:22:98:7B:44:E0:AB:12:34:56:78:9A:BC:DE:F0:11:91", instance: null, usable: true, different: false };
+    expect(certificateLine(id)).toEqual({ text: "certificate 3A:5F:...:91", title: "3A:5F:C1:0D:22:98:7B:44:E0:AB:12:34:56:78:9A:BC:DE:F0:11:91" });
+    expect(certificateLine({ ...id, thumbprint: "3A:5F" })).toEqual({ text: "certificate 3A:5F", title: "3A:5F" }); // too short to cut
+    expect(certificateLine({ ...id, thumbprint: null })).toBeNull();
+    expect(certificateLine(null)).toBeNull();
+  });
+
+  it("removalDialogText for not seen: says the latest scan did not find them and that mapped and hand-added sources are never removed", () => {
+    expect(removalDialogText(["Plant OPC"], "notSeen")).toEqual({
+      title: 'Remove "Plant OPC", which the latest scan did not find?',
+      message: "The latest scan of the same range did not find it. Mapped sources and sources added by hand are never removed. A scan can find it again.",
+    });
+    const several = removalDialogText(["A", "B", "C", "D", "E", "F", "G"], "notSeen");
+    expect(several.title).toBe("Remove 7 sources the latest scan did not find?");
+    expect(several.message).toBe("A, B, C, D, E and 2 more. The latest scan of the same range did not find them. Mapped sources and sources added by hand are never removed. A scan can find these again.");
+    // the old callers (no kind) get today's words
+    expect(removalDialogText(["A", "B"]).title).toBe("Remove 2 unmapped sources?");
+  });
+});
+
+describe("the Not seen lately filter (w33)", () => {
+  const miss = { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" };
+  const withMissing = () => model({
+    sources: [
+      source(1, { not_seen: miss, clusters: [{ key: "A", points: [point(1, "a")] }] }),
+      source(2, { clusters: [{ key: "B", points: [point(2, "b")] }] }),
+      source(3, { origin: "manual", clusters: [{ key: "C", points: [point(3, "c")] }] }),
+    ],
+  });
+  const view = (over: Partial<GraphView> = {}): GraphView => ({ ...NO_VIEW, ...over });
+
+  it("is off by default: NO_VIEW and a view without the field draw every source", () => {
+    expect(NO_VIEW.notSeenOnly ?? false).toBe(false);
+    expect(withMissing().sources.every((s) => sourceVisible(s, NO_VIEW))).toBe(true);
+    expect(ids(buildGraph(withMissing(), none).nodes.filter((n) => n.type === "source"))).toEqual(["src:1", "src:2", "src:3"]);
+  });
+
+  it("on: only the sources marked not seen are on the canvas, with their edges, and the others take no room", () => {
+    const { nodes, edges } = buildGraph(withMissing(), { sources: new Set([1, 2]), clusters: new Set() }, { view: view({ notSeenOnly: true }) });
+    expect(ids(nodes.filter((n) => n.type === "source"))).toEqual(["src:1"]);
+    expect(ids(nodes.filter((n) => n.type === "cluster"))).toEqual([nodeId.cluster(1, "A")]);
+    expect(edges.every((e) => e.source !== "src:2" && e.source !== "src:3")).toBe(true);
+    expect(nodes.find((n) => n.id === "src:1")?.position.y).toBe(0); // the first row: a hidden source before it left no gap
+  });
+
+  it("combines with Unmapped only: a not-seen source whose points are all mapped is hidden by that filter", () => {
+    const m = model({ sources: [source(1, { not_seen: miss, clusters: [{ key: "A", points: [point(1, "a", { asset_id: 10, mapping_id: 1, mapped_metric: "voltage_v" })] }] })] });
+    expect(sourceVisible(m.sources[0], view({ notSeenOnly: true }))).toBe(true);
+    expect(sourceVisible(m.sources[0], view({ notSeenOnly: true, unmappedOnly: true }))).toBe(false);
+  });
+
+  it("sourceIdOfNode: the source behind a source, group or point node; none for an asset or an unidentified service", () => {
+    const m = model();
+    expect(sourceIdOfNode(m, "src:2")).toBe(2);
+    expect(sourceIdOfNode(m, nodeId.cluster(1, "LVP01"))).toBe(1);
+    expect(sourceIdOfNode(m, "point:8")).toBe(2); // a point of the manual source
+    expect(sourceIdOfNode(m, "point:7")).toBe(1); // an ungrouped point
+    expect(sourceIdOfNode(m, "point:999")).toBeNull();
+    expect(sourceIdOfNode(m, "asset:10")).toBeNull();
+    expect(sourceIdOfNode(m, "unid:10.0.0.9:8080")).toBeNull();
   });
 });
 

@@ -41,8 +41,8 @@ import { useValueTip } from "../hooks/useValueTip";
 import { afterPaint } from "../lib/afterPaint";
 import { dropPayload, mappableClusters, multiPointDrop, pickDropTarget, takenMetrics, type DropPayload } from "../lib/drop";
 import {
-  buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isRemovable, layoutBatches, moreNodeIds, nodeId, ownPlaces, PAGE_SIZE, pruneShown,
-  removalDialogText, removalOutcome, seenLine, shiftedPlaces, visiblePoints,
+  buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isNotSeen, isRemovable, layoutBatches, moreNodeIds, nodeId, notSeenCount, ownPlaces, PAGE_SIZE, pruneShown,
+  removableNotSeen, removalDialogText, removalOutcome, seenLine, shiftedPlaces, sourceIdOfNode, visiblePoints,
   type AssetNodeData, type ClusterNodeData, type Group, type GraphView, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
 import { cameraMs, keepInView, overlayMargin, unionRect } from "../lib/graphCamera";
@@ -250,7 +250,13 @@ function Canvas({ model }: { model: GraphModel }) {
     const known = new Set(model.assets.map((a) => a.id));
     return new Set([...readAssetsClosed()].filter((id) => known.has(id)));
   });
-  const view = useMemo<GraphView>(() => ({ unmappedOnly, shown, assetsClosed, pageSize: PAGE_SIZE }), [unmappedOnly, shown, assetsClosed]);
+  // (w33) "Not seen lately": only the sources the newest scan of their range did not find. Session only (a filter that outlives the visit would hide sources the next scan
+  // found again). It is in force only while some source is marked, so a rescan or a removal that clears the last mark never leaves an empty canvas.
+  const [notSeenOn, setNotSeenOn] = useState(false);
+  const notSeenTotal = useMemo(() => notSeenCount(model.sources), [model]);
+  const notSeenOnly = notSeenOn && notSeenTotal > 0;
+  useEffect(() => { if (notSeenTotal === 0) setNotSeenOn(false); }, [notSeenTotal]); // forgotten with the last mark, so a later scan that marks a source does not bring the filter back by itself
+  const view = useMemo<GraphView>(() => ({ unmappedOnly, notSeenOnly, shown, assetsClosed, pageSize: PAGE_SIZE }), [unmappedOnly, notSeenOnly, shown, assetsClosed]);
   // The folds are set at once by their setter (two quick presses must not both start from the old set); it is up here because a new sub-asset opens its parent (`onAdd`).
   // It keeps only ids the model knows, and reads the model of the moment (`modelRef`, below) because a graph read may have come in since the render.
   const assetsClosedNow = useRef(assetsClosed);
@@ -308,7 +314,8 @@ function Canvas({ model }: { model: GraphModel }) {
   const [offer, setOffer] = useState<{ nodeId: string; label: string } | null>(null);
   // The sources a Remove or a Clear unmapped is asking about, FROZEN when the dialog opens: the request carries these ids and no others, so a source
   // a scan adds meanwhile is never touched. `fromNode`: the Remove button of a node opened it (that node is gone afterwards; Clear keeps its button).
-  const [removal, setRemoval] = useState<{ sources: { id: number; name: string }[]; fromNode: boolean } | null>(null);
+  // (w33) `kind: "notSeen"`: the list is the unmapped sources the newest scan did not find (Remove not seen); the dialog is worded for that and sends the same ids to the same route.
+  const [removal, setRemoval] = useState<{ sources: { id: number; name: string }[]; fromNode: boolean; kind?: "notSeen" } | null>(null);
   const refreshRef = useRef<HTMLButtonElement>(null);
   const focusRefresh = useRef(false);
   // The source whose bulk-create dialog is open, as it was when the button was pressed (like the review dialog's payload, so the dialog's own
@@ -479,6 +486,13 @@ function Canvas({ model }: { model: GraphModel }) {
   const clearUnmapped = () => {
     if (removable.length > 0) setRemoval({ sources: removable.map((s) => ({ id: s.id, name: s.name })), fromNode: false });
   };
+  // (w33) Remove not seen: the sources the newest scan of their range did not find AND with nothing mapped, frozen when the dialog opens like Clear unmapped's.
+  const missing = useMemo(() => removableNotSeen(model.sources), [model]);
+  const removeNotSeen = () => {
+    if (missing.length > 0) setRemoval({ sources: missing.map((s) => ({ id: s.id, name: s.name })), fromNode: false, kind: "notSeen" });
+  };
+  // The filter in the bar's menu. The menu hands the focus back to its button before this runs, so (unlike the Unmapped only switch) no node can be holding it.
+  const onNotSeenFilter = useCallback((on: boolean) => setNotSeenOn(on), []);
 
   // What the page works out about each source once per graph: the muted last-seen line, how many groups "Create assets" would turn into
   // assets (a role that may not accept has none) and whether it is removable. `asOf` moves with each read of the graph: the "ago" is as old as the data.
@@ -841,7 +855,8 @@ function Canvas({ model }: { model: GraphModel }) {
   // The bar above the canvas: what the graph holds, Collapse all, Expand all and Tidy layout. A button with nothing to do keeps its place and says so
   // (aria-disabled and a click guard, never `disabled`: it may hold the focus the click gave it).
   // These are worked out once per change of the graph, the open set, the view or the selection, not on every render (a hover renders the page).
-  const summary = useMemo(() => graphSummary(model, view), [model, view]);
+  // (w33) With "Not seen lately" on, the announced sentence says the canvas shows only those (the figures stay the whole graph's, as with Unmapped only).
+  const summary = useMemo(() => (view.notSeenOnly ? `${graphSummary(model, view)}, showing only sources not seen lately (${notSeenTotal})` : graphSummary(model, view)), [model, view, notSeenTotal]);
   const counts = useMemo(() => graphCounts(model, view), [model, view]); // the bar's chips (decoration); the sentence above is what is announced
   const collapsible = useMemo(() => canCollapse(model, open, view), [model, open, view]);
   const expandable = useMemo(() => canExpand(model, open, view), [model, open, view]);
@@ -919,14 +934,19 @@ function Canvas({ model }: { model: GraphModel }) {
 
   const confirmRemoval = async () => {
     if (!removal) return;
-    // The call resolves after the graph is read again, so the removed nodes are already gone when the dialog closes below.
-    const outcome = removalOutcome(await removeSources.mutateAsync(removal.sources.map((s) => s.id)));
-    if (outcome.kind === "none") throw new Error(outcome.text); // nothing went: the dialog stays open and says why as its error line
-    if (outcome.kind === "done") toast.success(outcome.text);
-    else if (outcome.kind === "partial") toast.error(outcome.text);
-    else toast.info(outcome.text);
-    focusRefresh.current = removal.fromNode;
-    setRemoval(null);
+    try {
+      // The call resolves after the graph is read again, so the removed nodes are already gone when the dialog closes below.
+      const outcome = removalOutcome(await removeSources.mutateAsync(removal.sources.map((s) => s.id)));
+      if (outcome.kind === "none") throw new Error(outcome.text); // nothing went: the dialog stays open and says why as its error line
+      if (outcome.kind === "done") toast.success(outcome.text);
+      else if (outcome.kind === "partial") toast.error(outcome.text);
+      else toast.info(outcome.text);
+      focusRefresh.current = removal.fromNode;
+      setRemoval(null);
+    } finally {
+      // (w33, A11) The hook refreshes the graph, the sources and the audit log; a removal also changes the findings a scan lists (they lose their source), so the scans are read again too, answer or refusal.
+      void invalidate(keys.scans);
+    }
   };
   // After the dialog has gone (a PARENT effect runs after the dialog's own cleanup has put the focus back on the node's Remove button, which the
   // refreshed graph has taken away): the focus lands on Refresh. A Clear unmapped keeps its own button, and the dialog hands the focus back to it.
@@ -974,7 +994,17 @@ function Canvas({ model }: { model: GraphModel }) {
    * off screen with no animation, which would cut the glide short and lose the zoom.
    */
   const onFind = useCallback(async (entry: FindEntry) => {
-    const now = viewNow.current;
+    let now = viewNow.current;
+    // (w33) findPlan knows nothing of "Not seen lately": a node of a source the filter hides turns the filter off first (the same promise as Unmapped only's), and says so.
+    if (now.notSeenOnly) {
+      const sourceId = sourceIdOfNode(modelRef.current, entry.id);
+      const source = sourceId === null ? undefined : modelRef.current.sources.find((s) => s.id === sourceId);
+      if (source && !isNotSeen(source)) {
+        now = { ...now, notSeenOnly: false };
+        setNotSeenOn(false);
+        toast.info(`Not seen lately is off so ${entry.label} can be shown.`);
+      }
+    }
     const plan = findPlan(modelRef.current, openNow.current, entry, EXPAND_NODE_BUDGET, now); // the model, open set and view of the moment: a refresh may have come in while the card was open
     if (plan.open !== openNow.current) setOpen(plan.open); // the very same object when nothing has to open: no rebuild
     if (plan.view) {
@@ -1137,6 +1167,7 @@ function Canvas({ model }: { model: GraphModel }) {
         find={find} onFindKey={openFind}
         onRefresh={() => invalidate(keys.graph)} refreshRef={refreshRef}
         clear={canRemove ? { count: removable.length, onClear: clearUnmapped } : undefined}
+        notSeen={canRemove ? { count: notSeenTotal, filtered: notSeenOnly, onFilter: onNotSeenFilter, removable: missing.length, onRemove: removeNotSeen } : undefined}
         shortcuts={<ShortcutsBubble openRef={keysRef} />}
       />
       {saveError && <p className="error" role="alert">{saveError}</p>}
@@ -1227,7 +1258,7 @@ function Canvas({ model }: { model: GraphModel }) {
       {menu && <GraphContextMenu key={menu.id} at={menu.at} items={menuItems} label={menuLabel} returnFocus={menu.returnFocus} onClose={closeMenu} />}
       {removal && (
         <ConfirmDeleteDialog
-          {...removalDialogText(removal.sources.map((s) => s.name))}
+          {...removalDialogText(removal.sources.map((s) => s.name), removal.kind)}
           confirmLabel="Remove"
           onConfirm={confirmRemoval}
           onCancel={() => setRemoval(null)}
