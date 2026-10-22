@@ -8,7 +8,7 @@ import type { SourceMoveDone, SourceMovePreview } from "../api/types";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
-import { INSTANCE_MATCH, movePreview, moveDone, NEW_NAME, OLD_NAME, POSSIBLY_MATCH, URI_MATCH } from "../test/moveFixtures";
+import { INSTANCE_MATCH, moveBody, movePreview, moveDone, NEW_NAME, OLD_NAME, POSSIBLY_MATCH, URI_MATCH } from "../test/moveFixtures";
 import { MoveSourceDialog } from "./MoveSourceDialog";
 
 type Reply = { status?: number; body?: unknown };
@@ -200,10 +200,7 @@ describe("MoveSourceDialog", () => {
       expect(within(dialog()).getByRole("radio", { name: "Use the address 172.20.0.5" })).toBeChecked();
       await userEvent.click(moveButton());
       await waitFor(() => expect(realRuns).toHaveLength(1));
-      expect(realRuns[0].body).toEqual({
-        to: 7, address: "as_found",
-        expect: { mappings: 12, address_before: "172.20.0.3:4840", address_after: "172.20.0.5:4840", name_after: NEW_NAME },
-      });
+      expect(realRuns[0].body).toEqual(moveBody());
     });
 
     it("the real run for the name sends the name and the host:port the preview showed", async () => {
@@ -212,10 +209,7 @@ describe("MoveSourceDialog", () => {
       await screen.findByText(/to opc\.tcp:\/\/simulator:4840/);
       await userEvent.click(moveButton());
       await waitFor(() => expect(realRuns).toHaveLength(1));
-      expect(realRuns[0].body).toEqual({
-        to: 7, address: "name",
-        expect: { mappings: 12, address_before: "172.20.0.3:4840", address_after: "simulator:4840", name_after: null },
-      });
+      expect(realRuns[0].body).toEqual(moveBody({ address: "name", expect: { address_after: "simulator:4840", name_after: null } }));
     });
 
     it("keeps Move inactive while the new preview is on its way, with the old one still on screen", async () => {
@@ -279,7 +273,7 @@ describe("MoveSourceDialog", () => {
       await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
       expect(realRuns).toEqual([{
         url: "/api/sources/2/move?dry_run=0",
-        body: { to: 7, address: "as_found", expect: { mappings: 12, address_before: "172.20.0.3:4840", address_after: "172.20.0.5:4840", name_after: NEW_NAME } },
+        body: moveBody({ expect: { match_kind: "possibly", needs_tick: true }, ticked: true }),
       }]);
       // the preview that was moved on goes with the answer: the real run does not carry the number of mappings, and the toast says it
       expect(onDone).toHaveBeenCalledWith(moveDone(), expect.objectContaining({ mappings: 12, mapped_points: 12 }));
@@ -404,6 +398,31 @@ describe("MoveSourceDialog", () => {
       await waitFor(() => expect(dryRuns).toHaveLength(2));
       await waitFor(() => expect(slot()).toHaveTextContent("A scan is queued or running; try again when it has finished."));
       expect(moveButton()).toHaveAttribute("aria-disabled", "true");
+    });
+
+    it("a refusal that the match needs confirming shows its sentence, asks the dry run again, and offers the box that was not there", async () => {
+      let needsTick = false;
+      const { dryRuns, realRuns } = serve(
+        () => show(needsTick ? movePreview({ match: POSSIBLY_MATCH, needs_tick: true }) : movePreview()),
+        () => {
+          needsTick = true;
+          return { status: 409, body: { detail: "The match needs your confirmation: tick that you checked it is the same device" } };
+        },
+      );
+      renderDialog();
+      await arrived();
+      await userEvent.click(moveButton());
+      await waitFor(() => expect(dryRuns).toHaveLength(2));
+      const box = await within(dialog()).findByRole("checkbox", { name: "I checked that this is the same device" });
+      expect(box).not.toBeChecked();
+      expect(slot()).toHaveTextContent("The match needs your confirmation: tick that you checked it is the same device.");
+      expect(moveButton()).toHaveAttribute("aria-disabled", "true");
+      expect(realRuns).toHaveLength(1);
+      expect((realRuns[0].body as { ticked: boolean }).ticked).toBe(false);
+      await userEvent.click(box);
+      await userEvent.click(moveButton());
+      await waitFor(() => expect(realRuns).toHaveLength(2));
+      expect(realRuns[1].body).toEqual(moveBody({ expect: { match_kind: "possibly", needs_tick: true }, ticked: true }));
     });
 
     it("says in words that the server cannot be reached", async () => {

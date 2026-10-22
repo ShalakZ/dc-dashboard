@@ -186,9 +186,9 @@ describe("SourcesPage", () => {
       await userEvent.type(name, "renamed");
       await userEvent.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-      expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({
-        name: "renamed", config: { url: "http://simulator:9000", timeout_seconds: 5 }, enabled: true, // the stored config lacks timeout_seconds: the field's default fills it
-      });
+      // A rename sends no config: the stored one is not sent back (a form opened before a move would put the old address back). The stored config lacks
+      // timeout_seconds, and the field's default filling it is not an edit.
+      expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ name: "renamed", enabled: true });
       expect(await screen.findByText("renamed")).toBeInTheDocument();
     });
 
@@ -249,10 +249,13 @@ describe("SourcesPage", () => {
       const dialog = await screen.findByRole("dialog", { name: "Edit source plc" });
       expect(await within(dialog).findByLabelText("Host")).toHaveValue("10.0.0.1");
       expect(within(dialog).queryByLabelText("Url")).not.toBeInTheDocument();
+      const port = within(dialog).getByLabelText("Port");
+      await userEvent.clear(port);
+      await userEvent.type(port, "504");
       await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({
-        name: "plc", config: { host: "10.0.0.1", port: 503, tls: true }, enabled: true,
+        name: "plc", config: { host: "10.0.0.1", port: 504, tls: true }, enabled: true,
       });
     });
 

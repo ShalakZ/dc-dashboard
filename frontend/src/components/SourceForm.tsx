@@ -36,7 +36,9 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
   const takesSecret = connector?.polls !== false;
   useEffect(() => { if (!source && connector && type !== connector.type) setType(connector.type); }, [source, connector, type]);
   // `source` must be a stable object (the page keeps the one it was opened with): a new one would reset what is typed.
-  useEffect(() => { setValues(source ? valuesFromConfig(fields, source.config) : initialValues(fields)); setClearKeys([]); }, [fields, source]);
+  // The values the form was opened with (an edit only): what the fields are compared with to tell whether the config was edited at all.
+  const opened = useMemo<RawValues>(() => (source ? valuesFromConfig(fields, source.config) : {}), [fields, source]);
+  useEffect(() => { setValues(source ? opened : initialValues(fields)); setClearKeys([]); }, [fields, source, opened]);
   // Config keys whose stored user name and password the API hides (an edit only; the field shows the masked value).
   const hiddenKeys = source?.hidden_config_keys ?? [];
   const fieldTitle = (key: string) => fields.find((f) => f.name === key)?.label ?? key;
@@ -49,10 +51,13 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
     try {
       if (source) {
         // No `secret` key keeps the stored secret; "" would erase it.
-        // `clear_config_credentials` only takes effect together with `config`, which an edit always sends.
+        // `config` goes only when a config field was edited, or credentials are to be removed (`clear_config_credentials` only takes effect together with
+        // `config`). A save that is a rename, a switch or a secret must not send the config this form was opened with back: after a move of the source
+        // (w33) that config holds the old address, and the save would put the source back there.
         const cleared = hiddenKeys.filter((key) => clearKeys.includes(key));
+        const configEdited = cleared.length > 0 || fields.some((field) => values[field.name] !== opened[field.name]);
         const body: Partial<Omit<SourceIn, "connector_type">> & { clear_config_credentials?: string[] } = {
-          name, config: coerceValues(fields, values), enabled, ...(removeSecret ? { secret: null } : secret ? { secret } : {}),
+          name, ...(configEdited ? { config: coerceValues(fields, values) } : {}), enabled, ...(removeSecret ? { secret: null } : secret ? { secret } : {}),
           ...(cleared.length ? { clear_config_credentials: cleared } : {}),
         };
         const patched = await api.patch<Source>(`/api/sources/${source.id}`, body);

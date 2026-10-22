@@ -29,8 +29,12 @@ export const previewMove = (oldId: number, body: { to: number; address: "as_foun
 /** The real run. `dry_run=0` is sent on purpose rather than left out. The body is `moveRequest(preview)`. */
 export const runMove = (oldId: number, body: SourceMoveIn) => api.post<SourceMoveDone>(`/api/sources/${oldId}/move?dry_run=0`, body);
 
-/** The real request for the preview the person saw: the numbers and the texts it showed are sent back, and the server refuses if anything differs now. */
-export function moveRequest(preview: SourceMovePreview): SourceMoveIn & { expect: NonNullable<SourceMoveIn["expect"]> } {
+/**
+ * The real request for the preview the person saw: the numbers and the texts it showed are sent back, together with why the move was offered (`match_kind`,
+ * `needs_tick`), and the server refuses if anything differs now. `ticked` is true exactly when the person ticked the box that confirms an uncertain match; the
+ * server refuses a move that needs the tick without it.
+ */
+export function moveRequest(preview: SourceMovePreview, ticked = false): SourceMoveIn & { expect: NonNullable<SourceMoveIn["expect"]>; ticked: boolean } {
   return {
     to: preview.target.id,
     address: preview.address,
@@ -39,9 +43,16 @@ export function moveRequest(preview: SourceMovePreview): SourceMoveIn & { expect
       address_before: hostPort(preview.from),
       address_after: hostPort(preview.to),
       name_after: preview.rename?.to ?? null,
+      match_kind: preview.match.kind,
+      needs_tick: preview.needs_tick,
     },
+    ticked: ticked === true,
   };
 }
+
+/** The server's 409 for a real run that needs the person's tick and came without it (the preview the dialog held did not ask for one): the dialog asks again. */
+export const needsConfirmation = (error: unknown): boolean =>
+  error instanceof ApiError && error.status === 409 && /^the match needs your confirmation/i.test(error.message);
 
 /** The server's 409 for a move whose preview is out of date (counts, addresses or the new name differ now): the dialog asks again and the person confirms the new numbers. */
 export const isChangedSincePreview = (error: unknown): boolean =>

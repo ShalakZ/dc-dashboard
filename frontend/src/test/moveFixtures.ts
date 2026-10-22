@@ -1,4 +1,4 @@
-import type { SourceMoveDone, SourceMoveMatch, SourceMovePreview, SourceMoveUndoResult } from "../api/types";
+import type { SourceMoveDone, SourceMoveIn, SourceMoveMatch, SourceMovePreview, SourceMoveUndoResult } from "../api/types";
 
 /** Why a move is offered, for the tests of the move dialog (w33). No endpoint here carries a user name or a password. */
 export const URI_MATCH: SourceMoveMatch = {
@@ -32,6 +32,22 @@ export function movePreview(over: Partial<SourceMovePreview> = {}): SourceMovePr
     assets: 3,
     needs_tick: false,
     ...over,
+  };
+}
+
+/**
+ * The body of the real run for `movePreview()` as the dialog sends it: the numbers and texts the preview showed, what the match was (`match_kind`, `needs_tick`)
+ * and whether the person ticked the box (`ticked`, false unless said). `over.expect` replaces single keys of `expect`.
+ */
+export function moveBody(over: { address?: SourceMoveIn["address"]; expect?: Partial<NonNullable<SourceMoveIn["expect"]>>; ticked?: boolean } = {}): SourceMoveIn {
+  return {
+    to: 7,
+    address: over.address ?? "as_found",
+    expect: {
+      mappings: 12, address_before: "172.20.0.3:4840", address_after: "172.20.0.5:4840", name_after: NEW_NAME, match_kind: "same_server", needs_tick: false,
+      ...over.expect,
+    },
+    ticked: over.ticked ?? false,
   };
 }
 

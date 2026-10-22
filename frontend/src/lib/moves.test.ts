@@ -1,11 +1,11 @@
 import { keys } from "../api/queries";
 import { ApiError } from "../api/client";
 import type { Source } from "../api/types";
-import { INSTANCE_MATCH, movePreview, moveDone, moveUndone, NEW_NAME, OLD_NAME, POSSIBLY_MATCH, URI_MATCH } from "../test/moveFixtures";
+import { INSTANCE_MATCH, moveBody, movePreview, moveDone, moveUndone, NEW_NAME, OLD_NAME, POSSIBLY_MATCH, URI_MATCH } from "../test/moveFixtures";
 import { mockFetch } from "../test/fetchMock";
 import {
   addressOptions, effectLines, fromToLine, hostNameLine, hostPort, hostPortOfEndpoint, isChangedSincePreview, isIpAddress, MOVE_REFRESHED, moveButtonLabel,
-  movedSentence, moveRequest, offerOf, previewMove, runMove, SCAN_RUNNING_TEXT, tickLabel, TWO_SERVERS_TEXT, undoMove, undoMoveSentence, undoRefusal, warningLines,
+  movedSentence, moveRequest, needsConfirmation, offerOf, previewMove, runMove, SCAN_RUNNING_TEXT, tickLabel, TWO_SERVERS_TEXT, undoMove, undoMoveSentence, undoRefusal, warningLines,
   whyLines,
 } from "./moves";
 
@@ -147,15 +147,33 @@ describe("the sentences of the preview", () => {
 
 describe("moveRequest", () => {
   it("builds the real request from the preview the person saw, not from the radio state", () => {
-    expect(moveRequest(movePreview())).toEqual({
-      to: 7, address: "as_found",
-      expect: { mappings: 12, address_before: "172.20.0.3:4840", address_after: "172.20.0.5:4840", name_after: NEW_NAME },
-    });
+    expect(moveRequest(movePreview())).toEqual(moveBody());
     const byName = movePreview({ address: "name", name_hint: "simulator", to: { host: "simulator", port: 4840, endpoint: "opc.tcp://simulator:4840/dcdash/" }, rename: null });
-    expect(moveRequest(byName)).toEqual({
-      to: 7, address: "name",
-      expect: { mappings: 12, address_before: "172.20.0.3:4840", address_after: "simulator:4840", name_after: null },
-    });
+    expect(moveRequest(byName)).toEqual(moveBody({ address: "name", expect: { address_after: "simulator:4840", name_after: null } }));
+  });
+
+  it("sends what the match was, so the server can refuse if the reason for the move has changed", () => {
+    const body = moveRequest(movePreview({ match: POSSIBLY_MATCH, needs_tick: true }));
+    expect(body.expect).toMatchObject({ match_kind: "possibly", needs_tick: true });
+    expect(moveRequest(movePreview({ match: INSTANCE_MATCH })).expect).toMatchObject({ match_kind: "same_server", needs_tick: false });
+  });
+
+  it("says ticked false unless the box was ticked, and true exactly when it was", () => {
+    const needsTick = movePreview({ match: POSSIBLY_MATCH, needs_tick: true });
+    expect(moveRequest(needsTick)).toHaveProperty("ticked", false);
+    expect(moveRequest(needsTick, false)).toHaveProperty("ticked", false);
+    expect(moveRequest(needsTick, true)).toEqual(moveBody({ expect: { match_kind: "possibly", needs_tick: true }, ticked: true }));
+    expect(moveRequest(movePreview())).toHaveProperty("ticked", false);
+  });
+});
+
+describe("needsConfirmation", () => {
+  it("knows the refusal that says the match must be confirmed", () => {
+    expect(needsConfirmation(new ApiError(409, "The match needs your confirmation: tick that you checked it is the same device"))).toBe(true);
+    expect(needsConfirmation(new ApiError(409, "the match needs your confirmation: tick that you checked it is the same device"))).toBe(true);
+    expect(needsConfirmation(new ApiError(409, "changed since the preview: it was 12 mappings, now 11"))).toBe(false);
+    expect(needsConfirmation(new ApiError(422, "The match needs your confirmation"))).toBe(false);
+    expect(needsConfirmation(new Error("The match needs your confirmation"))).toBe(false);
   });
 });
 

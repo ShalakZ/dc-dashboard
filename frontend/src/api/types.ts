@@ -307,10 +307,18 @@ export interface SourceMoveCandidateForNew {
 /** On the OLD source's row (Sources): the new source a scan found. */
 export interface SourceMoveCandidateForOld { kind: "offer"; to_source_id: number; to_name: string; to_endpoint: string; match: SourceMoveMatch }
 export interface SourceMoveAddress { host: string; port: number; endpoint: string }
-/** The body of POST /api/sources/{id}/move; `expect` is required for a real run (the numbers and texts the preview showed). */
+/**
+ * The body of POST /api/sources/{id}/move; `expect` is required for a real run (the numbers and texts the preview showed, and why the move was offered:
+ * `match_kind` and `needs_tick`). `ticked` is true when the person ticked the box that confirms an uncertain match; the server refuses a real run that needs
+ * the tick without it.
+ */
 export interface SourceMoveIn {
   to: number; address: "as_found" | "name";
-  expect?: { mappings: number; address_before: string; address_after: string; name_after: string | null };
+  expect?: {
+    mappings: number; address_before: string; address_after: string; name_after: string | null;
+    match_kind?: "same_server" | "possibly"; needs_tick?: boolean;
+  };
+  ticked?: boolean;
 }
 /** The answer to POST /api/sources/{id}/move?dry_run=1. `scan_running`: a scan is queued or running (the real run would be refused). */
 export interface SourceMovePreview {

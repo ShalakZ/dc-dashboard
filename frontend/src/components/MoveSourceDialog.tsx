@@ -5,8 +5,8 @@ import { useInvalidate } from "../api/queries";
 import type { SourceMoveDone, SourceMovePreview } from "../api/types";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import {
-  addressOptions, effectLines, fromToLine, hostNameLine, isChangedSincePreview, MOVE_REFRESHED, moveButtonLabel, moveRequest, previewMove, runMove,
-  SCAN_RUNNING_TEXT, tickLabel, warningLines, whyLines,
+  addressOptions, effectLines, fromToLine, hostNameLine, isChangedSincePreview, MOVE_REFRESHED, moveButtonLabel, moveRequest, needsConfirmation, previewMove,
+  runMove, SCAN_RUNNING_TEXT, tickLabel, warningLines, whyLines,
 } from "../lib/moves";
 import { upperFirst } from "../lib/upperFirst";
 
@@ -173,7 +173,7 @@ function MoveDialogBody({ oldId, oldName, newId, onClose, onDone, returnFocusTo,
       setMessage({ tone: "error", text: "Tick the box to confirm before you move." });
       return;
     }
-    const request = moveRequest(preview);
+    const request = moveRequest(preview, tick !== null && ticked); // the tick counts only for a preview that asks for it
     running.current = true;
     setMoving(true);
     setMessage(null);
@@ -199,7 +199,7 @@ function MoveDialogBody({ oldId, oldName, newId, onClose, onDone, returnFocusTo,
     if (refusal instanceof ApiError && refusal.status === 409) {
       // Something changed under the dialog (a scan started, the counts moved, the new name differs): ask again, so what is on screen is true, and say why.
       const changed = isChangedSincePreview(refusal);
-      if (changed) setTicked(false);
+      if (changed || needsConfirmation(refusal)) setTicked(false); // the person confirms again, on the preview that is true now
       void load(preview.address, { note: { tone: "error", text: changed ? `${text} The preview is updated: check it and press Move again.` : text } });
       return;
     }
