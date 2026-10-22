@@ -195,10 +195,9 @@ def decide(olds: Sequence[OldSource], news: Sequence[NewSource], holders: Mappin
             offer = Offer(old_id=old_id, new_id=new_id, match=match)
             by_old[old_id] = offer
             by_new[new_id] = offer
-        elif len(found) == 1:
-            by_old[old_id] = Two(count=len(olds_of_new[found[0][0]]))     # one candidate that other old sources want too
         else:
-            by_old[old_id] = Two(count=len(found))
+            # several candidates, or one that other old sources want too: how many servers could be this one
+            by_old[old_id] = Two(count=max(len(found), max(len(olds_of_new[new_id]) for new_id, _ in found)))
     for new_id, old_ids in olds_of_new.items():
         if new_id in by_new:
             continue

@@ -568,6 +568,18 @@ def test_a_shared_new_does_not_spoil_an_unrelated_offer():
     assert decision.by_new[11] is decision.by_old[3]
 
 
+def test_the_count_on_an_old_is_the_larger_of_its_candidates_and_the_olds_of_its_candidate():
+    # O1 has two candidates (C10, C11); C10 is also the candidate of O2 and O3: three servers or sources are in play around C10.
+    o1 = old(id=1, host="172.20.0.3", identity=None)
+    o2 = old(id=2, host="172.20.0.4", identity=None)
+    o3 = old(id=3, host="172.20.0.7", identity=None)
+    c10 = new(o1, id=10, host="172.20.0.15", overlap={1: 3, 2: 3, 3: 3})
+    c11 = new(o1, id=11, host="172.20.0.16", overlap={1: 3})
+    decision = decide([o1, o2, o3], [c10, c11], {})
+    assert decision.by_old == {1: Two(count=3), 2: Two(count=3), 3: Two(count=3)}
+    assert decision.by_new == {10: Two(count=3), 11: Two(count=2)}
+
+
 def test_old_with_two_candidates_where_only_one_is_valid_is_an_offer():
     o = old(identity=ident_opcua(URI_A))
     good = new(o, id=2, identity=ident_opcua(URI_A))
