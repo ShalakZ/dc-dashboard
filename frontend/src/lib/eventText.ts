@@ -38,7 +38,7 @@ export const kindName = (kind: string): string => KIND_NAMES[kind] ?? kind;
 
 /** What a person is told about a failure code, in a sentence (the stored text is one click away). */
 const CODE_REASONS: Readonly<Record<string, string>> = {
-  "unreachable": "Could not connect: the connection was refused.",
+  "unreachable": "Could not connect to the server.",
   "auth_failed": "The server did not accept the user name or password.",
   "timeout": "The server did not answer in time.",
   "protocol_error": "The server answered in a way the dashboard could not use.",
@@ -130,7 +130,10 @@ function headlineOf(event: SystemEvent, detail: Detail): { headline: string; rea
       const name = job ? (JOB_NAMES[job] ?? null) : null;
       const failed = detail.ok === false;
       const subject = name ? `The ${name}` : "A background job";
-      return { headline: `${subject} ${failed ? "failed" : "finished"}`, reason: failed ? text(detail.error) : null };
+      // A test says whether it passed; browsing the source "finished" in its own words; the plain reason of a failure comes from its code, the stored text only for a code not in the table.
+      const verb = failed ? "failed" : job === "test_source" ? "passed" : "finished";
+      const headline = !failed && job === "browse_source" ? "Browsing the source finished" : `${subject} ${verb}`;
+      return { headline, reason: failed ? (codeReason(code) ?? text(detail.error)) : null };
     }
     case "check.finished": {
       if (detail.ok === true) {
@@ -203,7 +206,7 @@ export function formatShortTime(iso: string, timezone: string): string {
 
 /**
  * The line of a problem that is still open, as the page pins it above the list: who, since when (and for how long), how many failed reads, and the plain
- * reason: `OPC UA server at 172.20.0.3:4840 is offline since 18 Oct 07:52 (4 d 2 h), 1,204 failed reads. Could not connect: the connection was refused.`
+ * reason: `OPC UA server at 172.20.0.3:4840 is offline since 18 Oct 07:52 (4 d 2 h), 1,204 failed reads. Could not connect to the server.`
  */
 export function openLine(event: SystemEvent, timezone: string): string {
   const incident = event.incident;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { EVENTS_REFETCH_MS, eventsCsvUrl, useEvent, useEventOptions, useEventPage, useEvents, useEventSummary, useSite } from "../api/queries";
 import { ApiError } from "../api/client";
@@ -123,10 +123,11 @@ function RawRow({ event, timezone, now, search, isOpen, open }: RowProps) {
   );
 }
 
-function Tile({ icon, title, tip, big, small, note, alert }: { icon: IconName; title: string; tip: string; big: string; small?: string; note?: string; alert?: boolean }) {
+function Tile({ icon, title, tip, big, small, note, alert }: { icon: IconName; title: string; tip: string; big: string; small?: string; note?: ReactNode; alert?: boolean }) {
   return (
     <div className="tile" data-alert={alert ? "true" : undefined}>
-      <div className="muted"><span className="tile-label"><Icon name={icon} /><span>{title}</span></span><InfoTip>{tip}</InfoTip></div>
+      {/* each tip is named after its tile ("About Kept"), so a list of buttons tells them apart */}
+      <div className="muted"><span className="tile-label"><Icon name={icon} /><span>{title}</span></span><InfoTip label={`About ${title}`}>{tip}</InfoTip></div>
       <div className="big">{big}{small && <small>{small}</small>}</div>
       {note ? <small className="muted">{note}</small> : <small className="muted">&nbsp;</small>}
     </div>
@@ -146,7 +147,7 @@ function Tiles({ summary, timezone }: { summary: EventSummary; timezone: string 
       <Tile icon="evProblem" title="Errors, last 24 h" big={number(summary.errors_24h)} tip="Errors the system wrote in the last 24 hours: jobs that failed and server errors." />
       <Tile
         icon="database" title="Kept" big={number(summary.kept)} small=" events"
-        note={`${summary.retention_days} days${oldest ? `, the oldest from ${oldest}` : ""}`}
+        note={<>{summary.retention_days} days{oldest && <>, the oldest from <span className="tile-date">{oldest}</span></>}</>}
         tip="How many events the journal holds. Events older than the limit, and any past the row limit, are removed every hour; an open problem is never removed. The limits are on the Storage page."
       />
     </div>

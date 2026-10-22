@@ -109,6 +109,18 @@ describe("EventsPage: the page (w32)", () => {
     expect(tiles[2]).not.toHaveAttribute("data-alert");
     expect(tiles[3]).toHaveTextContent("90 days");
     expect(tiles[3]).toHaveTextContent("the oldest from 24 Jul");
+    // review M7: the day and the month of the oldest event are one no-wrap unit, so the note never breaks between "2" and "Sep" at 1024 px
+    expect(tiles[3].querySelector(".tile-date")).toHaveTextContent(/^24 Jul$/);
+    expect(tiles[3].querySelector("small.muted")).toHaveTextContent("90 days, the oldest from 24 Jul");
+  });
+
+  it("gives each tile's ? tip its own name, About plus the tile's title (review M8)", async () => {
+    setup();
+    expect(await screen.findByText("3,412")).toBeInTheDocument();
+    const tiles = [...document.querySelectorAll(".event-tiles > .tile")];
+    expect(tiles.map((tile) => tile.querySelector(".tip-btn")!.getAttribute("aria-label"))).toEqual(
+      ["About Open problems", "About Warnings, last 24 h", "About Errors, last 24 h", "About Kept"],
+    );
   });
 
   it("shows no red on the first tile when nothing is open", async () => {
@@ -121,7 +133,7 @@ describe("EventsPage: the page (w32)", () => {
 
   it("pins the open problems above the list, one line each, in plain words, linked to their event", async () => {
     setup();
-    const line = await screen.findByText("OPC UA server at 172.20.0.3:4840 is offline since 18 Oct 07:52 (4 d 2 h), 1,204 failed reads. Could not connect: the connection was refused.");
+    const line = await screen.findByText("OPC UA server at 172.20.0.3:4840 is offline since 18 Oct 07:52 (4 d 2 h), 1,204 failed reads. Could not connect to the server.");
     expect(line.closest(".open-now")).not.toBeNull();
     expect(within(line.closest("li") as HTMLElement).getByRole("link", { name: "Open problem details, event #7" })).toHaveAttribute("href", "/events/7");
     expect(screen.getByRole("heading", { level: 2, name: "Happening now" })).toBeInTheDocument();

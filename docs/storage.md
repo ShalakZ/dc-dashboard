@@ -64,7 +64,8 @@ nothing deletes it, so the record of who did what is not part of this limit.
 setting at its next hourly clean-up (if the stored value is missing or broken it uses the defaults, so the clean-up always has a rule).
 
 **Shortening asks first.** Saving a shorter time or a lower number first asks the server what it would delete: when events would go, the
-dialog says "About N events will be deleted within the hour" and the button becomes **Confirm and save**; the events themselves are
+dialog says "About N events will be deleted within the hour" and the button becomes **Confirm and save** (the focus moves to **Cancel**, so a
+repeated Enter cannot confirm it unread; Tab reaches the confirming button); the events themselves are
 deleted by the next hourly clean-up, not by the save. N counts the events the new limits delete that the old ones would not, each once even
 if both limits reach it, and leaves out open problems. Lengthening needs no confirmation. The audit row `events.retention_changed`
 records the values before and after and, for a confirmed save, how many events were about to go.

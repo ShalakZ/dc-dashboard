@@ -39,7 +39,7 @@ describe("eventText (w32): the one table of words", () => {
       expect(text.reason, code).toBe(codeReason(code));
     }
     expect(describeEvent(event({ code: "unreachable" })).headline).toBe("Went offline: could not reach the server");
-    expect(describeEvent(event({ code: "unreachable" })).reason).toBe("Could not connect: the connection was refused.");
+    expect(describeEvent(event({ code: "unreachable" })).reason).toBe("Could not connect to the server.");
   });
 
   it("never throws and falls back to the raw text for a kind or a code it does not know", () => {
@@ -97,11 +97,37 @@ describe("eventText (w32): the one table of words", () => {
     expect(describeEvent(event({ kind: "check.finished", code: null, detail: { ok: true, steps: 7 } })).headline).toBe("The connection check passed (7 steps)");
     expect(describeEvent(event({ kind: "check.finished", detail: { ok: false, first_failed: "session", steps: 5 } })).headline).toBe('The connection check failed at "Session"');
     expect(describeEvent(event({ kind: "check.finished", detail: { ok: false } })).headline).toBe("The connection check failed");
-    expect(describeEvent(event({ kind: "job.finished", level: "info", code: null, detail: { ok: true, kind: "test_source" } })).headline).toBe("The connection test finished");
-    const failed = describeEvent(event({ kind: "job.finished", level: "error", detail: { ok: false, kind: "check_connection", error: "the worker restarted" } }));
+    expect(describeEvent(event({ kind: "job.finished", level: "info", code: null, detail: { ok: true, kind: "test_source" } })).headline).toBe("The connection test passed");
+    const failed = describeEvent(event({ kind: "job.finished", level: "error", code: null, detail: { ok: false, kind: "check_connection", error: "the worker restarted" } }));
     expect(failed.headline).toBe("The connection check failed");
     expect(failed.reason).toBe("the worker restarted");
     expect(describeEvent(event({ kind: "job.finished", detail: { ok: false, kind: "mystery" } })).headline).toBe("A background job failed");
+  });
+
+  it("gives a failed job a plain reason from its CODE and never the raw connector text when the code is known (review I1)", () => {
+    const raw = "[Errno 111] Connect call failed ('172.20.0.3', 4840)";
+    const failed = describeEvent(event({ kind: "job.finished", level: "error", code: "unreachable", message: raw, detail: { ok: false, kind: "test_source", error: raw, job_id: 3 } }));
+    expect(failed.headline).toBe("The connection test failed");
+    expect(failed.reason).toBe("Could not connect to the server.");
+    expect(JSON.stringify(failed)).not.toContain("Errno");
+    // a code the table does not know, or none, keeps the stored text
+    expect(describeEvent(event({ kind: "job.finished", code: "brand_new", detail: { ok: false, kind: "test_source", error: "it broke" } })).reason).toBe("it broke");
+    expect(describeEvent(event({ kind: "job.finished", code: null, detail: { ok: false, kind: "test_source", error: "it broke" } })).reason).toBe("it broke");
+    expect(describeEvent(event({ kind: "job.finished", code: "timeout", detail: { ok: false, kind: "test_source" } })).reason).toBe("The server did not answer in time.");
+    // a job that passed has no reason, whatever code the row carries
+    expect(describeEvent(event({ kind: "job.finished", level: "info", code: "unreachable", detail: { ok: true, kind: "test_source" } })).reason).toBeNull();
+  });
+
+  it("says a test passed or failed, and browsing finished; the other jobs keep their words (review M5)", () => {
+    const job = (kind: string, ok: boolean) => describeEvent(event({ kind: "job.finished", code: null, detail: { ok, kind } })).headline;
+    expect(job("test_source", true)).toBe("The connection test passed");
+    expect(job("test_source", false)).toBe("The connection test failed");
+    expect(job("browse_source", true)).toBe("Browsing the source finished");
+    expect(job("browse_source", false)).toBe("The browse failed");
+    expect(job("scan", true)).toBe("The scan finished");
+    expect(job("check_connection", true)).toBe("The connection check finished");
+    expect(job("history_fill", true)).toBe("The history fill finished");
+    expect(job("mystery", true)).toBe("A background job finished");
   });
 
   it("words the other kinds in plain sentences", () => {
@@ -109,7 +135,7 @@ describe("eventText (w32): the one table of words", () => {
     expect(describeEvent(event({ kind: "clock.skew", detail: { skew_seconds: -90 } })).headline).toBe("The source's clock is 1 min behind ours");
     expect(describeEvent(event({ kind: "history.filled", detail: { new: 1500 } })).headline).toBe("1,500 readings were filled in from the source's history");
     expect(describeEvent(event({ kind: "history.failed", code: "not_supported" })).headline).toBe("This source keeps no history");
-    expect(describeEvent(event({ kind: "history.failed", code: "unreachable" })).reason).toBe("Could not connect: the connection was refused.");
+    expect(describeEvent(event({ kind: "history.failed", code: "unreachable" })).reason).toBe("Could not connect to the server.");
     expect(describeEvent(event({ kind: "history.closed_month", detail: { month: "2026-09" } })).headline).toBe("Readings were filled into 2026-09, a month that is closed");
     expect(describeEvent(event({ kind: "import.finished", level: "warning" })).headline).toBe("A file import stopped half-way");
     expect(describeEvent(event({ kind: "import.finished", level: "info" })).headline).toBe("A file import finished");
@@ -117,7 +143,7 @@ describe("eventText (w32): the one table of words", () => {
 
   it("writes the line of an open problem the way the page pins it", () => {
     const line = openLine(event({ incident: incident() }), "Asia/Qatar");
-    expect(line).toBe("OPC UA server at 172.20.0.3:4840 is offline since 18 Oct 07:52 (4 d 2 h), 1,204 failed reads. Could not connect: the connection was refused.");
+    expect(line).toBe("OPC UA server at 172.20.0.3:4840 is offline since 18 Oct 07:52 (4 d 2 h), 1,204 failed reads. Could not connect to the server.");
     expect(openLine(event({ code: "secret_undecryptable", incident: incident({ count: 1 }) }), "Asia/Qatar")).toMatch(/^OPC UA server at 172\.20\.0\.3:4840 cannot be read since 18 Oct 07:52 \(4 d 2 h\), 1 failed read\. /);
     expect(openLine(event({ kind: "points.bad", code: null, incident: incident({ count: 12 }) }), "Asia/Qatar")).toBe(
       "OPC UA server at 172.20.0.3:4840 has bad readings since 18 Oct 07:52 (4 d 2 h), 12 polls with bad readings.",

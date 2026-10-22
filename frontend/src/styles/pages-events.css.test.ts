@@ -59,6 +59,12 @@ describe("the System events stylesheet (w32)", () => {
     expect(rule!.body).toMatch(/height:\s*60px/);
   });
 
+  it("keeps the date in the Kept tile's note on one line (review M7), in a rule of its own", () => {
+    const rule = rules.find((r) => parts(r.selector).includes(".events-page .event-tiles .tile-date"));
+    expect(rule, "a rule for the date").toBeDefined();
+    expect(rule!.body).toMatch(/white-space:\s*nowrap/);
+  });
+
   it("does not name the shared severity tag or the audit page's classes (a class written bare in one page file may not be named in another)", () => {
     const text = rules.map((r) => r.selector).join("\n");
     expect(text).not.toMatch(/\.ev-tag|\.audit-|\.ev-tile/);

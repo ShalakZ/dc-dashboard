@@ -36,7 +36,7 @@ describe("EventDrawer: one event (w32)", () => {
     const { dialog } = show(drawer());
     const rows = facts(dialog());
     expect(rows["What happened"]).toHaveTextContent("Went offline: could not reach the server");
-    expect(rows["What happened"]).toHaveTextContent("Could not connect: the connection was refused.");
+    expect(rows["What happened"]).toHaveTextContent("Could not connect to the server.");
     expect(rows.Message).toHaveTextContent("[Errno 111] Connect call failed ('172.20.0.3', 4840)");
     expect(rows.Level.querySelector(".ev-tag")).toHaveClass("ev-tag-warning");
     expect(rows.Level).toHaveTextContent("Warning");

@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import { keys, useInvalidate } from "../api/queries";
 import type { AuditEntry, AuditOutcome, TagListUndoResult } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
+import { meets } from "../auth/need";
 import { copyText } from "../lib/diagnostics";
 import { describeAudit, OUTCOME_ACTIONS, outcomeOf } from "../lib/auditText";
 import { relativeTime } from "../lib/relativeTime";
@@ -13,6 +14,7 @@ import { TAG_LIST_REFRESHED, undoSentence } from "../lib/tagListUndo";
 import { upperFirst } from "../lib/upperFirst";
 import { KindTile, UserLabel } from "./AuditCells";
 import { Drawer } from "./Drawer";
+import { PAGE_NEED } from "./navItems";
 import { Skeleton, SkeletonRegion } from "./Skeleton";
 import { useToast } from "./Toasts";
 
@@ -105,10 +107,10 @@ function UndoThisList({ entryId }: { entryId: number }) {
 /** How often the drawer asks the server how a check or test that is still running has gone. */
 const OUTCOME_POLL_MS = 5_000;
 
-/** "Open in System events" to the row that holds the end of the job: for someone who may read the journal (the permission its routes need), and for an outcome that has such a row. */
+/** "Open in System events" to the row that holds the end of the job: for someone who can open that page (PAGE_NEED.events: the journal's permission and the sources it names, as the Sources page asks), and for an outcome that has such a row. */
 function EventLink({ id }: { id: number }) {
   const { can } = useAuth();
-  return can("diagnostics.view") ? <>{" "}<Link className="what-link" to={`/events/${id}`}>Open in System events</Link></> : null;
+  return meets(PAGE_NEED.events, can) ? <>{" "}<Link className="what-link" to={`/events/${id}`}>Open in System events</Link></> : null;
 }
 
 function OutcomeText({ outcome }: { outcome: AuditOutcome }) {

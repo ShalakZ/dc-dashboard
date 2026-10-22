@@ -252,7 +252,7 @@ test.describe("W32: system events", () => {
     const lines = openLines(page);
     await expect(lines, "one open problem for the source").toHaveCount(1);
     await expect(lines.first()).toContainText(`${SOURCE} is offline since`);
-    await expect(lines.first(), "the plain reason follows").toContainText("Could not connect");
+    await expect(lines.first(), "the plain reason follows").toContainText("Could not connect to the server.");
     await expect(page.locator(".tile[data-alert='true']").filter({ hasText: "Open problems" }), "the first tile is red while a problem is open").toBeVisible();
 
     // The list holds the same incident as ONE row, with its count.

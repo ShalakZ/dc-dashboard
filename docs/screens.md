@@ -163,7 +163,8 @@ lacks says "No access".
   [Discovery](sources-and-discovery.md#discovery). The entry of a started connection check, test or Test all (`source.checked`,
   `source.tested`, `source.test_all`) also says how it ended: in the friendly view a small square tag after the sentence (`passed`,
   `failed` or `running`; none once the outcome is no longer kept), and in the drawer an **Outcome** row, always the last one, with a
-  plain sentence ("The connection check failed at "secure channel"."; for Test all, "3 passed, 1 failed"). With `diagnostics.view` the
+  plain sentence ("The connection check failed at "Session"."; a failed test says why in plain words from its failure code, "The test
+  failed. Could not connect to the server."; for Test all, "3 passed, 1 failed"). With `diagnostics.view` the
   row also has **Open in System events**, which opens the event that ended the job. The outcome is looked up when the entry is shown: it
   is not written into the audit row and not in the CSV, and a drawer showing "Still running." asks again every 5 seconds until the job ends.
 - **System events** (admin): needs `diagnostics.view` and `sources.view` (the first opens its routes, the second is needed because each
@@ -176,7 +177,7 @@ lacks says "No access".
   `scan.finished` entries (a scan ended) stay in the Audit log, where they were always written. On top, four tiles: **Open problems**
   (red above zero), **Warnings, last 24 h**, **Errors, last 24 h** and **Kept** (how many events and the oldest); under them **Happening
   now** lists the open problems, the first ten (**Show all open problems** shows the rest), one line each (`OPC UA server at 172.20.0.3:4840 is offline since 18 Oct 07:52 (4 d 2 h), 1,204 failed
-  reads. Could not connect: the connection was refused.`). The toolbar filters by source, kind, level (Info, Warning, Error) and a From to
+  reads. Could not connect to the server.`). The toolbar filters by source, kind, level (Info, Warning, Error) and a From to
   To range, has **Open only** and **Export CSV** (at most 20,000 events; a longer range is refused with a sentence); the filters are in the
   address. **Friendly** shows a sentence per event with a square level tag, its source, and for an incident its count and duration;
   **Raw** shows the stored kind, code, message and data. A row, its chevron or its time opens the event in a drawer on the right (`/events/ID`) with

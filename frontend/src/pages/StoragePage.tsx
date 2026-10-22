@@ -226,8 +226,8 @@ const inRange = ([low, high]: [number, number], unit: string) => `${unit} must b
 /**
  * The content of the Change... dialog (inside the Modal, so `useModalBusy` reaches it): the two numbers with the server's bounds, and one slot, always
  * there, for what the save has to say. A save that would shorten what is kept answers 409 with how many events go; the slot then says so and the same
- * button reads Confirm and save (it keeps the focus it has), which sends the request again with confirm=true. Changing a number takes the question back:
- * the count was for the numbers that were sent. The buttons wait with aria-disabled and a guard, never native `disabled`: the pressed one holds the focus.
+ * button reads Confirm and save, which sends the request again with confirm=true; the focus moves to Cancel when the question arrives, so a repeated Enter cannot
+ * confirm it unread. Changing a number takes the question back: the count was for the numbers that were sent. The buttons wait with aria-disabled and a guard, never native `disabled`: the pressed one holds the focus.
  */
 function EventsRetentionForm({ current, onClose }: { current: EventsSettings; onClose: () => void }) {
   const save = useSaveEventsSettings();
@@ -237,9 +237,17 @@ function EventsRetentionForm({ current, onClose }: { current: EventsSettings; on
   const [asking, setAsking] = useState<number | null>(null); // events the server said it would delete, once it has said so
   const [pending, setPending] = useState(false);
   const inFlight = useRef(false);
+  const cancelButton = useRef<HTMLButtonElement>(null);
   const daysHint = useId();
   const rowsHint = useId();
+  const questionId = useId();
   useModalBusy(pending); // Escape must not close the dialog on a request that is still running
+  // When the question arrives the focus goes to Cancel, off the button that turns into Confirm and save: a repeated Enter (or a double click) then cannot confirm a
+  // shortening that has not been read. Confirming takes a Tab to the button. Cancel is read with the question, since the alert is announced before the focus moves.
+  const questioned = asking !== null;
+  useEffect(() => {
+    if (questioned) cancelButton.current?.focus();
+  }, [questioned]);
   const { retention_days: dayBounds, max_rows: rowBounds } = current.bounds;
 
   const edit = (set: (text: string) => void) => (event: ChangeEvent<HTMLInputElement>) => {
@@ -296,11 +304,11 @@ function EventsRetentionForm({ current, onClose }: { current: EventsSettings; on
       {/* Always there and three lines tall (CSS), so the question or the refusal arriving moves neither the fields nor the buttons. One kind of announcer, an alert, for both. */}
       <div className="storage-events-slot">
         {error ? <p className="error" role="alert">{error}</p>
-          : asking !== null ? <p role="alert">About {asking.toLocaleString("en-US")} {asking === 1 ? "event" : "events"} will be deleted within the hour. Press Confirm and save to go ahead.</p>
+          : asking !== null ? <p id={questionId} role="alert">About {asking.toLocaleString("en-US")} {asking === 1 ? "event" : "events"} will be deleted within the hour. Press Confirm and save to go ahead.</p>
           : null}
       </div>
       <div className="row">
-        <button type="button" aria-disabled={pending || undefined} onClick={cancel}>Cancel</button>
+        <button type="button" ref={cancelButton} aria-disabled={pending || undefined} aria-describedby={questioned ? questionId : undefined} onClick={cancel}>Cancel</button>
         <button type="submit" className={asking === null ? "primary" : "danger"} aria-disabled={pending || undefined}>{asking === null ? "Save" : "Confirm and save"}</button>
       </div>
     </form>

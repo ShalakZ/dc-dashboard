@@ -1144,14 +1144,60 @@ describe("StoragePage System events card (w32)", () => {
     expect(eventsPuts(calls)).toHaveLength(1);
     expect(urls[0]).not.toContain("confirm");
     const confirm = within(dialog()).getByRole("button", { name: "Confirm and save" });
-    expect(confirm).toBe(save); // the same button, so the focus it holds stays on it
-    expect(confirm).toHaveFocus();
+    expect(confirm).toBe(save); // the same button, now turned into the confirming one
+    expect(confirm).not.toHaveFocus(); // review M6: the focus is on Cancel, so a repeated Enter cannot confirm a shortening unread
+    expect(within(dialog()).getByRole("button", { name: "Cancel" })).toHaveFocus();
     await userEvent.click(confirm);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(eventsPuts(calls)).toHaveLength(2);
     expect(urls[1]).toMatch(/\/api\/settings\/events\?confirm=true$/);
     expect(eventsPuts(calls)[1].body).toEqual({ retention_days: 30, max_rows: 100000 });
     expect(await screen.findByText(/System events are kept 30 days/)).toBeInTheDocument();
+  });
+
+  describe("the question keeps the focus off the confirming button (review M6)", () => {
+    const ask = () => keeping([], (_body, url) => (url.includes("confirm=true") ? null : { status: 409, body: { detail: "x", will_delete: 201 } }));
+
+    it("moves the focus to Cancel when the 409 arrives, also when it was Enter in a field that asked; the question stays ONE alert", async () => {
+      const calls = await show(ask(), ["storage.view", "storage.edit"]);
+      await openDialog();
+      await fill(days(), "7");
+      await userEvent.keyboard("{Enter}"); // implicit submission from the field
+      const question = await within(dialog()).findByRole("alert");
+      expect(question).toHaveTextContent("About 201 events will be deleted within the hour.");
+      expect(within(dialog()).getAllByRole("alert")).toHaveLength(1);
+      expect(within(dialog()).getByRole("button", { name: "Cancel" })).toHaveFocus();
+      expect(within(dialog()).getByRole("button", { name: "Confirm and save" })).not.toHaveFocus();
+      expect(eventsPuts(calls)).toHaveLength(1);
+    });
+
+    it("a repeated Enter after the question does not confirm: it presses Cancel, nothing more is sent", async () => {
+      const urls: string[] = [];
+      const calls = await show(keeping(urls, (_body, url) => (url.includes("confirm=true") ? null : { status: 409, body: { detail: "x", will_delete: 201 } })), ["storage.view", "storage.edit"]);
+      await openDialog();
+      await fill(days(), "7");
+      await userEvent.click(within(dialog()).getByRole("button", { name: "Save" }));
+      await within(dialog()).findByRole("button", { name: "Confirm and save" });
+      await userEvent.keyboard("{Enter}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(eventsPuts(calls)).toHaveLength(1);
+      expect(urls.some((url) => url.includes("confirm=true"))).toBe(false);
+    });
+
+    it("Tab then Enter does confirm: the request is repeated with confirm=true", async () => {
+      const urls: string[] = [];
+      const calls = await show(keeping(urls, (_body, url) => (url.includes("confirm=true") ? null : { status: 409, body: { detail: "x", will_delete: 201 } })), ["storage.view", "storage.edit"]);
+      await openDialog();
+      await fill(days(), "7");
+      await userEvent.click(within(dialog()).getByRole("button", { name: "Save" }));
+      await within(dialog()).findByRole("button", { name: "Confirm and save" });
+      await userEvent.tab();
+      expect(within(dialog()).getByRole("button", { name: "Confirm and save" })).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(eventsPuts(calls)).toHaveLength(2);
+      expect(urls[1]).toMatch(/\/api\/settings\/events\?confirm=true$/);
+    });
   });
 
   it("says one event in the singular", async () => {

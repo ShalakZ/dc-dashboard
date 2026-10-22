@@ -422,7 +422,7 @@ describe("AuditDrawer: the Outcome of a started check or test (w32)", () => {
   }
 
   it("adds an Outcome row LAST for a started check, with the sentence and a link to the event for someone who may read system events", async () => {
-    const { dialog, outcomeRow } = await showWith(["audit.view", "diagnostics.view"], checked(PASSED));
+    const { dialog, outcomeRow } = await showWith(["audit.view", "diagnostics.view", "sources.view"], checked(PASSED));
     expect(rowsOf(dialog)).toEqual([...BASE_ROWS, "Outcome"]);
     expect(outcomeRow()).toHaveTextContent("The connection check passed (7 steps).");
     const link = within(outcomeRow()!).getByRole("link", { name: "Open in System events" });
@@ -430,7 +430,7 @@ describe("AuditDrawer: the Outcome of a started check or test (w32)", () => {
   });
 
   it("shows a failed check's sentence and its own event, and a link per entry (not a shared one)", async () => {
-    const { outcomeRow } = await showWith(["diagnostics.view"], checked(FAILED));
+    const { outcomeRow } = await showWith(["diagnostics.view", "sources.view"], checked(FAILED));
     expect(outcomeRow()).toHaveTextContent('The connection check failed at "secure channel".');
     expect(within(outcomeRow()!).getByRole("link", { name: "Open in System events" })).toHaveAttribute("href", "/events/78");
   });
@@ -442,23 +442,35 @@ describe("AuditDrawer: the Outcome of a started check or test (w32)", () => {
     expect(within(outcomeRow()!).queryByRole("link")).toBeNull();
   });
 
+  it("gives the link only to an account that can open the page: diagnostics.view AND sources.view, as the Events page needs (review M2)", async () => {
+    const onlyDiagnostics = await showWith(["audit.view", "diagnostics.view"], checked(PASSED));
+    expect(onlyDiagnostics.outcomeRow()).toHaveTextContent("The connection check passed (7 steps).");
+    expect(within(onlyDiagnostics.outcomeRow()!).queryByRole("link")).toBeNull();
+    cleanup();
+    const onlySources = await showWith(["audit.view", "sources.view"], checked(PASSED));
+    expect(within(onlySources.outcomeRow()!).queryByRole("link")).toBeNull();
+    cleanup();
+    const both = await showWith(["diagnostics.view", "sources.view"], checked(PASSED));
+    expect(within(both.outcomeRow()!).getByRole("link", { name: "Open in System events" })).toHaveAttribute("href", "/events/77");
+  });
+
   it("gives no link when the outcome has no event (no longer kept, or still running), also with diagnostics.view", async () => {
-    const gone = await showWith(["diagnostics.view"], checked(GONE));
+    const gone = await showWith(["diagnostics.view", "sources.view"], checked(GONE));
     expect(gone.outcomeRow()).toHaveTextContent("The outcome is no longer kept (system events are kept 90 days).");
     expect(within(gone.outcomeRow()!).queryByRole("link")).toBeNull();
     cleanup();
-    const running = await showWith(["diagnostics.view"], checked(RUNNING, { id: 61 }), { "GET /api/audit/61": { body: checked(RUNNING, { id: 61 }) } });
+    const running = await showWith(["diagnostics.view", "sources.view"], checked(RUNNING, { id: 61 }), { "GET /api/audit/61": { body: checked(RUNNING, { id: 61 }) } });
     expect(running.outcomeRow()).toHaveTextContent("Still running.");
     expect(within(running.outcomeRow()!).queryByRole("link")).toBeNull();
   });
 
   it("says the test of several sources in the server's words, for source.tested and source.test_all as well", async () => {
     const several: AuditOutcome = { state: "failed", text: "3 passed, 1 failed", event_id: null, counts: { passed: 3, failed: 1, running: 0, gone: 0 } };
-    const { dialog, outcomeRow } = await showWith(["diagnostics.view"], checked(several, { action: "source.test_all", detail: { sources: 4, job_ids: [1, 2, 3, 4] } }));
+    const { dialog, outcomeRow } = await showWith(["diagnostics.view", "sources.view"], checked(several, { action: "source.test_all", detail: { sources: 4, job_ids: [1, 2, 3, 4] } }));
     expect(rowsOf(dialog)).toEqual([...BASE_ROWS, "Outcome"]);
     expect(outcomeRow()).toHaveTextContent("3 passed, 1 failed");
     cleanup();
-    const tested = await showWith(["diagnostics.view"], checked(PASSED, { action: "source.tested" }));
+    const tested = await showWith(["diagnostics.view", "sources.view"], checked(PASSED, { action: "source.tested" }));
     expect(rowsOf(tested.dialog)).toEqual([...BASE_ROWS, "Outcome"]);
   });
 
@@ -478,7 +490,7 @@ describe("AuditDrawer: the Outcome of a started check or test (w32)", () => {
 
   it("adds no live region of its own: no status or alert, and the one polite line stays the only aria-live", async () => {
     for (const outcome of [PASSED, FAILED, GONE]) {
-      const { dialog } = await showWith(["diagnostics.view"], checked(outcome));
+      const { dialog } = await showWith(["diagnostics.view", "sources.view"], checked(outcome));
       expect(dialog.querySelectorAll('[role="status"], [role="alert"]')).toHaveLength(0);
       expect(dialog.querySelectorAll("[aria-live]")).toHaveLength(1);
       cleanup();
@@ -492,7 +504,7 @@ describe("AuditDrawer: the Outcome of a started check or test (w32)", () => {
 
     it("asks for the entry again every 5 seconds, shows the new outcome when it ends, and then stops asking", async () => {
       let answers = 0;
-      const { asked, outcomeRow, refreshed } = await showWith(["diagnostics.view"], asEntry(RUNNING), {
+      const { asked, outcomeRow, refreshed } = await showWith(["diagnostics.view", "sources.view"], asEntry(RUNNING), {
         "GET /api/audit/60": () => ({ body: asEntry(answers++ === 0 ? RUNNING : PASSED) }),
       });
       await waitFor(() => expect(asked()).toBe(1)); // once on opening: the list may be a few seconds old
@@ -516,7 +528,7 @@ describe("AuditDrawer: the Outcome of a started check or test (w32)", () => {
     });
 
     it("keeps asking while the answer is still running", async () => {
-      const { asked } = await showWith(["diagnostics.view"], asEntry(RUNNING), { "GET /api/audit/60": () => ({ body: asEntry(RUNNING) }) });
+      const { asked } = await showWith(["diagnostics.view", "sources.view"], asEntry(RUNNING), { "GET /api/audit/60": () => ({ body: asEntry(RUNNING) }) });
       await waitFor(() => expect(asked()).toBe(1));
       for (const n of [2, 3, 4]) {
         act(() => { vi.advanceTimersByTime(5_000); });
@@ -526,7 +538,7 @@ describe("AuditDrawer: the Outcome of a started check or test (w32)", () => {
 
     it("keeps the sentence it has when a request fails, shows no alert for it, and tries again at the next beat", async () => {
       let answers = 0;
-      const { asked, outcomeRow, dialog } = await showWith(["diagnostics.view"], asEntry(RUNNING), {
+      const { asked, outcomeRow, dialog } = await showWith(["diagnostics.view", "sources.view"], asEntry(RUNNING), {
         "GET /api/audit/60": () => (answers++ === 0 ? { status: 500, body: { detail: "boom" } } : { body: asEntry(FAILED) }),
       });
       await waitFor(() => expect(asked()).toBe(1));
@@ -538,7 +550,7 @@ describe("AuditDrawer: the Outcome of a started check or test (w32)", () => {
 
     it("does not move the focus when the outcome changes under it", async () => {
       let answers = 0;
-      const { asked, outcomeRow, dialog } = await showWith(["diagnostics.view"], asEntry(RUNNING), {
+      const { asked, outcomeRow, dialog } = await showWith(["diagnostics.view", "sources.view"], asEntry(RUNNING), {
         "GET /api/audit/60": () => ({ body: asEntry(answers++ === 0 ? RUNNING : PASSED) }),
       });
       await waitFor(() => expect(asked()).toBe(1));
@@ -550,7 +562,7 @@ describe("AuditDrawer: the Outcome of a started check or test (w32)", () => {
     });
 
     it("stops asking when the drawer is closed", async () => {
-      const { asked, unmount } = await showWith(["diagnostics.view"], asEntry(RUNNING), { "GET /api/audit/60": () => ({ body: asEntry(RUNNING) }) });
+      const { asked, unmount } = await showWith(["diagnostics.view", "sources.view"], asEntry(RUNNING), { "GET /api/audit/60": () => ({ body: asEntry(RUNNING) }) });
       await waitFor(() => expect(asked()).toBe(1));
       unmount();
       act(() => { vi.advanceTimersByTime(30_000); });
@@ -562,7 +574,7 @@ describe("AuditDrawer: the Outcome of a started check or test (w32)", () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
       for (const outcome of [PASSED, FAILED, GONE]) {
-        const { asked } = await showWith(["diagnostics.view"], checked(outcome));
+        const { asked } = await showWith(["diagnostics.view", "sources.view"], checked(outcome));
         act(() => { vi.advanceTimersByTime(30_000); });
         await new Promise((resolve) => setTimeout(resolve, 20));
         expect(asked()).toBe(0);

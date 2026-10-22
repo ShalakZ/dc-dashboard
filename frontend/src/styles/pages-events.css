@@ -13,6 +13,7 @@
   .events-page .event-tiles .tile > .muted:first-child:not(.tile-label) { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
   .events-page .event-tiles .tile > .muted:first-child .tip { margin: -4px -6px -4px 0; } /* the 24 px tip button does not make the caption line taller */
   .events-page .event-tiles .tile[data-alert] .big { color: var(--crit); }
+  .events-page .event-tiles .tile-date { white-space: nowrap; } /* "2 Sep" is never broken between the day and the month */
 
   /* Happening now: the open problems, one line each, above the toolbar. Its slot is always there once the page is: a skeleton line while it loads, the lines, or one
      sentence saying nothing is open, so the toolbar and the table do not move when the answer arrives (A2). */
