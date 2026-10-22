@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiError } from "../api/client";
-import type { AuditRefs } from "../api/types";
+import type { AuditOutcome, AuditRefs } from "../api/types";
 import { downloadCsv } from "../lib/download";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
@@ -18,7 +18,7 @@ vi.mock("../lib/download", () => ({ downloadCsv: vi.fn() }));
 const entry = (id: number, action: string, detail: Record<string, unknown> = { scan_id: id }, username: string | null = "admin") => ({
   id, user_id: username ? 1 : null, actor_id: username ? 1 : null, username, action, detail, ts: "2026-10-07T10:00:00Z",
 });
-const list = (total: number, items: (ReturnType<typeof entry> & { refs?: AuditRefs })[], offset = 0) => ({
+const list = (total: number, items: (ReturnType<typeof entry> & { refs?: AuditRefs; outcome?: AuditOutcome | null })[], offset = 0) => ({
   body: { total, offset, limit: 50, items },
 });
 
@@ -1446,5 +1446,118 @@ describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
       await waitFor(() => expect(within(open).getByText("Started scan #151")).toBeInTheDocument());
       expect(copy).toHaveFocus();
     });
+  });
+});
+
+describe("AuditPage: the outcome of a started check or test (w32)", () => {
+  const PASSED: AuditOutcome = { state: "passed", text: "The connection check passed (7 steps).", event_id: 77, counts: null };
+  const FAILED: AuditOutcome = { state: "failed", text: "The test failed: the connection was refused.", event_id: 78, counts: null };
+  const RUNNING: AuditOutcome = { state: "running", text: "Still running.", event_id: null, counts: null };
+  const GONE: AuditOutcome = { state: "gone", text: "The outcome is no longer kept (system events are kept 90 days).", event_id: null, counts: null };
+  const CHECKED = { source_id: 2, name: "PM-1", job_id: 9 };
+  const page = list(8, [
+    { ...entry(64, "source.checked", CHECKED), outcome: PASSED },
+    { ...entry(63, "source.tested", { ...CHECKED, job_id: 8 }), outcome: FAILED },
+    { ...entry(62, "source.test_all", { sources: 3, job_ids: [5, 6, 7] }), outcome: RUNNING },
+    { ...entry(61, "source.checked", { ...CHECKED, job_id: 4 }), outcome: GONE },
+    entry(60, "source.checked", { ...CHECKED, job_id: 3 }), // an answer without the field (an older server)
+    { ...entry(59, "source.tested", { ...CHECKED, job_id: 2 }), outcome: null },
+    entry(58, "scan.started", { scan_id: 58 }),
+    { ...entry(57, "source.updated", { source_id: 2, name: "PM-1", before: { enabled: true }, after: { enabled: false } }), outcome: PASSED }, // never sent for this action; never shown
+  ]);
+  const rowOf = (id: number) => document.querySelector<HTMLElement>(`tr[data-entry-id="${id}"]`)!;
+  const tagOf = (id: number) => rowOf(id).querySelector<HTMLElement>(".ev-tag");
+  const dialog = () => screen.findByRole("dialog", { name: "Audit entry" });
+  const ready = () => screen.findByRole("button", { name: "Details of entry #64" });
+
+  it("draws a small square tag after the sentence of a started check or test: the word passed, failed or running", async () => {
+    setup("/audit", page);
+    await ready();
+    for (const [id, word] of [[64, "passed"], [63, "failed"], [62, "running"]] as const) {
+      const tag = tagOf(id)!;
+      expect(tag, `entry ${id}`).not.toBeNull();
+      expect(tag).toHaveTextContent(new RegExp(`^${word}$`));
+      expect(tag).toHaveClass("ev-tag", `ev-tag-${word}`);
+      expect(tag.closest(".what-text")).not.toBeNull(); // in the sentence's own line, not in a column of its own
+    }
+    expect(tagOf(64)).toHaveAttribute("title", PASSED.text); // the whole sentence is one hover away
+    expect(tagOf(63)).toHaveAttribute("title", FAILED.text);
+  });
+
+  it("puts the tag after the sentence and its link, with a space between, so a copy or a screen reader's line keeps the words apart", async () => {
+    setup("/audit", page);
+    await ready();
+    expect(rowOf(64).querySelector(".what-text")!.textContent).toBe("Started a connection check of source PM-1 Open Sources passed");
+    expect(rowOf(63).querySelector(".what-text")!.textContent).toBe("Started a connection test of source PM-1 Open Sources failed");
+  });
+
+  it("draws no tag when the outcome is no longer kept, is missing or null, or the action is any other (the row is exactly what it was)", async () => {
+    setup("/audit", page);
+    await ready();
+    for (const id of [61, 60, 59, 58, 57]) expect(tagOf(id), `entry ${id}`).toBeNull();
+    expect(rowOf(60).querySelector(".what-text")!.textContent).toBe("Started a connection check of source PM-1 Open Sources");
+    expect(rowOf(58).querySelector(".what-text")!.textContent).toBe("Started scan #58 Open Scans");
+    expect(document.querySelectorAll(".audit-table .ev-tag")).toHaveLength(3);
+  });
+
+  it("draws the tag to everyone who can read the log (it needs no other permission), and none in the Raw view", async () => {
+    mockFetch({ ...admin, "GET /api/me": { body: userFor("custom", { permissions: ["audit.view"] }) }, "GET /api/audit": page });
+    const first = renderWithDataRouter(<><AuditPage /><SignedIn /></>, { route: "/audit", path: "/audit/:id?" });
+    await accountKnown();
+    await ready();
+    expect(document.querySelectorAll(".audit-table .ev-tag")).toHaveLength(3);
+    first.unmount();
+    setup("/audit?view=raw", page);
+    await screen.findByRole("cell", { name: "source.test_all" });
+    expect(document.querySelector(".ev-tag")).toBeNull();
+  });
+
+  it("opens the drawer of a started check with the Outcome row last and a link to its event", async () => {
+    setup("/audit", page);
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: "Details of entry #64" }));
+    const open = await dialog();
+    const rows = [...open.querySelectorAll(".kv dt")].map((dt) => dt.textContent);
+    expect(rows).toEqual(["What happened", "When", "Who", "Action", "Entry", "Outcome"]);
+    const outcome = [...open.querySelectorAll(".kv > div")].at(-1)!;
+    expect(outcome).toHaveTextContent("The connection check passed (7 steps).");
+    expect(within(outcome as HTMLElement).getByRole("link", { name: "Open in System events" })).toHaveAttribute("href", "/events/77");
+  });
+
+  it("gives an account without diagnostics.view the sentence and no link", async () => {
+    mockFetch({ ...admin, "GET /api/me": { body: userFor("custom", { permissions: ["audit.view"] }) }, "GET /api/audit": page });
+    renderWithDataRouter(<><AuditPage /><SignedIn /></>, { route: "/audit", path: "/audit/:id?" });
+    await accountKnown();
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: "Details of entry #64" }));
+    const open = await dialog();
+    expect(open).toHaveTextContent("The connection check passed (7 steps).");
+    expect(within(open).queryByRole("link", { name: "Open in System events" })).toBeNull();
+  });
+
+  it("shows the Outcome row of an entry opened by its address, which the page fetches by its id", async () => {
+    // the list does not hold entry 64 (a deep link to an older entry), so the page asks for it by its id
+    setup("/audit/64", list(1, [entry(50, "scan.started", { scan_id: 50 })]), { "GET /api/audit/64": { body: { ...entry(64, "source.checked", CHECKED), refs: {}, outcome: FAILED } } });
+    const open = await dialog();
+    expect(await within(open).findByText(FAILED.text)).toBeInTheDocument();
+    expect(within(open).getByRole("link", { name: "Open in System events" })).toHaveAttribute("href", "/events/78");
+  });
+
+  it("keeps five rows in the drawer of an entry with no outcome", async () => {
+    setup("/audit", page);
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: "Details of entry #60" }));
+    const open = await dialog();
+    expect([...open.querySelectorAll(".kv dt")].map((dt) => dt.textContent)).toEqual(["What happened", "When", "Who", "Action", "Entry"]);
+  });
+
+  it("reads a running entry again when its drawer opens and shows how it ended", async () => {
+    const { calls } = setup("/audit", page, { "GET /api/audit/62": { body: { ...entry(62, "source.test_all", { sources: 3, job_ids: [5, 6, 7] }), refs: {}, outcome: { ...FAILED, text: "2 passed, 1 failed", event_id: null, counts: { passed: 2, failed: 1, running: 0, gone: 0 } } } } });
+    await ready();
+    expect(calls.filter((c) => c.path === "/api/audit/62")).toHaveLength(0); // the list is read, nothing else, until a drawer needs more
+    await userEvent.click(screen.getByRole("button", { name: "Details of entry #62" }));
+    const open = await dialog();
+    expect(await within(open).findByText("2 passed, 1 failed")).toBeInTheDocument();
+    expect(calls.filter((c) => c.path === "/api/audit/62")).toHaveLength(1);
   });
 });

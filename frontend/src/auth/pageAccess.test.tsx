@@ -29,6 +29,7 @@ vi.mock("../pages/TariffsPage", () => ({ TariffsPage: () => <h1>the tariffs page
 vi.mock("../pages/StoragePage", () => ({ StoragePage: () => <h1>the storage page</h1> }));
 vi.mock("../pages/DisplaysPage", () => ({ DisplaysPage: () => <h1>the displays page</h1> }));
 vi.mock("../pages/AuditPage", () => ({ AuditPage: () => <h1>the audit page</h1> }));
+vi.mock("../pages/EventsPage", () => ({ EventsPage: () => <h1>the events page</h1> }));
 vi.mock("../pages/DiagnosticsPage", () => ({ DiagnosticsPage: () => <h1>the diagnostics page</h1> }));
 vi.mock("../pages/PasswordPage", () => ({ PasswordPage: () => <h1>the password page</h1> }));
 
@@ -84,6 +85,8 @@ const ROUTES: [string, Need, string][] = [
   ["/displays", PAGE_NEED.displays, "the displays page"],
   ["/audit", PAGE_NEED.audit, "the audit page"],
   ["/audit/7", PAGE_NEED.audit, "the audit page"], // the same page, with the entry open in the drawer
+  ["/events", PAGE_NEED.events, "the events page"],
+  ["/events/7", PAGE_NEED.events, "the events page"], // the same page, with the event open in the drawer
   ["/diagnostics", PAGE_NEED.diagnostics, "the diagnostics page"],
 ];
 
@@ -285,6 +288,7 @@ describe("the page map", () => {
       tariffs: ["tariffs.view", "assets.view"],
       storage: "storage.view",
       audit: "audit.view",
+      events: ["diagnostics.view", "sources.view"], // w32: the journal's own page; the sources list names each event's source
       diagnostics: ["diagnostics.view", "sources.view"],
       displays: ["displays.manage", "dashboards.view"],
     });

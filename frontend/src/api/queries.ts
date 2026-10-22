@@ -1,4 +1,4 @@
-import { hashKey, keepPreviousData, queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, keepPreviousData, queryOptions, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiQuery, type AuditFilters } from "../lib/auditFilters";
 import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { upperFirst } from "../lib/upperFirst";
@@ -9,6 +9,7 @@ import type {
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, SourceImpact, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, DataWidgetType, DashboardTemplates, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
   DisplayCreated, DisplayIn, DisplayPatch, DisplayRow, DisplaysList, PlaylistIn, PlaylistRow, ImportProfile,
+  EventDetail, EventFilters, EventOptions, EventPage, EventsRetention, EventsSettings, EventSummary,
 } from "./types";
 
 export const keys = {
@@ -40,6 +41,15 @@ export const keys = {
   /** Prefix of every audit query (list, options, entry): invalidate this after a change that writes an audit row. */
   auditAll: ["audit"] as const,
   auditEntry: (id: number | null) => ["audit", "entry", id] as const,
+  /** w32 system events. Every read of them sits under this prefix (list, one page, one event, options, summary): invalidate it after a write that can change the journal or its retention. */
+  eventsAll: ["events"] as const,
+  eventsList: (filters: EventFilters, limit: number) => ["events", "list", filters, limit] as const,
+  eventsPage: (filters: EventFilters, before: string | null, includeTotal: boolean, limit: number) => ["events", "page", filters, limit, before, includeTotal] as const,
+  eventsOptions: ["events", "options"] as const,
+  eventsSummary: ["events", "summary"] as const,
+  event: (id: number | null) => ["events", "one", id] as const,
+  /** The retention of the journal (`GET /api/settings/events`), with the other settings, as the storage settings are. */
+  eventsSettings: ["settings", "events"] as const,
   site: ["site"] as const,
   billingSettings: ["settings", "billing"] as const,
   tariffs: ["tariffs"] as const,
@@ -540,6 +550,114 @@ export const useAuditEntry = (id: number | null) =>
 export function auditPosition(filters: AuditFilters, date: string): Promise<AuditPosition> {
   return api.get<AuditPosition>(`/api/audit/position?${apiQuery(filters, { date })}`);
 }
+
+// ---- w32: system events (the journal behind Diagnostics; every route needs diagnostics.view) ----
+
+/** The page size of the events list (the API takes up to 200). */
+export const EVENT_PAGE_SIZE = 50;
+/** How often the open problems, the tiles and page one of the list are read again while the page is open and visible (the page stops the list's own refresh while a drawer is open or a `to` day is set). */
+export const EVENTS_REFETCH_MS = 10_000;
+
+export const NO_EVENT_FILTERS: EventFilters = { source: "", levels: [], kinds: [], from: "", to: "", open: false };
+
+/** The text after "?" for /api/events and /api/events.csv: the filters (level and kind repeat, open is `1`), then `extra`. Anything not set is left out. */
+export function eventsQuery(filters: EventFilters, extra: Record<string, string | number> = {}): string {
+  const params = new URLSearchParams();
+  if (filters.source) params.set("source", filters.source);
+  for (const level of filters.levels) params.append("level", level);
+  for (const kind of filters.kinds) params.append("kind", kind);
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
+  if (filters.open) params.set("open", "1");
+  for (const [key, value] of Object.entries(extra)) {
+    if (value !== "") params.set(key, String(value));
+  }
+  return params.toString();
+}
+
+/** The address of the CSV export of the filtered events: the filters alone (the server refuses more than 20,000 rows and says so in a sentence). */
+export function eventsCsvUrl(filters: EventFilters): string {
+  const query = eventsQuery(filters);
+  return query ? `/api/events.csv?${query}` : "/api/events.csv";
+}
+
+interface EventPageParams { before: string | null; includeTotal: boolean; limit: number }
+const loadEventPage = (filters: EventFilters, { before, includeTotal, limit }: EventPageParams) =>
+  api.get<EventPage>(`/api/events?${eventsQuery(filters, { limit, include_total: includeTotal ? 1 : 0, ...(before ? { before } : {}) })}`);
+
+/**
+ * The events list, one keyset page at a time (newest first): `fetchNextPage` sends the `next` cursor of the last page as `before`. The total is asked for with the
+ * first page only (`pages[0].total`; the later pages carry none), so a change of filters counts again and scrolling on does not. No timer here: a list that grows
+ * as it is read cannot be refetched page by page without moving rows, so the calm refresh is `useEventPage` for page one, compared with what is on screen.
+ * The rows of the previous filters stay while the new ones load.
+ */
+export const useEvents = (filters: EventFilters, limit = EVENT_PAGE_SIZE) =>
+  useInfiniteQuery({
+    queryKey: keys.eventsList(filters, limit),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => loadEventPage(filters, { before: pageParam, includeTotal: pageParam === null, limit }),
+    getNextPageParam: (last) => last.next,
+    placeholderData: keepPreviousData,
+  });
+
+/**
+ * One page of the events, as an ordinary query (page one by default, no total unless `includeTotal`). `refetchMs` reads it again on that interval while the tab is
+ * visible (the calm refresh of the list, and the pinned open problems with `open: true` in the filters); `enabled: false` stops it. The previous rows stay while other
+ * filters load, and while a read fails the last good page stays (`data` is kept; the page decides whether to say so).
+ */
+export const useEventPage = (
+  filters: EventFilters,
+  { before = null, includeTotal = false, limit = EVENT_PAGE_SIZE, refetchMs = false, enabled = true }: Partial<EventPageParams> & { refetchMs?: number | false; enabled?: boolean } = {},
+) =>
+  useQuery({
+    queryKey: keys.eventsPage(filters, before, includeTotal, limit),
+    queryFn: () => loadEventPage(filters, { before, includeTotal, limit }),
+    refetchInterval: refetchMs,
+    enabled,
+    placeholderData: keepPreviousData,
+  });
+
+/** One event by id (with `started_by`); no request for an id the API cannot hold. */
+export const useEvent = (id: number | null) =>
+  useQuery({
+    queryKey: keys.event(id),
+    enabled: isEntryId(id),
+    queryFn: () => api.get<EventDetail>(`/api/events/${id}`),
+  });
+
+/** The kinds and the sources the events filters offer. */
+export const useEventOptions = (enabled = true) =>
+  useQuery({ queryKey: keys.eventsOptions, queryFn: () => api.get<EventOptions>("/api/events/options"), staleTime: 60_000, enabled });
+
+/** The tiles of the page: open problems, warnings and errors of the last 24 hours, what is kept. Read again every 10 seconds. */
+export const useEventSummary = (enabled = true) =>
+  useQuery({ queryKey: keys.eventsSummary, queryFn: () => api.get<EventSummary>("/api/events/summary"), refetchInterval: EVENTS_REFETCH_MS, enabled });
+
+/** The retention of the journal (storage.view): days, rows, the factory values, the bounds, and what is kept now. */
+export const useEventsSettings = (enabled = true) =>
+  useQuery({ queryKey: keys.eventsSettings, queryFn: () => api.get<EventsSettings>("/api/settings/events"), enabled });
+
+/**
+ * Save the retention (storage.edit). A change that would shorten what is kept answers 409 `{ detail, will_delete }` until it is sent again with `confirm: true`
+ * (in the query string, never the body); the ApiError reaches the caller (`eventsLoss` reads it). `onSettled`, not `onSuccess`: a refusal means the setting on
+ * screen is out of date. It moves the setting, the events reads (the summary's retention, `kept` and `oldest`) and the audit log (the save is audited, and an
+ * outcome that is no longer kept names the days).
+ */
+export function useSaveEventsSettings() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: ({ values, confirm }: { values: EventsRetention; confirm: boolean }) =>
+      api.put<EventsSettings>(`/api/settings/events${confirm ? "?confirm=true" : ""}`, values),
+    onSettled: () => invalidate(keys.eventsSettings, keys.eventsAll, keys.auditAll),
+  });
+}
+
+/** PUT /api/settings/events wants confirmation: how many events saving would delete (within the hour) and the server's sentence, otherwise null. */
+export const eventsLoss = (error: unknown): { detail: string; willDelete: number } | null => {
+  if (!(error instanceof ApiError) || error.status !== 409) return null;
+  const body = error.body as { detail?: unknown; will_delete?: unknown } | null | undefined;
+  return typeof body?.detail === "string" && typeof body.will_delete === "number" ? { detail: body.detail, willDelete: body.will_delete } : null;
+};
 
 export const useSite = () =>
   useQuery({ queryKey: keys.site, queryFn: () => api.get<Site>("/api/site"), staleTime: 60_000 });

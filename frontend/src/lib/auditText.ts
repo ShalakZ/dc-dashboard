@@ -1,4 +1,4 @@
-import type { AuditEntry, AuditRefs, RefKind } from "../api/types";
+import type { AuditEntry, AuditOutcome, AuditRefs, RefKind } from "../api/types";
 import { assetIconLabel } from "./assetIcons";
 import { monthLabel } from "./billing";
 import { PERMISSION_LABELS, type PermissionId } from "./permissions";
@@ -413,6 +413,36 @@ const billingPage = page("/billing", "Open Billing"); // the page has no month i
 const storagePage = page("/storage", "Open Storage");
 const displaysPage = page("/displays", "Open Displays");
 
+/** A stored count that can be read as one: a whole number of zero or more. */
+const wholeNumber = (value: unknown): number | null => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null);
+
+/** The new value of one number in a before/after pair, and the old one when the entry kept it (it keeps only the fields that changed). */
+function changedNumber(sides: Sides | null, key: string): { now: number; was: number | null } | null {
+  const now = sides ? wholeNumber(get(sides.after, key)) : null;
+  return sides && now !== null ? { now, was: wholeNumber(get(sides.before, key)) } : null;
+}
+
+/**
+ * events.retention_changed, in the style of storage.changed: what the person changed, with the old value beside the new one ("30 days (was 90),
+ * at most 50,000 events (was 100,000)"), and when the confirmed shortening put events over the new limits, how many the hourly clean-up then deletes.
+ * Sides it cannot read fall back to the names of the changed fields, and an entry with no sides to the plain sentence.
+ */
+function eventsRetention(c: Context): string {
+  const base = "Changed how long system events are kept";
+  const num = (n: number) => n.toLocaleString("en-US");
+  const noun = (n: number, word: string) => `${num(n)} ${word}${n === 1 ? "" : "s"}`;
+  const was = (old: number | null) => (old !== null ? ` (was ${num(old)})` : "");
+  const days = changedNumber(c.sides, "retention_days");
+  const rows = changedNumber(c.sides, "max_rows");
+  const parts: string[] = [];
+  if (days) parts.push(`${noun(days.now, "day")}${was(days.was)}`);
+  if (rows) parts.push(`at most ${noun(rows.now, "event")}${was(rows.was)}`);
+  if (parts.length === 0) return withFields(base, c.fields);
+  const going = wholeNumber(c.d.will_delete);
+  if (going !== null && going > 0) parts.push(`deleting about ${noun(going, "event")}`);
+  return `${base}: ${parts.join(", ")}`;
+}
+
 /** "QAR", or "not set" when the side is missing or empty. */
 function settingSide(side: Detail | undefined, key: string): string {
   return (side && text(get(side, key))) || "not set";
@@ -729,6 +759,9 @@ const RULES: Record<string, Rule> = {
   "display.revoked": { summary: (c) => `Revoked ${displayThing(c)}: its link no longer works`, link: displaysPage },
   "display.updated": { summary: (c) => displayUpdate(c) ?? withFields(`Changed ${displayThing(c)}`, c.fields), link: displaysPage },
 
+  // The Storage page holds the card that changes this. The entry keeps only the limits that changed, and (when the shortening was confirmed) how many events it put over them.
+  "events.retention_changed": { summary: eventsRetention, link: storagePage },
+
   // The job's id is only in the raw Details; the sentence says which source and which time range.
   "history.fill_requested": {
     summary: (c) => {
@@ -957,4 +990,19 @@ export function describeAudit(entry: AuditEntry): AuditView {
     const action = typeof entry?.action === "string" ? entry.action : "";
     return { summary: humanise(action), changes: [], unchanged: 0, link: null };
   }
+}
+
+/** The audit actions that start a job whose end the System events journal keeps (w32): only their entries carry an `outcome`. */
+export const OUTCOME_ACTIONS: ReadonlySet<string> = new Set(["source.checked", "source.test_all", "source.tested"]);
+
+const OUTCOME_STATES: ReadonlySet<string> = new Set(["passed", "failed", "running", "gone"]);
+
+/**
+ * How the check or test an entry started ended, or null: for any other action, for an entry the server sent without the field (an older one) or with
+ * null, and for one this build cannot read (an unknown state is shown as nothing, never as a guess). Never throws.
+ */
+export function outcomeOf(entry: AuditEntry): AuditOutcome | null {
+  const outcome = entry?.outcome;
+  if (!OUTCOME_ACTIONS.has(entry?.action) || !isObject(outcome)) return null;
+  return OUTCOME_STATES.has(outcome.state) && typeof outcome.text === "string" ? outcome : null;
 }

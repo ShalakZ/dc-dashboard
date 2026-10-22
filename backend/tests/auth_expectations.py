@@ -141,6 +141,14 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     _all("readings.import", "POST /api/sources/{source_id}/import"),
     _all("storage.view", "GET /api/storage", "GET /api/storage/rows-per-day", "GET /api/settings/storage"),
     _all("storage.edit", "PUT /api/settings/storage", "PUT /api/settings/storage/default"),
+    # Added in W32 (how long system events are kept: the Storage card): after the freeze, so not in auth_matrix_pre_w9a.json; the gate
+    # and isolation tests cover them. The read routes of the events themselves are listed by their own task.
+    _all("storage.view", "GET /api/settings/events"),
+    _all("storage.edit", "PUT /api/settings/events"),
+    # Added in W32 (the System events page: the journal, one event, its filters, its tiles and its CSV): after the freeze, so not in
+    # auth_matrix_pre_w9a.json; the gate and isolation tests cover them. diagnostics.view alone opens them (the page also needs sources.view).
+    _all("diagnostics.view", "GET /api/events", "GET /api/events/{event_id:int}", "GET /api/events/options", "GET /api/events/summary",
+         "GET /api/events.csv"),
     _all("settings.view", "GET /api/settings/general", "GET /api/settings/sign-in", "GET /api/tls/status"),
     _all("settings.edit", "PUT /api/settings/general"),
     # Added in W9b: the sign-in protection left settings.edit. The built-in roles are unaffected (Admin holds every id).

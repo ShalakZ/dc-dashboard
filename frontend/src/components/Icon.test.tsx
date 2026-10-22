@@ -137,3 +137,36 @@ describe("the widget icons (w13)", () => {
     expect(pencil.container.querySelectorAll("path").length).toBeGreaterThanOrEqual(2);
   });
 });
+
+// The icon of the System events page (w32): a bell with its clapper. The Events link sits between Audit (a page with a tick) and Diagnostics (a pulse line) in the sidebar, so it must not look like either.
+describe("the events icon (w32)", () => {
+  const drawn = (name: IconName) => {
+    const { container, unmount } = render(<Icon name={name} />);
+    const html = container.querySelector("svg")!.innerHTML;
+    unmount();
+    return html;
+  };
+
+  it("is there and is not named like an asset kind", () => {
+    expect(Object.keys(ICONS)).toContain("events");
+    expect("events".startsWith("kind")).toBe(false);
+  });
+
+  it("is one decorative svg of the 24-unit box with at least one shape and no colour of its own", () => {
+    const { container } = render(<Icon name="events" />);
+    const svg = container.firstElementChild!;
+    expect(svg.tagName.toLowerCase()).toBe("svg");
+    expect(svg).toHaveClass("i");
+    expect(svg).toHaveAttribute("viewBox", "0 0 24 24");
+    expect(svg).toHaveAttribute("aria-hidden", "true");
+    expect(svg.querySelectorAll("path, circle, rect, ellipse").length).toBeGreaterThan(0);
+    for (const attr of ["fill", "stroke", "stroke-width", "style", "color"]) expect(svg.querySelector(`[${attr}]`), attr).toBeNull();
+  });
+
+  it("is drawn differently from the audit and diagnostics icons beside it and from the other signs it could be taken for", () => {
+    const events = drawn("events");
+    for (const other of ["audit", "diagnostics", "evProblem", "evOther", "alert", "info", "clock", "readings"] as const) {
+      expect(events, `not the same as ${other}`).not.toBe(drawn(other));
+    }
+  });
+});

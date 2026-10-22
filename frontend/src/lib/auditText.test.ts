@@ -1,5 +1,5 @@
 import type { AuditEntry } from "../api/types";
-import { describeAudit, formatValue, humanise } from "./auditText";
+import { describeAudit, formatValue, humanise, outcomeOf, OUTCOME_ACTIONS } from "./auditText";
 
 const entry = (action: string, detail: unknown, extra: Partial<AuditEntry> = {}): AuditEntry => ({
   id: 1, user_id: 1, actor_id: 1, username: "admin", action, detail: detail as Record<string, unknown>,
@@ -20,6 +20,7 @@ const ALL_ACTIONS = [
   "playlist.created", "playlist.updated", "playlist.deleted",
   "display.created", "display.updated", "display.revoked", "display.deleted", "display.connected", "display.claim_blocked",
   "readings.imported", "import_profile.saved", "import_profile.deleted", "tags.mapped", "tags.unmapped", "history.fill_requested",
+  "events.retention_changed",
 ];
 
 describe("humanise", () => {
@@ -885,7 +886,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(68);
+    expect(ALL_ACTIONS).toHaveLength(69);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }
@@ -1381,6 +1382,7 @@ describe("describeAudit: no sentence shows an id", () => {
     },
     "tags.unmapped": { audit_id: CLOSE, source_id: SRC, mappings: 3, assets: 2, points_removed: 2, points_kept: [POINT] },
     "history.fill_requested": { source_id: SRC, name: "PM-1", start: "2026-10-01T00:00:00+00:00", end: "2026-10-05T00:00:00+00:00", before_first_reading: false, job_id: JOB },
+    "events.retention_changed": { will_delete: 40, before: { retention_days: 90, max_rows: 100000 }, after: { retention_days: 30, max_rows: 50000 } },
   };
 
   const present = {
@@ -1776,5 +1778,74 @@ describe("describeAudit: imports, import profiles, tag lists and history fills",
       expect(say("history.fill_requested", { name: "PM-1", start: "last week", end: "today" }).summary).toBe("Asked for a history fill of source PM-1, last week to today");
       expect(say("history.fill_requested", {}).summary).toBe("Asked for a history fill of a source");
     });
+  });
+});
+
+describe("describeAudit: the system events retention (w32)", () => {
+  const retention = (detail: unknown) => describeAudit(entry("events.retention_changed", detail));
+  const BASE = "Changed how long system events are kept";
+
+  it("says both new limits with the old ones beside them, and links to the Storage page where the card is", () => {
+    const view = retention({ before: { retention_days: 90, max_rows: 100000 }, after: { retention_days: 30, max_rows: 50000 } });
+    expect(view.summary).toBe(`${BASE}: 30 days (was 90), at most 50,000 events (was 100,000)`);
+    expect(view.link).toEqual({ to: "/storage", label: "Open Storage" });
+    expect(view.changes).toEqual([
+      { field: "Retention days", before: "90", after: "30" },
+      { field: "Max rows", before: "100000", after: "50000" },
+    ]);
+  });
+
+  it("names only the limit that changed (the entry keeps only the changed fields)", () => {
+    expect(retention({ before: { retention_days: 90 }, after: { retention_days: 120 } }).summary).toBe(`${BASE}: 120 days (was 90)`);
+    expect(retention({ before: { max_rows: 100000 }, after: { max_rows: 200000 } }).summary).toBe(`${BASE}: at most 200,000 events (was 100,000)`);
+    expect(retention({ before: { retention_days: 31 }, after: { retention_days: 1 } }).summary).toBe(`${BASE}: 1 day (was 31)`);
+  });
+
+  it("says how many events the confirmed shortening put over the new limits, in plain words and only when there were some", () => {
+    const sides = { before: { retention_days: 90 }, after: { retention_days: 30 } };
+    expect(retention({ will_delete: 1204, ...sides }).summary).toBe(`${BASE}: 30 days (was 90), deleting about 1,204 events`);
+    expect(retention({ will_delete: 1, ...sides }).summary).toBe(`${BASE}: 30 days (was 90), deleting about 1 event`);
+    expect(retention({ will_delete: 0, ...sides }).summary).toBe(`${BASE}: 30 days (was 90)`);
+    expect(retention(sides).summary).toBe(`${BASE}: 30 days (was 90)`);
+  });
+
+  it("reads a side it cannot trust as the changed field names, and an entry with no sides as the plain sentence", () => {
+    expect(retention({ before: { retention_days: "ninety" }, after: { retention_days: "thirty" } }).summary).toBe(`${BASE}: retention days`);
+    expect(retention({ before: { retention_days: 90 }, after: { retention_days: -5 } }).summary).toBe(`${BASE}: retention days`);
+    expect(retention({}).summary).toBe(BASE);
+    expect(retention(null).summary).toBe(BASE);
+    expect(retention({ will_delete: "many" }).summary).toBe(BASE);
+  });
+
+  it("leaves out 'was' when the old value is not in the entry", () => {
+    expect(retention({ before: {}, after: { retention_days: 45 } }).summary).toBe(`${BASE}: 45 days`);
+  });
+});
+
+describe("outcomeOf (w32)", () => {
+  const outcome = { state: "passed", text: "The test passed.", event_id: 7, counts: null };
+  const withOutcome = (action: string, extra: unknown = outcome) => entry(action, { source_id: 2 }, { outcome: extra as AuditEntry["outcome"] });
+
+  it("is defined for the three actions that start a job, and only those", () => {
+    expect([...OUTCOME_ACTIONS].sort()).toEqual(["source.checked", "source.test_all", "source.tested"]);
+  });
+
+  it("returns the outcome of an entry of one of those actions", () => {
+    for (const action of OUTCOME_ACTIONS) expect(outcomeOf(withOutcome(action))).toEqual(outcome);
+  });
+
+  it("returns none for another action, for a missing or null outcome, and for one it cannot read", () => {
+    expect(outcomeOf(withOutcome("source.updated"))).toBeNull();
+    expect(outcomeOf(entry("source.checked", {}))).toBeNull();
+    expect(outcomeOf(withOutcome("source.checked", null))).toBeNull();
+    expect(outcomeOf(withOutcome("source.checked", "passed"))).toBeNull();
+    expect(outcomeOf(withOutcome("source.checked", { state: "weird", text: "x", event_id: null, counts: null }))).toBeNull();
+    expect(outcomeOf(withOutcome("source.checked", { state: "passed", text: 5, event_id: null, counts: null }))).toBeNull();
+    expect(outcomeOf(null as unknown as AuditEntry)).toBeNull();
+  });
+
+  it("returns a gone outcome (the drawer shows its text; the row draws no tag for it)", () => {
+    const gone = { state: "gone", text: "The outcome is no longer kept (system events are kept 90 days).", event_id: null, counts: null };
+    expect(outcomeOf(withOutcome("source.tested", gone))).toEqual(gone);
   });
 });

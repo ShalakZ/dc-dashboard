@@ -20,6 +20,7 @@ from dcdash.core.audit import (
 from dcdash.core.crypto import encrypt
 from dcdash.core.models import Mapping, Point, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
+from dcdash.events import read as events_read
 
 router = APIRouter(prefix="/api", tags=["sources"])
 
@@ -90,6 +91,8 @@ class SourceListOut(SourceOut):
     mapped_points: int = 0  # points of this source that have a mapping
     polls: bool = True  # the connector class's flag: false for a source that is filled by importing files, which is never tested or polled
     history: SourceHistoryLine | None = None  # never null in an answer: list_sources fills it for every row (the default only lets `of` validate)
+    offline_since: datetime | None = None  # while offline: the earlier of the open incident's start and last_seen; else null (P7)
+    failed_reads: int | None = None  # while offline: the open incident's count of failed reads; else null
 
 
 class SourceHistoryOut(BaseModel):
@@ -257,15 +260,30 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
             )
         ).mappings()
     }
+    # One more query for all the OFFLINE listed sources: their open `source.offline` incident (w32). Plain SQL, as above. A source
+    # that is not offline is not looked up (this list refreshes every 10 s for every user): with none offline, no query at all.
+    incidents = await events_read.open_incidents(db, [s.id for s in sources if s.status == "offline"])
     types = connector_types()
     return [
         SourceListOut.of(
             s, last_reading_age_seconds=ages.get(s.id), mapped_points=int(counts.get(s.id, 0)),
             polls=getattr(types.get(s.connector_type), "polls", True),  # a type this build does not know counts as polling
             history=_history_line(s, history.get(s.id), types),
+            **_offline_fields(s, incidents.get(s.id)),
         )
         for s in sources
     ]
+
+
+def _offline_fields(source: Source, incident: dict[str, Any] | None) -> dict[str, Any]:
+    """`offline_since` and `failed_reads` of a listed source. `offline_since` is the earlier of the open incident's start and
+    `last_seen` (a null is ignored) and only while the source is offline; null when there is neither. `failed_reads` is the open
+    incident's count, and only an offline source has its incident looked up: any other source answers null."""
+    since = None
+    if source.status == "offline":
+        starts = [moment for moment in (incident["first_at"] if incident else None, source.last_seen) if moment is not None]
+        since = min(starts) if starts else None
+    return {"offline_since": since, "failed_reads": incident["count"] if incident else None}
 
 
 @router.post(

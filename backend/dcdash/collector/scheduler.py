@@ -9,6 +9,7 @@ from typing import Any
 
 import asyncpg
 
+from dcdash.collector.incidents import IncidentBook
 from dcdash.collector.writer import Row, Writer
 from dcdash.connectors.base import BAD, Connector, ConnectorError, ConnectorFactory, PointValue, create_connector
 from dcdash.core import journal
@@ -20,8 +21,6 @@ log = logging.getLogger(__name__)
 MAX_BACKOFF_SECONDS = 60
 LAST_SEEN_REFRESH_SECONDS = 10
 STATUS_WRITE_TIMEOUT_SECONDS = 5.0
-BAD_POINTS_REFRESH_SECONDS = 600  # while points stay bad, the journal repeats points.bad at most this often
-SILENT_FAILURE_REPEAT_SECONDS = 600  # a source whose configuration or secret is unusable is journaled once per period
 NO_VALUE = "no value returned"
 MAX_STATUSES_LISTED = 10
 MAX_SAMPLE_ADDRESSES = 5
@@ -71,7 +70,9 @@ async def mark_source(pool: asyncpg.Pool, source_id: int, online: bool, error: s
         return False
 
 
-async def load_groups(pool: asyncpg.Pool) -> list[PollGroup]:
+async def load_groups(pool: asyncpg.Pool, book: IncidentBook | None = None) -> list[PollGroup]:
+    """One group per enabled source and interval. A source whose stored secret cannot be decrypted has no group: it is reported to
+    `book` (an incident that counts every reload, not a row per reload) and marked offline."""
     rows = await pool.fetch(_MAPPED_POINTS)
     grouped: dict[tuple[int, int], list[asyncpg.Record]] = {}
     for row in rows:
@@ -87,11 +88,10 @@ async def load_groups(pool: asyncpg.Pool) -> list[PollGroup]:
         except Exception:
             undecryptable.add(source_id)
             await mark_source(pool, source_id, False, "stored secret cannot be decrypted")
-            if journal.allow(("secret_undecryptable", source_id), SILENT_FAILURE_REPEAT_SECONDS):
-                journal.record_soon(
-                    pool, "collector", journal.SOURCE_OFFLINE, "stored secret cannot be decrypted", level="warning",
-                    source_id=source_id, code="secret_undecryptable", known=journal.known_for(first["config"], None),
-                    detail={"interval": interval},
+            if book is not None:
+                book.setup_failed(
+                    source_id, code="secret_undecryptable", message="stored secret cannot be decrypted",
+                    known=journal.known_for(first["config"], None),
                 )
             continue
         groups.append(
@@ -181,8 +181,9 @@ class _StatusWriter:
                 self._written = None
 
 
-def _bad_points(bad: list[PointValue], total: int, first: datetime) -> tuple[str, str, dict[str, Any]]:
-    """(code, message, detail) of a points.bad event: how many points are bad and with which statuses."""
+def _bad_points(bad: list[PointValue], total: int) -> tuple[str, str, dict[str, Any]]:
+    """(code, message, detail) of what one poll of a group found bad: how many points and with which statuses. The incident book
+    adds the groups of a source up and writes its own message; the group's is what it would say alone."""
     counts = Counter(value.status or "no status" for value in bad)
     top = counts.most_common(MAX_STATUSES_LISTED)
     listed = ", ".join(f"{name} x{count}" for name, count in top[:3])
@@ -191,8 +192,6 @@ def _bad_points(bad: list[PointValue], total: int, first: datetime) -> tuple[str
         "total": total,
         "statuses": dict(top),
         "sample": [value.address[:100] for value in bad[:MAX_SAMPLE_ADDRESSES]],
-        "first": first.isoformat(),
-        "last": datetime.now(timezone.utc).isoformat(),
     }
     return top[0][0].split(" (")[0], f"{len(bad)} of {total} points have a bad reading: {listed}", detail
 
@@ -204,31 +203,40 @@ async def run_group(
     factory: ConnectorFactory = create_connector,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], float] = time.monotonic,
+    incidents: IncidentBook | None = None,
+) -> None:
+    """Poll one group until cancelled. What a poll finds is told to the incident book (`incidents`: the scheduler's, shared by all
+    the groups of all the sources); the book decides what reaches the journal, off the poll path, so a slow or frozen database never
+    delays the next poll. Without a book the group makes its own (on `clock`) and closes it when it ends."""
+    book = incidents if incidents is not None else IncidentBook(pool, clock=clock)
+    try:
+        await _poll_group(group, pool, writer, book, factory, sleep)
+    finally:
+        if incidents is None:
+            await book.close()
+
+
+async def _poll_group(
+    group: PollGroup,
+    pool: asyncpg.Pool,
+    writer: Writer,
+    book: IncidentBook,
+    factory: ConnectorFactory,
+    sleep: Callable[[float], Awaitable[None]],
 ) -> None:
     known = journal.known_for(group.config, group.secret)
-
-    def note(kind: str, message: str, *, level: str = "info", code: str | None = None, **detail: Any) -> None:
-        # Scheduled, never awaited: a slow or frozen journal must not delay the next poll.
-        journal.record_soon(
-            pool, "collector", kind, message, level=level, source_id=group.source_id, code=code, known=known,
-            detail={**detail, "interval": group.interval},
-        )
-
+    source_id, key = group.source_id, group.interval  # the book's key for a group is its interval
     try:
         connector = factory(group.connector_type, group.config, group.secret)
     except Exception as exc:
         text = f"invalid configuration: {exc}"
-        await mark_source(pool, group.source_id, False, text)
-        if journal.allow(("config_invalid", group.source_id), SILENT_FAILURE_REPEAT_SECONDS):
-            note(journal.SOURCE_OFFLINE, text, level="warning", code="config_invalid")
+        await mark_source(pool, source_id, False, text)
+        # The group ends here and its key stays in trouble: the next reload starts it again and the count goes on.
+        book.trouble(source_id, key, journal.SOURCE_OFFLINE, code="config_invalid", message=text, known=known)
         return
-    status = _StatusWriter(pool, group.source_id)
+    status = _StatusWriter(pool, source_id)
     failures = 0
-    polled_ok: bool | None = None  # outcome of the previous poll, so that only changes are logged and journaled
-    offline_since: float | None = None
-    bad_since: float | None = None  # when the points of this group last turned bad (None: they are not)
-    bad_first = datetime.now(timezone.utc)
-    bad_noted = 0.0  # when points.bad was last journaled
+    polled_ok: bool | None = None  # outcome of the previous poll, so that only changes are logged
     try:
         while True:
             try:
@@ -240,39 +248,21 @@ async def run_group(
                 else:
                     message, code = str(exc) or type(exc).__name__, "exception"
                 if polled_ok is not False:
-                    log.warning("source %s went offline: %s", group.source_id, exc)
-                    offline_since = clock()
-                    note(
-                        journal.SOURCE_OFFLINE, message, level="warning", code=code, failures=failures, error=message,
-                        backoff_seconds=backoff_delay(group.interval, failures),
-                    )
+                    log.warning("source %s went offline: %s", source_id, exc)
                 polled_ok = False
+                book.trouble(source_id, key, journal.SOURCE_OFFLINE, code=code, message=message, known=known)
                 status.request(False, message)
             else:
-                now = clock()
-                if polled_ok is not True:  # the first success since the start, or after an outage
-                    offline_for = None if offline_since is None else round(now - offline_since, 1)
-                    text = "source is online" if offline_for is None else f"source is back online after {offline_for:g} s"
-                    note(journal.SOURCE_ONLINE, text, offline_seconds=offline_for, failures=failures)
-                    offline_since = None
                 failures = 0
                 polled_ok = True
+                book.clear(source_id, key, journal.SOURCE_OFFLINE, known=known)
                 status.request(True)
                 bad = [value for value in values if value.quality == BAD]
                 if bad:
-                    entering = bad_since is None
-                    if entering:
-                        bad_since, bad_first = now, datetime.now(timezone.utc)
-                    if entering or now - bad_noted >= BAD_POINTS_REFRESH_SECONDS:
-                        code, text, detail = _bad_points(bad, len(values), bad_first)
-                        note(journal.POINTS_BAD, text, level="warning", code=code, **detail)
-                        bad_noted = now
-                elif bad_since is not None:
-                    note(
-                        journal.POINTS_RECOVERED, f"all {len(values)} points read good again", total=len(values),
-                        bad_seconds=round(now - bad_since, 1), first=bad_first.isoformat(),
-                    )
-                    bad_since = None
+                    code, text, detail = _bad_points(bad, len(values))
+                    book.trouble(source_id, key, journal.POINTS_BAD, code=code, message=text, known=known, detail=detail)
+                else:
+                    book.clear(source_id, key, journal.POINTS_BAD, known=known, total=len(values))
             await sleep(backoff_delay(group.interval, failures))
     finally:
         try:
@@ -282,28 +272,35 @@ async def run_group(
 
 
 class Scheduler:
-    """Runs one polling task per PollGroup and restarts only the groups that changed."""
+    """Runs one polling task per PollGroup and restarts only the groups that changed. It owns the incident book every group
+    reports to: a source's trouble is one counted incident whichever groups of it are polled."""
 
     def __init__(self, pool: asyncpg.Pool, writer: Writer, factory: ConnectorFactory = create_connector) -> None:
         self._pool = pool
         self._writer = writer
         self._factory = factory
+        self._book = IncidentBook(pool)
         # Keyed by (source_id, interval): load_groups yields one PollGroup per such pair.
         self._running: dict[tuple[int, int], tuple[PollGroup, asyncio.Task[None]]] = {}
 
     async def reload(self) -> int:
-        groups = await load_groups(self._pool)  # load first so a failure leaves the old tasks running
+        self._book.begin_reload()
+        groups = await load_groups(self._pool, self._book)  # load first so a failure leaves the old tasks running
         wanted = {(group.source_id, group.interval): group for group in groups}
         # a task that already returned (e.g. the factory failed) is forgotten so the group is retried
         finished = [key for key, (_, task) in self._running.items() if task.done()]
         for key in finished:
             del self._running[key]
         stale = [key for key, (group, _) in self._running.items() if wanted.get(key) != group]
-        await self._cancel(stale)
-        for key, group in wanted.items():
-            if key not in self._running:
-                task = asyncio.create_task(run_group(group, self._pool, self._writer, self._factory))
-                self._running[key] = (group, task)
+        await self._cancel(stale)  # a cancelled task reports nothing more: the book is told about the groups only after this
+        new = [key for key in wanted if key not in self._running]
+        known = {key: journal.known_for(group.config, group.secret) for key, group in wanted.items()}
+        self._book.sync(known, restarted={*stale, *new})
+        for key in new:
+            task = asyncio.create_task(
+                run_group(wanted[key], self._pool, self._writer, self._factory, incidents=self._book)
+            )
+            self._running[key] = (wanted[key], task)
         return len(groups)
 
     async def _cancel(self, keys: list[tuple[int, int]]) -> None:
@@ -314,3 +311,4 @@ class Scheduler:
 
     async def stop(self) -> None:
         await self._cancel(list(self._running))
+        await self._book.close()  # idempotent: the collector's shutdown may call stop() twice

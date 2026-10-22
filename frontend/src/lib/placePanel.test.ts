@@ -96,3 +96,55 @@ describe("placePanel: no room at the left (below or above the trigger, right edg
     expect(placePanel(at(100, 600), { width: 1200, height: 100 }, VIEW).left).toBe(8);
   });
 });
+
+describe("placePanel: a reserve at the bottom of the window (the toast stack)", () => {
+  const RESERVE = 72; // the stack's height plus the 16px it stands off the window plus 8px of air
+
+  it("no reserve, or 0, gives the old results for the same inputs", () => {
+    for (const trigger of [at(100), at(480), at(600), at(450, 100), at(600, 100), at(300, 100)]) {
+      for (const panel of [PANEL, { width: 180, height: 900 }]) {
+        expect(placePanel(trigger, panel, VIEW, 4, 52, 0)).toEqual(placePanel(trigger, panel, VIEW, 4, 52));
+      }
+    }
+    expect(placePanel(at(480), PANEL, VIEW)).toEqual({ top: 480, left: 388, placement: "down", maxHeight: 212 }); // the old value
+  });
+
+  it("flips a panel beside the trigger that would reach into the reserve to the upward placement", () => {
+    const trigger = at(480); // the panel's bottom edge would be at 680: free of the 8px edge, but inside the reserve
+    expect(placePanel(trigger, PANEL, VIEW).placement).toBe("down");
+    const placed = placePanel(trigger, PANEL, VIEW, 4, 52, RESERVE);
+    expect(placed).toMatchObject({ placement: "up", top: 508 - 200, left: 388 });
+    expect(placed.top + PANEL.height).toBeLessThanOrEqual(700 - 8 - RESERVE);
+  });
+
+  it("lowers maxHeight by the reserve, for both placements", () => {
+    const down = placePanel(at(100), PANEL, VIEW, 4, 52, RESERVE);
+    expect(down).toMatchObject({ placement: "down", top: 100, maxHeight: 700 - 100 - 8 - RESERVE });
+    const up = placePanel(at(600), PANEL, VIEW, 4, 52, RESERVE);
+    expect(up.maxHeight).toBe(700 - up.top - 8 - RESERVE);
+  });
+
+  it("a panel that fits above the reserve stays down", () => {
+    expect(placePanel(at(300), PANEL, VIEW, 4, 52, RESERVE)).toMatchObject({ placement: "down", top: 300 });
+  });
+
+  it("fits exactly: the panel's bottom may touch the line above the reserve, and one pixel more moves it up", () => {
+    const edge = 700 - 8 - RESERVE - 200;
+    expect(placePanel(at(edge), PANEL, VIEW, 4, 52, RESERVE)).toMatchObject({ placement: "down", top: edge });
+    expect(placePanel(at(edge + 1), PANEL, VIEW, 4, 52, RESERVE).placement).toBe("up");
+  });
+
+  it("with no room at the left it flips from below the trigger to above it when below would reach into the reserve", () => {
+    const trigger = at(450, 100); // below it the panel ends at 682
+    expect(placePanel(trigger, PANEL, VIEW, 4, 52)).toMatchObject({ placement: "down", top: 482 });
+    const placed = placePanel(trigger, PANEL, VIEW, 4, 52, RESERVE);
+    expect(placed).toMatchObject({ placement: "up", top: 450 - 4 - 200, left: 8 });
+    expect(placed.maxHeight).toBe(700 - placed.top - 8 - RESERVE);
+  });
+
+  it("with no room above either it stays below and scrolls inside a maxHeight that stops above the reserve", () => {
+    const tall = { width: 180, height: 900 };
+    expect(placePanel(at(300, 100), tall, VIEW, 4, 52, RESERVE)).toEqual({ top: 332, left: 8, placement: "down", maxHeight: 700 - 332 - 8 - RESERVE });
+    expect(placePanel(at(300), tall, VIEW, 4, 52, RESERVE)).toMatchObject({ top: 52, maxHeight: 700 - 52 - 8 - RESERVE });
+  });
+});

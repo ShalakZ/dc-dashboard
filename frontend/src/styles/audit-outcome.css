@@ -1,0 +1,7 @@
+@layer w6 {
+  /* w32: the Audit page's outcome of a started check or test (components/AuditCells.tsx OutcomeTag, pages/AuditPage.tsx FriendlyRow). The tag itself is the square one of
+     styles/tags-events.css (.ev-tag, .ev-tag-passed|failed|running); this file only spaces it from the sentence, inline in the same line (.what-text), so a row keeps its
+     columns. It comes with the row (the list answers with the outcomes), so no late content moves the table; the word may change from running to passed in place when the
+     drawer sees the job end and the lists are read again. The class is named on its own and lives in this file only (app.css.test.ts: one page group, one file). */
+  .what-outcome { margin-left: 6px; vertical-align: middle; }
+}

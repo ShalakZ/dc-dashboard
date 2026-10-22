@@ -584,6 +584,82 @@ def test_repeated_events_collapse_and_distinct_errors_count_first_and_last():
     assert any("x5 since 2026-10-12T09:56:00Z" in line and "same failure" in line for line in lines_of(body, "SOURCE HEALTH"))
 
 
+def open_incident(count=1204, minutes=4 * 24 * 60, **kw) -> Event:
+    """The journal row of a standing incident (w32): its time is when it began, its detail says how it stands now."""
+    detail = {"state": "open", "count": count, "last_at": "2026-10-12T09:59:50+00:00", "first_code": "timeout", "interval": 5}
+    return event(message=kw.pop("message", "timeout: no answer"), minutes=minutes, detail=detail, **kw)
+
+
+def test_an_open_incident_line_ends_with_its_state_and_count_and_old_rows_are_unchanged():
+    closed = event(message="timeout: no answer", minutes=3, detail={"state": "closed", "count": 9, "closed_by": "recovered"})
+    plain_row = event(message="read timed out", minutes=2, code="exception", detail={"failures": 1})
+    body = render(ReportData(generated_at=NOW, journal=(plain_row, closed, open_incident())), "summary", ident)
+    lines = lines_of(body, "JOURNAL")
+    assert lines[0].endswith(" [open, 1204 times]") and "timeout: no answer" in lines[0]
+    assert all("[open" not in line for line in lines[1:])
+    assert lines[1].endswith('{"failures":1}')  # a row from before w32 keeps its old shape
+    assert '"state":"closed"' in lines[2]  # a closed incident is a plain row
+    one = render(ReportData(generated_at=NOW, journal=(open_incident(count=1),)), "summary", ident)
+    assert lines_of(one, "JOURNAL")[0].endswith(" [open, 1 time]")
+
+
+def test_an_open_incident_line_keeps_its_ending_when_the_message_is_long():
+    long = "word " * 100
+    body = render(ReportData(generated_at=NOW, journal=(open_incident(message=long, source_id=123456),)), "summary", ident)
+    [line] = lines_of(body, "JOURNAL")
+    assert len(line) <= report.LINE_LIMIT and line.endswith(" [open, 1204 times]")
+
+
+def test_open_incidents_come_first_in_the_journal_and_in_the_errors_of_their_source():
+    newer = tuple(event(i, minutes=i, source_id=3, message=f"newer failure {i}") for i in range(40))
+    data = ReportData(
+        generated_at=NOW, sources=(source(),), health=(SourceHealth(3, 10, 0, 1.0),), journal=(*newer, open_incident(source_id=3)),
+    )
+    body = render(data, "summary", ident)
+    assert lines_of(body, "JOURNAL")[0].endswith(" [open, 1204 times]")  # not line 41 of a 30-line section
+    errors = [line for line in lines_of(body, "SOURCE HEALTH") if line.startswith("   ")]
+    assert errors[0].endswith(" [open, 1204 times]") and "newer failure 0" in errors[1]
+
+
+async def test_the_journal_of_a_report_keeps_every_open_incident_however_old(db, session):
+    a = await make_source(db, "Main SCADA")
+    b = await make_source(db, "Spare")
+    insert = (
+        "INSERT INTO diag_events (ts, level, component, source_id, kind, code, message, detail) "
+        "VALUES (now() - $1 * interval '1 second', $2, $3, $4, $5, $6, $7, $8)"
+    )
+    standing = {"state": "open", "count": 7, "last_at": "2026-10-12T09:59:50+00:00", "first_code": "timeout"}
+    await db.execute(insert, 4 * 86400, "warning", "collector", a, "source.offline", "timeout", "timeout: no answer", standing)
+    await db.execute(insert, 3 * 86400, "warning", "collector", b, "points.bad", "BadNodeIdUnknown", "2 of 6 points", {**standing, "count": 3})
+    await db.execute(insert, 5 * 86400, "warning", "collector", a, "source.offline", "timeout", "an old closed one", {"state": "closed", "count": 2})
+    await db.execute(insert, 6 * 86400, "info", "collector", a, "job.finished", None, "not an incident kind", {"state": "open"})
+    await db.executemany(insert, [(n, "info", "collector", a, "source.online", None, f"newer {n}", {}) for n in range(310)])
+    summary = await gather(session, detail="summary")
+    ids = [(e.kind, e.message) for e in summary.journal]
+    assert len(summary.journal) == 300 + 2 and len(set(ids)) == len(ids)  # the newest 300 plus the two standing incidents
+    assert [e.message for e in summary.journal[-2:]] == ["2 of 6 points", "timeout: no answer"]  # still newest first by time
+    messages = {e.message for e in summary.journal}
+    assert "an old closed one" not in messages and "not an incident kind" not in messages
+    body = render(summary, "summary", ident)
+    first, second = lines_of(body, "JOURNAL")[:2]
+    assert first.endswith(" [open, 3 times]") and "points.bad" in first
+    assert second.endswith(" [open, 7 times]") and "source.offline" in second
+    only_a = await gather(session, detail="summary", source_id=a)
+    assert len(only_a.journal) == 300 + 1 and {e.source_id for e in only_a.journal} == {a}  # b's incident is not a's business
+    assert "points.bad" not in {e.kind for e in only_a.journal} and only_a.journal[-1].message == "timeout: no answer"
+
+
+async def test_an_open_incident_inside_the_window_is_not_listed_twice(db, session):
+    a = await make_source(db, "Main SCADA")
+    await db.execute(
+        "INSERT INTO diag_events (level, component, source_id, kind, code, message, detail) "
+        "VALUES ('warning', 'collector', $1, 'source.offline', 'timeout', 'now', $2)",
+        a, {"state": "open", "count": 2},
+    )
+    data = await gather(session, detail="summary")
+    assert [e.message for e in data.journal] == ["now"]
+
+
 def test_a_full_report_stays_under_its_budget_splits_into_parts_and_verifies():
     body = render(busy(40, 2000), "full", ident)
     assert len(body) <= report.FULL_BODY_CHARS

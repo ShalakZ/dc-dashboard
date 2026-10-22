@@ -121,9 +121,16 @@ async def seed(db, user_id: int) -> dict[str, Any]:
         "INSERT INTO scan_scopes (name, targets, ports) VALUES ('lab', $1, $2) RETURNING id", ["127.0.0.1"], [9000]
     )
     dashboard = await db.fetchval("INSERT INTO dashboards (name) VALUES ('Overview') RETURNING id")
+    # w32: a journal row written WITHOUT the source's known values (the kinds `readings.conflict` and `http.5xx` are): the events
+    # routes put every message and detail through a second scrub, so the URL's password must not come back from any of them.
+    event = await db.fetchval(
+        "INSERT INTO diag_events (level, component, source_id, kind, message, detail) "
+        "VALUES ('warning', 'collector', $1, 'readings.conflict', $2, $3) RETURNING id",
+        source, ERROR_TEXT, {"error": ERROR_TEXT, "nested": [{"message": ERROR_TEXT}]},
+    )
     return {
         "source_id": source, "asset_id": asset, "mapping_id": mapping, "job_id": job, "scan_id": scan, "scope_id": scope,
-        "dashboard_id": dashboard,
+        "dashboard_id": dashboard, "event_id": event,
     }
 
 

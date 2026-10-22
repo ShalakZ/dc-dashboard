@@ -1,0 +1,14 @@
+@layer w6 {
+  /* w32: the square tag of the System events page and of the Audit page's Outcome (pages/EventsPage.tsx, components/EventDrawer.tsx, components/AuditDrawer.tsx and the
+     Friendly cell of pages/AuditPage.tsx). One tag, one word: the colour never speaks alone. A tag is a SQUARE (the corner is --radius-sm, 4 px; never a pill) and sits in
+     a line of text or a table cell, so it is --chip-h tall like .chip, and it does not wrap. It takes the status pairs of .chip (ok, warn, crit, info, stale), which
+     are tokens of every look and of dark mode, and whose contrast themes.css.test.ts and app.css.test.ts already check in each of them: no colour of its own, so no new token.
+     Severity: info, warning, error. Outcome of a check: passed, failed, running (neutral: it has not ended). */
+  .ev-tag { display: inline-flex; align-items: center; height: var(--chip-h); padding: 0 8px; border-radius: var(--radius-sm); font-size: var(--fs-xs); font-weight: 600; line-height: 1; white-space: nowrap; }
+  .ev-tag-info { background: var(--info-tint); color: var(--info); }
+  .ev-tag-warning { background: var(--warn-tint); color: var(--warn); }
+  .ev-tag-error { background: var(--crit-tint); color: var(--crit); }
+  .ev-tag-passed { background: var(--ok-tint); color: var(--ok); }
+  .ev-tag-failed { background: var(--crit-tint); color: var(--crit); }
+  .ev-tag-running { background: var(--stale-tint); color: var(--stale); }
+}

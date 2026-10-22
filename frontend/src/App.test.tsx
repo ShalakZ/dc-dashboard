@@ -95,6 +95,19 @@ describe("App routes", () => {
     expect(calls.some((c) => c.path === "/api/diagnostics/report")).toBe(false);
   });
 
+  it.each([["viewer", "/events"], ["operator", "/events"], ["viewer", "/events/7"], ["operator", "/events/7"]])("keeps System events away from a %s at %s, and asks the events routes nothing", async (role, route) => {
+    const calls = visit(role, route);
+    expect(await screen.findByRole("heading", { name: "No access" })).toBeInTheDocument();
+    expect(calls.some((c) => c.path.startsWith("/api/events"))).toBe(false);
+  });
+
+  it.each(["/events", "/events/7"])("opens System events at %s for an admin (the list and one event in its drawer are one page), under its tab title, with the sidebar link current", async (route) => {
+    visit("admin", route);
+    expect(await screen.findByRole("heading", { level: 1, name: "System events" })).toBeInTheDocument();
+    expect(document.title).toBe("System events · DC Dashboard");
+    expect(within(screen.getByRole("navigation", { name: "Main" })).getByRole("link", { name: "Events" })).toHaveAttribute("aria-current", "page");
+  });
+
   it("opens Tariffs for an admin", async () => {
     visit("admin", "/tariffs");
     expect(await screen.findByRole("heading", { name: "Tariffs" })).toBeInTheDocument();

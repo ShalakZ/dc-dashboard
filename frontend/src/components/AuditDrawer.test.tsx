@@ -1,9 +1,9 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { AuditEntry } from "../api/types";
+import type { AuditEntry, AuditOutcome } from "../api/types";
 import { AuthProvider } from "../auth/AuthProvider";
 import type { PermissionId } from "../lib/permissions";
 import { mockFetch, type Routes } from "../test/fetchMock";
@@ -388,5 +388,213 @@ describe("AuditDrawer: Undo this tag list", () => {
     const { dialog } = await showAs(["discovery.accept"], mapped({ detail: big }));
     expect(dialog.querySelector("pre")).toBeNull();
     expect(stringify.mock.calls.some(([value]) => value === big)).toBe(false);
+  });
+});
+
+describe("AuditDrawer: the Outcome of a started check or test (w32)", () => {
+  const PASSED: AuditOutcome = { state: "passed", text: "The connection check passed (7 steps).", event_id: 77, counts: null };
+  const RUNNING: AuditOutcome = { state: "running", text: "Still running.", event_id: null, counts: null };
+  const FAILED: AuditOutcome = { state: "failed", text: 'The connection check failed at "secure channel".', event_id: 78, counts: null };
+  const GONE: AuditOutcome = { state: "gone", text: "The outcome is no longer kept (system events are kept 90 days).", event_id: null, counts: null };
+  const checked = (outcome: AuditOutcome | null | undefined, extra: Partial<AuditEntry> = {}) =>
+    stored({ id: 60, action: "source.checked", detail: { source_id: 2, name: "PM-1", job_id: 9 }, refs: {}, outcome, ...extra });
+  const BASE_ROWS = ["What happened", "When", "Who", "Action", "Entry"];
+  const rowsOf = (dialog: HTMLElement) => [...dialog.querySelectorAll(".kv dt")].map((dt) => dt.textContent);
+
+  /** The drawer over an account holding `permissions`, once the account is known (the link is absent until /api/me has answered). */
+  async function showWith(permissions: PermissionId[], entry: AuditEntry, routes: Routes = {}) {
+    const toasts = spyToasts();
+    const calls = mockFetch({ "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("custom", { permissions }) }, ...routes });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const refreshed = vi.spyOn(client, "invalidateQueries");
+    const view = render(
+      <QueryClientProvider client={client}>
+        <AuthProvider>
+          <MemoryRouter>{toasts.wrap(<><SignedIn />{drawer({ entry })}</>)}</MemoryRouter>
+        </AuthProvider>
+      </QueryClientProvider>,
+    );
+    await accountKnown();
+    const dialog = screen.getByRole("dialog", { name: "Audit entry" });
+    const outcomeRow = () => facts(dialog).Outcome as HTMLElement | undefined;
+    const asked = () => calls.filter((c) => c.method === "GET" && c.path === "/api/audit/60").length;
+    return { ...view, dialog, outcomeRow, asked, calls, refreshed };
+  }
+
+  it("adds an Outcome row LAST for a started check, with the sentence and a link to the event for someone who may read system events", async () => {
+    const { dialog, outcomeRow } = await showWith(["audit.view", "diagnostics.view", "sources.view"], checked(PASSED));
+    expect(rowsOf(dialog)).toEqual([...BASE_ROWS, "Outcome"]);
+    expect(outcomeRow()).toHaveTextContent("The connection check passed (7 steps).");
+    const link = within(outcomeRow()!).getByRole("link", { name: "Open in System events" });
+    expect(link).toHaveAttribute("href", "/events/77");
+  });
+
+  it("shows a failed check's sentence and its own event, and a link per entry (not a shared one)", async () => {
+    const { outcomeRow } = await showWith(["diagnostics.view", "sources.view"], checked(FAILED));
+    expect(outcomeRow()).toHaveTextContent('The connection check failed at "secure channel".');
+    expect(within(outcomeRow()!).getByRole("link", { name: "Open in System events" })).toHaveAttribute("href", "/events/78");
+  });
+
+  it("gives no link to an account without diagnostics.view (the row and the sentence stay)", async () => {
+    const { dialog, outcomeRow } = await showWith(["audit.view"], checked(PASSED));
+    expect(rowsOf(dialog)).toEqual([...BASE_ROWS, "Outcome"]);
+    expect(outcomeRow()).toHaveTextContent("The connection check passed (7 steps).");
+    expect(within(outcomeRow()!).queryByRole("link")).toBeNull();
+  });
+
+  it("gives the link only to an account that can open the page: diagnostics.view AND sources.view, as the Events page needs (review M2)", async () => {
+    const onlyDiagnostics = await showWith(["audit.view", "diagnostics.view"], checked(PASSED));
+    expect(onlyDiagnostics.outcomeRow()).toHaveTextContent("The connection check passed (7 steps).");
+    expect(within(onlyDiagnostics.outcomeRow()!).queryByRole("link")).toBeNull();
+    cleanup();
+    const onlySources = await showWith(["audit.view", "sources.view"], checked(PASSED));
+    expect(within(onlySources.outcomeRow()!).queryByRole("link")).toBeNull();
+    cleanup();
+    const both = await showWith(["diagnostics.view", "sources.view"], checked(PASSED));
+    expect(within(both.outcomeRow()!).getByRole("link", { name: "Open in System events" })).toHaveAttribute("href", "/events/77");
+  });
+
+  it("gives no link when the outcome has no event (no longer kept, or still running), also with diagnostics.view", async () => {
+    const gone = await showWith(["diagnostics.view", "sources.view"], checked(GONE));
+    expect(gone.outcomeRow()).toHaveTextContent("The outcome is no longer kept (system events are kept 90 days).");
+    expect(within(gone.outcomeRow()!).queryByRole("link")).toBeNull();
+    cleanup();
+    const running = await showWith(["diagnostics.view", "sources.view"], checked(RUNNING, { id: 61 }), { "GET /api/audit/61": { body: checked(RUNNING, { id: 61 }) } });
+    expect(running.outcomeRow()).toHaveTextContent("Still running.");
+    expect(within(running.outcomeRow()!).queryByRole("link")).toBeNull();
+  });
+
+  it("says the test of several sources in the server's words, for source.tested and source.test_all as well", async () => {
+    const several: AuditOutcome = { state: "failed", text: "3 passed, 1 failed", event_id: null, counts: { passed: 3, failed: 1, running: 0, gone: 0 } };
+    const { dialog, outcomeRow } = await showWith(["diagnostics.view", "sources.view"], checked(several, { action: "source.test_all", detail: { sources: 4, job_ids: [1, 2, 3, 4] } }));
+    expect(rowsOf(dialog)).toEqual([...BASE_ROWS, "Outcome"]);
+    expect(outcomeRow()).toHaveTextContent("3 passed, 1 failed");
+    cleanup();
+    const tested = await showWith(["diagnostics.view", "sources.view"], checked(PASSED, { action: "source.tested" }));
+    expect(rowsOf(tested.dialog)).toEqual([...BASE_ROWS, "Outcome"]);
+  });
+
+  it("keeps five rows, exactly as before, for any other action, a missing outcome field and a null outcome (no account or query client needed)", () => {
+    for (const entry of [
+      stored(), // tariff.created, no outcome field at all
+      stored({ outcome: PASSED }), // an outcome on an action that never has one is not shown
+      checked(undefined),
+      checked(null),
+    ]) {
+      const { dialog, unmount } = show(drawer({ entry }));
+      expect(rowsOf(dialog())).toEqual(BASE_ROWS);
+      expect(dialog()).not.toHaveTextContent("Outcome");
+      unmount();
+    }
+  });
+
+  it("adds no live region of its own: no status or alert, and the one polite line stays the only aria-live", async () => {
+    for (const outcome of [PASSED, FAILED, GONE]) {
+      const { dialog } = await showWith(["diagnostics.view", "sources.view"], checked(outcome));
+      expect(dialog.querySelectorAll('[role="status"], [role="alert"]')).toHaveLength(0);
+      expect(dialog.querySelectorAll("[aria-live]")).toHaveLength(1);
+      cleanup();
+    }
+  });
+
+  describe("while the check is still running", () => {
+    const asEntry = (outcome: AuditOutcome) => checked(outcome);
+    beforeEach(() => { vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] }); }); // before the render, so the query's interval is the fake one
+    afterEach(() => { vi.useRealTimers(); });
+
+    it("asks for the entry again every 5 seconds, shows the new outcome when it ends, and then stops asking", async () => {
+      let answers = 0;
+      const { asked, outcomeRow, refreshed } = await showWith(["diagnostics.view", "sources.view"], asEntry(RUNNING), {
+        "GET /api/audit/60": () => ({ body: asEntry(answers++ === 0 ? RUNNING : PASSED) }),
+      });
+      await waitFor(() => expect(asked()).toBe(1)); // once on opening: the list may be a few seconds old
+      expect(outcomeRow()).toHaveTextContent("Still running.");
+      expect(refreshed).not.toHaveBeenCalled();
+      act(() => { vi.advanceTimersByTime(4_000); });
+      expect(asked()).toBe(1); // not before 5 seconds
+      act(() => { vi.advanceTimersByTime(1_000); });
+      await waitFor(() => expect(outcomeRow()).toHaveTextContent("The connection check passed (7 steps)."));
+      expect(asked()).toBe(2);
+      expect(within(outcomeRow()!).getByRole("link", { name: "Open in System events" })).toHaveAttribute("href", "/events/77");
+      act(() => { vi.advanceTimersByTime(60_000); });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(asked()).toBe(2); // it has ended: nothing more is asked
+      // the lists are read once, so the tag in the row says what the drawer says; the entry itself is not read again by that
+      expect(refreshed).toHaveBeenCalledTimes(1);
+      const { queryKey, predicate } = refreshed.mock.calls[0][0] as { queryKey: readonly unknown[]; predicate: (query: { queryKey: readonly unknown[] }) => boolean };
+      expect(queryKey).toEqual(["audit"]);
+      expect(predicate({ queryKey: ["audit", { q: "" }, 50, 0] })).toBe(true);
+      expect(predicate({ queryKey: ["audit", "entry", 60] })).toBe(false);
+    });
+
+    it("keeps asking while the answer is still running", async () => {
+      const { asked } = await showWith(["diagnostics.view", "sources.view"], asEntry(RUNNING), { "GET /api/audit/60": () => ({ body: asEntry(RUNNING) }) });
+      await waitFor(() => expect(asked()).toBe(1));
+      for (const n of [2, 3, 4]) {
+        act(() => { vi.advanceTimersByTime(5_000); });
+        await waitFor(() => expect(asked()).toBe(n));
+      }
+    });
+
+    it("keeps the sentence it has when a request fails, shows no alert for it, and tries again at the next beat", async () => {
+      let answers = 0;
+      const { asked, outcomeRow, dialog } = await showWith(["diagnostics.view", "sources.view"], asEntry(RUNNING), {
+        "GET /api/audit/60": () => (answers++ === 0 ? { status: 500, body: { detail: "boom" } } : { body: asEntry(FAILED) }),
+      });
+      await waitFor(() => expect(asked()).toBe(1));
+      expect(outcomeRow()).toHaveTextContent("Still running.");
+      expect(dialog.querySelectorAll('[role="alert"]')).toHaveLength(0);
+      act(() => { vi.advanceTimersByTime(5_000); });
+      await waitFor(() => expect(outcomeRow()).toHaveTextContent('The connection check failed at "secure channel".'));
+    });
+
+    it("does not move the focus when the outcome changes under it", async () => {
+      let answers = 0;
+      const { asked, outcomeRow, dialog } = await showWith(["diagnostics.view", "sources.view"], asEntry(RUNNING), {
+        "GET /api/audit/60": () => ({ body: asEntry(answers++ === 0 ? RUNNING : PASSED) }),
+      });
+      await waitFor(() => expect(asked()).toBe(1));
+      const copy = within(dialog).getByRole("button", { name: "Copy entry number" });
+      copy.focus();
+      act(() => { vi.advanceTimersByTime(5_000); });
+      await waitFor(() => expect(outcomeRow()).toHaveTextContent("passed"));
+      expect(copy).toHaveFocus();
+    });
+
+    it("stops asking when the drawer is closed", async () => {
+      const { asked, unmount } = await showWith(["diagnostics.view", "sources.view"], asEntry(RUNNING), { "GET /api/audit/60": () => ({ body: asEntry(RUNNING) }) });
+      await waitFor(() => expect(asked()).toBe(1));
+      unmount();
+      act(() => { vi.advanceTimersByTime(30_000); });
+      expect(asked()).toBe(1);
+    });
+  });
+
+  it("never asks for the entry when the outcome has ended, passed or not", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      for (const outcome of [PASSED, FAILED, GONE]) {
+        const { asked } = await showWith(["diagnostics.view", "sources.view"], checked(outcome));
+        act(() => { vi.advanceTimersByTime(30_000); });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(asked()).toBe(0);
+        cleanup();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("draws six skeleton rows while a started check or test loads, and five for any other action or an entry it does not know yet", () => {
+    const rows = (props: Partial<Parameters<typeof AuditDrawer>[0]>) => {
+      const { dialog, unmount } = show(drawer({ status: "loading", ...props }));
+      const count = within(dialog()).getByText("Loading the entry").parentElement!.querySelectorAll("dl.kv > div").length;
+      unmount();
+      return count;
+    };
+    for (const action of ["source.tested", "source.checked", "source.test_all"]) expect(rows({ entry: checked(undefined, { action }) }), action).toBe(6);
+    expect(rows({ entry: stored() })).toBe(5);
+    expect(rows({ entry: checked(undefined, { action: "source.updated" }) })).toBe(5);
+    expect(rows({ entry: undefined })).toBe(5);
   });
 });

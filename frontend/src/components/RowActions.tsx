@@ -26,6 +26,16 @@ function barHeight() {
 }
 
 /**
+ * The strip at the bottom of the window that the toast stack takes, which a menu must stay clear of (the stack is above the menu in the layers):
+ * the window's height minus the top of the stack, and 8px of air. 0 when no toast is showing (the stack is always in the page, empty).
+ */
+function reservedBottom() {
+  const stack = document.querySelector(".toast-stack");
+  if (!stack || stack.childElementCount === 0) return 0;
+  return Math.max(0, window.innerHeight - stack.getBoundingClientRect().top + 8);
+}
+
+/**
  * The three-dot menu of a table row. The panel is a portal on document.body with position: fixed, because `.table-wrap` scrolls
  * (and so clips) its content. Opens on click (pinned), Enter, Space, ArrowDown/ArrowUp and, for a mouse, on hover.
  * Choosing an item closes the menu and puts the focus on the trigger BEFORE `onSelect` runs, so a dialog that onSelect opens
@@ -55,7 +65,7 @@ export function RowActions({ label, items }: { label: string; items: RowAction[]
     const box = pop.panel.current;
     if (!at || !box) return;
     const { width, height } = box.getBoundingClientRect();
-    setPlace(placePanel(at.getBoundingClientRect(), { width, height }, { width: window.innerWidth, height: window.innerHeight }, 4, barHeight()));
+    setPlace(placePanel(at.getBoundingClientRect(), { width, height }, { width: window.innerWidth, height: window.innerHeight }, 4, barHeight(), reservedBottom()));
     if (wantFocus.current) focusItem(wantFocus.current);
     wantFocus.current = null;
   }, [pop.open]);

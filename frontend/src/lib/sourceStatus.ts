@@ -1,4 +1,6 @@
 import type { Source } from "../api/types";
+import { formatSpanLong } from "./age";
+import { formatSiteDateHour } from "./siteTime";
 
 /**
  * What the Status column says. The collector polls only enabled sources and only their mapped points, so a source with none of
@@ -11,4 +13,68 @@ export function sourceStatusText(s: Pick<Source, "enabled" | "status" | "mapped_
   if (!s.enabled) return { text: `not polled (disabled)${last}`, polled: false };
   if (s.mapped_points === 0) return { text: `not polled (no mapped points)${last}`, polled: false };
   return { text: s.status, polled: true };
+}
+
+/**
+ * A polled source is called "offline for a while" once it has been out of reach for more than this many seconds (w32, Ruling P7). The same number is
+ * `OFFLINE_BANNER_SECONDS` in lib/eventText.ts (Task 4b, not committed yet when this was written); it is defined here so that this file stands alone, and the two must stay equal.
+ */
+export const OFFLINE_BANNER_SECONDS = 120;
+
+/** A source the Sources banner names: how long it has been offline (as of the `nowMs` it was asked for) and whether it ever answered. */
+export interface LongOffline { source: Source; since: string; seconds: number; neverAnswered: boolean }
+
+/**
+ * The sources the banner of the Sources page names (Ruling P7): enabled, polled (`polls` not false, at least one mapped point; a missing field counts as
+ * polled, like the Status column), stored status `offline`, and `offline_since` older than `OFFLINE_BANNER_SECONDS` at `nowMs` (epoch milliseconds; the page
+ * passes its ticking clock, a test passes any time it likes). A source with no `offline_since` (or one that is not a time) is left out: there is nothing to
+ * say about how long. Longest outage first, ties by name. Pure: nothing here reads a clock.
+ */
+export function longOffline(sources: readonly Source[], nowMs: number): LongOffline[] {
+  const found: LongOffline[] = [];
+  for (const source of sources) {
+    if (source.status !== "offline" || !sourceStatusText(source).polled || !source.offline_since) continue;
+    const seconds = (nowMs - Date.parse(source.offline_since)) / 1000;
+    if (!(seconds > OFFLINE_BANNER_SECONDS)) continue; // also false for NaN (a value that is not a time)
+    found.push({ source, since: source.offline_since, seconds, neverAnswered: source.last_seen === null });
+  }
+  return found.sort((a, b) => b.seconds - a.seconds || a.source.name.localeCompare(b.source.name));
+}
+
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * `18 Oct 07:52`: the day (no leading zero: the same shape as `formatShortTime` of lib/eventText.ts, so the Sources page and the System events page date an outage
+ * alike), the month and the time of day on the wall clock of the site zone. Null for a time or a zone that cannot be read, so that the caller leaves the time out
+ * instead of showing one in the browser's zone.
+ */
+export function formatOfflineSince(iso: string, timezone: string): string | null {
+  const m = /^\d{4}-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(formatSiteDateHour(iso, timezone));
+  return m ? `${Number(m[2])} ${SHORT_MONTHS[Number(m[1]) - 1]} ${m[3]}:${m[4]}` : null;
+}
+
+/** The banner's words are the last full stop's job: an error that already ends in one (or in ! or ?) does not get a second. */
+const stop = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
+
+/**
+ * The sentence of the Sources banner. One source: its name, how long, since when (site zone; left out while the zone is unknown) and its last error:
+ * `1 source is offline: OPC UA server at 172.20.0.3:4840, for 4 d 2 h (since 18 Oct 07:52): Connect call failed ('172.20.0.3', 4840).` A source that never
+ * answered has not answered since it was added. Several: at most three named, each with how long, then `and 2 more`. Plain text, no markup.
+ */
+export function offlineBannerText(list: readonly LongOffline[], timezone: string | undefined): string {
+  if (list.length === 0) return "";
+  const when = (item: LongOffline) => (timezone ? formatOfflineSince(item.since, timezone) : null);
+  if (list.length === 1) {
+    const [one] = list;
+    const how = one.neverAnswered
+      ? ", which has not answered since it was added"
+      : `, for ${formatSpanLong(one.seconds)}${when(one) ? ` (since ${when(one)})` : ""}`;
+    const error = one.source.last_error ? `: ${one.source.last_error}` : "";
+    return stop(`1 source is offline: ${one.source.name}${how}${error}`);
+  }
+  const named = list.slice(0, 3).map((item) => `${item.source.name} (${item.neverAnswered ? "has not answered since it was added" : `for ${formatSpanLong(item.seconds)}`})`);
+  const more = list.length - named.length;
+  if (more > 0) named.push(`${more} more`);
+  const last = named.pop() as string;
+  return `${list.length} sources are offline: ${named.length > 0 ? `${named.join(", ")} and ` : ""}${last}.`;
 }

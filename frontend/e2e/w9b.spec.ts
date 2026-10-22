@@ -40,7 +40,7 @@ const GENERAL: Account = { username: "w9b-general", password: "w9b-general-pass"
 const SECURITY: Account = { username: "w9b-security", password: "w9b-security-pass", role: ROLE_SECURITY };
 
 // The sidebar's links, in the order it draws them (components/navItems.ts); the check that a link is NOT there goes through these names.
-const EVERY_LINK = ["Assets Tree", "Dashboards", "Billing", "Sources", "Scans", "Discovery", "Users & Roles", "Settings", "Tariffs", "Storage", "Displays", "Audit", "Diagnostics"];
+const EVERY_LINK = ["Assets Tree", "Dashboards", "Billing", "Sources", "Scans", "Discovery", "Users & Roles", "Settings", "Tariffs", "Storage", "Displays", "Audit", "Events", "Diagnostics"];
 
 // What the Operator's role holds, from /api/me (backend core/permissions.py BUILTIN), sorted: the Duplicate test compares a copy against it.
 const OPERATOR_PERMISSIONS = [

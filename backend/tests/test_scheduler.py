@@ -242,3 +242,38 @@ async def test_reload_restarts_a_group_whose_task_finished(db):
         await wait_for(factory_calls, 2)
     finally:
         await scheduler.stop()
+
+
+async def test_stop_may_be_called_twice(db):
+    """The collector's shutdown calls stop() a second time when its bound fires; the incident book closes once and the second call is
+    harmless."""
+    scheduler = Scheduler(db, Writer(db), sim_factory(create_sim_app(Simulator(), api_key="k")))
+    await scheduler.stop()
+    await scheduler.stop()
+    assert scheduler._running == {}
+
+
+async def test_the_first_reload_closes_the_incidents_of_sources_that_are_no_longer_polled(db):
+    """A source disabled or deleted while the collector was down left an incident open; the first reload closes it as stopped, with
+    no claim that the source recovered; the source that is polled is left to its own polls."""
+    sim_app = create_sim_app(Simulator(), api_key="k")
+    polled = await make_source(db, name="polled", secret="k")
+    await make_mapping(db, await make_point(db, polled, "sim.p1"), await make_asset(db, "MV2"))
+    insert = (
+        "INSERT INTO diag_events (level, component, source_id, kind, code, message, detail) "
+        "VALUES ('warning', 'collector', $1, 'source.offline', 'timeout', 'old', $2) RETURNING id"
+    )
+    gone = await db.fetchval(insert, 9999, {"state": "open", "count": 3})  # a source that no longer exists
+    kept = await db.fetchval(insert, polled, {"state": "open", "count": 3})
+    scheduler = Scheduler(db, Writer(db), sim_factory(sim_app))
+    try:
+        assert await scheduler.reload() == 1
+
+        async def state(event_id: int) -> str:
+            return await db.fetchval("SELECT detail->>'state' || ':' || COALESCE(detail->>'closed_by', '') FROM diag_events WHERE id = $1", event_id)
+
+        await wait_for(lambda: state(gone), "closed:polling_stopped")
+        # The polled source is spared by the reconcile; its own poll answers, so the incident ends as recovered, not as stopped.
+        await wait_for(lambda: state(kept), "closed:recovered")
+    finally:
+        await scheduler.stop()

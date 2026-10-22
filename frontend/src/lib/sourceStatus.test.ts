@@ -1,4 +1,4 @@
-import { sourceStatusText } from "./sourceStatus";
+import { formatOfflineSince, longOffline, OFFLINE_BANNER_SECONDS, offlineBannerText, sourceStatusText } from "./sourceStatus";
 
 describe("sourceStatusText", () => {
   it("says a disabled source is not polled", () => {
@@ -39,5 +39,117 @@ describe("sourceStatusText", () => {
 
   it("counts a missing or true polls as polling", () => {
     expect(sourceStatusText({ enabled: true, status: "online", mapped_points: 4, polls: true })).toEqual({ text: "online", polled: true });
+  });
+});
+
+describe("longOffline (w32, the Sources banner)", () => {
+  const NOW = Date.parse("2026-10-22T07:00:00Z");
+  const secondsAgo = (n: number) => new Date(NOW - n * 1000).toISOString();
+  const base = { id: 1, name: "opc", connector_type: "opcua", config: {}, origin: "manual" as const, enabled: true, status: "offline", last_seen: "2026-10-18T04:52:51Z", last_error: null, has_secret: false, mapped_points: 3, polls: true };
+
+  it("takes a polled source that is offline and has been for more than 120 seconds, and says how long", () => {
+    const [one] = longOffline([{ ...base, offline_since: secondsAgo(121) }], NOW);
+    expect(one).toMatchObject({ since: secondsAgo(121), seconds: 121, neverAnswered: false });
+    expect(one.source.id).toBe(1);
+  });
+
+  it("is a strict 120: a source offline for 120 seconds or less is left out, and so is one with a future time", () => {
+    expect(OFFLINE_BANNER_SECONDS).toBe(120);
+    expect(longOffline([{ ...base, offline_since: secondsAgo(120) }], NOW)).toEqual([]);
+    expect(longOffline([{ ...base, offline_since: secondsAgo(90) }], NOW)).toEqual([]);
+    expect(longOffline([{ ...base, offline_since: secondsAgo(-30) }], NOW)).toEqual([]);
+  });
+
+  it.each([
+    ["disabled", { enabled: false }],
+    ["filled by file import (polls false)", { polls: false }],
+    ["no mapped points", { mapped_points: 0 }],
+    ["online", { status: "online" }],
+    ["unknown", { status: "unknown" }],
+    ["no offline_since (null)", { offline_since: null }],
+    ["no offline_since (an older API)", { offline_since: undefined }],
+    ["an offline_since that is not a time", { offline_since: "not a time" }],
+  ])("leaves out a source that is %s", (_name, over) => {
+    expect(longOffline([{ ...base, offline_since: secondsAgo(500), ...over }], NOW)).toEqual([]);
+  });
+
+  it("counts a missing mapped_points or polls as polled (an older API), the way the Status column does", () => {
+    const { mapped_points: _m, polls: _p, ...older } = base;
+    expect(longOffline([{ ...older, offline_since: secondsAgo(500) }], NOW)).toHaveLength(1);
+  });
+
+  it("marks a source that never answered (no last_seen), and lists the longest outage first, ties by name", () => {
+    const list = longOffline([
+      { ...base, id: 1, name: "short", offline_since: secondsAgo(300) },
+      { ...base, id: 2, name: "b-long", offline_since: secondsAgo(9000) },
+      { ...base, id: 3, name: "a-long", offline_since: secondsAgo(9000) },
+      { ...base, id: 4, name: "never", offline_since: secondsAgo(600), last_seen: null },
+    ], NOW);
+    expect(list.map((x) => x.source.name)).toEqual(["a-long", "b-long", "never", "short"]);
+    expect(list.map((x) => x.neverAnswered)).toEqual([false, false, true, false]);
+  });
+});
+
+describe("formatOfflineSince", () => {
+  it("prints the day, the month and the hour and minute on the wall clock of the site zone", () => {
+    expect(formatOfflineSince("2026-10-18T04:52:51Z", "Asia/Qatar")).toBe("18 Oct 07:52");
+    expect(formatOfflineSince("2026-10-17T22:30:00Z", "Asia/Qatar")).toBe("18 Oct 01:30"); // the zone moves the day
+    expect(formatOfflineSince("2026-01-05T09:05:00Z", "UTC")).toBe("5 Jan 09:05"); // no leading zero on the day, like formatShortTime of the System events page
+  });
+
+  it("is null for a time or a zone it cannot read (the caller then leaves the time out rather than show one in the browser's zone)", () => {
+    expect(formatOfflineSince("2026-10-18T04:52:51Z", "Not/AZone")).toBeNull();
+    expect(formatOfflineSince("nonsense", "UTC")).toBeNull();
+  });
+});
+
+describe("offlineBannerText", () => {
+  const NOW = Date.parse("2026-10-22T07:00:00Z");
+  const entry = (name: string, secondsOffline: number, over: Record<string, unknown> = {}) => {
+    const since = new Date(NOW - secondsOffline * 1000).toISOString();
+    return {
+      source: { id: 1, name, connector_type: "opcua", config: {}, origin: "manual" as const, enabled: true, status: "offline", last_seen: "2026-10-18T04:52:51Z", last_error: null, has_secret: false, offline_since: since, ...over },
+      since, seconds: secondsOffline, neverAnswered: false,
+    };
+  };
+  const FOUR_DAYS_TWO_HOURS = 4 * 86400 + 2 * 3600 + 8 * 60; // from 2026-10-18 04:52 UTC (07:52 in Qatar) to NOW
+
+  it("names one source, how long, since when in the site zone, and its last error", () => {
+    const e = entry("OPC UA server at 172.20.0.3:4840", FOUR_DAYS_TWO_HOURS, {
+      last_error: "[Errno 111] Connect call failed ('172.20.0.3', 4840)",
+    });
+    expect(offlineBannerText([e], "Asia/Qatar")).toBe(
+      "1 source is offline: OPC UA server at 172.20.0.3:4840, for 4 d 2 h (since 18 Oct 07:52): [Errno 111] Connect call failed ('172.20.0.3', 4840).",
+    );
+  });
+
+  it("does not put a second full stop after an error that ends with one, and says nothing of an error there is none of", () => {
+    expect(offlineBannerText([entry("a", 300, { last_error: "no answer." })], "UTC")).toMatch(/: no answer\.$/);
+    expect(offlineBannerText([entry("a", 300)], "UTC")).toMatch(/^1 source is offline: a, for 5 min \(since [0-9]{2} \w{3} [0-9:]{5}\)\.$/);
+  });
+
+  it("leaves the time out, not the browser's, while the site zone is unknown", () => {
+    expect(offlineBannerText([entry("a", 300, { last_error: "x" })], undefined)).toBe("1 source is offline: a, for 5 min: x.");
+  });
+
+  it("says a source that never answered has not answered since it was added", () => {
+    const e = { ...entry("fresh", 600, { last_seen: null, last_error: "timeout" }), neverAnswered: true };
+    expect(offlineBannerText([e], "UTC")).toBe("1 source is offline: fresh, which has not answered since it was added: timeout.");
+  });
+
+  it("names up to three, each with how long, then 'and N more'", () => {
+    const two = [entry("a", 7200), entry("b", 300)];
+    expect(offlineBannerText(two, "UTC")).toBe("2 sources are offline: a (for 2 h) and b (for 5 min).");
+    const three = [entry("a", 7200), entry("b", 300), entry("c", 130)];
+    expect(offlineBannerText(three, "UTC")).toBe("3 sources are offline: a (for 2 h), b (for 5 min) and c (for 2 min).");
+    const four = [...three, entry("d", 200)];
+    expect(offlineBannerText(four, "UTC")).toBe("4 sources are offline: a (for 2 h), b (for 5 min), c (for 2 min) and 1 more.");
+    const five = [...four, entry("e", 200)];
+    expect(offlineBannerText(five, "UTC")).toBe("5 sources are offline: a (for 2 h), b (for 5 min), c (for 2 min) and 2 more.");
+  });
+
+  it("says in the list of several that one never answered", () => {
+    const never = { ...entry("fresh", 600, { last_seen: null }), neverAnswered: true };
+    expect(offlineBannerText([entry("a", 7200), never], "UTC")).toBe("2 sources are offline: a (for 2 h) and fresh (has not answered since it was added).");
   });
 });

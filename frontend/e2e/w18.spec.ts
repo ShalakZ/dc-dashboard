@@ -31,7 +31,7 @@ test.beforeEach(({ page }) => markGuideSeen(page)); // w27: the dashboard guide 
 //   1b  the same on the real pages: the Live chip put back to 28 px, the Billing selects to 38 px and the asset header chip to 22 px (a style tag) are each reported.
 //   2   the top bar at 1920, 1440, 1024 and 800: the Find field and the Live chip are 34 px (within 1 px), and the asset page's "live" chip is as tall as its Edit button.
 //   3   every page, at 1440 and at 1024: Assets Tree, an asset page, Asset kinds, Dashboards, a dashboard (view and edit), Billing (an open month, a closed month, the Close month dialog),
-//       Sources, Scans, Users, Roles, Settings, Tariffs, Storage, Audit, Diagnostics, Password: no pair of controls on one line differs in height, the page's named controls are there and at
+//       Sources, Scans, Users, Roles, Settings, Tariffs, Storage, Audit, System events, Diagnostics, Password: no pair of controls on one line differs in height, the page's named controls are there and at
 //       least its floor of pairs was compared.
 //   4   the same in dark + desert gold for Billing (a closed month), Audit, an asset page and the top bar (Assets Tree): the Live chip and the Find field still count as having an edge.
 //   5   the note box: the Close month dialog and the Reopen month dialog at 1440 x 900, 1024 x 640 and 800 x 600: at least 4 lines, at most the smaller of 12 lines and 40% of the window, a drag
@@ -533,6 +533,8 @@ const PAGES: readonly PageCase[] = [
   { name: "Storage", open: goTo("/storage"), floor: 2, named: (p) => [p.getByLabel("Rows from day", { exact: true }), p.getByLabel("Raw retention (days)", { exact: true }), btn(p, "Set as default")] },
   // 20: the filter bar and the pager (52 at 1440, 40 at 1024); kept well under what they give, so a wrap at another width does not fail it.
   { name: "Audit", open: goTo("/audit"), floor: 20, named: (p) => [btn(p, "Export CSV"), btn(p, "Today"), p.getByLabel("Go to date", { exact: true })] },
+  // 10: the System events page (w32) has the Audit page's filter bar (Source and Kind selects, the Level toggles, the dates, Open only, Export CSV); 23 pairs measured at 1440 and at 1024, kept well under.
+  { name: "System events", open: goTo("/events"), floor: 10, named: (p) => [btn(p, "Export CSV"), btn(p, "Open only"), btn(p, "Info"), p.getByLabel("Source", { exact: true }), p.getByLabel("Kind", { exact: true })] },
   // 1: the connection check's source select beside Run connection check (Build report and its select are each on a line of their own).
   { name: "Diagnostics", open: goTo("/diagnostics"), floor: 1, named: (p) => [btn(p, "Build report"), btn(p, "Run connection check")] },
   // floor 0: the three password fields stack, and Change password sits under them.

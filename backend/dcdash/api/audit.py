@@ -17,6 +17,7 @@ from dcdash.api.settings import current_timezone
 from dcdash.core.csvout import write_csv
 from dcdash.core.models import Asset, AuditLog, Dashboard, Display, Playlist, Point, Source, User
 from dcdash.core.timeutil import local_midnight
+from dcdash.events import read as events_read
 
 router = APIRouter(prefix="/api", tags=["audit"])
 
@@ -154,10 +155,14 @@ async def _refs_for(db: AsyncSession, entries: Sequence[AuditLog]) -> list[dict[
     return refs
 
 
-def _item(entry: AuditLog, username: str | None, refs: dict[str, dict[str, str]]) -> dict[str, Any]:
+def _item(
+    entry: AuditLog, username: str | None, refs: dict[str, dict[str, str]], outcome: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """`outcome` is how a started check or test ended (events_read.outcomes), None for every other action. It is not stored
+    in the audit row and not in the CSV."""
     return {
         "id": entry.id, "user_id": entry.user_id, "actor_id": entry.actor_id, "username": username,
-        "action": entry.action, "detail": entry.detail, "ts": entry.ts, "refs": refs,
+        "action": entry.action, "detail": entry.detail, "ts": entry.ts, "refs": refs, "outcome": outcome,
     }
 
 
@@ -171,8 +176,13 @@ async def list_audit(
     clauses = where_clauses(f, await current_timezone(db))
     total = await db.scalar(select(func.count()).select_from(AuditLog).where(*clauses))
     rows = (await db.execute(_entries().where(*clauses).order_by(AuditLog.id.desc()).limit(limit).offset(offset))).all()
-    refs = await _refs_for(db, [entry for entry, _ in rows])
-    items = [_item(entry, username, entry_refs) for (entry, username), entry_refs in zip(rows, refs, strict=True)]
+    entries = [entry for entry, _ in rows]
+    refs = await _refs_for(db, entries)
+    ended = await events_read.outcomes(db, entries)  # one journal query and at most one jobs query for the whole page
+    items = [
+        _item(entry, username, entry_refs, ended.get(entry.id))
+        for (entry, username), entry_refs in zip(rows, refs, strict=True)
+    ]
     return {"total": total, "offset": offset, "limit": limit, "items": items}
 
 
@@ -268,4 +278,4 @@ async def get_audit_entry(
     if row is None:
         raise HTTPException(404, "audit entry not found")
     entry, username = row
-    return _item(entry, username, (await _refs_for(db, [entry]))[0])
+    return _item(entry, username, (await _refs_for(db, [entry]))[0], (await events_read.outcomes(db, [entry])).get(entry.id))

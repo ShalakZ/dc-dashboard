@@ -1,28 +1,34 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { api } from "../api/client";
-import { useInvalidate } from "../api/queries";
-import type { AuditEntry, TagListUndoResult } from "../api/types";
+import { keys, useInvalidate } from "../api/queries";
+import type { AuditEntry, AuditOutcome, TagListUndoResult } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
+import { meets } from "../auth/need";
 import { copyText } from "../lib/diagnostics";
-import { describeAudit } from "../lib/auditText";
+import { describeAudit, OUTCOME_ACTIONS, outcomeOf } from "../lib/auditText";
 import { relativeTime } from "../lib/relativeTime";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { TAG_LIST_REFRESHED, undoSentence } from "../lib/tagListUndo";
 import { upperFirst } from "../lib/upperFirst";
 import { KindTile, UserLabel } from "./AuditCells";
 import { Drawer } from "./Drawer";
+import { PAGE_NEED } from "./navItems";
 import { Skeleton, SkeletonRegion } from "./Skeleton";
 import { useToast } from "./Toasts";
 
 export type AuditDrawerStatus = "loading" | "ready" | "error";
 
-/** What the drawer is waiting for while the entry is fetched: the five lines it will have, and the block of JSON under them. */
-function EntrySkeleton() {
+/**
+ * What the drawer is waiting for while the entry is fetched: the lines it will have (five, and a sixth, the Outcome, for an entry that starts a check or a
+ * test: when the row it was opened from is known, its action says which), and the block of JSON under them.
+ */
+function EntrySkeleton({ rows }: { rows: number }) {
   return (
     <SkeletonRegion label="Loading the entry">
       <dl className="kv" aria-hidden="true">
-        {Array.from({ length: 5 }, (_, i) => (
+        {Array.from({ length: rows }, (_, i) => (
           <div key={i}><dt><Skeleton width="9ch" /></dt><dd><Skeleton width={i % 2 === 0 ? "26ch" : "16ch"} /></dd></div>
         ))}
       </dl>
@@ -98,6 +104,59 @@ function UndoThisList({ entryId }: { entryId: number }) {
   );
 }
 
+/** How often the drawer asks the server how a check or test that is still running has gone. */
+const OUTCOME_POLL_MS = 5_000;
+
+/** "Open in System events" to the row that holds the end of the job: for someone who can open that page (PAGE_NEED.events: the journal's permission and the sources it names, as the Sources page asks), and for an outcome that has such a row. */
+function EventLink({ id }: { id: number }) {
+  const { can } = useAuth();
+  return meets(PAGE_NEED.events, can) ? <>{" "}<Link className="what-link" to={`/events/${id}`}>Open in System events</Link></> : null;
+}
+
+function OutcomeText({ outcome }: { outcome: AuditOutcome }) {
+  const id = outcome.event_id;
+  return (
+    <>
+      {outcome.text}
+      {id !== null && Number.isSafeInteger(id) && id > 0 && <EventLink id={id} />}
+    </>
+  );
+}
+
+/**
+ * The outcome while the job is still running: the entry is read again every 5 seconds until the answer says it has ended (the list the entry came from
+ * is a snapshot). Its own part so that an entry that has ended asks for no query client; a request that fails leaves the sentence as it is, with no alert,
+ * and the next beat tries again. When it ends the audit lists are read once, so the tag in the row says what the drawer says.
+ */
+function RunningOutcome({ entry, listed }: { entry: AuditEntry; listed: AuditOutcome }) {
+  const client = useQueryClient();
+  const live = useQuery({
+    queryKey: keys.auditEntry(entry.id),
+    queryFn: () => api.get<AuditEntry>(`/api/audit/${entry.id}`),
+    // Asked again while the newest answer (or the list's, with none yet) says running; a stopped drawer asks nothing more.
+    refetchInterval: (query) => (query.state.data && outcomeOf(query.state.data)?.state !== "running" ? false : OUTCOME_POLL_MS),
+  });
+  const latest = live.data ? outcomeOf(live.data) : null;
+  const ended = latest !== null && latest.state !== "running";
+  useEffect(() => {
+    // Everything audit but the entries (this one is read already): the list page the row is in, and the one the filters offer.
+    if (ended) void client.invalidateQueries({ queryKey: keys.auditAll, predicate: (query) => query.queryKey[1] !== "entry" });
+  }, [ended, client]);
+  return <OutcomeText outcome={latest ?? listed} />;
+}
+
+/** The Outcome row, LAST in the list: only for the entry of a started check or test that carries one; every other entry has no such row. */
+function OutcomeRow({ entry }: { entry: AuditEntry }) {
+  const outcome = outcomeOf(entry);
+  if (!outcome) return null;
+  return (
+    <div>
+      <dt>Outcome</dt>
+      <dd>{outcome.state === "running" ? <RunningOutcome entry={entry} listed={outcome} /> : <OutcomeText outcome={outcome} />}</dd>
+    </div>
+  );
+}
+
 /** One entry of the log, opened from its row: what happened, when, who, the stored JSON. Previous and Next go in `footer`. */
 function EntryView({ entry, timezone, now }: { entry: AuditEntry; timezone: string; now: Date }) {
   const toast = useToast();
@@ -144,6 +203,8 @@ function EntryView({ entry, timezone, now }: { entry: AuditEntry; timezone: stri
             <button ref={button} type="button" className="copy-btn" aria-label="Copy entry number" onClick={() => void copy()}>Copy</button>
           </dd>
         </div>
+        {/* Keyed by the entry: stepping to another entry must not carry a polled answer over to it. */}
+        <OutcomeRow key={`outcome-${entry.id}`} entry={entry} />
       </dl>
       {/* The field copyText copies from when the clipboard API is missing: inside the panel (so inside the focus trap), out of sight and out of the Tab order. */}
       <textarea ref={area} className="copy-field" readOnly tabIndex={-1} aria-hidden="true" value={number} />
@@ -268,7 +329,8 @@ export function AuditDrawer({ entry, status, message, timezone, now, onClose, fo
       ) : status === "error" ? (
         <p className="error" role="alert">{message ?? "Could not load the entry."}</p>
       ) : (
-        <EntrySkeleton />
+        // The opening row's action is known when the entry is (the page has it, and only the account or the site is still loading); a deep link knows nothing yet.
+        <EntrySkeleton rows={entry && OUTCOME_ACTIONS.has(entry.action) ? 6 : 5} />
       )}
     </Drawer>
   );

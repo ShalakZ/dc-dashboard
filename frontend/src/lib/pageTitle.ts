@@ -14,6 +14,7 @@ const TITLES: [path: string, title: string][] = [
   ["/storage", "Storage"],
   ["/displays", "Displays"],
   ["/audit", "Audit log"],
+  ["/events", "System events"],
   ["/diagnostics", "Diagnostics"],
   ["/password", "Change password"],
 ];

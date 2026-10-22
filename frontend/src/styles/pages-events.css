@@ -1,0 +1,90 @@
+@layer w6 {
+  /* w32 System events (pages/EventsPage.tsx, components/EventFilterBar.tsx, components/EventDrawer.tsx). Tokens only; every rule is scoped by the page class
+     (.events-page) or, for the drawer, which is a portal outside the page, by .event-entry. The square severity tag (.ev-tag) is tags-events.css's, so it is not
+     named here. Nothing on this page animates or transitions (the 10 s refresh changes text in place and shows one button), so there is no motion to switch off
+     under prefers-reduced-motion. */
+
+  .events-page .page-head .sub { max-width: 110ch; }
+  .events-page .page-head .sub a { white-space: nowrap; } /* "Audit log" is not broken across two lines */
+
+  /* The four tiles (the .tiles grid and .tile are app.css). The caption of a real tile is [icon and title, tip] with the tip pushed to the right, as on Storage;
+     the skeleton's caption keeps its circle and line together at the left. The first tile is red while anything is open. */
+  .events-page .event-tiles { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 20px; }
+  .events-page .event-tiles .tile > .muted:first-child:not(.tile-label) { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .events-page .event-tiles .tile > .muted:first-child .tip { margin: -4px -6px -4px 0; } /* the 24 px tip button does not make the caption line taller */
+  .events-page .event-tiles .tile[data-alert] .big { color: var(--crit); }
+  .events-page .event-tiles .tile-date { white-space: nowrap; } /* "2 Sep" is never broken between the day and the month */
+
+  /* Happening now: the open problems, one line each, above the toolbar. Its slot is always there once the page is: a skeleton line while it loads, the lines, or one
+     sentence saying nothing is open, so the toolbar and the table do not move when the answer arrives (A2). */
+  .events-page .open-now { margin: 0 0 18px; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius); }
+  .events-page .open-now h2 { margin: 0 0 6px; color: var(--text-2); font-size: var(--fs-sm); font-weight: 600; }
+  .events-page .open-now p { margin: 0; }
+  .events-page .open-now ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+  .events-page .open-now li { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+  .events-page .open-now .open-text { min-width: 0; overflow-wrap: anywhere; }
+  .events-page .open-now li > a { flex: none; }
+  .events-page .open-now .quiet { margin: 6px 0 0 -10px; }
+
+  /* The toolbar: Source, Kind, the Level toggles and From to To as one row; under it Open only at the left and Export CSV at the right. The selects have a fixed
+     width, so the rows wrap at the same place before and after the options arrive. The Level caption is a span (the toggles are a group, not one control). */
+  .events-page .filter-bar select { width: 176px; max-width: 100%; }
+  @media (min-width: 1400px) {
+    .events-page .filter-bar select { width: 220px; }
+  }
+  .events-page .field-label { font-size: var(--fs-sm); font-weight: 600; }
+  .events-page .range-group { display: flex; flex: none; align-items: flex-end; }
+  .events-page .range-group input { width: 140px; }
+  .events-page .range-group .field:first-child input { border-radius: var(--radius) 0 0 var(--radius); }
+  .events-page .range-group .field:last-child input { border-radius: 0 var(--radius) var(--radius) 0; }
+  .events-page .range-sep { display: grid; place-items: center; height: var(--ctl-h); padding: 0 10px; border: solid var(--field-border); border-width: 1px 0; background: var(--surface); color: var(--text-2); font-size: var(--fs-sm); }
+  .events-page .filter-bar .quick-row { align-items: center; justify-content: space-between; }
+  .events-page .filter-bar .filter-tools { align-items: center; margin-left: auto; }
+  @media (max-width: 1279.98px) {
+    .events-page .filter-bar select { width: 150px; } /* Source, Kind, Level and From to To then share one line at 1024px (884px of room: 856px) */
+    .events-page .filter-bar :is(.quick-row, .filter-tools) { gap: 8px; }
+    .events-page .filter-chip { padding: 0 8px; }
+  }
+
+  /* The result line: the Friendly / Raw switch at the left (.seg-switch is pages-admin.css's), the count at the right, and between them the button that offers the
+     events that arrived since the list loaded. The button takes a place in the same row, so the row keeps its height whether or not it shows. */
+  .events-page .new-events { border-color: var(--accent); color: var(--accent); }
+  .events-page .refresh-note { color: var(--text-2); }
+
+  /* The table has fixed columns (the <colgroup> in EventsPage.tsx, which the skeleton draws too). A row is at least 60px high (the time cell alone is two lines) in the real table and in its skeleton,
+     so the rows that arrive are not taller than the placeholders they replace. The source is cut with an ellipsis (its title holds the whole name); the sentence,
+     its reason and the stored message wrap. */
+  .events-page .events-table { table-layout: fixed; }
+  .events-page .events-table th { overflow: hidden; text-overflow: ellipsis; }
+  .events-page .events-table td, .events-page .events-skeleton td { height: 60px; }
+  .events-page .events-table td.cell-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .events-page .events-table .ago { display: block; color: var(--text-2); font-size: var(--fs-xs); }
+  .events-page .events-table td.cell-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .events-page .events-table td.cell-more { padding-inline: 4px; text-align: center; } /* the 36px first column: the 28px button and 4px each side */
+  .events-page .events-table td.cell-count { font-variant-numeric: tabular-nums; }
+  .events-page .events-table td.cell-kind, .events-page .events-table td.cell-detail { overflow-wrap: anywhere; }
+  .events-page .events-table code { font-size: var(--fs-xs); overflow-wrap: anywhere; }
+  .events-page .events-table td.cell-detail code { display: block; margin-top: 2px; color: var(--text-2); }
+  .events-page .events-table .what-line { display: flex; align-items: flex-start; gap: 10px; }
+  .events-page .events-table .what-line > :first-child { flex: none; margin-top: 1px; } /* the severity tag */
+  .events-page .events-table .what-text { min-width: 0; overflow-wrap: anywhere; }
+  .events-page .events-table .reason { display: block; color: var(--text-2); font-size: var(--fs-xs); }
+  /* A row opens its event in the drawer: a click anywhere on it (not on a link or a button); the open one is tinted */
+  .events-page .events-table tbody tr[data-event-id] { cursor: pointer; }
+  .events-page .events-table tbody tr[data-open] > td { background: var(--accent-tint); }
+
+  /* Under the table: how many are shown, a failed read of a page, and Load more at the right. */
+  .events-page .load-row { justify-content: space-between; margin: 12px 0 0; }
+  .events-page .load-row p { margin: 0; font-size: var(--fs-sm); }
+  .events-page .load-row button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+
+  /* One event in the drawer (components/EventDrawer.tsx): the facts in the shared .kv box (pages-admin.css), then the stored JSON. */
+  .event-entry .reason { display: block; margin-top: 2px; color: var(--text-2); font-size: var(--fs-sm); }
+  .event-entry .what-link { margin-left: 10px; }
+  .event-entry .copy-btn { min-height: var(--ctl-h-xs); margin-left: 10px; padding: 0 10px; }
+  .event-entry .section-title { margin-top: 24px; }
+  .event-entry .entry-json { margin: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* The field the Copy button copies from when the browser has no clipboard API (plain http): in the panel, in the viewport (focusing it must not scroll the
+     body), invisible and out of the way of clicks. */
+  .event-entry .copy-field { position: fixed; top: 0; left: 0; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; pointer-events: none; resize: none; }
+}

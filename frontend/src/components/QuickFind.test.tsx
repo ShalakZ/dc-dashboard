@@ -191,13 +191,13 @@ describe("QuickFind structure", () => {
 });
 
 describe("QuickFind matches", () => {
-  it.each([["users", "Users & Roles"], ["settings", "Settings"], ["sources", "Sources"]])("lists %s to an admin as %s", async (query, label) => {
+  it.each([["users", "Users & Roles"], ["settings", "Settings"], ["sources", "Sources"], ["events", "Events"]])("lists %s to an admin as %s", async (query, label) => {
     const { user, input } = await mount({ role: "admin" });
     await user.type(input, query);
     expect(await screen.findByRole("option", { name: label })).toBeInTheDocument();
   });
 
-  it.each(["users", "settings", "sources", "scans", "discovery", "tariffs", "storage", "audit", "diagnostics"])("never lists the %s page to a viewer", async (query) => {
+  it.each(["users", "settings", "sources", "scans", "discovery", "tariffs", "storage", "audit", "events", "diagnostics"])("never lists the %s page to a viewer", async (query) => {
     const { user, input } = await mount({ role: "viewer" });
     await user.type(input, query);
     expect(await screen.findByRole("status")).toHaveTextContent("No match");

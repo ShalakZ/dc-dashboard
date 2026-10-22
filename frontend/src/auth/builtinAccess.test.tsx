@@ -29,6 +29,7 @@ vi.mock("../pages/TariffsPage", () => ({ TariffsPage: () => <h1>the tariffs page
 vi.mock("../pages/StoragePage", () => ({ StoragePage: () => <h1>the storage page</h1> }));
 vi.mock("../pages/DisplaysPage", () => ({ DisplaysPage: () => <h1>the displays page</h1> }));
 vi.mock("../pages/AuditPage", () => ({ AuditPage: () => <h1>the audit page</h1> }));
+vi.mock("../pages/EventsPage", () => ({ EventsPage: () => <h1>the events page</h1> }));
 vi.mock("../pages/DiagnosticsPage", () => ({ DiagnosticsPage: () => <h1>the diagnostics page</h1> }));
 vi.mock("../pages/PasswordPage", () => ({ PasswordPage: () => <h1>the password page</h1> }));
 
@@ -51,7 +52,7 @@ const ROLE_WORD: Record<BuiltinRole, string> = { viewer: "Viewer", operator: "Op
 const MONITOR = [["Assets Tree", "/assets"], ["Dashboards", "/dashboards"], ["Billing", "/billing"]];
 const OPERATE = [["Sources", "/sources"], ["Scans", "/scans"], ["Discovery", "/discovery"]];
 const ADMINISTER = [
-  ["Users", "/users"], ["Settings", "/settings"], ["Tariffs", "/tariffs"], ["Storage", "/storage"], ["Audit", "/audit"], ["Diagnostics", "/diagnostics"],
+  ["Users", "/users"], ["Settings", "/settings"], ["Tariffs", "/tariffs"], ["Storage", "/storage"], ["Audit", "/audit"], ["Events", "/events"], ["Diagnostics", "/diagnostics"],
 ];
 const SIDEBAR: Record<BuiltinRole, [string, string[][]][]> = {
   viewer: [["Monitor", MONITOR]],
@@ -77,11 +78,13 @@ const PAGE: Record<string, string> = {
   "/displays": "the displays page",
   "/audit": "the audit page",
   "/audit/7": "the audit page", // the same page, with the entry open in the drawer
+  "/events": "the events page",
+  "/events/7": "the events page", // the same page, with the event open in the drawer
   "/diagnostics": "the diagnostics page",
 };
 const EVERYONE = ["/assets", "/dashboards", "/dashboards/3", "/billing", "/password"];
 const OPERATORS_ADD = ["/sources", "/scans", "/discovery"];
-const ADMINS_ADD = ["/sources/4/points", "/users", "/settings", "/tariffs", "/storage", "/audit", "/audit/7", "/diagnostics"];
+const ADMINS_ADD = ["/sources/4/points", "/users", "/settings", "/tariffs", "/storage", "/audit", "/audit/7", "/events", "/events/7", "/diagnostics"];
 const MAY_OPEN: Record<BuiltinRole, string[]> = {
   viewer: EVERYONE,
   operator: [...EVERYONE, ...OPERATORS_ADD],
@@ -145,7 +148,7 @@ describe("what w28 added for the built-in roles", () => {
   it("is one page, for the Admin alone: Displays, between Storage and Audit", () => {
     expect(ADDED_IN_W28).toEqual({ role: "admin", after: "Storage", link: ["Displays", "/displays"], page: "/displays", quickFind: "Displays" });
     expect((sidebarOf("admin").find(([heading]) => heading === "Administer")![1] as string[][]).map(([label]) => label)).toEqual(
-      ["Users & Roles", "Settings", "Tariffs", "Storage", "Displays", "Audit", "Diagnostics"],
+      ["Users & Roles", "Settings", "Tariffs", "Storage", "Displays", "Audit", "Events", "Diagnostics"],
     );
     for (const role of ROLES.filter((each) => each !== "admin")) expect(JSON.stringify(sidebarOf(role))).not.toContain("Displays");
   });

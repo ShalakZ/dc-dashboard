@@ -1,15 +1,16 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { Icon, type IconName } from "../components/Icon";
 import { InfoTip } from "../components/InfoTip";
+import { Modal, useModalBusy } from "../components/Modal";
 import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
 import { READ_ONLY_TEXT, ReadOnlyNote } from "../components/ReadOnlyNote";
 import { SaveButton } from "../components/SaveButton";
 import { CTL_H, PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
-import { useRowsPerDay, useSaveStorageSettings, useSetStorageDefault, useStorage, useStorageSettings } from "../api/queries";
-import type { RowsPerDayRange, StorageSettings, StorageStats } from "../api/types";
+import { eventsLoss, useEventsSettings, useRowsPerDay, useSaveEventsSettings, useSaveStorageSettings, useSetStorageDefault, useSite, useStorage, useStorageSettings } from "../api/queries";
+import type { EventsSettings, RowsPerDayRange, StorageSettings, StorageStats } from "../api/types";
 import { storageLoss } from "../lib/impact";
 import { FIELD_HELP, TILE_HELP } from "../lib/storageHelp";
 
@@ -186,12 +187,151 @@ function DayTable({ days, total }: { days: { day: string; rows: number }[]; tota
   );
 }
 
+/** w32: the day and the English short month (`24 Jul`) an instant falls on in `timezone`; UTC when the zone is unknown, null when `iso` is not a time. */
+export function dayMonth(iso: string, timezone: string): string | null {
+  const moment = new Date(iso);
+  if (Number.isNaN(moment.getTime())) return null;
+  for (const zone of [timezone, "UTC"]) {
+    try {
+      const parts = new Intl.DateTimeFormat("en-US", { timeZone: zone, day: "numeric", month: "short" }).formatToParts(moment);
+      const part = (type: string) => parts.find((p) => p.type === type)?.value;
+      return `${part("day")} ${part("month")}`;
+    } catch { /* a zone the browser does not know: UTC next */ }
+  }
+  return null;
+}
+
+/** What the System events card says about the journal: the rule, then how many events are kept now and the day of the oldest (nothing about it when none is kept). */
+export function eventsKeptText(e: EventsSettings, timezone: string): string {
+  const oldest = e.oldest ? dayMonth(e.oldest, timezone) : null;
+  return `System events are kept ${e.retention_days} days or the newest ${e.max_rows.toLocaleString("en-US")}, whichever is fewer. Kept now: ${e.kept.toLocaleString("en-US")}${oldest ? `, the oldest from ${oldest}` : ""}.`;
+}
+/** The second line of the card. */
+export const AUDIT_KEPT = "The audit log is kept forever.";
+/** Typical numbers for the loading frame, whose sentence is drawn as grey word pills (only the length of each word is used), so it breaks into the lines the real one will. */
+const EVENTS_SAMPLE: EventsSettings = {
+  retention_days: 90, max_rows: 100_000, factory: { retention_days: 90, max_rows: 100_000 },
+  bounds: { retention_days: [7, 400], max_rows: [10_000, 1_000_000] }, kept: 3412, oldest: "2026-07-24T08:15:00Z",
+};
+const EVENTS_DAYS_HELP = "Events older than this many days are deleted, once an hour. A problem that is still open is never deleted.";
+const EVENTS_ROWS_HELP = "Only this many of the newest events are kept, even if they are younger than the days allow. It stops a burst of events from filling the database.";
+
+/** `text` as a whole number inside `[low, high]`, or null (blank, a fraction, text, out of range). */
+function wholeIn(text: string, [low, high]: [number, number]): number | null {
+  const n = Number(text);
+  return text.trim() !== "" && Number.isInteger(n) && n >= low && n <= high ? n : null;
+}
+const inRange = ([low, high]: [number, number], unit: string) => `${unit} must be a whole number from ${low.toLocaleString("en-US")} to ${high.toLocaleString("en-US")}.`;
+
+/**
+ * The content of the Change... dialog (inside the Modal, so `useModalBusy` reaches it): the two numbers with the server's bounds, and one slot, always
+ * there, for what the save has to say. A save that would shorten what is kept answers 409 with how many events go; the slot then says so and the same
+ * button reads Confirm and save, which sends the request again with confirm=true; the focus moves to Cancel when the question arrives, so a repeated Enter cannot
+ * confirm it unread. Changing a number takes the question back: the count was for the numbers that were sent. The buttons wait with aria-disabled and a guard, never native `disabled`: the pressed one holds the focus.
+ */
+function EventsRetentionForm({ current, onClose }: { current: EventsSettings; onClose: () => void }) {
+  const save = useSaveEventsSettings();
+  const [days, setDays] = useState(String(current.retention_days));
+  const [rows, setRows] = useState(String(current.max_rows));
+  const [error, setError] = useState<string | null>(null);
+  const [asking, setAsking] = useState<number | null>(null); // events the server said it would delete, once it has said so
+  const [pending, setPending] = useState(false);
+  const inFlight = useRef(false);
+  const cancelButton = useRef<HTMLButtonElement>(null);
+  const daysHint = useId();
+  const rowsHint = useId();
+  const questionId = useId();
+  useModalBusy(pending); // Escape must not close the dialog on a request that is still running
+  // When the question arrives the focus goes to Cancel, off the button that turns into Confirm and save: a repeated Enter (or a double click) then cannot confirm a
+  // shortening that has not been read. Confirming takes a Tab to the button. Cancel is read with the question, since the alert is announced before the focus moves.
+  const questioned = asking !== null;
+  useEffect(() => {
+    if (questioned) cancelButton.current?.focus();
+  }, [questioned]);
+  const { retention_days: dayBounds, max_rows: rowBounds } = current.bounds;
+
+  const edit = (set: (text: string) => void) => (event: ChangeEvent<HTMLInputElement>) => {
+    set(event.target.value);
+    setAsking(null);
+    setError(null);
+  };
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (inFlight.current) return;
+    const retention_days = wholeIn(days, dayBounds);
+    const max_rows = wholeIn(rows, rowBounds);
+    if (retention_days === null || max_rows === null) {
+      setAsking(null);
+      setError(retention_days === null ? inRange(dayBounds, "Days") : inRange(rowBounds, "Events"));
+      return;
+    }
+    inFlight.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      await save.mutateAsync({ values: { retention_days, max_rows }, confirm: asking !== null });
+      onClose();
+    } catch (err) {
+      const loss = eventsLoss(err);
+      if (loss) setAsking(loss.willDelete);
+      else setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      inFlight.current = false;
+      setPending(false);
+    }
+  }
+  const cancel = () => { if (!inFlight.current) onClose(); };
+
+  return (
+    <form className="storage-events-dialog" onSubmit={submit} noValidate>
+      <p className="muted">System events are kept for this many days or this many events, whichever is fewer. Saving a shorter time asks first.</p>
+      <div className="has-tip">
+        <label>
+          Keep events for (days)
+          <input type="number" step={1} min={dayBounds[0]} max={dayBounds[1]} value={days} aria-describedby={daysHint} onChange={edit(setDays)} />
+        </label>
+        <InfoTip>{EVENTS_DAYS_HELP}</InfoTip>
+        <small id={daysHint} className="muted storage-events-hint">From {dayBounds[0].toLocaleString("en-US")} to {dayBounds[1].toLocaleString("en-US")} days. Factory: {current.factory.retention_days.toLocaleString("en-US")}.</small>
+      </div>
+      <div className="has-tip">
+        <label>
+          Keep at most (events)
+          <input type="number" step={1} min={rowBounds[0]} max={rowBounds[1]} value={rows} aria-describedby={rowsHint} onChange={edit(setRows)} />
+        </label>
+        <InfoTip>{EVENTS_ROWS_HELP}</InfoTip>
+        <small id={rowsHint} className="muted storage-events-hint">From {rowBounds[0].toLocaleString("en-US")} to {rowBounds[1].toLocaleString("en-US")} events. Factory: {current.factory.max_rows.toLocaleString("en-US")}.</small>
+      </div>
+      {/* Always there and three lines tall (CSS), so the question or the refusal arriving moves neither the fields nor the buttons. One kind of announcer, an alert, for both. */}
+      <div className="storage-events-slot">
+        {error ? <p className="error" role="alert">{error}</p>
+          : asking !== null ? <p id={questionId} role="alert">About {asking.toLocaleString("en-US")} {asking === 1 ? "event" : "events"} will be deleted within the hour. Press Confirm and save to go ahead.</p>
+          : null}
+      </div>
+      <div className="row">
+        <button type="button" ref={cancelButton} aria-disabled={pending || undefined} aria-describedby={questioned ? questionId : undefined} onClick={cancel}>Cancel</button>
+        <button type="submit" className={asking === null ? "primary" : "danger"} aria-disabled={pending || undefined}>{asking === null ? "Save" : "Confirm and save"}</button>
+      </div>
+    </form>
+  );
+}
+
+function EventsRetentionDialog({ current, onClose }: { current: EventsSettings; onClose: () => void }) {
+  return (
+    <Modal title="Change how long system events are kept" onClose={onClose}>
+      <EventsRetentionForm current={current} onClose={onClose} />
+    </Modal>
+  );
+}
+
 export function StoragePage() {
   const canEdit = useAuth().can("storage.edit"); // Save, Set as default and the Resets; without it the form is read-only
   const stats = useStorage();
   const settings = useStorageSettings();
+  const events = useEventsSettings(); // w32: how long the system events are kept, and how many are kept now
+  const site = useSite(); // the day of the oldest event is a day of the site's clock; asked for here so the card is never drawn in the wrong zone first
   const save = useSaveStorageSettings();
   const makeDefault = useSetStorageDefault();
+  const [changingEvents, setChangingEvents] = useState(false);
   const [form, setForm] = useState<StorageSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -204,9 +344,9 @@ export function StoragePage() {
   }, [settings.data, form]);
   if (stats.isError) return <p className="error" role="alert">{stats.error.message}</p>;
   if (settings.isError) return <p className="error" role="alert">{settings.error.message}</p>;
-  if (stats.isPending || settings.isPending || !form) {
+  if (stats.isPending || settings.isPending || events.isPending || site.isPending || !form) {
     // The page in its order: the five real tiles (an icon circle and a line each, three with their note line), then the two cards in the page
-    // grid as the loaded page draws them. Rows per day: the range fields and the count, then the seven day rows with no header, as the real table
+    // grid as the loaded page draws them (w32: and the System events card under both, spanning the grid). Rows per day: the range fields and the count, then the seven day rows with no header, as the real table
     // has none, then the UTC note under it. Retention and capacity: the disk note, the field grid, the buttons and the summary, whose paragraphs are word pills of
     // the real sentences (the real lines wrap with the width). All lines are placeholders: a region holds no words but its label. Banners are data and are not drawn.
     return (
@@ -247,6 +387,11 @@ export function StoragePage() {
                   <ParagraphSkeleton text={canEdit ? SUMMARY_SAMPLE : SUMMARY_SAMPLE.replace(RESETS_SENTENCE, "")} className="muted" />
                 </div>
               </div>
+            </PageCardSkeleton>
+            <PageCardSkeleton className="storage-events span-all">
+              <ParagraphSkeleton text={eventsKeptText(EVENTS_SAMPLE, "UTC")} />
+              <ParagraphSkeleton text={AUDIT_KEPT} className="muted" />
+              {canEdit && <div className="row"><Skeleton variant="block" width={104} height={34} /></div>}
             </PageCardSkeleton>
           </div>
         </SkeletonRegion>
@@ -358,7 +503,18 @@ export function StoragePage() {
             </div>
           </form>
         </PageCard>
+        {/* w32: under both cards, the width of the grid. Its data is awaited with the rest of the page (the loading frame draws it), so nothing arrives later and moves it. */}
+        <PageCard className="storage-events span-all" icon="events" title="System events and the audit log">
+          {events.isError ? (
+            <p className="error" role="alert">How long system events are kept could not be read: {events.error.message}</p>
+          ) : (
+            <p>{eventsKeptText(events.data, site.data?.timezone ?? "UTC")}</p>
+          )}
+          <p className="muted">{AUDIT_KEPT}</p>
+          {canEdit && events.data && <div className="row"><button type="button" onClick={() => setChangingEvents(true)}>Change...</button></div>}
+        </PageCard>
       </div>
+      {changingEvents && events.data && <EventsRetentionDialog current={events.data} onClose={() => setChangingEvents(false)} />}
       {needsConfirm && (
         <ConfirmDeleteDialog
           title={needsConfirm.deletesNow ? "Delete old readings?" : "Shorten retention?"}

@@ -24,6 +24,8 @@ the administrators who install, back up and update it. The design is in
 - **Roles and permissions**: the built-in Viewer, Operator and Admin roles and roles of your own:
   [Roles and permissions](docs/roles-and-permissions.md).
 - **Audit log**: who changed what and when, sign-ins included, with filters and CSV export: [Screens](docs/screens.md).
+- **System events**: what the system did by itself (a source going offline and back, checks, imports, errors), an outage counted as one
+  row, kept 90 days by default and linked to the audit entry that started a check: [Screens](docs/screens.md), [Storage](docs/storage.md).
 - **Storage tiers**: raw readings, 1-minute and 1-hour rollups, each with its own retention: [Storage](docs/storage.md).
 - **Backups and restore**, by hand or from the machine's scheduler: [Backup and restore](docs/backup-and-restore.md),
   [Scheduled backups](docs/scheduled-backups.md).

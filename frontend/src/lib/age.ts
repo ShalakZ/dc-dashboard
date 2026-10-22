@@ -11,6 +11,25 @@ export function formatSpan(seconds: number | null | undefined): string {
   return `${Math.floor(s / 86400)} d`;
 }
 
+/**
+ * A long stretch in words, for how long a source has been down (w32): the same units as `formatSpan`, but from one hour on two of them, with a zero second
+ * unit left out: "45 s", "3 min", "2 h 5 min", "2 h", "4 d 2 h", "4 d". "—" for no value.
+ */
+export function formatSpanLong(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return "—";
+  const s = Math.max(0, seconds);
+  if (s < 60) return `${Math.floor(s)} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min`;
+  if (s < 86400) {
+    const hours = Math.floor(s / 3600);
+    const minutes = Math.floor((s % 3600) / 60);
+    return minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`;
+  }
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  return hours > 0 ? `${days} d ${hours} h` : `${days} d`;
+}
+
 /** "12 s ago" ...; "—" for no value. */
 export function formatAge(seconds: number | null | undefined): string {
   const span = formatSpan(seconds);

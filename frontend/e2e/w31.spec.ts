@@ -47,7 +47,7 @@ const PASSWORD = `w31-${RUN}-password`;
 const FILE_DESCRIPTION = /Filled by importing CSV files/;
 
 /** The row menu's words (three plain dots, not the ellipsis character). */
-const MENU = { import: "Import file...", map: "Map tag list...", fill: "Fill older range..." } as const;
+const MENU = { import: "Import file...", map: "Map tag list...", fill: "Fill older range...", events: "Events" } as const;
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // What the files hold
@@ -694,8 +694,9 @@ test("5. the file source never polls: no online or offline, no Test, no Check co
   await expect(fileRow).not.toContainText(/\b(online|offline)\b/i);
   await expectNoRowAction(page, fileRow, "Test");
   await expectNoRowAction(page, fileRow, "Check connection");
-  expect(await menuItems(page, fileRow), "the file source's menu, in order").toEqual(["Edit", "Points", MENU.import, MENU.map]);
-  expect(await menuItems(page, simRow), "the simulator's menu, in order").toEqual(["Test", "Check connection", "Edit", "Points", MENU.import, MENU.map, MENU.fill]);
+  // w32: an administrator holds diagnostics.view, so every row's menu ends with Events (a file source has events too: its imports and failures are written there).
+  expect(await menuItems(page, fileRow), "the file source's menu, in order").toEqual(["Edit", "Points", MENU.import, MENU.map, MENU.events]);
+  expect(await menuItems(page, simRow), "the simulator's menu, in order").toEqual(["Test", "Check connection", "Edit", "Points", MENU.import, MENU.map, MENU.fill, MENU.events]);
 
   await page.goto(`/sources/${ids.fileB}/points`);
   await expect(heading1(page, "Points")).toBeVisible();
