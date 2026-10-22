@@ -153,11 +153,61 @@ async def test_two_default_uri_answers_do_not_make_a_different_server(db):
     assert "different" not in await identity_of(db, source) and await events(db) == []
 
 
-async def test_a_stored_key_is_never_overwritten_by_an_answer_without_one(db):
+DEFAULT_URI = "urn:freeopcua:python:server"
+
+
+async def test_a_default_uri_where_a_keyed_server_used_to_be_is_another_server_noted_once(db):
     source = await opc_source(db)
     await remember(db, source, SERVER_A, expected_config=CONFIG)
-    assert await remember(db, source, {"application_uri": "urn:freeopcua:python:server"}, expected_config=CONFIG) == "same"
-    assert await identity_of(db, source) == SERVER_A and await events(db) == []
+    default = {"application_uri": DEFAULT_URI, "application_name": "FreeOpcUa Python Server"}
+    assert await remember(db, source, default, expected_config=CONFIG) == "different"
+    stored = await identity_of(db, source)
+    assert {key: stored[key] for key in SERVER_A} == SERVER_A and set(stored) == {*SERVER_A, "different"}  # the stored identity is untouched
+    assert {k: v for k, v in stored["different"].items() if k != "at"} == {"application_uri": DEFAULT_URI}
+    datetime.fromisoformat(stored["different"]["at"])
+    rows = await events(db)
+    assert len(rows) == 1 and (rows[0]["level"], rows[0]["kind"], rows[0]["source_id"]) == ("warning", SOURCE_IDENTITY_CHANGED, source)
+    assert rows[0]["detail"]["before"] == SERVER_A and rows[0]["detail"]["after"] == default
+    again = await xmin_of(db, source)  # the same other server again within 24 hours: no second row, no write
+    assert await remember(db, source, default, expected_config=CONFIG) == "different"
+    assert len(await events(db)) == 1 and await xmin_of(db, source) == again
+    assert await remember(db, source, dict(SERVER_A), expected_config=CONFIG) == "same"  # the stored server answers again: note cleared
+    assert await identity_of(db, source) == SERVER_A
+
+
+async def test_a_default_uri_with_its_own_thumbprint_records_both_in_the_note(db):
+    source = await opc_source(db)
+    await remember(db, source, SERVER_A, expected_config=CONFIG)
+    assert await remember(db, source, {"application_uri": DEFAULT_URI, "thumbprint": THUMB_2}, expected_config=CONFIG) == "different"
+    note = (await identity_of(db, source))["different"]
+    assert {k: v for k, v in note.items() if k != "at"} == {"application_uri": DEFAULT_URI, "thumbprint": THUMB_2}
+    assert len(await events(db)) == 1
+
+
+async def test_an_answer_that_names_no_server_leaves_a_keyed_source_alone(db):
+    source = await opc_source(db)
+    await remember(db, source, SERVER_A, expected_config=CONFIG)
+    before = await xmin_of(db, source)
+    for nameless in ({"application_name": "Some Server"}, {"product_uri": "urn:vendor:product"}, {"application_name": "Some Server", "product_uri": "urn:v"}):
+        assert await remember(db, source, nameless, expected_config=CONFIG) == "same"
+    assert await identity_of(db, source) == SERVER_A and await xmin_of(db, source) == before and await events(db) == []
+
+
+async def test_a_name_hint_alone_leaves_a_keyed_source_alone(db):
+    source = await opc_source(db)
+    await remember(db, source, SERVER_A, expected_config=CONFIG)
+    hint = {"name": "meters", "host": "10.0.0.5"}
+    assert await remember(db, source, {"name_hint": hint}, expected_config=CONFIG) == "same"
+    assert await identity_of(db, source) == {**SERVER_A, "name_hint": hint} and await events(db) == []
+    assert await remember(db, source, {}, expected_config=CONFIG) == "skipped"  # nothing at all: not even looked at
+    assert await events(db) == []
+
+
+def test_deciding_on_an_empty_answer_is_the_same_server():
+    from dcdash.collector.identity import _decide
+
+    outcome, new, event = _decide("opcua", dict(SERVER_A), {})
+    assert (outcome, new, event) == ("same", SERVER_A, None)
 
 
 async def test_a_name_hint_replaces_the_stored_one_and_is_never_dropped(db):

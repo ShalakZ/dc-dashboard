@@ -85,6 +85,15 @@ def _address(connector_type: str, config: Any) -> Any:
 _Event = tuple[str, dict[str, Any], dict[str, Any], tuple[Any, ...]]  # ("different" | "renewed", before, after, the rate-gate key)
 
 
+def _note_different(stored: dict[str, Any], new: dict[str, Any], seen_id: dict[str, str]) -> dict[str, Any]:
+    """`new` with `different` set to what the other server says (and when); left as it is when those fields are already recorded."""
+    other = {key: seen_id[key] for key in _OTHER_KEYS if key in seen_id}
+    current = stored.get("different")
+    if not (isinstance(current, dict) and {k: v for k, v in current.items() if k != "at"} == other):
+        new["different"] = {**other, "at": datetime.now(UTC).isoformat()}
+    return new
+
+
 def _decide(connector_type: str, stored: dict[str, Any], seen: dict[str, Any]) -> tuple[str, dict[str, Any], _Event | None]:
     """(outcome, the identity to store, the journal event to write after the commit or None). Pure."""
     stored_id, seen_id = _fields(stored), _fields(seen)
@@ -107,16 +116,16 @@ def _decide(connector_type: str, stored: dict[str, Any], seen: dict[str, Any]) -
             return STORED, replaced, None
         new.update(seen_id)  # neither names anyone: keep what the server says now
         return (STORED if _fields(new) != stored_id else SAME), new, None
-    if seen_key is None:  # a stored key and an answer without one: never overwrite it
-        return SAME, new, None
+    if seen_key is None:  # a stored key and an answer without one: the stored key is never overwritten
+        if not any(key in seen_id for key in _OTHER_KEYS):  # the answer names no server at all (only an application name, ...)
+            return SAME, new, None
+        # It names one, but a default one (or a bare thumbprint): where a keyed server used to be, that is another server.
+        gate = ("unkeyed", seen_id.get("application_uri"), seen_id.get("thumbprint"))
+        return DIFFERENT, _note_different(stored, new, seen_id), ("different", stored_id, seen_id, gate)
 
     if seen_key != stored_key:
-        other = {key: seen_id[key] for key in _OTHER_KEYS if key in seen_id}
-        current = stored.get("different")
-        if not (isinstance(current, dict) and {k: v for k, v in current.items() if k != "at"} == other):
-            new["different"] = {**other, "at": datetime.now(UTC).isoformat()}
         event = ("different", stored_id, seen_id, (seen_key, seen_id.get("thumbprint")))
-        return DIFFERENT, new, event
+        return DIFFERENT, _note_different(stored, new, seen_id), event
 
     new.pop("different", None)  # the stored server answers again
     renewed = thumbprints_conflict(stored_id.get("thumbprint"), seen_id.get("thumbprint"))
