@@ -42,8 +42,8 @@ in full. **More Discovery actions** gains two items:
 
 - **Turn on Not seen lately** shows only the marked sources on the canvas (the same item turns it off again). While it is on, the row of
   counts in the bar gains the chip `Only not seen lately (2)` (2 is how many sources are marked, mapped or not), so the canvas never
-  looks empty without a reason. On a narrower bar the chip shortens to `not seen (2)` and then to an icon and the number; resting the
-  pointer on it always reads the whole. The filter turns itself off when the last mark goes, and a Find result that it hides turns it off
+  looks empty without a reason. On a narrower bar the chip shortens to `not seen (2)` and then to an icon and the number (a bar that also has a
+  credentials chip or a count of 1,000 or more goes straight to the icon and the number); resting the pointer on it always reads the whole. The filter turns itself off when the last mark goes, and a Find result that it hides turns it off
   with a note (`Not seen lately is off so <name> can be shown.`).
 - **Remove not seen (3)...** removes the marked sources that have nothing mapped. It asks first, in the same kind of dialog as **Clear
   unmapped** (`Remove 3 sources the latest scan did not find?`): it names the first five sources and how many more, and it sends exactly
