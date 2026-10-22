@@ -84,6 +84,8 @@ interface ApiCluster { key: string; points: ApiPoint[] }
 interface ApiGraphSource {
   id: number; name: string; connector_type: string; origin: "manual" | "discovered"; point_count: number;
   last_scan: { scan_id: number; at: string } | null; clusters: ApiCluster[]; ungrouped: ApiPoint[];
+  /** (w33) Set on a discovered source the newest scan of its range did not find. */
+  not_seen?: unknown;
 }
 interface ApiGraph { sources: ApiGraphSource[]; assets: { id: number }[]; unidentified: unknown[]; layout: Record<string, { x: number; y: number }> }
 interface ApiScope { id: number; name: string }
@@ -869,7 +871,18 @@ test.describe("W7r: who sees what", () => {
       await expect(detailsButton(page, target), "something is there to be absent next to").toBeVisible();
       await expect(refreshButton(page), "Refresh is in the bar").toBeVisible();
       expect(page.viewportSize()!.width, "the window is wide enough that the bar draws all its controls").toBeGreaterThanOrEqual(1200);
-      await expect(overflowButton(page), "a role with nothing to put in the overflow menu has no overflow button while every control is drawn").toBeHidden();
+      // (w33) The Not seen lately filter only changes the view, so a role that may only look gets it in that menu while some source is marked not seen (a shared stack often holds one): the
+      // button is drawn then and the menu holds that one item, never Clear unmapped or Remove not seen. With nothing marked there is nothing to put in it, as before.
+      const marked = (await graphOf(page.request)).sources.some((s) => s.origin === "discovered" && s.not_seen != null);
+      if (marked) {
+        await expect(overflowButton(page), "a marked source gives the reader the filter, so the button is drawn").toBeVisible();
+        await overflowButton(page).click();
+        await expect(overflowMenu(page).getByRole("menuitem"), "the reader's menu holds the filter and nothing else").toHaveText(["Turn on Not seen lately"]);
+        await page.keyboard.press("Escape");
+        await expect(overflowMenu(page)).toBeHidden();
+      } else {
+        await expect(overflowButton(page), "a role with nothing to put in the overflow menu has no overflow button while every control is drawn").toBeHidden();
+      }
       await expect(sourceActions(page, target), "no Source actions button: nothing to offer in it").toHaveCount(0);
       await rightClickSource(page, target);
       await expect(page.getByRole("menuitem", { name: "Details", exact: true }), "the right-click menu is there to be absent from").toBeVisible();

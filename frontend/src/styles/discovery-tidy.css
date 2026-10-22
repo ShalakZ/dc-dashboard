@@ -111,20 +111,22 @@
 
   /* w33: while the Not seen lately filter is on, the chips row carries one more chip (GraphBar gives the row `gbar-chips-filtered`), so that the state is visible without opening the menu. It is the LAST chip and a chip that
      does not fit is not drawn, so it must not be starved. It has three forms, one run of text whose parts the tiers take out: `Only not seen lately (2)`, then `not seen (2)`, then icon and number (the whole
-     sentence is the title). Every tier is the need of the state it leaves, from the worst set (12 sources, 1,240 of 1,240 points, 612 mapped, 2 needing credentials) as icon and number beside the chip:
+     sentence is the title). The middle form is for a row of normal chips only: a wide row (a credentials chip, a four-digit count) goes straight from the full words to icon and number, because the middle form
+     is too wide for it just above each control tier. Every tier is the need of the state it leaves, from the worst set (12 sources, 1,240 of 1,240 points, 612 mapped, 2 needing credentials) as icon and number beside the chip:
        - up to a 1700px bar every count chip is icon and number (the words of the normal and of the wide chips both go: 961 + 8 + 539 + 14 + 175 = 1697 with every word of the worst set);
-       - up to a 1440px bar the chip is `not seen (2)` (the words `Only` and `lately` go: 1425 on paper, 1437 in the sweep, with the worst chips as icon and number beside the full chip);
-       - up to an 840px bar the chip is icon and number (the same tier where the normal chips lose their words), and the gap between the chips is 6px instead of 14px, which is what lets the worst set keep
+       - up to a 1440px bar the chip is `not seen (2)` in a normal row and icon and number in a wide one (the words `Only` and `lately` go: 1425 on paper, 1437 in the sweep, with the worst chips as icon and number beside the full chip);
+       - up to an 840px bar the chip is icon and number in every row (the same tier where the normal chips lose their words), and the gap between the chips is 6px instead of 14px, which is what lets the worst set keep
          the chip in a 744px bar (a 1024px window, the sidebar open): 39 + 127 + 48 + 30 + 30 + four gaps of 6 = 298 of the 302px the chips have.
      Measured like the table above (Chromium on Linux, 2026-10-22, GraphBar's markup with these rules in the built stylesheet, 1700 down to 560px every 4px, typical, widest normal and worst chips, both roles): the bar is
-     36px tall and nothing clips at any width; the chip is drawn at every width for the typical and the widest normal set (reader or admin); for the worst set it is drawn except in the slivers just above a control tier
-     (1264, 1220 to 1212, 1128 to 1124, 1020 to 1012 and 740 to 724px) and below 612px, where the worst chips already lose their last chip (a chip is never cut in half). The reader's bar loses it only below 612px. */
+     36px tall and nothing clips at any width; the chip is drawn at every width for the typical and the widest normal set (reader or admin); for the worst set it is drawn except at 740 to 724px (the squeeze just above the
+     720px tier, where the admin's bar holds all the controls and the worst chips; the reader's bar draws it there) and below 612px, where the worst chips already lose their last chip (a chip is never cut in half). */
   .gbar-chip-filter svg.i { color: var(--accent); }
   @container (max-width: 1700px) {
     .gbar-chips-filtered .gbar-chip-word { display: none; }
   }
   @container (max-width: 1440px) {
     .gbar-chip-fword { display: none; }
+    .gbar-chips-wide .gbar-chip-mword { display: none; }
   }
   @container (max-width: 840px) {
     .gbar-chip-mword { display: none; }

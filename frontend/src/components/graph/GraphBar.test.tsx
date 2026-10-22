@@ -679,6 +679,7 @@ describe("the bar's stylesheet (discovery-tidy.css)", () => {
   const FILTERED_WORDS = ".gbar-chips-filtered .gbar-chip-word";
   const FILTER_CHIP_WORDS = ".gbar-chip-fword";
   const FILTER_CHIP_MORE = ".gbar-chip-mword";
+  const WIDE_FILTER_CHIP_MORE = ".gbar-chips-wide .gbar-chip-mword"; // the middle form is for a normal row only
   const at = (selector: string) => {
     const tier = tiers.find((r) => r.selector === selector);
     expect(tier, `a tier rule for ${selector}`).toBeDefined();
@@ -763,6 +764,7 @@ describe("the bar's stylesheet (discovery-tidy.css)", () => {
       `@container (max-width: ${at(FILTERED_WORDS)}px)|${FILTERED_WORDS}`,
       `@container (max-width: ${at(FILTER_CHIP_WORDS)}px)|${FILTER_CHIP_WORDS}`,
       `@container (max-width: ${at(FILTER_CHIP_MORE)}px)|${FILTER_CHIP_MORE}`,
+      `@container (max-width: ${at(WIDE_FILTER_CHIP_MORE)}px)|${WIDE_FILTER_CHIP_MORE}`,
     ].sort());
     expect(body(".graph-bar .gbar-overflow-narrow", tiers.find((r) => r.selector === ".gbar-narrow")!.at)).toMatch(/display:\s*grid/); // and the narrowest tier draws it, as the .icon-btn grid it is
   });
@@ -783,6 +785,8 @@ describe("the bar's stylesheet (discovery-tidy.css)", () => {
     expect(at(FILTER_CHIP_WORDS)).toBeLessThanOrEqual(1447);
     expect(at(FILTER_CHIP_WORDS)).toBeLessThan(at(FILTERED_WORDS)); // the others' words leave first, then the chip's own
     expect(at(FILTER_CHIP_MORE), "icon and number from the tier where the normal chips lose their words").toBe(at(NORMAL_WORDS));
+    // the middle form (`not seen (2)`) is too wide just above each control tier for a wide row (measured), so a wide row goes from the full words straight to icon and number, in the same tier
+    expect(at(WIDE_FILTER_CHIP_MORE), "a wide row skips the middle form").toBe(at(FILTER_CHIP_WORDS));
     const gap = tiers.find((r) => r.selector === ".gbar-chips-filtered" && /column-gap/.test(r.body));
     expect(gap, "a tighter gap while the filter is on").toBeDefined();
     expect(gap!.body).toMatch(/column-gap:\s*6px/);
