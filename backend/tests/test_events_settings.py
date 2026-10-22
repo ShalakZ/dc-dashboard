@@ -236,6 +236,22 @@ async def test_will_delete_counts_the_union_of_both_rules_once(db):
         assert await events_settings.will_delete(session, old, old) == 0
 
 
+async def test_a_closed_at_that_is_not_a_time_never_breaks_the_forecast_or_housekeeping(client, db, pool):
+    await login_as(client, db)
+    for value in ("garbage", "", "2026-13-45T00:00:00Z", 7):
+        await db.execute(
+            "INSERT INTO diag_events (ts, level, component, kind, message, detail) "
+            "VALUES (now() - interval '60 days', 'warning', 'collector', 'source.offline', 'old', $1)",
+            {"state": "closed", "closed_at": value},
+        )
+    await add_rows(db, 3, timedelta(days=5))
+    r = await client.put("/api/settings/events", json={"retention_days": 30, "max_rows": 100_000})
+    assert r.status_code == 409 and r.json()["will_delete"] == 4   # the age falls back to the row's own time
+    assert (await client.put("/api/settings/events?confirm=true", json={"retention_days": 30, "max_rows": 100_000})).status_code == 200
+    assert (await housekeep(pool))["journal"] == 4
+    assert await kept(db) == 3
+
+
 async def test_stats_are_the_row_count_and_the_oldest_time(db):
     async with get_sessionmaker()() as session:
         assert await events_settings.stats(session) == (0, None)

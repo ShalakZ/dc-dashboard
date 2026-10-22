@@ -22,7 +22,7 @@ from sqlalchemy import ColumnElement, Integer, Text, and_, any_, func, literal, 
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.core.audit import clip_error, scrub_strings
+from dcdash.core.audit import clip_error, scrub_strings, scrub_url_credentials
 from dcdash.core.models import DiagEvent, Job, Source
 from dcdash.core.timeutil import local_midnight
 from dcdash.events import settings as events_settings
@@ -406,15 +406,18 @@ def job_ids_of(action: str, detail: Any) -> list[int]:
 
 
 def _reason(value: Any) -> str | None:
-    """A reason as one short plain line for a sentence: scrubbed (a URL's credentials), on one line, cut, no closing full stop."""
+    """A reason as one short plain line for a sentence: scrubbed (a URL's credentials), on one line, cut, no closing full stop.
+
+    The scrub comes FIRST: `str.split()` also splits on a no-break space, and the scrub keeps such a space inside a password on
+    purpose, so collapsing the whitespace before it would cut a URL in two pieces that neither the scrub nor `clip_error` can see."""
     if not isinstance(value, str):
         return None
-    line = clip_error(" ".join(value.split()), _REASON_CHARS).rstrip(" .")
+    line = clip_error(" ".join(scrub_url_credentials(value).split()), _REASON_CHARS).rstrip(" .")
     return line or None
 
 
 def _step_words(step: str) -> str:
-    words = _STEP_WORDS.get(step) or re.sub(r"[_\s]+", " ", step).strip()
+    words = _STEP_WORDS.get(step) or re.sub(r"[_\s]+", " ", scrub_url_credentials(step)).strip()
     return clip_error(words, 40).replace('"', "'")
 
 

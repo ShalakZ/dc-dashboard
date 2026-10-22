@@ -337,6 +337,31 @@ async def test_a_reason_stored_without_scrubbing_is_hidden_in_the_text(client, d
     assert "[hidden]" in (await one(client, second))["text"]
 
 
+async def test_a_password_with_a_no_break_space_is_hidden_in_the_outcome_and_in_the_events_routes(client, db):
+    # `str.split()` also splits on a no-break space: the reason must be scrubbed BEFORE its whitespace is collapsed, or the URL
+    # falls in two pieces (`http://admin:pa` and `ss-77@10.0.0.5/`) that neither hold both "://" and "@"
+    await login_as(client, db)
+    secret_url = "http://admin:pa\xa0ss-77@10.0.0.5/"
+    from_event = await job(db, "test_source")
+    await journal(db, "job.finished", from_event, kind="test_source", ok=False, status="done", error=f"could not reach {secret_url} now")
+    from_job = await job(db, "test_source", status="failed", result={"error": f"refused by {secret_url} twice"})
+    first, second = await audit_test(db, from_event), await audit_test(db, from_job)
+    message_id = await db.fetchval(
+        "INSERT INTO diag_events (level, component, source_id, kind, message, detail) "
+        "VALUES ('warning', 'collector', 1, 'readings.conflict', $1, $2) RETURNING id",
+        f"conflict at {secret_url} for point", {"url": secret_url},
+    )
+    texts = [
+        (await client.get("/api/audit?limit=200")).text, (await client.get(f"/api/audit/{first}")).text,
+        (await client.get(f"/api/audit/{second}")).text, (await client.get("/api/events")).text,
+        (await client.get(f"/api/events/{message_id}")).text, (await client.get("/api/events.csv")).content.decode("utf-8-sig"),
+    ]
+    for body in texts:
+        assert "ss-77" not in body and "pa\xa0ss" not in body and "admin:pa" not in body
+    assert (await one(client, first))["text"] == "The test failed: could not reach http://[hidden]@10.0.0.5/ now."
+    assert (await one(client, second))["text"] == "The test failed: refused by http://[hidden]@10.0.0.5/ twice."
+
+
 async def test_a_long_reason_is_cut_and_stays_on_one_line(client, db):
     await login_as(client, db)
     job_id = await job(db, "test_source", status="failed", result={"error": "line one\nline two " + "x" * 600})

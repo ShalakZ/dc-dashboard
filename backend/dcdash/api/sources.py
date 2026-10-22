@@ -92,7 +92,7 @@ class SourceListOut(SourceOut):
     polls: bool = True  # the connector class's flag: false for a source that is filled by importing files, which is never tested or polled
     history: SourceHistoryLine | None = None  # never null in an answer: list_sources fills it for every row (the default only lets `of` validate)
     offline_since: datetime | None = None  # while offline: the earlier of the open incident's start and last_seen; else null (P7)
-    failed_reads: int | None = None  # the open incident's count of failed reads, else null
+    failed_reads: int | None = None  # while offline: the open incident's count of failed reads; else null
 
 
 class SourceHistoryOut(BaseModel):
@@ -260,8 +260,9 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
             )
         ).mappings()
     }
-    # One more query for all the listed sources: the open `source.offline` incident of each (w32). Plain SQL, as above.
-    incidents = await events_read.open_incidents(db, [s.id for s in sources])
+    # One more query for all the OFFLINE listed sources: their open `source.offline` incident (w32). Plain SQL, as above. A source
+    # that is not offline is not looked up (this list refreshes every 10 s for every user): with none offline, no query at all.
+    incidents = await events_read.open_incidents(db, [s.id for s in sources if s.status == "offline"])
     types = connector_types()
     return [
         SourceListOut.of(
@@ -276,7 +277,8 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
 
 def _offline_fields(source: Source, incident: dict[str, Any] | None) -> dict[str, Any]:
     """`offline_since` and `failed_reads` of a listed source. `offline_since` is the earlier of the open incident's start and
-    `last_seen` (a null is ignored) and only while the source is offline; null when there is neither."""
+    `last_seen` (a null is ignored) and only while the source is offline; null when there is neither. `failed_reads` is the open
+    incident's count, and only an offline source has its incident looked up: any other source answers null."""
     since = None
     if source.status == "offline":
         starts = [moment for moment in (incident["first_at"] if incident else None, source.last_seen) if moment is not None]

@@ -70,20 +70,29 @@ async def load_pool(pool: Any) -> EventsSettings:
         return FACTORY
 
 
+# The moment a row `e` counts from for the age rule: the day a closed incident closed (`detail.closed_at`), else the row's own
+# time. A `closed_at` that is missing or is not a time (a damaged or hand-edited row) reads as the row's own time: it must never
+# raise, or one bad row would stop the journal from ever being pruned (and turn the forecast into an error). `CASE` evaluates the
+# cast only for the rows whose value passed `pg_input_is_valid` (PostgreSQL 16). Housekeeping uses this same text.
+AGE_FROM = (
+    "CASE WHEN pg_input_is_valid(e.detail->>'closed_at', 'timestamptz') "
+    "THEN CAST(e.detail->>'closed_at' AS timestamptz) ELSE e.ts END"
+)
+
 # The one rule, as a condition on a row `e` and the cut ids: a row goes when it is not an open incident and it is older than
 # the days (a closed incident counts from its closing) or it is beyond the newest `rows` ids of ALL rows. housekeeping.py
-# repeats this text for the DELETE (asyncpg numbers its parameters); a test holds the two equal.
+# spells the DELETE with the same `AGE_FROM` (asyncpg numbers its parameters); a test holds the two equal.
 _WILL_DELETE = text(
-    """
+    f"""
     WITH cuts AS (
         SELECT (SELECT id FROM diag_events ORDER BY id DESC OFFSET :old_rows LIMIT 1) AS old_id,
                (SELECT id FROM diag_events ORDER BY id DESC OFFSET :new_rows LIMIT 1) AS new_id
     )
     SELECT count(*) FROM diag_events e, cuts
     WHERE e.detail->>'state' IS DISTINCT FROM 'open'
-      AND (COALESCE(CAST(e.detail->>'closed_at' AS timestamptz), e.ts) < now() - make_interval(days => :new_days)
+      AND ({AGE_FROM} < now() - make_interval(days => :new_days)
            OR COALESCE(e.id <= cuts.new_id, false))
-      AND NOT (COALESCE(CAST(e.detail->>'closed_at' AS timestamptz), e.ts) < now() - make_interval(days => :old_days)
+      AND NOT ({AGE_FROM} < now() - make_interval(days => :old_days)
                OR COALESCE(e.id <= cuts.old_id, false))
     """
 )

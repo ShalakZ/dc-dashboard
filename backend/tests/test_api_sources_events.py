@@ -122,8 +122,12 @@ async def test_a_source_that_is_not_offline_has_no_offline_since_whatever_its_in
         source = await make_source(db, status)
         await set_state(db, source, status, datetime.now(UTC) - timedelta(days=1))
         await incident(db, source, ts=datetime.now(UTC) - timedelta(days=1), count=3)
-    rows = await listed(client)
+    with statements() as seen:
+        rows = await listed(client)
     assert [rows[name]["offline_since"] for name in ("online", "unknown")] == [None, None]
+    # only an offline source is looked up (the list refreshes every 10 s for every user): no journal read, and no count
+    assert [rows[name]["failed_reads"] for name in ("online", "unknown")] == [None, None]
+    assert journal_reads(seen) == []
 
 
 async def test_only_an_open_source_offline_incident_counts_and_the_newest_open_one_wins(client, db):
@@ -156,13 +160,13 @@ async def test_an_incident_whose_count_is_not_a_whole_number_never_breaks_the_li
     assert row["failed_reads"] == 1
 
 
-async def test_the_list_reads_the_journal_once_whatever_the_number_of_sources_and_not_at_all_when_empty(client, db):
+async def test_the_list_reads_the_journal_once_for_all_offline_sources_and_not_at_all_when_none_is_offline(client, db):
     await login_as(client, db)
     with statements() as none:
         assert (await client.get("/api/sources")).json() == []
     assert journal_reads(none) == []
     await make_source(db, "one")
-    with statements() as few:
+    with statements() as few:  # one source that is not offline: nothing to look up
         assert len(await listed(client)) == 1
     for number in range(2, 9):
         source = await make_source(db, f"source {number}")
@@ -170,8 +174,8 @@ async def test_the_list_reads_the_journal_once_whatever_the_number_of_sources_an
         await incident(db, source, count=number)
     with statements() as many:
         assert len(await listed(client)) == 8
-    assert len(many) == len(few)  # no statement per row
-    assert len(journal_reads(few)) == 1 and len(journal_reads(many)) == 1
+    assert len(many) == len(few) + 1  # one statement for all the offline sources, none per row
+    assert journal_reads(few) == [] and len(journal_reads(many)) == 1
 
 
 async def test_only_listed_sources_are_looked_up(client, db):

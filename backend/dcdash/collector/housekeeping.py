@@ -43,12 +43,13 @@ async def housekeep(
     # The journal is bounded twice: by age, and by count (a burst of events must not outgrow the table within one retention
     # period). ONE statement, so the count rule's cut is taken over ALL rows (it keeps the newest `journal_max_rows` ids; the
     # subquery finds none while the table is smaller than that) and a row both rules hit is deleted and counted once. Open
-    # incidents (detail.state = 'open') are spared by both rules; the age of a closed incident is counted from its closing.
+    # incidents (detail.state = 'open') are spared by both rules; the age of a closed incident is counted from its closing (a
+    # `closed_at` that is not a time reads as the row's own time: `AGE_FROM`, the text the forecast uses too).
     # events/settings.py::_WILL_DELETE spells the same rule for the forecast of a retention change.
     journal = _count(
         await pool.execute(
             "DELETE FROM diag_events e WHERE e.detail->>'state' IS DISTINCT FROM 'open' "
-            "AND (COALESCE(CAST(e.detail->>'closed_at' AS timestamptz), e.ts) < now() - make_interval(days => $1) "
+            f"AND ({events_settings.AGE_FROM} < now() - make_interval(days => $1) "
             "     OR e.id <= (SELECT id FROM diag_events ORDER BY id DESC OFFSET $2 LIMIT 1))",
             journal_retention_days,
             journal_max_rows,

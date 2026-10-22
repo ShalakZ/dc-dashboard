@@ -113,3 +113,20 @@ async def test_an_old_row_that_is_not_an_incident_is_deleted_by_age_as_before(db
     await add_events(db, 3, timedelta(days=91))
     await add_events(db, 1, timedelta(days=89))
     assert (await housekeep(pool))["journal"] == 3
+
+
+async def test_a_closed_at_that_is_not_a_time_cannot_stop_housekeeping(db, pool):
+    # a hand-edited or damaged row: the age falls back to the row's own time, and the other rows are still deleted
+    bad = ["garbage", "", "2026-13-45T00:00:00Z", "2026-02-31T10:00:00+00:00", "soon", 7]
+    for value in bad:
+        await db.execute(
+            "INSERT INTO diag_events (ts, level, component, kind, message, detail) "
+            "VALUES (now() - interval '200 days', 'info', 'collector', 'source.online', 'old', $1), "
+            "       (now() - interval '1 day', 'info', 'collector', 'source.online', 'recent', $1)",
+            {"state": "closed", "closed_at": value},
+        )
+    await add_events(db, 3, timedelta(days=100))
+    assert (await housekeep(pool))["journal"] == len(bad) + 3
+    assert await db.fetchval("SELECT count(*) FROM diag_events") == len(bad)
+    assert await db.fetchval("SELECT count(*) FROM diag_events WHERE message = 'recent'") == len(bad)
+    assert (await housekeep(pool))["journal"] == 0
