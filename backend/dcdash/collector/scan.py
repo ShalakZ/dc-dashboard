@@ -1,6 +1,7 @@
 """The `scan` job: sweep → probe → adopt as discovered sources → browse. Read-only toward the network."""
 import asyncio
 import contextlib
+import dataclasses
 import logging
 import socket
 import time
@@ -12,6 +13,7 @@ import asyncpg
 
 from dcdash.collector.browse import browse_source
 from dcdash.collector.identity import DIFFERENT, clean_identity, remember_safely
+from dcdash.collector.names import POOL_WORKERS, LookupBudget, name_hint
 from dcdash.collector.scheduler import mark_source
 from dcdash.collector.sweep import sweep
 from dcdash.connectors.base import Claim, Connector, ConnectorError, ConnectorFactory, connector_types, create_connector
@@ -200,6 +202,35 @@ async def _probe_stage(
     return list(await asyncio.gather(*(probe_one(host, port) for host, port in open_pairs)))
 
 
+def _with_hint(claim: Claim | None, host: str, hint: str | None) -> Claim | None:
+    """`claim` carrying the Docker name of its host in its identity: a COPY (the connector's own answer, which may be a shared
+    constant, is never edited), and the very same claim when there is nothing to add."""
+    if claim is None or hint is None:
+        return claim
+    return dataclasses.replace(claim, identity={**(claim.identity or {}), "name_hint": {"name": hint, "host": host}})
+
+
+async def _with_name_hints(endpoints: list[tuple[str, int, Claim | None]]) -> list[tuple[str, int, Claim | None]]:
+    """Give every claimed endpoint the Docker name of its host (R7), so `_insert_source` stores it and an existing source learns it.
+
+    One lookup per distinct claimed host (a host with HTTP, OPC UA and Modbus open is one slot of the scan's budget), a few at a time;
+    only private IPv4 addresses are ever looked up (`names.name_hint` decides). A failed or empty lookup changes nothing."""
+    budget = LookupBudget()
+    gate = asyncio.Semaphore(POOL_WORKERS)  # the lookup pool's size: each lookup's timeout then counts its own time, not the queue's
+
+    async def hint_for(host: str) -> tuple[str, str | None]:
+        async with gate:
+            try:
+                return host, await name_hint(host, lookups=budget)
+            except Exception:  # noqa: BLE001 - a hint is a nicety; it must never fail a scan
+                log.debug("name hint for %s failed", host, exc_info=True)
+                return host, None
+
+    hosts = list(dict.fromkeys(host for host, _port, claim in endpoints if claim is not None))
+    hints = dict(await asyncio.gather(*(hint_for(host) for host in hosts)))
+    return [(host, port, _with_hint(claim, host, hints.get(host))) for host, port, claim in endpoints]
+
+
 async def _insert_source(pool: asyncpg.Pool, claim: Claim) -> int:
     """Create a disabled, discovered source; `sources.name` is unique, so a clashing label gets a number.
 
@@ -363,6 +394,7 @@ async def run_scan(
             progress.update(hosts=len(expansion.hosts), pairs=len(pairs))
             open_pairs = await _sweep_stage(pool, scan_id, pairs, progress, writer)
             endpoints = await _probe_stage(pool, scan_id, open_pairs, types, progress, writer)
+            endpoints = await _with_name_hints(endpoints)  # still the probe stage: a few resolver calls, no stage of their own
             findings, to_browse = await _adopt(pool, endpoints, types)
             results = await _browse_stage(pool, scan_id, to_browse, factory, progress, writer)
             _apply_browse(findings, results, progress)

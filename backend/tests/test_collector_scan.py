@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 import pytest
 
+from dcdash.collector import names as names_module
 from dcdash.collector import scan as scan_module
 from dcdash.collector.jobs import run_pending_jobs
 from dcdash.collector.scan import run_scan
@@ -676,3 +677,189 @@ async def test_a_failure_to_remember_never_fails_the_scan(db, monkeypatch):
         scan = await scan_stub(db, port, stub, factory)
     assert await db.fetchval("SELECT status FROM scans WHERE id = $1", scan) == "done"
     assert await db.fetchval("SELECT identity FROM sources WHERE id = $1", manual) is None
+
+
+# --- the Docker name hint: a name for the address, stored with the identity (w33 R7) ------------------------------------------
+
+DOCKER_REVERSE = "dcdash-simulator-1.dcdash_default"
+HINT = {"name": "simulator", "host": "127.0.0.1"}
+
+
+def fake_dns(monkeypatch, reverse=DOCKER_REVERSE, forward=None, as_docker=True):
+    """Make 127.0.0.1 look like an address Docker handed out, with no real DNS: the reverse lookup says `reverse` (None: it fails)
+    and only the names in `forward` lead back. Returns the list of lookups made, in order."""
+    made: list[tuple[str, str]] = []
+    leads_back = {"simulator": ["127.0.0.1"]} if forward is None else forward
+
+    def reverse_lookup(address):
+        made.append(("reverse", address))
+        if reverse is None:
+            raise OSError("no such host")
+        return reverse
+
+    def forward_lookup(name):
+        made.append(("forward", name))
+        if name not in leads_back:
+            raise OSError("no such name")
+        return leads_back[name]
+
+    monkeypatch.setattr(names_module, "_reverse", reverse_lookup)
+    monkeypatch.setattr(names_module, "_forward", forward_lookup)
+    if as_docker:  # loopback is never looked up for real; here the point is the scan's side of it
+        monkeypatch.setattr(names_module, "is_candidate_host", lambda host: host == "127.0.0.1")
+    return made
+
+
+async def test_a_new_source_stores_the_docker_name_of_its_address_next_to_its_identity(db, monkeypatch):
+    made = fake_dns(monkeypatch)
+    stub, factory = identifying_opcua(SERVER_A)
+    async with silent_server() as port:
+        await scan_stub(db, port, stub, factory)
+        endpoint = f"opc.tcp://127.0.0.1:{port}/dcdash/"
+    row = await db.fetchrow("SELECT identity, config FROM sources")
+    assert row["identity"] == {**SERVER_A, "name_hint": HINT}
+    assert row["config"]["endpoint"] == endpoint  # the hint is only offered; the address stays what was found
+    assert "name_hint" not in SERVER_A  # the probe's own answer is never edited
+    assert made == [("reverse", "127.0.0.1"), ("forward", "simulator")]
+
+
+async def test_a_probe_without_an_identity_still_stores_the_name_hint(db, monkeypatch):
+    fake_dns(monkeypatch)
+    stub, factory = identifying_opcua(None)
+    async with silent_server() as port:
+        await scan_stub(db, port, stub, factory)
+    assert await db.fetchval("SELECT identity FROM sources") == {"name_hint": HINT}
+
+
+async def test_an_existing_source_learns_the_name_and_keeps_its_identity_and_its_address(db, monkeypatch):
+    fake_dns(monkeypatch)
+    stub, factory = identifying_opcua(SERVER_A)
+    async with silent_server() as port:
+        endpoint = f"opc.tcp://127.0.0.1:{port}/dcdash/"
+        manual = await make_source(db, "plc", "opcua", {"endpoint": endpoint}, enabled=False)
+        await db.execute("UPDATE sources SET identity = $2 WHERE id = $1", manual, SERVER_A)
+        scan = await scan_stub(db, port, stub, factory)
+    row = await db.fetchrow("SELECT identity, config, name FROM sources WHERE id = $1", manual)
+    assert row["identity"] == {**SERVER_A, "name_hint": HINT}
+    assert row["config"] == {"endpoint": endpoint} and row["name"] == "plc"
+    finding = await db.fetchrow("SELECT outcome, detail FROM scan_findings WHERE scan_id = $1", scan)
+    assert (finding["outcome"], finding["detail"]) == ("claimed", "existing source")
+    assert await db.fetchval("SELECT count(*) FROM sources") == 1
+
+
+async def test_a_hand_added_source_without_any_identity_gets_the_name_hint_alone(db, monkeypatch):
+    fake_dns(monkeypatch)
+    stub, factory = identifying_opcua(None)
+    async with silent_server() as port:
+        manual = await make_source(db, "plc", "opcua", {"endpoint": f"opc.tcp://127.0.0.1:{port}/dcdash/"}, enabled=False)
+        await scan_stub(db, port, stub, factory)
+    assert await db.fetchval("SELECT identity FROM sources WHERE id = $1", manual) == {"name_hint": HINT}
+
+
+async def test_a_new_lookup_replaces_the_stored_hint_and_a_failed_one_keeps_it(db, monkeypatch):
+    stub, factory = identifying_opcua(SERVER_A)
+    async with silent_server() as port:
+        fake_dns(monkeypatch)
+        await scan_stub(db, port, stub, factory)
+        fake_dns(monkeypatch, reverse=None)  # now every lookup fails: nothing changes
+        await scan_stub(db, port, stub, factory)
+        assert await db.fetchval("SELECT identity FROM sources") == {**SERVER_A, "name_hint": HINT}
+        fake_dns(monkeypatch, reverse="dcdash-meters-3.dcdash_default", forward={"meters": ["127.0.0.1"]})
+        await scan_stub(db, port, stub, factory)
+    assert await db.fetchval("SELECT identity FROM sources") == {**SERVER_A, "name_hint": {"name": "meters", "host": "127.0.0.1"}}
+    assert await db.fetchval("SELECT count(*) FROM sources") == 1
+
+
+@pytest.mark.parametrize("lookup", ["no_such_host", "wrong_address", "explodes"])
+async def test_the_scan_finishes_done_and_stores_no_hint_when_every_lookup_fails(db, monkeypatch, lookup):
+    if lookup == "no_such_host":
+        fake_dns(monkeypatch, reverse=None)
+    elif lookup == "wrong_address":
+        fake_dns(monkeypatch, forward={"simulator": ["172.20.0.9"], "dcdash-simulator": ["a", "b"]})
+    else:
+        fake_dns(monkeypatch)
+
+        def explodes(_value):
+            raise RuntimeError("the resolver exploded")
+
+        monkeypatch.setattr(names_module, "_reverse", explodes)
+    stub, factory = identifying_opcua(SERVER_A)
+    async with silent_server() as port:
+        scan = await scan_stub(db, port, stub, factory)
+    assert await db.fetchval("SELECT status FROM scans WHERE id = $1", scan) == "done"
+    assert await db.fetchval("SELECT identity FROM sources") == SERVER_A
+    assert stub.browses == 1  # the source was browsed as always
+
+
+async def test_a_scan_whose_name_step_blows_up_still_finishes(db, monkeypatch):
+    async def broken(host, *, lookups):
+        raise RuntimeError("the name step has a bug")
+
+    monkeypatch.setattr(scan_module, "name_hint", broken)
+    stub, factory = identifying_opcua(SERVER_A)
+    async with silent_server() as port:
+        scan = await scan_stub(db, port, stub, factory)
+    assert await db.fetchval("SELECT status FROM scans WHERE id = $1", scan) == "done"
+    assert await db.fetchval("SELECT identity FROM sources") == SERVER_A
+
+
+async def test_a_loopback_address_is_not_looked_up_and_gets_no_hint(db, monkeypatch):
+    made = fake_dns(monkeypatch, as_docker=False)  # the real rule: 127.0.0.1 is no Docker address
+    stub, factory = identifying_opcua(SERVER_A)
+    async with silent_server() as port:
+        await scan_stub(db, port, stub, factory)
+    assert made == []
+    assert await db.fetchval("SELECT identity FROM sources") == SERVER_A
+
+
+async def test_one_host_with_several_open_ports_is_looked_up_once_and_every_source_gets_the_name(db, monkeypatch):
+    made = fake_dns(monkeypatch)
+    stub, factory = identifying_opcua(SERVER_A)
+    async with silent_server() as first, silent_server() as second:
+        scan = await make_scan(db, ["127.0.0.1"], [first, second])
+        await run_scan(db, scan, factory, {"opcua": stub})
+    assert made == [("reverse", "127.0.0.1"), ("forward", "simulator")]  # one budget slot, one set of lookups
+    assert await db.fetchval("SELECT count(*) FROM sources") == 2
+    assert await db.fetchval("SELECT count(*) FROM sources WHERE identity -> 'name_hint' = $1::jsonb", HINT) == 2
+
+
+def claimed(connector_type="opcua", identity=None):
+    return Claim(connector_type, {"endpoint": "opc.tcp://unused:4840/"}, "a server", identity=identity)
+
+
+async def test_every_claimed_host_is_looked_up_once_with_one_budget_and_the_claims_are_not_edited(monkeypatch):
+    calls: list[tuple[str, int]] = []
+
+    async def fake_name_hint(host, *, lookups):
+        calls.append((host, id(lookups)))
+        return {"10.0.0.1": "alpha", "10.0.0.2": None}.get(host)
+
+    monkeypatch.setattr(scan_module, "name_hint", fake_name_hint)
+    first, second, third = claimed(identity=SERVER_A), claimed(), claimed()
+    endpoints = [("10.0.0.1", 502, first), ("10.0.0.1", 4840, second), ("10.0.0.2", 80, third), ("10.0.0.3", 1, None)]
+    result = await scan_module._with_name_hints(endpoints)
+    assert [host for host, _ in calls] == ["10.0.0.1", "10.0.0.2"]  # the unclaimed host is not looked up; a shared host once
+    assert len({budget for _, budget in calls}) == 1  # one budget for the whole scan
+    assert [(host, port) for host, port, _ in result] == [(host, port) for host, port, _ in endpoints]
+    assert result[0][2].identity == {**SERVER_A, "name_hint": {"name": "alpha", "host": "10.0.0.1"}}
+    assert result[1][2].identity == {"name_hint": {"name": "alpha", "host": "10.0.0.1"}}
+    assert result[0][2].config == first.config and result[0][2].label == first.label
+    assert result[2][2] is third and result[3][2] is None  # no hint, no change: the very same object
+    assert first.identity is SERVER_A and "name_hint" not in SERVER_A and second.identity is None
+
+
+async def test_the_scan_stops_at_fifty_hosts_and_never_looks_up_names_or_public_addresses(monkeypatch):
+    reversed_for: list[str] = []
+
+    def reverse_lookup(address):
+        reversed_for.append(address)
+        return "box-1.net"
+
+    monkeypatch.setattr(names_module, "_reverse", reverse_lookup)
+    monkeypatch.setattr(names_module, "_forward", lambda name: ["10.0.0.1"])
+    private = [f"10.0.0.{n}" for n in range(1, 61)]
+    endpoints = [(host, 4840, claimed()) for host in ["8.8.8.8", "plc.lab.example", *private]]
+    result = await scan_module._with_name_hints(endpoints)
+    assert reversed_for == private[:50]  # the first fifty private hosts, in order; the public address and the name cost nothing
+    assert result[2][2].identity == {"name_hint": {"name": "box", "host": "10.0.0.1"}}
+    assert all(claim.identity is None for _, _, claim in result[:2] + result[3:])  # only 10.0.0.1 leads back to "box"
