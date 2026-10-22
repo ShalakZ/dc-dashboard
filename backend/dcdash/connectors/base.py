@@ -56,6 +56,7 @@ class Claim:
     connector_type: str
     config: dict[str, Any]
     label: str
+    identity: dict[str, Any] | None = None  # what the server says about itself (OPC UA application URI, simulator instance), when it does
 
 
 def url_host_port(url: object) -> tuple[str, int | None, str] | None:
@@ -175,6 +176,13 @@ class Connector(ABC):
 
         await checker.step("test", "Connection test", run_test)
         return await checker.finish()
+
+    async def identity(self) -> dict[str, Any] | None:
+        """What the server says about itself (read-only, anonymous where the protocol allows it), or None when unknown.
+
+        Used by Test and the connection check. Never raises: a server that cannot be asked gives None.
+        """
+        return None
 
     async def close(self) -> None:
         return None
