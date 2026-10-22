@@ -9,10 +9,13 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import select
 
 from dcdash.core.db import get_sessionmaker
+from dcdash.core.models import Source
 from dcdash.events import read as events_read
-from dcdash.moves.load import load_offers
+from dcdash.moves.freshness import not_seen_map
+from dcdash.moves.load import load_offers, load_offers_detailed
 from dcdash.moves.match import Decision, Match, Offer, Two
 from test_moves_freshness import finished_at, make_finding, make_scan, statements
 
@@ -535,3 +538,55 @@ async def test_open_incidents_carry_the_code_of_the_row_and_stay_otherwise_the_s
     assert sorted(found) == sorted([timed_out, no_code])
     assert set(found[timed_out]) == {"first_at", "count", "code"} and found[timed_out]["count"] == 5
     assert (found[timed_out]["code"], found[no_code]["code"], found[no_code]["count"]) == ("timeout", None, 2)
+
+
+# ---- the detailed answer (w33 T4a: the Discovery graph names the old source on the new one's card) --------------------------
+
+async def detailed(*, old_ids=None, not_seen=None, count=False):
+    async with get_sessionmaker()() as session:
+        with statements() as sql:
+            loaded = await load_offers_detailed(session, old_ids=old_ids, not_seen=not_seen)
+    return (loaded, sql) if count else loaded
+
+
+async def test_the_detailed_answer_has_the_same_decision_and_names_the_old_sources_and_their_incidents(db):
+    old, new = await owners_case(db)
+    loaded = await detailed()
+    assert loaded.decision == await offers() and loaded.decision.by_new[new].old_id == old
+    assert list(loaded.olds) == [old]
+    taken = loaded.olds[old]
+    assert (taken.name, taken.mappings, taken.assets, taken.last_seen) == ("OPC UA server at 172.20.0.3:4840", 3, 1, finished_at(0))
+    assert list(loaded.incidents) == [old] and loaded.incidents[old]["code"] == "unreachable"
+    assert loaded.incidents[old]["first_at"] is not None
+
+
+async def test_the_detailed_answer_of_nothing_is_empty_all_round_and_costs_what_the_plain_one_does(db):
+    await owners_case(db)
+    await db.execute("UPDATE sources SET status = 'online'")
+    loaded, sql = await detailed(count=True)
+    assert (loaded.decision, dict(loaded.olds), dict(loaded.incidents)) == (Decision(by_old={}, by_new={}), {}, {}) and len(sql) == 1
+    loaded, sql = await detailed(old_ids=[], count=True)
+    assert loaded.decision == Decision(by_old={}, by_new={}) and sql == []
+
+
+async def test_the_plain_answer_is_the_detailed_ones_decision(db):
+    await owners_case(db)
+    assert await offers(old_ids=[]) == (await detailed(old_ids=[])).decision
+    assert await offers() == (await detailed()).decision
+
+
+async def test_a_not_seen_map_handed_in_is_used_instead_of_the_loaders_own_work(db):
+    """Without any incident row, a discovered source is unreachable only by "not seen": the map decides, and with the map given the
+    loader skips the statements that compute it."""
+    old, new = await owners_case(db)
+    await db.execute("DELETE FROM diag_events")
+    async with get_sessionmaker()() as session:
+        rows = (await session.execute(select(Source.id, Source.origin, Source.connector_type, Source.config))).all()
+        full = await not_seen_map(session, rows)
+    assert old in full
+    on_its_own, own_sql = await detailed(count=True)
+    given, given_sql = await detailed(not_seen=full, count=True)
+    assert given.decision == on_its_own.decision and given.decision.by_old[old].new_id == new
+    assert len(given_sql) < len(own_sql)
+    nothing = await detailed(not_seen={})  # an empty map says no source is not seen: nothing is unreachable
+    assert nothing.decision == Decision(by_old={}, by_new={})

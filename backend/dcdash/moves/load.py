@@ -16,9 +16,9 @@ the strength of a competitor that was left out of the question). Callers that al
 the offline ones they hold: `old_ids=[]` then costs no statement at all. With `old_ids=None` the loader looks for them itself.
 """
 from collections import defaultdict
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
 
 from sqlalchemy import distinct, func, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,26 +30,28 @@ from dcdash.core.models import Point, Scan, ScanFinding, Source
 from dcdash.events import read as events_read
 from dcdash.moves.freshness import not_seen_map
 from dcdash.moves.match import MOVABLE_TYPES, Decision, Holder, NewSource, OldSource, decide
+from dcdash.moves.urls import address_key
 
 UNREACHABLE_CODES = ("unreachable", "timeout")  # the open incident's code of a server that did not answer at all
 
 _EMPTY = Decision(by_old={}, by_new={})
 
 
+@dataclass(frozen=True)
+class Loaded:
+    """What `load_offers_detailed` found: the decision, and what a caller needs to describe the old sources in it."""
+    decision: Decision
+    olds: Mapping[int, OldSource]            # the old sources that stopped answering (name, counts, last_seen), by id
+    incidents: Mapping[int, Mapping[str, Any]]  # their open incidents `{first_at, count, code}`, by id (an old source may have none)
+
+
+_NOTHING = Loaded(decision=_EMPTY, olds={}, incidents={})
+
+
 def _endpoint(connector_type: str, config: Any) -> tuple[str, int, str] | None:
-    """(host lower-cased, port, path) the source points at, from its connector class and its config; None when it has no address.
-    The path is the OPC UA endpoint's path (an empty path and `/` are the same place); the simulator has none."""
-    cls = connector_types().get(connector_type)
-    key = cls.endpoint_key(config) if cls is not None else None
-    if key is None:
-        return None
-    path = ""
-    if connector_type == "opcua":
-        try:
-            path = urlsplit(config["endpoint"]).path or "/"
-        except (KeyError, TypeError, ValueError):
-            return None
-    return key[0].lower(), key[1], path
+    """(host lower-cased, port, path) the source points at; None when it has no address. One reading of an address for the
+    whole feature: `moves.urls.address_key` (an empty OPC UA path and `/` are the same place; the simulator has no path)."""
+    return address_key(connector_type, config)
 
 
 def _mapped_sources() -> Any:
@@ -109,9 +111,20 @@ async def load_offers(db: AsyncSession, *, old_ids: Collection[int] | None = Non
     """The decision for the old sources that stopped answering: `by_old[id]` is an `Offer` or `Two` for an old source that has
     something to say, `by_new[id]` the same for the new source it could move to. Never None: an empty decision says there is nothing.
     `old_ids` narrows `by_old` to those sources (see the module note); `by_new` is always the whole picture."""
+    return (await load_offers_detailed(db, old_ids=old_ids)).decision
+
+
+async def load_offers_detailed(
+    db: AsyncSession, *, old_ids: Collection[int] | None = None, not_seen: Mapping[int, Any] | None = None
+) -> Loaded:
+    """`load_offers`, and with the decision the old sources it was made about and their open incidents, so that a caller can say
+    which source a new one looks like without asking again. The statements are the same.
+
+    `not_seen` is a `moves.freshness.not_seen_map` answer the caller already has for (at least) the discovered sources it holds: it
+    stands in for the loader's own call (which costs up to three statements). An empty map says that no source is marked."""
     asked = None if old_ids is None else set(old_ids)
     if asked is not None and not asked:
-        return _EMPTY
+        return _NOTHING
 
     # (a) the old sources (a source whose config has no readable address can never be matched: dropped)
     rows = []
@@ -122,18 +135,19 @@ async def load_offers(db: AsyncSession, *, old_ids: Collection[int] | None = Non
             rows.append(row)
             where_of[row.id] = where
     if not rows or (asked is not None and not asked & where_of.keys()):
-        return _EMPTY
+        return _NOTHING
 
     # (b) the open incidents, then not seen for the discovered ones that the incident did not settle
     incidents = await events_read.open_incidents(db, list(where_of))
     unreachable = {row.id for row in rows if (incidents.get(row.id) or {}).get("code") in UNREACHABLE_CODES}
     unsettled = [row for row in rows if row.id not in unreachable and row.origin == "discovered"]
     if asked is not None and not asked & (unreachable | {row.id for row in unsettled}):
-        return _EMPTY  # none of the asked sources can be unreachable: nothing to say, whatever the others are
+        return _NOTHING  # none of the asked sources can be unreachable: nothing to say, whatever the others are
     if unsettled:
-        unreachable |= set(await not_seen_map(db, unsettled))
+        marked = not_seen if not_seen is not None else await not_seen_map(db, unsettled)
+        unreachable |= {row.id for row in unsettled if row.id in marked}
     if not unreachable or (asked is not None and not asked & unreachable):
-        return _EMPTY
+        return _NOTHING
     olds = [
         OldSource(
             id=row.id, name=row.name, connector_type=row.connector_type, host=where_of[row.id][0], port=where_of[row.id][1],
@@ -160,7 +174,7 @@ async def load_offers(db: AsyncSession, *, old_ids: Collection[int] | None = Non
         if (new.connector_type, new.port, new.path) == (old.connector_type, old.port, old.path)
     ]
     if not pairs:
-        return _EMPTY
+        return _NOTHING
 
     # (d) the overlap of every pair that could match, in one statement
     overlap: dict[int, dict[int, int]] = defaultdict(dict)
@@ -172,9 +186,12 @@ async def load_offers(db: AsyncSession, *, old_ids: Collection[int] | None = Non
     holders = await _holders(db, olds, news, pairs)
 
     decision = decide(olds, news, holders)
-    if asked is None:
-        return decision
-    return Decision(by_old={old_id: said for old_id, said in decision.by_old.items() if old_id in asked}, by_new=decision.by_new)
+    if asked is not None:
+        decision = Decision(by_old={old_id: said for old_id, said in decision.by_old.items() if old_id in asked}, by_new=decision.by_new)
+    return Loaded(
+        decision=decision, olds={old.id: old for old in olds},
+        incidents={old.id: incidents[old.id] for old in olds if old.id in incidents},
+    )
 
 
 def _with_overlap(new: NewSource, overlap: dict[int, int]) -> NewSource:

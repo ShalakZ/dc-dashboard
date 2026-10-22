@@ -1,4 +1,5 @@
 import math
+from dataclasses import asdict
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,13 +13,18 @@ from dcdash.api.asset_names import AssetName, require_free_name
 from dcdash.api.assets import get_asset
 from dcdash.api.deps import current_user, get_db, notify, require_permission
 from dcdash.api.scans import SCAN_START_LOCK
-from dcdash.api.sources import _lock_source, _mapped_counts
+from dcdash.api.sources import _lock_source, _mapped_counts, _offline_fields
+from dcdash.connectors.identity import usable_key
 from dcdash.core.asset_kinds import icon_for, kind_icons
 from dcdash.core.audit import audit, hidden_values, safe_config, scrub_url_credentials
 from dcdash.core.discovery import MappingGuess, PointInfo, guess_mapping, suggest_groups
 from dcdash.core.metrics import Metric, Scale, default_interval
 from dcdash.core.models import Asset, GraphLayout, Mapping, Point, Scan, ScanFinding, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
+from dcdash.moves.freshness import not_seen_map
+from dcdash.moves.load import Loaded, load_offers_detailed
+from dcdash.moves.match import MOVABLE_TYPES, Offer, Two
+from dcdash.moves.urls import address_key, display_endpoint
 
 router = APIRouter(prefix="/api/discovery", tags=["discovery"])
 MAX_UNIT_LENGTH = 20  # keep in step with MAX_UNIT_LENGTH in frontend/src/lib/drop.ts
@@ -98,8 +104,72 @@ def point_json(point: Any, mapping: Any, guess: MappingGuess) -> dict[str, Any]:
     }
 
 
+IDENTITY_TEXTS = ("application_uri", "application_name", "product_uri", "thumbprint", "instance")  # what a server said about itself
+
+
+def _shown(value: Any) -> str | None:
+    """A text a server reported, as it may be shown: text only, never empty, any user info of a URL scrubbed (it came off the network)."""
+    return scrub_url_credentials(value) if isinstance(value, str) and value else None
+
+
+def identity_json(source: Source) -> dict[str, Any] | None:
+    """What the source's server said about itself, for the card and the panel; None until it said something (a record that only
+    holds a Docker name hint says nothing). `usable`: it tells servers apart (not a default URI); `different`: another server answered
+    at this address (who it was is never shown). Tolerant of whatever the column holds."""
+    identity = source.identity
+    if not isinstance(identity, dict):
+        return None
+    texts = {key: _shown(identity.get(key)) for key in IDENTITY_TEXTS}
+    different = bool(identity.get("different"))
+    if not any(texts.values()) and not different:
+        return None
+    return {**texts, "usable": usable_key(source.connector_type, identity) is not None, "different": different}
+
+
+def name_hint_of(source: Source) -> str | None:
+    """The Docker name stored for the source's host, only while the source still points at that host (a name made for an address
+    says nothing about another one). None for a source with no readable literal host (Modbus too) or a hint that is not a name and a host."""
+    hint = source.identity.get("name_hint") if isinstance(source.identity, dict) else None
+    if not isinstance(hint, dict):
+        return None
+    name, host = hint.get("name"), hint.get("host")
+    if not isinstance(name, str) or not name.strip() or not isinstance(host, str):
+        return None
+    where = address_key(source.connector_type, source.config)
+    return name.strip() if where is not None and where[0] == host.strip().lower() else None
+
+
+def move_candidate_json(said: Offer | Two | None, loaded: Loaded, rows: dict[int, Source]) -> dict[str, Any] | None:
+    """What the card of a NEW source says about the old source it looks like: the offer (who, since when, what is mapped, why) or
+    that several servers could be it. The old source's address is shown without user info (`display_endpoint`)."""
+    if isinstance(said, Two):
+        return {"kind": "two", "count": said.count}
+    if not isinstance(said, Offer):
+        return None
+    old, row = loaded.olds.get(said.old_id), rows.get(said.old_id)
+    if old is None or row is None:  # cannot happen: an offer is made about a source the loader just read
+        return None
+    return {
+        "kind": "offer",
+        "from_source_id": old.id,
+        "from_name": old.name,
+        "from_endpoint": display_endpoint(old.connector_type, row.config),
+        "from_since": _offline_fields(row, loaded.incidents.get(old.id))["offline_since"],
+        "mappings": old.mappings,
+        "assets": old.assets,
+        "match": {**asdict(said.match), "value": _shown(said.match.value)},
+    }
+
+
 def source_json(
-    source: Source, rows: list[Any], mappings: dict[int, Any], latest_outcome: str | None, last_scan: dict[str, Any] | None
+    source: Source,
+    rows: list[Any],
+    mappings: dict[int, Any],
+    latest_outcome: str | None,
+    last_scan: dict[str, Any] | None,
+    *,
+    not_seen: dict[str, Any] | None = None,
+    move_candidate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One source with its points clustered by name and a suggested mapping for each point."""
     infos = [PointInfo(r.id, r.address, r.name, r.unit_hint) for r in rows]
@@ -128,12 +198,21 @@ def source_json(
         "point_count": len(rows),
         "clusters": [{"key": g.key, "points": [render(pid) for pid in g.point_ids]} for g in groups],
         "ungrouped": [render(pid) for pid in ungrouped],
+        "not_seen": not_seen,  # a discovered source the newest scan of the same range did not find (moves/freshness.py)
+        "identity": identity_json(source),
+        "name_hint": name_hint_of(source),
+        "move_candidate": move_candidate,  # on a NEW source: the old one it looks like (moves/load.py); null on every other
     }
 
 
 @router.get("/graph", dependencies=[Depends(require_permission("discovery.view"))])
 async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     sources = (await db.scalars(select(Source).order_by(Source.name, Source.id))).all()
+    # Not seen is worked out once for every source; the offer loader reuses it, and runs no statement when nothing is offline.
+    not_seen = await not_seen_map(db, sources)
+    offline = [s.id for s in sources if s.status == "offline" and s.connector_type in MOVABLE_TYPES]
+    offers = await load_offers_detailed(db, old_ids=offline, not_seen=not_seen)
+    by_id = {s.id: s for s in sources}
     points = await db.execute(
         select(Point.id, Point.source_id, Point.address, Point.name, Point.unit_hint).order_by(Point.name, Point.id)
     )
@@ -176,7 +255,10 @@ async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     layout = await db.execute(select(GraphLayout.node_id, GraphLayout.x, GraphLayout.y))
     return {
         "sources": [
-            source_json(s, points_by_source.get(s.id, []), mappings, latest_outcome.get(s.id), last_scan.get(s.id))
+            source_json(
+                s, points_by_source.get(s.id, []), mappings, latest_outcome.get(s.id), last_scan.get(s.id),
+                not_seen=not_seen.get(s.id), move_candidate=move_candidate_json(offers.decision.by_new.get(s.id), offers, by_id),
+            )
             for s in sources
         ],
         "unidentified": [{"host": r.host, "port": r.port, "scan_id": r.scan_id} for r in unidentified],

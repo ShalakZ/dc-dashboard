@@ -5,6 +5,8 @@ import pytest
 
 from dcdash.core.asset_kinds import kind_key
 from helpers import listening, login_as, make_asset, make_mapping, make_source
+from test_moves_freshness import finished_at, make_finding, make_found, make_scan, statements
+from test_moves_load import PAIRS, new_source, old_source, owners_case, populate, populate_more
 
 SIGNALS = (("kW", "kW"), ("kWh", "kWh"), ("V", "V"))
 
@@ -565,3 +567,281 @@ async def test_accept_refuses_a_new_asset_whose_name_exists_under_that_parent_an
         "source_id": source, "new_asset": {"name": "LV Panel", "parent_id": elsewhere}, "points": [pt(ids["LVP01_kW"])],
     })
     assert ok.status_code == 201
+
+
+# ---- what a scan did not find, who a server says it is, and which new source looks like an old one (w33 T4a) -------------------
+
+OLD_KEYS = {
+    "id", "name", "connector_type", "origin", "enabled", "status", "last_error", "has_secret", "needs_credentials", "last_scan",
+    "config", "point_count", "clusters", "ungrouped",
+}
+NEW_KEYS = {"not_seen", "identity", "name_hint", "move_candidate"}
+
+
+async def graph_of(client) -> dict:
+    response = await client.get("/api/discovery/graph")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def by_id(client) -> dict[int, dict]:
+    return {s["id"]: s for s in (await graph_of(client))["sources"]}
+
+
+async def test_the_four_new_keys_are_on_every_source_and_null_on_a_plain_database(client, db):
+    await login_as(client, db, "admin")
+    discovered, _ = await seed_source(db)
+    manual, _ = await seed_source(db, "hand", ("LVP01",), enabled=True, origin="manual")
+    sources = await by_id(client)
+    for source in (discovered, manual):
+        assert set(sources[source]) == OLD_KEYS | NEW_KEYS  # the old keys are all still there
+        assert [sources[source][key] for key in sorted(NEW_KEYS)] == [None, None, None, None]
+
+
+# ---- not seen, end to end ----
+
+
+async def test_a_discovered_source_that_the_newer_scan_of_the_same_range_did_not_find_is_marked_not_seen(client, db):
+    await login_as(client, db, "admin")
+    lost = await make_found(db, "lost", "10.0.0.2")
+    kept = await make_found(db, "kept", "10.0.0.3")
+    hand = await make_found(db, "hand", "10.0.0.4", origin="manual")
+    first = await make_scan(db, day=0)
+    for source, host in ((lost, "10.0.0.2"), (kept, "10.0.0.3"), (hand, "10.0.0.4")):
+        await make_finding(db, first, host, 4840, source)
+    second = await make_scan(db, day=3)
+    await make_finding(db, second, "10.0.0.3", 4840, kept)  # seen again
+    sources = await by_id(client)
+    marked = sources[lost]["not_seen"]
+    assert set(marked) == {"scan_id", "at", "last_seen_scan_id", "last_seen_at"}
+    assert (marked["scan_id"], marked["last_seen_scan_id"]) == (second, first)
+    assert marked["at"].startswith(finished_at(3).strftime("%Y-%m-%dT%H:%M:%S"))
+    assert marked["last_seen_at"].startswith(finished_at(0).strftime("%Y-%m-%dT%H:%M:%S"))
+    assert sources[kept]["not_seen"] is None  # the newer scan found it
+    assert sources[hand]["not_seen"] is None  # a hand-added source is never marked
+
+
+async def test_not_seen_asks_for_the_same_range_and_a_finished_scan(client, db):
+    await login_as(client, db, "admin")
+    lost = await make_found(db, "lost", "10.0.0.2")
+    await make_finding(db, await make_scan(db, day=0), "10.0.0.2", 4840, lost)
+    await make_scan(db, day=1, targets=["10.0.9.0/29"])  # another range
+    await make_scan(db, day=2, status="failed")
+    await make_scan(db, day=3, status="running")
+    assert (await by_id(client))[lost]["not_seen"] is None
+    newest = await make_scan(db, day=4)
+    assert (await by_id(client))[lost]["not_seen"]["scan_id"] == newest
+
+
+# ---- the identity view and the name hint ----
+
+
+async def set_identity(db, source, identity) -> None:
+    await db.execute("UPDATE sources SET identity = $2 WHERE id = $1", source, identity)
+
+
+async def test_identity_view_of_a_keyed_identity_a_default_uri_and_an_instance(client, db):
+    await login_as(client, db, "admin")
+    keyed = await make_found(db, "keyed", "10.0.0.2")
+    default = await make_found(db, "default", "10.0.0.3")
+    sim = await make_found(db, "sim", "10.0.0.4", port=8080, kind="simulator")
+    await set_identity(db, keyed, {
+        "application_uri": "urn:vendor:plc1", "application_name": "PLC 1", "product_uri": "urn:vendor", "thumbprint": "3A:5F:91",
+    })
+    await set_identity(db, default, {"application_uri": "urn:FreeOpcUa:Python:Server", "application_name": "FreeOpcUa Python Server"})
+    await set_identity(db, sim, {"instance": "lab-2"})
+    sources = await by_id(client)
+    assert sources[keyed]["identity"] == {
+        "application_uri": "urn:vendor:plc1", "application_name": "PLC 1", "product_uri": "urn:vendor", "thumbprint": "3A:5F:91",
+        "instance": None, "usable": True, "different": False,
+    }
+    assert sources[default]["identity"]["usable"] is False and sources[default]["identity"]["application_uri"] == "urn:FreeOpcUa:Python:Server"
+    assert sources[sim]["identity"] == {
+        "application_uri": None, "application_name": None, "product_uri": None, "thumbprint": None, "instance": "lab-2",
+        "usable": True, "different": False,
+    }
+
+
+async def test_identity_view_says_a_different_server_answers_but_never_who(client, db):
+    await login_as(client, db, "admin")
+    source = await make_found(db, "keyed", "10.0.0.2")
+    other = await make_found(db, "other", "10.0.0.3")
+    await set_identity(db, source, {
+        "application_uri": "urn:vendor:plc1",
+        "different": {"application_uri": "urn:vendor:intruder", "thumbprint": "FF:EE", "at": "2026-10-20T10:00:00+00:00"},
+    })
+    await set_identity(db, other, {"application_uri": "urn:vendor:plc2", "different": {}})  # nothing recorded = nothing different
+    response = await client.get("/api/discovery/graph")
+    sources = {s["id"]: s for s in response.json()["sources"]}
+    assert sources[source]["identity"]["different"] is True and sources[other]["identity"]["different"] is False
+    assert "intruder" not in response.text and "FF:EE" not in response.text
+
+
+@pytest.mark.parametrize("stored", [None, [], "text", 7, {}, {"name_hint": {"name": "simulator", "host": "10.0.0.2"}}, {"application_uri": 5}])
+async def test_a_source_with_no_identity_to_show_has_none_and_junk_does_not_break_the_graph(client, db, stored):
+    await login_as(client, db, "admin")
+    source = await make_found(db, "found", "10.0.0.2")
+    await set_identity(db, source, stored)
+    assert (await by_id(client))[source]["identity"] is None
+
+
+async def test_identity_strings_are_scrubbed_of_user_info(client, db):
+    await login_as(client, db, "admin")
+    source = await make_found(db, "found", "10.0.0.2")
+    await set_identity(db, source, {"application_uri": "opc.tcp://svc:s3cretpw@plc/app"})
+    response = await client.get("/api/discovery/graph")
+    assert "s3cretpw" not in response.text and "svc:" not in response.text
+
+
+async def test_the_name_hint_shows_only_while_the_host_it_was_made_for_is_the_sources_address(client, db):
+    await login_as(client, db, "admin")
+    sim = await make_found(db, "sim", "172.20.0.5", port=8080, kind="simulator")
+    await set_identity(db, sim, {"instance": "dev", "name_hint": {"name": "simulator", "host": "172.20.0.5"}})
+    assert (await by_id(client))[sim]["name_hint"] == "simulator"
+    await db.execute("""UPDATE sources SET config = '{"url": "http://172.20.0.9:8080"}' WHERE id = $1""", sim)  # re-addressed since
+    assert (await by_id(client))[sim]["name_hint"] is None
+    await db.execute("""UPDATE sources SET config = '{"url": "http://Sim-Host:8080"}' WHERE id = $1""", sim)  # a name is a different host
+    assert (await by_id(client))[sim]["name_hint"] is None
+
+
+async def test_the_name_hint_compares_the_host_without_regard_to_case_and_works_without_other_identity(client, db):
+    await login_as(client, db, "admin")
+    source = await make_found(db, "found", "Meter-7.Lab")
+    await set_identity(db, source, {"name_hint": {"name": "meter-7", "host": "METER-7.lab"}})
+    sources = await by_id(client)
+    assert sources[source]["name_hint"] == "meter-7" and sources[source]["identity"] is None
+
+
+@pytest.mark.parametrize(
+    "hint",
+    ["simulator", None, [], {}, {"name": "simulator"}, {"host": "10.0.0.2"}, {"name": 5, "host": "10.0.0.2"}, {"name": "", "host": "10.0.0.2"},
+     {"name": "simulator", "host": ["10.0.0.2"]}],
+)
+async def test_a_name_hint_that_is_not_a_name_and_a_host_is_ignored(client, db, hint):
+    await login_as(client, db, "admin")
+    source = await make_found(db, "found", "10.0.0.2")
+    await set_identity(db, source, {"instance": "dev", "name_hint": hint})
+    assert (await by_id(client))[source]["name_hint"] is None
+
+
+async def test_a_modbus_source_never_has_a_name_hint(client, db):
+    await login_as(client, db, "admin")
+    source = await make_found(db, "meter", config={"host": "10.0.0.2", "port": 502, "unit_id": 1}, kind="modbus")
+    await set_identity(db, source, {"name_hint": {"name": "meter", "host": "10.0.0.2"}})
+    assert (await by_id(client))[source]["name_hint"] is None
+
+
+# ---- the move candidate ----
+
+
+async def test_a_new_source_that_looks_like_an_old_one_carries_the_offer_and_the_old_one_does_not(client, db):
+    await login_as(client, db, "admin")
+    old, new = await owners_case(db)
+    other = await make_found(db, "bystander", "10.9.9.9")  # nothing to do with it
+    sources = await by_id(client)
+    assert sources[new]["move_candidate"] == {
+        "kind": "offer", "from_source_id": old, "from_name": "OPC UA server at 172.20.0.3:4840",
+        "from_endpoint": "opc.tcp://172.20.0.3:4840/", "from_since": sources[new]["move_candidate"]["from_since"],
+        "mappings": 3, "assets": 1,
+        "match": {"kind": "possibly", "evidence": "addresses", "value": None, "addresses": 3, "missing_addresses": 0, "needs_tick": True},
+    }
+    # the earlier of the open incident's start and the last time the old source answered: the second here
+    assert sources[new]["move_candidate"]["from_since"].startswith(finished_at(0).strftime("%Y-%m-%dT%H:%M:%S"))
+    assert sources[old]["move_candidate"] is None and sources[other]["move_candidate"] is None
+    assert sources[old]["not_seen"] is not None  # the newer scan of the range found the new one, not the old one
+
+
+async def test_a_same_server_offer_names_the_evidence(client, db):
+    await login_as(client, db, "admin")
+    first = await make_scan(db, day=0)
+    uri = {"application_uri": "urn:vendor:plc1", "thumbprint": "3A:5F:91"}
+    old = await old_source(db, "plc at old", "172.20.0.3", identity=uri)
+    await make_finding(db, first, "172.20.0.3", 4840, old)
+    new = await new_source(db, "plc at new", "172.20.0.5", await make_scan(db, day=3), identity=uri)
+    offer = (await by_id(client))[new]["move_candidate"]
+    assert offer["kind"] == "offer" and offer["from_source_id"] == old
+    assert offer["match"] == {
+        "kind": "same_server", "evidence": "uri", "value": "urn:vendor:plc1", "addresses": 3, "missing_addresses": 0, "needs_tick": False,
+    }
+
+
+async def test_an_offer_without_any_incident_still_names_when_the_old_source_went_away(client, db):
+    """Decided by "not seen" alone (no incident row): `from_since` is then the last time the old source answered."""
+    await login_as(client, db, "admin")
+    old, new = await owners_case(db)
+    await db.execute("DELETE FROM diag_events")
+    offer = (await by_id(client))[new]["move_candidate"]
+    assert offer["from_source_id"] == old and offer["from_since"].startswith(finished_at(0).strftime("%Y-%m-%dT%H:%M:%S"))
+    await db.execute("UPDATE sources SET last_seen = NULL WHERE id = $1", old)
+    assert (await by_id(client))[new]["move_candidate"]["from_since"] is None
+
+
+async def test_two_candidates_for_one_old_source_say_two_on_both_new_cards(client, db):
+    await login_as(client, db, "admin")
+    old, first_new = await owners_case(db)
+    second_new = await new_source(db, "twin", "172.20.0.6", await db.fetchval("SELECT max(id) FROM scans"), pairs=PAIRS)
+    sources = await by_id(client)
+    assert sources[first_new]["move_candidate"] == {"kind": "two", "count": 2}
+    assert sources[second_new]["move_candidate"] == {"kind": "two", "count": 2}
+    assert sources[old]["move_candidate"] is None
+
+
+async def test_two_old_sources_for_one_new_one_say_two_on_the_new_card(client, db):
+    await login_as(client, db, "admin")
+    old, new = await owners_case(db)
+    other_old = await old_source(db, "second old", "172.20.0.4")
+    await make_finding(db, await db.fetchval("SELECT min(id) FROM scans"), "172.20.0.4", 4840, other_old)
+    sources = await by_id(client)
+    assert sources[new]["move_candidate"] == {"kind": "two", "count": 2}
+    assert sources[old]["move_candidate"] is None and sources[other_old]["move_candidate"] is None
+
+
+async def test_the_old_endpoint_on_a_card_has_no_user_info_and_the_response_has_none_anywhere(client, db):
+    await login_as(client, db, "admin")
+    first = await make_scan(db, day=0)
+    old = await old_source(db, "OPC UA server at 172.20.0.3:4840", "172.20.0.3", path="/dcdash/")
+    await db.execute(
+        """UPDATE sources SET config = '{"endpoint": "opc.tcp://user:pass@172.20.0.3:4840/dcdash/"}' WHERE id = $1""", old
+    )
+    await make_finding(db, first, "172.20.0.3", 4840, old)
+    new = await new_source(db, "OPC UA server at 172.20.0.5:4840", "172.20.0.5", await make_scan(db, day=3), path="/dcdash/")
+    response = await client.get("/api/discovery/graph")
+    card = {s["id"]: s for s in response.json()["sources"]}[new]["move_candidate"]
+    assert card["kind"] == "offer" and card["from_source_id"] == old
+    assert card["from_endpoint"] == "opc.tcp://172.20.0.3:4840/dcdash/"
+    assert "user" not in response.text and "pass" not in response.text
+
+
+# ---- cost ----
+
+
+async def get_counted(client) -> list[str]:
+    with statements() as sql:
+        response = await client.get("/api/discovery/graph")
+    assert response.status_code == 200, response.text
+    return sql
+
+
+async def test_the_number_of_statements_does_not_grow_with_the_number_of_sources(client, db):
+    await login_as(client, db, "admin")
+    await populate(db, 1)
+    await client.get("/api/discovery/graph")  # one unmeasured request: a session touch is written once, not once per measurement
+    small = await get_counted(client)
+    await populate_more(db, 1, 30)
+    await client.get("/api/discovery/graph")
+    big = await get_counted(client)
+    assert len(big) == len(small), (len(small), len(big))
+    # the offer loader really ran (the sources are offline and mapped) and "not seen" was computed once, not twice
+    assert sum("AS pairs" in statement for statement in small) == 1 and sum("AS pairs" in statement for statement in big) == 1
+    assert sum("scope_snapshot" in statement for statement in big) == sum("scope_snapshot" in statement for statement in small) <= 2
+
+
+async def test_nothing_offline_costs_no_statement_from_the_offer_loader(client, db):
+    await login_as(client, db, "admin")
+    await populate(db, 3)
+    await db.execute("UPDATE sources SET status = 'online'")
+    await client.get("/api/discovery/graph")
+    sql = await get_counted(client)
+    assert not any("AS pairs" in statement for statement in sql), sql
+    await db.execute("UPDATE sources SET status = 'offline'")
+    assert any("AS pairs" in statement for statement in await get_counted(client))
