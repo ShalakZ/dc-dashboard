@@ -514,6 +514,21 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   connection check's audit entry carries a `passed` tag and an Outcome row whose link opens the event, which links back; (6) a role
   without `diagnostics.view` has no Events link, the page says No access and the API answers 403; (7) the Storage card reads `90 days`.
   Lookups use `exact: true` ("System events" is part of "System events and the audit log").
+- `w33.spec.ts` (its own project, last in the list, after `w32`; 1440 x 900, and 1024 x 768 for the row menu) checks devices that move or
+  disappear. Every case talks to ONE endpoint, the stand-in Historian at `simulator:9100` (an HTTP source of the `simulator` type), because
+  a scan LINKS its finding to a source that already holds an endpoint and then makes no new source; no other spec keeps a source at 9100.
+  If somebody else holds it, all cases SKIP with the holder's name (a skipped w33 in the summary line means that), and a silent
+  Historian fails. It makes its own data (`W33 <run> ...`, the account and role `w33-...`) and removes it in `afterAll`. Cases (serial):
+  (1) a hand-added source with two mapped points is pointed at `127.0.0.1:9100`, where nothing listens, and goes offline with an open
+  `unreachable` incident; (2) a scan of the live endpoint makes a new source and both Sources and Discovery offer the move as `possibly`
+  (the old source has no identity, so only the addresses speak); (3) its row menu opens with **Move to new address...** first, inside the
+  window at 1024 x 768; (4) the new source's card says `Looks like ...` or `Was at ...`, the dialog opens from it, **Move 2 mappings**
+  stays off until the tick is set and Cancel returns the focus to the card; (5) a role without `sources.edit` sees none of it and gets
+  403; (6) the move from Sources keeps the mappings and the SAME point ids, the old source answers, the duplicate is gone, the toast Undo
+  puts the dead address back, and the Audit page reads both entries; (7) a second round from Discovery undone from the audit drawer, and a
+  second Undo of the same entry refused in words; (8) Not seen: three scans of one scope, the dimmed card, the panel sentence,
+  **Turn on Not seen lately**, **Remove not seen (N)...** removing only the unmapped ones. The OPC UA move itself is covered by the
+  backend tests and by the controller's drill. Lookups use `exact: true` ("Undo" is inside "Undo this move").
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

@@ -159,7 +159,7 @@ is replaced.
   of the row menu of such a source is **Move to new address...**. A person without `sources.edit` reads the same sentence and has no
   button. When a single offline source could be two servers, the banner ends `Two servers could be this one; edit the address by hand.`
   (`Several` for more than two) and has no button; the same sentence is in the tooltip of the source's Status chip.
-- **Discovery.** The new source's card says `Looks like OPC UA server (12 mappings)`, the old source's short name first, and has a
+- **Discovery.** The new source's card says `Was at 172.20.0.3:4840 (12 mappings)` (the old source has a default name such as `OPC UA server at 172.20.0.3:4840`; a name of its own reads `Looks like <name> (12 mappings)`) and has a
   **Move...** button beside **Details** (for a person with `sources.edit`); the card's tooltip holds the whole sentence. Its panel says
   `This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets), which has not answered since 18 Oct 07:52` (when the time
   is not known, `which stopped answering at 172.20.0.3:4840`, and nothing at all after the mappings when the old name already holds the
@@ -281,7 +281,7 @@ An update recreated every container, and Docker gave the simulator a new address
    4840)`: another container holds the old address and refuses the connection.
 2. A scan of the same range was run. Because a scan matches by address, it made a new source, `OPC UA server at
    172.20.0.5:4840`, and **Discovery** shows the old items beside the new ones. The old source, which has 12 mappings, reads `Mapped:
-   move it or delete it on Sources`; the new one reads `Looks like OPC UA server (12 mappings)` and has a **Move...** button.
+   move it or delete it on Sources`; the new one reads `Was at 172.20.0.3:4840 (12 mappings)` and has a **Move...** button.
 3. On Sources the banner ends `A scan found it at 172.20.0.5:4840:` with **Move to new address...**. The old source was made before
    the update and remembers no server, so this is a **possible** match: all 12 mapped addresses and their names exist on the new
    server, and the dialog asks for the tick `I checked that this is the same device`. When the scan found a name for the new

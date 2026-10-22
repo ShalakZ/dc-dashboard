@@ -108,7 +108,7 @@ lacks says "No access".
   uses the same kind of dialog as Clear unmapped and never removes a mapped or hand-added source (a marked source with
   something mapped and offline reads `Mapped: move it or delete it on Sources`; while **Turn on Not seen lately** is on, the bar's row
   of counts gains the chip `Only not seen lately (2)`, which shortens to `not seen (2)` and then to an icon and the number on a narrower
-  bar). A new source that looks like an old one that stopped answering reads `Looks like <its short name> (12 mappings)` and has
+  bar). A new source that looks like an old one that stopped answering reads `Looks like <its short name> (12 mappings)` (`Was at 172.20.0.3:4840 (12 mappings)` when the name is only the generic type text) and has
   **Move...** beside **Details** (needs `sources.edit`); `Two servers could be this one; edit
   the address by hand` (`Several servers ...` for more than two) and `A different server answers at this address` take the same line,
   and the Details panel adds the server's name (`Server: urn:dcdash:simulator:dev`, or `Simulator instance dev` for the HTTP simulator)
