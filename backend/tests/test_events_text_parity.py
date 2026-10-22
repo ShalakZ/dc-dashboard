@@ -59,3 +59,32 @@ def test_every_failure_code_of_a_source_has_a_sentence_in_the_events_table():
 
 def test_the_table_exports_the_banner_threshold_the_sources_page_reads():
     assert re.search(r"export const OFFLINE_BANNER_SECONDS = 120;", EVENT_TEXT)
+
+
+# ---- the words the server builds (events/read.py) are the words the page uses ------------------------------------------------
+
+DIAGNOSTICS = (ROOT / "frontend" / "src" / "lib" / "diagnostics.ts").read_text(encoding="utf-8")
+
+
+def table_of(source: str, declaration: str, key: str) -> dict[str, str]:
+    """The `key: "text"` entries of the object literal that follows `declaration` in a TypeScript file."""
+    block = re.search(rf"{re.escape(declaration)}[^=]*=\s*\{{(.*?)\n?\s*\}};", source, re.S)
+    assert block is not None, f"{declaration} not found"
+    return dict(re.findall(key + r':\s*"([^"]*)"', block.group(1)))
+
+
+def test_the_plain_sentence_of_each_failure_code_is_the_same_on_the_server_and_on_the_page():
+    from dcdash.events.read import CODE_REASONS
+
+    page = table_of(EVENT_TEXT, "const CODE_REASONS", r'"([a-z_]+)"')
+    assert len(page) == 9, page  # a guard for the guard
+    assert dict(CODE_REASONS) == page
+    assert CODE_REASONS["unreachable"] == "Could not connect to the server."
+
+
+def test_the_step_words_of_an_outcome_are_the_page_s_step_labels():
+    from dcdash.events.read import _STEP_WORDS
+
+    page = table_of(DIAGNOSTICS, "const STEP_NAMES", r"([a-z_]+)")
+    assert len(page) == 10, page
+    assert dict(_STEP_WORDS) == page

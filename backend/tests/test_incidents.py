@@ -602,8 +602,61 @@ async def test_a_frozen_database_never_delays_a_caller_and_close_returns_twice(d
     [
         (0, "0 s"), (45, "45 s"), (59, "59 s"), (60, "1 min"), (200, "3 min"), (3599, "59 min"), (3600, "1 h"),
         (7500, "2 h 5 min"), (7200, "2 h"), (86399, "23 h 59 min"), (86400, "1 d"), (4 * 86400 + 2 * 3600, "4 d 2 h"),
-        (4 * 86400, "4 d"), (4 * 86400 + 1800, "4 d"), (-5, "0 s"), (44.6, "45 s"),
+        (4 * 86400, "4 d"), (4 * 86400 + 1800, "4 d"), (-5, "0 s"),
+        # floored, as the page's `formatSpanLong` does (the same 21.6 s must read the same in the stored message and on the page)
+        (44.6, "44 s"), (21.6, "21 s"), (59.99, "59 s"), (119.9, "1 min"), (3599.9, "59 min"), (7199.9, "1 h 59 min"),
+        (86399.9, "23 h 59 min"), (86400.9, "1 d"),
     ],
 )
 def test_format_span(seconds, text):
     assert format_span(seconds) == text
+
+
+# --- a damaged open row never stops the writer ------------------------------------------------------------------------------
+
+DAMAGED = {"state": "open", "count": "many", "since": "not a time", "last_at": "not a time either"}
+
+
+async def test_a_damaged_since_and_count_do_not_stop_the_close_of_a_stopped_source(db, make_book):
+    stopped = await make_source(db, "stopped")
+    other = await make_source(db, "other")
+    await db.execute(INSERT_EVENT, "warning", "collector", stopped, OFFLINE, "unreachable", "old", DAMAGED)
+    await db.execute(INSERT_EVENT, "warning", "collector", other, BAD_POINTS, "X", "old", {"state": "open", "count": "1.5", "since": "x"})
+    book = make_book()
+    book.sync({}, set())  # nothing is polled: the reconcile has to close both rows, however damaged
+    await idle(book)
+    rows = await events(db)
+    assert [row["detail"]["state"] for row in rows] == ["closed", "closed"]
+    assert [row["detail"]["closed_by"] for row in rows] == ["polling_stopped", "polling_stopped"]
+    assert all(0 <= row["detail"]["duration_seconds"] < 60 for row in rows)  # a `since` that is not a time falls back to the row's own
+
+
+async def test_a_damaged_count_does_not_stop_a_bump_and_a_valid_since_is_still_used(db, make_book):
+    source = await make_source(db, "plant")
+    since = datetime.now(timezone.utc) - timedelta(days=2)
+    await db.execute(INSERT_EVENT, "warning", "collector", source, OFFLINE, "unreachable", "old", {**DAMAGED, "since": since.isoformat()})
+    book = make_book()
+    offline(book, source)
+    await idle(book)
+    [row] = await events(db)
+    assert row["detail"]["state"] == "open" and row["detail"]["count"] == 1  # 0 + this poll; the row was bumped, not duplicated
+    book.clear(source, 5, OFFLINE)
+    await idle(book)
+    closed, online = await events(db)
+    assert closed["id"] == row["id"] and closed["detail"]["state"] == "closed"
+    assert abs(closed["detail"]["duration_seconds"] - 2 * 86400) < 60  # a valid `since` still counts
+    assert online["kind"] == journal.SOURCE_ONLINE and online["detail"]["incident_id"] == row["id"]
+
+
+async def test_a_close_with_a_damaged_row_still_writes_its_recovery_row(db, make_book):
+    source = await make_source(db, "plant")
+    await db.execute(INSERT_EVENT, "warning", "collector", source, OFFLINE, "unreachable", "old", DAMAGED)
+    book = make_book()
+    wanted = {(source, 5): ()}
+    book.sync(wanted, set(wanted))
+    book.clear(source, 5, OFFLINE)  # the first good poll after a restart closes what the database holds open
+    await idle(book)
+    closed, online = await events(db)
+    assert (closed["detail"]["state"], closed["detail"]["closed_by"], closed["detail"]["count"]) == ("closed", "recovered", 0)
+    assert online["kind"] == journal.SOURCE_ONLINE and online["detail"]["incident_id"] == closed["id"]
+    assert online["message"].startswith("back online after ")

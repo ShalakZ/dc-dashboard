@@ -366,10 +366,26 @@ async def open_incidents(db: AsyncSession, source_ids: Iterable[int]) -> dict[in
 OUTCOME_ACTIONS = ("source.tested", "source.checked", "source.test_all")
 _ENDING_EVENTS = ("check.finished", "job.finished")  # the journal rows that end a job a person started (see `job_of`)
 _JOB_OF_ACTION = {"source.tested": "test", "source.checked": "check", "source.test_all": "test"}
+# The page's own step labels (`STEP_NAMES` in frontend/src/lib/diagnostics.ts): the Audit outcome and System events name the same step
+# in the same words. `tests/test_events_text_parity.py` holds the two tables equal.
 _STEP_WORDS = {
-    "dns": "name lookup", "tcp": "network connection", "endpoints": "server endpoints", "certificates": "certificates",
-    "session": "secure channel", "server_time": "server time", "namespaces": "namespaces", "read_points": "reading the points",
-    "timing": "read timing", "test": "connection test",
+    "dns": "DNS resolution", "tcp": "TCP connection", "endpoints": "Server endpoints", "certificates": "Certificates",
+    "session": "Session", "server_time": "Server clock", "namespaces": "Namespaces", "read_points": "Reading the points",
+    "timing": "Read timing", "test": "Connection test",
+}
+# What a person is told about the failure code of a test (the status of the connector's error): the same sentences as `CODE_REASONS`
+# in frontend/src/lib/eventText.ts, held equal by `tests/test_events_text_parity.py`. The raw text of the error (`[Errno 111] Connect
+# call failed ...`) is for the Raw view; a code that is not here falls back to it.
+CODE_REASONS = {
+    "unreachable": "Could not connect to the server.",
+    "auth_failed": "The server did not accept the user name or password.",
+    "timeout": "The server did not answer in time.",
+    "protocol_error": "The server answered in a way the dashboard could not use.",
+    "exception": "Reading failed with an unexpected error.",
+    "config_invalid": "The source's settings are not valid, so it is not being read.",
+    "secret_undecryptable": "The stored password cannot be read, so the source is not being read.",
+    "needs_profile": "No device profile is chosen for this source.",
+    "not_supported": "This source cannot do that.",
 }
 _REASON_CHARS = 200
 NO_SOURCE_TESTED = "No source was tested."
@@ -385,6 +401,7 @@ class _Ended:
     steps: int | None = None
     first_failed: str | None = None
     reason: str | None = None  # unscrubbed here; `_reason` cleans it when the sentence is built
+    code: str | None = None  # the failure status of a test (the journal row's `code`, else the job result's `status`)
 
 
 _GONE = _Ended("gone")
@@ -434,6 +451,7 @@ def _from_event(row: Any) -> tuple[int, _Ended] | None:
     return job_id, _Ended(
         "passed" if ok else "failed", what, row.id, steps if type(steps) is int and steps >= 0 else None,
         first if isinstance(first, str) and first else None, None if ok else detail.get("error"),
+        None if ok or not isinstance(row.code, str) else row.code,
     )
 
 
@@ -449,9 +467,11 @@ def _from_job(row: Any) -> _Ended:
     steps = body.get("steps")
     first = body.get("first_failed")
     reason = next((body[key] for key in ("error", "message") if isinstance(body.get(key), str) and body[key]), None)
+    status = body.get("status")
     return _Ended(
         "passed" if ok else "failed", what, None, len(steps) if isinstance(steps, list) else None,
         first if isinstance(first, str) and first else None, None if ok else reason,
+        status if not ok and isinstance(status, str) else None,
     )
 
 
@@ -460,7 +480,7 @@ def _sentence(ended: _Ended, retention_days: int) -> str:
     if ended.state == "running":
         return "Still running."
     if ended.state == "gone":
-        return f"The outcome is no longer kept (system events are kept {retention_days} days)."
+        return f"The outcome was not recorded, or it is no longer kept (system events are kept {retention_days} days)."
     if ended.what == "check":
         if ended.state == "passed":
             if ended.steps is None:
@@ -472,6 +492,9 @@ def _sentence(ended: _Ended, retention_days: int) -> str:
         return f"The connection check failed: {reason}." if reason else "The connection check failed."
     if ended.state == "passed":
         return "The test passed."
+    known = CODE_REASONS.get(ended.code) if ended.code else None  # the plain words of the code, never the connector's raw error
+    if known:
+        return f"The test failed. {known}"
     reason = _reason(ended.reason)
     return f"The test failed: {reason}." if reason else "The test failed."
 
@@ -498,7 +521,7 @@ async def _ended_jobs(db: AsyncSession, job_ids: list[int], since: datetime) -> 
     about: an entry is written before its job runs), else from its jobs row (at most ONE more query, for the jobs with no row)."""
     texts = literal([str(job_id) for job_id in job_ids], ARRAY(Text))
     events = await db.execute(
-        select(DiagEvent.id, DiagEvent.kind, DiagEvent.detail)
+        select(DiagEvent.id, DiagEvent.kind, DiagEvent.code, DiagEvent.detail)
         .where(DiagEvent.kind.in_(_ENDING_EVENTS), DiagEvent.ts >= since, DiagEvent.detail["job_id"].astext == any_(texts))
         .order_by(DiagEvent.id.desc())
     )

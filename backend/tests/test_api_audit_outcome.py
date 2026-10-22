@@ -11,7 +11,7 @@ from helpers import login_as, make_role, make_source
 
 SECRET_URL = "http://admin:pw-secret-77@10.0.0.5/"
 OUTCOME_KEYS = {"state", "text", "event_id", "counts"}
-GONE = "The outcome is no longer kept (system events are kept 90 days)."
+GONE = "The outcome was not recorded, or it is no longer kept (system events are kept 90 days)."
 
 
 @contextlib.contextmanager
@@ -49,12 +49,13 @@ async def job(db, kind="check_connection", status="done", result=None, source_id
     )
 
 
-async def journal(db, event_kind: str, job_id: int, **detail) -> int:
-    """A journal row of the given kind; `detail` keys (even `kind`, which `job.finished` carries) go into the stored detail."""
+async def journal(db, event_kind: str, job_id: int, row_code: str | None = None, **detail) -> int:
+    """A journal row of the given kind; `detail` keys (even `kind`, which `job.finished` carries) go into the stored detail;
+    `row_code` is the row's own `code` column (the failure status of a test)."""
     ok = detail.get("ok", True)
     return await db.fetchval(
-        "INSERT INTO diag_events (level, component, source_id, kind, message, detail) VALUES ($1, 'job', 1, $2, 'x', $3) RETURNING id",
-        "info" if ok else "warning", event_kind, {"job_id": job_id, **detail},
+        "INSERT INTO diag_events (level, component, source_id, kind, code, message, detail) VALUES ($1, 'job', 1, $2, $3, 'x', $4) RETURNING id",
+        "info" if ok else "warning", event_kind, row_code, {"job_id": job_id, **detail},
     )
 
 
@@ -97,7 +98,7 @@ async def test_a_check_that_failed_names_the_step_in_plain_words(client, db):
     event_id = await journal(db, "check.finished", job_id, ok=False, first_failed="session", steps=9, steps_ok=3, skew_seconds=None)
     outcome = await in_list(client, await audit_check(db, job_id))
     assert outcome == {
-        "state": "failed", "text": 'The connection check failed at "secure channel".', "event_id": event_id, "counts": None,
+        "state": "failed", "text": 'The connection check failed at "Session".', "event_id": event_id, "counts": None,
     }
 
 
@@ -135,7 +136,7 @@ async def test_a_finished_check_without_an_event_is_answered_from_its_result(cli
     failed = await job(db, result={"ok": False, "steps": [{"id": "dns"}], "first_failed": "tcp"})
     assert (await in_list(client, await audit_check(db, passed)))["text"] == "The connection check passed (2 steps)."
     outcome = await in_list(client, await audit_check(db, failed))
-    assert (outcome["state"], outcome["text"]) == ("failed", 'The connection check failed at "network connection".')
+    assert (outcome["state"], outcome["text"]) == ("failed", 'The connection check failed at "TCP connection".')
 
 
 async def test_a_pending_or_running_job_is_still_running(client, db):
@@ -152,7 +153,7 @@ async def test_a_job_and_its_event_that_are_both_gone_say_so_with_the_retention_
     entry_id = await audit_check(db, 424242)
     assert await in_list(client, entry_id) == {"state": "gone", "text": GONE, "event_id": None, "counts": None}
     await db.execute("INSERT INTO settings (key, value) VALUES ('events', $1)", {"retention_days": 30, "max_rows": 50_000})
-    assert (await one(client, entry_id))["text"] == "The outcome is no longer kept (system events are kept 30 days)."
+    assert (await one(client, entry_id))["text"] == "The outcome was not recorded, or it is no longer kept (system events are kept 30 days)."
 
 
 async def test_the_event_is_preferred_over_the_job_row(client, db):
@@ -196,7 +197,7 @@ async def test_a_source_test_without_an_event_is_answered_from_the_jobs_row(clie
     crashed = await job(db, "test_source", status="failed", result={"error": "no such source"})
     bare = await job(db, "test_source", status="failed", result=None)
     assert (await in_list(client, await audit_test(db, good)))["text"] == "The test passed."
-    assert (await in_list(client, await audit_test(db, refused)))["text"] == "The test failed: connection refused."
+    assert (await in_list(client, await audit_test(db, refused)))["text"] == "The test failed. Could not connect to the server."
     assert (await in_list(client, await audit_test(db, crashed)))["text"] == "The test failed: no such source."
     outcome = await in_list(client, await audit_test(db, bare))
     assert (outcome["state"], outcome["text"]) == ("failed", "The test failed.")
@@ -207,6 +208,62 @@ async def test_a_test_job_that_failed_in_the_collector_is_failed_even_though_the
     job_id = await job(db, "test_source", status="done", result={"ok": False, "message": "timed out"})
     outcome = await in_list(client, await audit_test(db, job_id))
     assert (outcome["state"], outcome["text"]) == ("failed", "The test failed: timed out.")
+
+
+async def test_a_failed_test_with_a_known_code_reads_the_plain_sentence_of_the_code_not_the_raw_error(client, db):
+    # R11: the owner's case. The journal row of the job carries the status as its `code`; the error is the connector's raw text.
+    await login_as(client, db)
+    raw = "[Errno 111] Connect call failed ('172.20.0.3', 4840)"
+    job_id = await job(db, "test_source")
+    event_id = await journal(db, "job.finished", job_id, "unreachable", kind="test_source", ok=False, status="done", error=raw)
+    outcome = await in_list(client, await audit_test(db, job_id))
+    assert outcome == {
+        "state": "failed", "text": "The test failed. Could not connect to the server.", "event_id": event_id, "counts": None,
+    }
+    assert "Errno" not in outcome["text"] and "172.20.0.3" not in outcome["text"]
+
+
+async def test_every_code_in_the_table_has_its_sentence_and_the_job_row_answers_with_its_status(client, db):
+    from dcdash.events.read import CODE_REASONS
+
+    await login_as(client, db)
+    for code, reason in CODE_REASONS.items():
+        from_event = await job(db, "test_source")
+        await journal(db, "job.finished", from_event, code, kind="test_source", ok=False, status="done", error="raw text")
+        from_job = await job(db, "test_source", result={"ok": False, "status": code, "message": "raw text"})  # no journal row
+        assert (await one(client, await audit_test(db, from_event)))["text"] == f"The test failed. {reason}"
+        assert (await one(client, await audit_test(db, from_job)))["text"] == f"The test failed. {reason}"
+
+
+async def test_a_failed_test_with_an_unknown_or_missing_code_keeps_the_scrubbed_raw_reason(client, db):
+    await login_as(client, db)
+    odd = await job(db, "test_source")
+    await journal(db, "job.finished", odd, "BadSomething", kind="test_source", ok=False, status="done", error=f"refused by {SECRET_URL}")
+    none = await job(db, "test_source")
+    await journal(db, "job.finished", none, kind="test_source", ok=False, status="done", error="broke")
+    bare = await job(db, "test_source")
+    await journal(db, "job.finished", bare, "unreachable", kind="test_source", ok=False, status="done")  # a known code needs no reason
+    bad_status = await job(db, "test_source", result={"ok": False, "status": {"x": 1}, "message": "odd result"})
+    assert (await one(client, await audit_test(db, odd)))["text"] == "The test failed: refused by http://[hidden]@10.0.0.5/."
+    assert (await one(client, await audit_test(db, none)))["text"] == "The test failed: broke."
+    assert (await one(client, await audit_test(db, bare)))["text"] == "The test failed. Could not connect to the server."
+    assert (await one(client, await audit_test(db, bad_status)))["text"] == "The test failed: odd result."
+
+
+async def test_a_failed_check_keeps_its_step_sentence_whatever_the_code_of_its_row(client, db):
+    # the code of a check.finished row is the connector's status name (`BadSecurityChecksFailed`), not a failure code of a source
+    await login_as(client, db)
+    job_id = await job(db)
+    await journal(db, "check.finished", job_id, "unreachable", ok=False, first_failed="tcp", steps=2, steps_ok=1)
+    assert (await one(client, await audit_check(db, job_id)))["text"] == 'The connection check failed at "TCP connection".'
+
+
+async def test_the_step_words_are_the_page_s_labels(client, db):
+    await login_as(client, db)
+    for step, label in (("dns", "DNS resolution"), ("endpoints", "Server endpoints"), ("test", "Connection test"), ("read_points", "Reading the points")):
+        job_id = await job(db)
+        await journal(db, "check.finished", job_id, ok=False, first_failed=step, steps=2, steps_ok=1)
+        assert (await one(client, await audit_check(db, job_id)))["text"] == f'The connection check failed at "{label}".'
 
 
 # ---- test all ----------------------------------------------------------------------------------------------------------
@@ -381,8 +438,8 @@ async def test_a_reader_with_only_audit_view_gets_the_outcome_and_nothing_more_t
     assert response.status_code == 200, response.text
     outcome = response.json()["outcome"]
     assert set(outcome) == OUTCOME_KEYS
-    assert outcome["text"] == "The test failed: refused by http://[hidden]@10.0.0.5/."  # the words the journal holds, scrubbed
-    assert "pw-secret-77" not in response.text
+    assert outcome["text"] == "The test failed. The server did not accept the user name or password."  # the code's words, not the raw message
+    assert "pw-secret-77" not in response.text and "refused by" not in outcome["text"]
 
 
 # ---- cost: one query per page ------------------------------------------------------------------------------------------

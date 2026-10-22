@@ -16,6 +16,7 @@ import asyncio
 import functools
 import json
 import logging
+import math
 import time
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -47,7 +48,18 @@ INCIDENT_KEYS = (
 EXTRAS_BUDGET_BYTES = journal.MAX_DETAIL_BYTES - 800
 _RECOVERY_KIND = {journal.SOURCE_OFFLINE: journal.SOURCE_ONLINE, journal.POINTS_BAD: journal.POINTS_RECOVERED}
 
-_OPEN_OR_BUMP = """
+# The two values of an open row that the writer reads back. A row that is damaged or was edited by hand (a `count` that is not a
+# whole number, a `since` that is not a time) must never make a statement fail: one such row would stop every bump, every close and
+# every reconcile at each retry. `CASE` runs the cast only for a value that passed `pg_input_is_valid` (PostgreSQL 16, as
+# `events/settings.py` does): a damaged `count` counts as 0, a damaged `since` falls back to the row's own time.
+_COUNT_OF = (
+    "CASE WHEN pg_input_is_valid(e.detail->>'count', 'bigint') THEN (e.detail->>'count')::bigint ELSE 0::bigint END"
+)
+_SINCE_OF = (
+    "CASE WHEN pg_input_is_valid(e.detail->>'since', 'timestamptz') THEN (e.detail->>'since')::timestamptz ELSE e.ts END"
+)
+
+_OPEN_OR_BUMP = f"""
 WITH t AS (
     SELECT id FROM diag_events
     WHERE kind = $1::text AND source_id = $2::int AND detail->>'state' = 'open'
@@ -57,9 +69,9 @@ WITH t AS (
     SET level = $3::text, code = $4::text, message = $5::text,
         detail = COALESCE(
                 (SELECT jsonb_object_agg(x.k, x.v) FROM jsonb_each(e.detail) AS x(k, v) WHERE x.k = ANY($10::text[])),
-                '{}'::jsonb)
+                '{{}}'::jsonb)
             || $8::jsonb
-            || jsonb_build_object('count', COALESCE((e.detail->>'count')::bigint, 0) + $6::bigint,
+            || jsonb_build_object('count', {_COUNT_OF} + $6::bigint,
                                   'last_at', now(), 'last_error', $7::text)
     FROM t WHERE e.id = t.id
     RETURNING e.id
@@ -70,8 +82,8 @@ WITH t AS (
            || jsonb_build_object('state', 'open', 'count', $6::bigint, 'last_at', now(), 'last_error', $7::text)
            || CASE WHEN $11::boolean
                    THEN COALESCE((SELECT jsonb_build_object('since', s.last_seen) FROM sources s
-                                  WHERE s.id = $2::int AND s.status = 'offline' AND s.last_seen IS NOT NULL), '{}'::jsonb)
-                   ELSE '{}'::jsonb END
+                                  WHERE s.id = $2::int AND s.status = 'offline' AND s.last_seen IS NOT NULL), '{{}}'::jsonb)
+                   ELSE '{{}}'::jsonb END
     WHERE NOT EXISTS (SELECT 1 FROM u)
     RETURNING id
 )
@@ -79,7 +91,7 @@ SELECT id FROM u UNION ALL SELECT id FROM i
 """
 
 # Every open row of (kind, source): overlapping processes can leave two. The unwritten count goes to the newest only.
-_CLOSE_OPEN = """
+_CLOSE_OPEN = f"""
 WITH o AS (
     SELECT id FROM diag_events
     WHERE kind = $1::text AND source_id = $2::int AND detail->>'state' = 'open'
@@ -88,19 +100,19 @@ WITH o AS (
 UPDATE diag_events e
 SET detail = e.detail || jsonb_build_object(
         'state', 'closed', 'closed_at', now(),
-        'duration_seconds', round(EXTRACT(EPOCH FROM now() - COALESCE((e.detail->>'since')::timestamptz, e.ts))::numeric, 1),
+        'duration_seconds', round(EXTRACT(EPOCH FROM now() - {_SINCE_OF})::numeric, 1),
         'closed_by', $3::text,
-        'count', COALESCE((e.detail->>'count')::bigint, 0)
+        'count', {_COUNT_OF}
                  + CASE WHEN e.id = (SELECT max(id) FROM o) THEN $4::bigint ELSE 0::bigint END)
 FROM o WHERE e.id = o.id
 RETURNING e.id, e.ts, e.detail
 """
 
-_RECONCILE = """
+_RECONCILE = f"""
 UPDATE diag_events e
 SET detail = e.detail || jsonb_build_object(
         'state', 'closed', 'closed_at', now(),
-        'duration_seconds', round(EXTRACT(EPOCH FROM now() - COALESCE((e.detail->>'since')::timestamptz, e.ts))::numeric, 1),
+        'duration_seconds', round(EXTRACT(EPOCH FROM now() - {_SINCE_OF})::numeric, 1),
         'closed_by', 'polling_stopped')
 WHERE e.kind = ANY($1::text[]) AND e.detail->>'state' = 'open' AND e.source_id <> ALL($2::int[])
 RETURNING e.id
@@ -109,8 +121,8 @@ RETURNING e.id
 
 def format_span(seconds: float) -> str:
     """A duration in plain words: `45 s`, `3 min`, `2 h 5 min`, `2 h`, `4 d 2 h`, `4 d` (from an hour two units, a zero second unit
-    dropped)."""
-    total = max(0, round(seconds))
+    dropped). Floored, like the page's `formatSpanLong`: 21.6 s is `21 s` in the stored message and on the page."""
+    total = max(0, math.floor(seconds))
     if total < 60:
         return f"{total} s"
     if total < 3600:
