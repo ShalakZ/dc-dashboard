@@ -16,7 +16,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w32 (2026-10-22, MERGEHASH)
+## w32 (2026-10-22, 8741aab)
 
 System events (no migration, no new permission, no change to the figure engine, so nothing is recomputed). A new page, **System events** (Administer, beside Audit), shows what the system did by itself: sources going offline and coming back, checks, imports and errors. A source that is down is now ONE row that counts its failed reads instead of a row each time, and one recovery row says how long it lasted. Sources shows a notice for a source offline more than 2 minutes, and the audit entry of a started check or test shows how it ended, linked both ways. Events are kept 90 days or 100,000 rows (was 14 days and 20,000), changed on a new card on Storage. After the update a source that is still down shows its true start, when it last answered.
 
