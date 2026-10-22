@@ -252,6 +252,24 @@ async def test_another_port_or_another_path_is_not_a_candidate(db):
     assert await offers() == Decision(by_old={}, by_new={})
 
 
+async def test_an_empty_endpoint_path_and_a_slash_are_the_same_place(db):
+    """A hand-typed `opc.tcp://host:4840` (the config is not normalised) must pair with what a scan stores, `opc.tcp://host:4840/`."""
+    await make_scan(db, day=0)
+    old = await old_source(db, "O", "172.20.0.3", path="")
+    second = await make_scan(db, day=3)
+    new = await new_source(db, "C", "172.20.0.5", second, path="/")
+    assert await db.fetchval("SELECT config->>'endpoint' FROM sources WHERE id = $1", old) == "opc.tcp://172.20.0.3:4840"
+    assert (await offers()).by_old[old] == Offer(old_id=old, new_id=new, match=POSSIBLY)
+
+
+async def test_any_other_difference_in_the_endpoint_path_is_a_different_place(db):
+    await make_scan(db, day=0)
+    await old_source(db, "O", "172.20.0.3", path="/dcdash")
+    second = await make_scan(db, day=3)
+    await new_source(db, "C", "172.20.0.5", second, path="/dcdash/")
+    assert await offers() == Decision(by_old={}, by_new={})
+
+
 async def test_the_same_addresses_under_other_names_do_not_overlap(db):
     first = await make_scan(db, day=0)
     old = await old_source(db, "O", "172.20.0.3")
