@@ -297,6 +297,23 @@ async def test_it_runs_at_most_three_statements_however_many_sources_there_are(d
     assert {mark["scan_id"] for mark in result.values()} == {third}
 
 
+async def test_the_read_of_the_scans_is_bounded_to_done_scans_newer_than_the_oldest_last_sighting(db):
+    """`scans` is never pruned: the statement that looks for the newer scan of the range must not read every scan ever made."""
+    source = await make_found(db, "found")
+    await make_scan(db, day=-3)
+    await make_scan(db, day=-2, status="failed")
+    await make_finding(db, await make_scan(db, day=0), "10.0.0.2", 4840, source)
+    await make_scan(db, day=1, status="failed")
+    third = await make_scan(db, day=3)
+    async with get_sessionmaker()() as session:
+        rows = (await session.execute(select(Source.id, Source.origin, Source.connector_type, Source.config))).all()
+        with statements() as sql:
+            result = await not_seen_map(session, rows)
+    assert result[source]["scan_id"] == third
+    over_scans = [s.lower() for s in sql if "from scans" in s.lower() and "scan_findings" not in s.lower()]
+    assert len(over_scans) == 1 and "status" in over_scans[0] and "scans.id >" in over_scans[0], sql
+
+
 async def test_empty_inputs_run_no_statement_and_a_list_without_a_discovered_source_runs_none_either(db):
     hand = await make_found(db, "hand", origin="manual")
     async with get_sessionmaker()() as session:

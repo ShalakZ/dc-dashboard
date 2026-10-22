@@ -6,6 +6,8 @@ A wrong match sends a meter's readings (and the bills built on them) to the wron
 * a name is never evidence: nothing here reads `name`;
 * two different identities, or two different certificates, never match; a default application URI is no identity at all;
 * a URI that sources at OTHER endpoints also report is no identity either;
+* a candidate must have appeared after O went silent (its earliest sighting, `found_at`), and a same-server claim without a
+  certificate on both sides needs every pair O has mapped on a candidate that was browsed;
 * a pairing must be unique in both directions, otherwise the person is told that several servers could be it.
 
 The loaders (`moves/load.py`) build the inputs from the database; the offer's wording lives in the front end."""
@@ -50,7 +52,9 @@ class NewSource:
     path: str
     identity: Mapping[str, Any] | None
     points: int
-    found_at: datetime | None       # when the newest scan that found it finished; None = no finished scan
+    # When it APPEARED: its earliest sighting, the start (`scans.created_at`) of the first finished scan that found it; None = no
+    # finished scan found it. A candidate must have turned up after O went silent, not merely been seen again after that.
+    found_at: datetime | None
     mapped: int                     # mappings on it; a candidate has 0
     overlap: Mapping[int, int]      # old source id -> how many of that old source's mapped (address, name) pairs this one has
 
@@ -97,8 +101,11 @@ def _plain(identity: Mapping[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _thumbprint(identity: Mapping[str, Any] | None) -> str | None:
+    """The stored certificate thumbprint, or None when there is none to compare. Read the way `thumbprints_conflict` reads it (colons
+    and spaces do not count): what is left empty ("::", spaces) is no certificate, so it can neither prove a server nor spare the
+    tick. Anything left, hex or not, stays a thumbprint, so it can still conflict."""
     value = identity.get("thumbprint") if isinstance(identity, Mapping) else None
-    return value if isinstance(value, str) and value.strip() else None
+    return value if isinstance(value, str) and "".join(value.replace(":", "").split()) else None
 
 
 def _endpoint(host: str, port: int) -> tuple[str, int]:
@@ -154,13 +161,16 @@ def _evaluate(old: OldSource, new: NewSource, holders: Mapping[tuple[str, str], 
             return None
         kind, value = old_key
         evidence: Literal["uri", "instance"] = "uri" if kind == "uri" else "instance"
+        missing = None if new.points == 0 else max(0, old.mapped_pairs - addresses)
+        needs_tick = not (old_thumbprint and new_thumbprint)
+        # Without a certificate on both sides an equal URI or instance id is only a claim (a product line shares one URI, a
+        # simulator left at its default shares its id). A C that was browsed and lacks any pair O has mapped is then another
+        # server, and moving would leave those mappings dead: no offer. Equal certificates prove the server, so a few missing
+        # pairs stay a warning; a C never browsed (`missing is None`) cannot be judged and stays allowed.
+        if needs_tick and missing:
+            return None
         return Match(
-            kind="same_server",
-            evidence=evidence,
-            value=value,
-            addresses=addresses,
-            missing_addresses=None if new.points == 0 else max(0, old.mapped_pairs - addresses),
-            needs_tick=not (old_thumbprint and new_thumbprint),
+            kind="same_server", evidence=evidence, value=value, addresses=addresses, missing_addresses=missing, needs_tick=needs_tick,
         )
     # (d) O has no usable key: only "possibly", and only when C has every (address, name) pair O has mapped.
     if new.points >= 1 and old.mapped_pairs >= 1 and addresses == old.mapped_pairs:

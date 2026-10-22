@@ -3,10 +3,10 @@
 The pure matcher is tested in test_source_identity.py. These tests are about what the loader FEEDS it: which sources are old ones
 (offline, OPC UA or simulator, something mapped, unreachable by an open incident or by "not seen"), which are new ones (discovered,
 nothing mapped, found by a scan that finished after the old one last answered), the (address, name) overlap, the holders of every
-identity key, and the number of statements (at most 8 however many sources there are; none when nothing is offline).
+identity key, and the number of statements (at most 9 however many sources there are; none when nothing is offline).
 """
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -17,7 +17,7 @@ from dcdash.events import read as events_read
 from dcdash.moves.freshness import not_seen_map
 from dcdash.moves.load import load_offers, load_offers_detailed
 from dcdash.moves.match import Decision, Match, Offer, Two
-from test_moves_freshness import finished_at, make_finding, make_scan, statements
+from test_moves_freshness import T0, finished_at, make_finding, make_scan, statements
 
 PAIRS = [("ns=2;s=LVP01.kW", "LVP01 kW"), ("ns=2;s=LVP01.V", "LVP01 V"), ("ns=2;s=LVP02.kW", "LVP02 kW")]
 METRICS = ["active_power_kw", "voltage_v", "energy_kwh", "current_a", "frequency_hz", "power_factor"]
@@ -234,14 +234,51 @@ async def test_a_new_source_found_before_the_old_one_last_answered_is_not_a_cand
     assert await offers() == Decision(by_old={}, by_new={})
 
 
-async def test_found_at_is_the_newest_finished_scan_that_found_the_source(db):
-    """C was first found long ago and again after O went quiet: the newest scan counts."""
+async def test_found_at_is_the_start_of_the_first_finished_scan_that_found_the_source(db):
+    """A candidate must have APPEARED after O went quiet, so its EARLIEST sighting counts, not the newest: a later scan that finds
+    it again proves it is still there, not that it is new."""
     old, new = await owners_case(db)
-    early = await make_scan(db, day=-5)
     third = await make_scan(db, day=6)
-    await db.execute("UPDATE scan_findings SET scan_id = $2 WHERE source_id = $1", new, early)
-    assert await offers() == Decision(by_old={}, by_new={})  # only the old scan found it
     await make_finding(db, third, "172.20.0.5", 4840, new)
+    assert (await offers()).by_old[old].new_id == new  # found on day 3 and again on day 6: the first sighting is after O's last poll
+    early = await make_scan(db, day=-5)
+    await make_finding(db, early, "172.20.0.5", 4840, new)
+    assert await offers() == Decision(by_old={}, by_new={})  # it was there before O went quiet: a neighbour, not a replacement
+
+
+async def test_a_new_source_seen_in_the_same_scan_as_the_old_one_is_not_a_candidate_even_when_later_scans_find_it_again(db):
+    """Two units of one make, one of them mapped: both answered on day 0, so the unmapped one did not replace the mapped one."""
+    first = await make_scan(db, day=0)
+    old = await old_source(db, "O", "172.20.0.3")
+    await make_finding(db, first, "172.20.0.3", 4840, old)
+    new = await new_source(db, "C", "172.20.0.5", first)
+    second = await make_scan(db, day=3)
+    await make_finding(db, second, "172.20.0.5", 4840, new)
+    assert await offers() == Decision(by_old={}, by_new={})
+
+
+async def test_a_scan_that_started_before_the_old_source_last_answered_does_not_make_a_candidate_of_what_it_found(db):
+    """The scan ran 08:00 to 09:00 and O last answered at 08:30: C may have been answering at the same time, so C is no replacement."""
+    scan = await make_scan(db, day=0)
+    old = await old_source(db, "O", "172.20.0.3", last_seen=T0 + timedelta(minutes=30))
+    await make_finding(db, scan, "172.20.0.3", 4840, old)
+    await new_source(db, "C", "172.20.0.5", scan)
+    assert await db.fetchval("SELECT finished_at FROM scans WHERE id = $1", scan) > T0 + timedelta(minutes=30)
+    assert await offers() == Decision(by_old={}, by_new={})
+
+
+async def test_a_scan_that_started_after_the_old_source_last_answered_does_make_one(db):
+    scan = await make_scan(db, day=0)
+    old = await old_source(db, "O", "172.20.0.3", last_seen=T0 - timedelta(minutes=30))
+    await make_finding(db, scan, "172.20.0.3", 4840, old)
+    new = await new_source(db, "C", "172.20.0.5", scan)
+    assert (await offers()).by_old[old].new_id == new
+
+
+async def test_only_a_finished_scan_counts_for_found_at_so_a_failed_one_that_found_it_early_changes_nothing(db):
+    old, new = await owners_case(db)
+    failed = await make_scan(db, day=-5, status="failed")
+    await make_finding(db, failed, "172.20.0.5", 4840, new)
     assert (await offers()).by_old[old].new_id == new
 
 
@@ -498,8 +535,25 @@ async def test_a_normal_pass_runs_at_most_eight_statements_whatever_the_number_o
     await populate_more(db, 4, 30)
     big, big_sql = await counted()
     assert len(big.by_old) == 30
-    assert len(small_sql) <= 8 and len(big_sql) <= 8, (small_sql, big_sql)
+    assert len(small_sql) <= 9 and len(big_sql) <= 9, (small_sql, big_sql)
     assert len(big_sql) == len(small_sql)
+
+
+async def test_found_at_is_read_once_for_all_the_candidates_not_once_per_source(db):
+    """`scan_findings` has no index on `source_id` and scans are never pruned, so a read per candidate would grow with sources x
+    findings: one grouped statement reads it for every candidate, and the pass costs the same for 1 and for 60 unmapped sources."""
+    old, new = await owners_case(db)
+    one, one_sql = await counted()
+    assert one.by_old[old].new_id == new
+    second = await db.fetchval("SELECT max(id) FROM scans")
+    for number in range(59):
+        # the same shape as the real candidate (type, port, path), so every one of them is read for its first sighting
+        await new_source(db, f"extra {number}", f"10.3.0.{number + 1}", second)
+    many, many_sql = await counted()
+    assert many.by_old[old] == Two(count=60) and many.by_new[new] == Two(count=60)
+    assert len(many_sql) == len(one_sql), (one_sql, many_sql)
+    reads = [statement for statement in many_sql if "scan_findings" in statement.lower()]
+    assert len(reads) == 1 and "group by" in reads[0].lower(), reads
 
 
 async def populate_more(db, start: int, end: int) -> None:

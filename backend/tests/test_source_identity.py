@@ -399,8 +399,9 @@ def test_same_server_with_no_points_is_allowed_and_missing_addresses_is_none():
 
 @pytest.mark.parametrize("overlap, expected_missing", [(3, 0), (2, 1), (0, 3), (1, 2)])
 def test_missing_addresses_is_mapped_pairs_minus_addresses(overlap, expected_missing):
-    o = old(identity=ident_opcua(URI_A), mapped_pairs=3)
-    offer = only_offer(decide([o], [new(o, identity=ident_opcua(URI_A), overlap={1: overlap})], {}))
+    # equal certificates on both sides: the server is proven, so missing pairs are a warning and not a refusal
+    o = old(identity=ident_opcua(URI_A, THUMB_1), mapped_pairs=3)
+    offer = only_offer(decide([o], [new(o, identity=ident_opcua(URI_A, THUMB_1), overlap={1: overlap})], {}))
     assert offer.match.addresses == overlap
     assert offer.match.missing_addresses == expected_missing
 
@@ -412,9 +413,66 @@ def test_missing_addresses_is_never_negative():
 
 
 def test_same_server_with_a_missing_overlap_entry_has_zero_addresses():
-    o = old(identity=ident_opcua(URI_A), mapped_pairs=3)
-    offer = only_offer(decide([o], [new(o, identity=ident_opcua(URI_A), overlap={})], {}))
+    o = old(identity=ident_opcua(URI_A, THUMB_1), mapped_pairs=3)
+    offer = only_offer(decide([o], [new(o, identity=ident_opcua(URI_A, THUMB_1), overlap={})], {}))
     assert (offer.match.addresses, offer.match.missing_addresses) == (0, 3)
+
+
+# A match that needs the tick (no certificate on both sides) and whose C was browsed must hold every mapped pair of O: a URI shared by
+# a product line, or a simulator id left at its default, would otherwise offer a meter's mappings to a server that has none of them.
+def test_same_server_by_uri_with_points_and_no_overlap_at_all_is_not_offered():
+    o = old(identity=ident_opcua(URI_A), mapped_pairs=3)
+    nothing(decide([o], [new(o, identity=ident_opcua(URI_A), points=10, overlap={1: 0})], {}))
+    nothing(decide([o], [new(o, identity=ident_opcua(URI_A), points=10, overlap={})], {}))
+
+
+@pytest.mark.parametrize("overlap", [0, 1, 2])
+def test_same_server_by_uri_without_certificates_and_two_of_three_pairs_is_not_offered(overlap):
+    o = old(identity=ident_opcua(URI_A), mapped_pairs=3)
+    nothing(decide([o], [new(o, identity=ident_opcua(URI_A), overlap={1: overlap})], {}))
+
+
+def test_same_server_by_uri_with_a_certificate_on_one_side_only_still_needs_every_pair():
+    o = old(identity=ident_opcua(URI_A, THUMB_1), mapped_pairs=3)
+    nothing(decide([o], [new(o, identity=ident_opcua(URI_A), overlap={1: 2})], {}))
+    o2 = old(identity=ident_opcua(URI_A), mapped_pairs=3)
+    nothing(decide([o2], [new(o2, identity=ident_opcua(URI_A, THUMB_1), overlap={1: 2})], {}))
+    assert only_offer(decide([o2], [new(o2, identity=ident_opcua(URI_A, THUMB_1), overlap={1: 3})], {})).match.missing_addresses == 0
+
+
+def test_same_server_by_simulator_instance_with_a_missing_pair_is_not_offered():
+    o = sim_old(identity=ident_sim("dev"), mapped_pairs=3)
+    nothing(decide([o], [new(o, identity=ident_sim("dev"), overlap={1: 2})], {}))
+    assert only_offer(decide([o], [new(o, identity=ident_sim("dev"), overlap={1: 3})], {})).match.missing_addresses == 0
+
+
+def test_same_server_by_uri_with_equal_certificates_and_two_of_three_pairs_is_offered_with_the_warning():
+    o = old(identity=ident_opcua(URI_A, THUMB_1), mapped_pairs=3)
+    offer = only_offer(decide([o], [new(o, identity=ident_opcua(URI_A, THUMB_1), overlap={1: 2})], {}))
+    assert offer.match == Match(kind="same_server", evidence="uri", value=URI_A, addresses=2, missing_addresses=1, needs_tick=False)
+
+
+def test_same_server_by_uri_without_certificates_and_a_c_that_was_never_browsed_is_still_offered():
+    o = old(identity=ident_opcua(URI_A), mapped_pairs=3)
+    offer = only_offer(decide([o], [new(o, identity=ident_opcua(URI_A), points=0, overlap={})], {}))
+    assert (offer.match.needs_tick, offer.match.missing_addresses) == (True, None)
+
+
+def test_a_thumbprint_with_something_left_after_the_colons_and_spaces_still_conflicts_with_a_real_one():
+    o = old(identity=ident_opcua(URI_A, "zz:zz"))
+    nothing(decide([o], [new(o, identity=ident_opcua(URI_A, THUMB_1))], {}))
+
+
+# A thumbprint with no hex digit in it ("::", spaces) is no certificate: the tick stays and it cannot conflict.
+@pytest.mark.parametrize("junk", ["::", " ", ":: ::", "\t:\n"])
+def test_a_junk_thumbprint_is_no_thumbprint_so_the_tick_is_needed(junk):
+    o = old(identity=ident_opcua(URI_A, junk))
+    offer = only_offer(decide([o], [new(o, identity=ident_opcua(URI_A, THUMB_1))], {}))
+    assert (offer.match.kind, offer.match.needs_tick) == ("same_server", True)
+    o2 = old(identity=ident_opcua(URI_A, THUMB_1))
+    assert only_offer(decide([o2], [new(o2, identity=ident_opcua(URI_A, junk))], {})).match.needs_tick is True
+    o3 = old(identity=ident_opcua(URI_A, junk))
+    assert only_offer(decide([o3], [new(o3, identity=ident_opcua(URI_A, junk))], {})).match.needs_tick is True
 
 
 # -------------------------------------------------------------------------------------------------------------- holders

@@ -3,11 +3,14 @@
 Which sources are OLD ones (O): offline, OPC UA or simulator, something mapped, and unreachable: an open `source.offline` incident
 with the code `unreachable` or `timeout`, or (a discovered source only) marked not seen by the newer scan of the same range
 (`moves/freshness.py`). Which are NEW ones (C): discovered, nothing mapped, of the same type, port and endpoint path as some O, with
-the time their newest finished scan found them. For every (O, C) that could pair, how many of O's mapped (address, point name) pairs
-C has, in SQL. And the holders of every identity key (which sources, of any status, report the same server).
+the time they APPEARED (the start of the first finished scan that found them: a candidate must have turned up after O went silent).
+For every (O, C) that could pair, how many of O's mapped (address, point name) pairs C has, in SQL. And the holders of every identity
+key (which sources, of any status, report the same server).
 
-Statements, in this order, and at most 8 however many sources there are: the old sources (1); their open incidents (1); not seen (at
-most 3); the new sources (1); the overlap (1); the holders (1). The loader returns an empty decision, with no further statement, as
+Statements, in this order, and at most 9 however many sources there are: the old sources (1); their open incidents (1); not seen (at
+most 3); the new sources (1); when those were first found, for all of them at once (1); the overlap (1); the holders (1). `scan_findings`
+has no index on `source_id` and scans are never pruned, so it is read in grouped statements for all the ids, never once per source
+(`moves/freshness.py` reads it in three, none of them per source). The loader returns an empty decision, with no further statement, as
 soon as a step finds nothing. Columns are named: a source's encrypted `secret` is never read.
 
 `old_ids` narrows the ANSWER to those old sources and never the field they compete in: every unreachable old source is loaded, so a
@@ -26,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dcdash.connectors.base import connector_types
 from dcdash.connectors.identity import usable_key
 from dcdash.core.models import Mapping as MappingRow
-from dcdash.core.models import Point, Scan, ScanFinding, Source
+from dcdash.core.models import Point, Source
 from dcdash.events import read as events_read
 from dcdash.moves.freshness import not_seen_map
 from dcdash.moves.match import MOVABLE_TYPES, Decision, Holder, NewSource, OldSource, decide
@@ -72,26 +75,30 @@ def _mapped_sources() -> Any:
 
 
 def _unmapped_discovered(types: list[str]) -> Any:
-    """Every discovered source of those types with nothing mapped: its points, and when its newest finished scan found it
-    (NULL when no scan that found it has finished)."""
+    """Every discovered source of those types with nothing mapped, and how many points it has. (When it was first found is a
+    separate, grouped read for the sources that survive the narrowing by port and path: `_found_at`.)"""
     points = select(func.count(Point.id)).where(Point.source_id == Source.id).correlate(Source).scalar_subquery()
-    found_at = (
-        select(func.max(Scan.finished_at))
-        .select_from(ScanFinding)
-        .join(Scan, Scan.id == ScanFinding.scan_id)
-        .where(ScanFinding.source_id == Source.id)
-        .correlate(Source)
-        .scalar_subquery()
-    )
     mapped = select(MappingRow.id).join(Point, Point.id == MappingRow.point_id).where(Point.source_id == Source.id).correlate(Source)
     return (
-        select(
-            Source.id, Source.name, Source.connector_type, Source.config, Source.identity,
-            points.label("points"), found_at.label("found_at"),
-        )
+        select(Source.id, Source.name, Source.connector_type, Source.config, Source.identity, points.label("points"))
         .where(Source.origin == "discovered", Source.connector_type.in_(types), ~mapped.exists())
         .order_by(Source.id)
     )
+
+
+# When each of the listed sources APPEARED: the start of the first finished scan that found it. A candidate must have turned up after
+# the old source went silent, so the EARLIEST sighting counts (a scan that found it again later only proves it is still there), and
+# the scan's start, not its end (a scan that began before the old source's last answer may have seen both answering at once). One
+# pass over `scan_findings` for all the ids, never one per source: the table has no index on `source_id` and scans are never pruned.
+_FOUND_AT = text(
+    """
+    SELECT f.source_id AS source_id, min(s.created_at) AS found_at
+    FROM scan_findings f
+    JOIN scans s ON s.id = f.scan_id AND s.status = 'done'
+    WHERE f.source_id = ANY(CAST(:ids AS int[]))
+    GROUP BY f.source_id
+    """
+)
 
 
 # How many of the old source's mapped (address, point name) pairs the new source has, for the listed (old, new) pairs only.
@@ -158,17 +165,24 @@ async def load_offers_detailed(
         if row.id in unreachable
     ]
 
-    # (c) the new sources: read in one statement, narrowed by type, port and path in Python
+    # (c) the new sources: read in one statement, narrowed by type, port and path in Python; then when each survivor was first found,
+    # in one grouped statement for all of them
     shapes = {(old.connector_type, old.port, old.path) for old in olds}
-    news: list[NewSource] = []
+    narrowed = []
     for row in await db.execute(_unmapped_discovered(sorted({old.connector_type for old in olds}))):
         where = _endpoint(row.connector_type, row.config)
-        if where is None or (row.connector_type, where[1], where[2]) not in shapes:
-            continue
-        news.append(NewSource(
+        if where is not None and (row.connector_type, where[1], where[2]) in shapes:
+            narrowed.append((row, where))
+    if not narrowed:
+        return _NOTHING
+    found_at = {row.source_id: row.found_at for row in await db.execute(_FOUND_AT, {"ids": [row.id for row, _ in narrowed]})}
+    news = [
+        NewSource(
             id=row.id, name=row.name, connector_type=row.connector_type, host=where[0], port=where[1], path=where[2],
-            identity=row.identity, points=row.points, found_at=row.found_at, mapped=0, overlap={},
-        ))
+            identity=row.identity, points=row.points, found_at=found_at.get(row.id), mapped=0, overlap={},
+        )
+        for row, where in narrowed
+    ]
     pairs = [
         (old.id, new.id) for old in olds for new in news
         if (new.connector_type, new.port, new.path) == (old.connector_type, old.port, old.path)
