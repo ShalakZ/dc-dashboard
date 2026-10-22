@@ -245,6 +245,7 @@ async def test_the_move_of_the_owners_case_changes_the_address_and_the_name_and_
         "identity_before": None, "identity_after": None,
         "match": {"kind": "possibly", "evidence": "addresses", "value": None, "addresses": 3, "missing_addresses": 0},
         "mappings": 3, "removed": {"source_id": new, "name": OWNERS_NEW_NAME, "points": 4}, "finding_ids": [new_finding],
+        "last_seen_before": finished_at(0).isoformat(),  # the old source's last answer, as read under the lock (T5b-M1)
     }
     assert await db.fetchval("SELECT user_id FROM audit_log WHERE id = $1", audit_id) == admin
 

@@ -14,7 +14,7 @@ import pytest
 from dcdash.api.scans import SCAN_START_LOCK
 from dcdash.core.crypto import encrypt
 from dcdash.core.pg import CONFIG_CHANNEL
-from dcdash.moves.service import undo_sentence
+from dcdash.moves.service import host_of_authority, undo_sentence
 from helpers import listening, login_as, make_role
 from test_api_asset_move_concurrency import finished, pending
 from test_api_delete_locks import holder
@@ -100,14 +100,26 @@ async def simulator_case(db) -> tuple[int, int]:
     "host, port, readings, expected",
     [
         ("172.20.0.3", 4840, 0, "Moved back to 172.20.0.3:4840."),
-        ("172.20.0.3", 4840, 1, "Moved back to 172.20.0.3:4840. 1 reading taken at the new address stays."),
-        ("172.20.0.3", 4840, 4, "Moved back to 172.20.0.3:4840. 4 readings taken at the new address stay."),
-        ("172.20.0.3", 4840, 1200, "Moved back to 172.20.0.3:4840. 1,200 readings taken at the new address stay."),
+        ("172.20.0.3", 4840, 1, "Moved back to 172.20.0.3:4840. 1 reading taken since the last answer from the old address stays."),
+        ("172.20.0.3", 4840, 4, "Moved back to 172.20.0.3:4840. 4 readings taken since the last answer from the old address stay."),
+        ("172.20.0.3", 4840, 1200, "Moved back to 172.20.0.3:4840. 1,200 readings taken since the last answer from the old address stay."),
+        ("PLC7.Plant", 4840, 2, "Moved back to PLC7.Plant:4840. 2 readings taken since the last answer from the old address stay."),  # the case it had
         ("fe80::1", 4841, 0, "Moved back to [fe80::1]:4841."),  # an IPv6 host is written in brackets, as everywhere a person reads one
     ],
 )
 def test_the_sentence_says_where_the_source_went_back_to_and_what_stays(host, port, readings, expected):
     assert undo_sentence(host, port, readings) == expected
+
+
+@pytest.mark.parametrize(
+    "authority, host",
+    [
+        ("172.20.0.3:4840", "172.20.0.3"), ("PLC7.Plant", "PLC7.Plant"), ("PLC7.Plant:4840", "PLC7.Plant"),
+        ("[fe80::1]:4841", "fe80::1"), ("[FE80::1]", "FE80::1"),
+    ],
+)
+def test_the_host_of_an_authority_keeps_its_case_and_loses_its_port_and_brackets(authority, host):
+    assert host_of_authority(authority) == host
 
 
 # ---- the Undo restores what the move changed -----------------------------------------------------------------------------------
@@ -268,7 +280,8 @@ async def test_an_address_written_in_capitals_and_without_a_port_comes_back_byte
     assert (recorded["host_before"], recorded["port_before"]) == ("plc7.plant", 4840)  # as the matcher reads it
     response = await undo(client, moved_.json()["audit_id"])
     assert response.status_code == 200, response.text
-    assert response.json()["restored"] == {"host": "plc7.plant", "port": 4840, "name": "Plant PLC 7"}
+    assert response.json()["restored"] == {"host": "PLC7.Plant", "port": 4840, "name": "Plant PLC 7"}  # the text it had, case and all (T5b-M6)
+    assert response.json()["text"] == "Moved back to PLC7.Plant:4840."
     assert await row_of(db, old) == before
     assert (await row_of(db, old))["config"]["endpoint"] == "opc.tcp://PLC7.Plant/dcdash/"  # not opc.tcp://plc7.plant:4840/dcdash/
 
@@ -348,38 +361,97 @@ async def test_a_finding_that_belongs_to_another_source_by_now_is_left_alone(cli
     assert await db.fetchval("SELECT source_id FROM scan_findings WHERE id = $1", new_finding) == other
 
 
-# ---- readings_since_move (F13) -------------------------------------------------------------------------------------------------
+# ---- readings_since_move (F13, T5b-M1) -------------------------------------------------------------------------------------------
 
 
-async def test_the_readings_since_the_move_are_counted_and_only_those(client, db):
+async def put_reading(db, audit_id: int, point: int, anchor: str, shift: str, value: int) -> None:
+    """A reading at `anchor` (`ts`: the moment of the move, `last_seen_before`: the old source's last answer) plus `shift`."""
+    when = {"ts": "ts", "last_seen_before": "(detail->>'last_seen_before')::timestamptz"}[anchor]
+    await db.execute(f"INSERT INTO readings (point_id, ts, value) SELECT $1, {when} {shift}, {value} FROM audit_log WHERE id = $2", point, audit_id)
+
+
+async def test_the_readings_since_the_last_answer_from_the_old_address_are_counted_and_only_those(client, db):
     old, new, audit_id = await moved(client, db)
     mapped = [r["id"] for r in await db.fetch("SELECT id FROM points WHERE source_id = $1 ORDER BY id", old)]
     spare = (await add_points(db, old, [("ns=2;s=Spare", "Spare")]))[0]  # a point of the old source that nothing is mapped to
     other = await add_source(db, "another source", "172.20.0.60", origin="manual")
     elsewhere = (await add_points(db, other, [("ns=2;s=E", "E")]))[0]
-    for point, shift, value in (
-        (mapped[0], "- interval '2 hours'", 1), (mapped[0], "- interval '1 second'", 2),  # before the move: not counted
-        (mapped[1], "+ interval '0 seconds'", 3),  # at the very instant of the move: counted
-        (mapped[0], "+ interval '1 second'", 4), (mapped[0], "+ interval '2 seconds'", 5), (mapped[2], "+ interval '3 seconds'", 6),
-        (spare, "+ interval '4 seconds'", 7), (elsewhere, "+ interval '5 seconds'", 8),  # not mapped / not this source: not counted
+    for point, anchor, shift, value in (
+        (mapped[0], "last_seen_before", "- interval '2 hours'", 1), (mapped[0], "last_seen_before", "- interval '1 second'", 2),  # before the last answer: not counted
+        (mapped[1], "last_seen_before", "+ interval '0 seconds'", 3),  # AT the last answer: it is the old address's own reading, not counted
+        (mapped[0], "last_seen_before", "+ interval '1 second'", 4),  # after the last answer, before the move: the backfill wrote it, counted
+        (mapped[0], "ts", "- interval '1 second'", 5), (mapped[1], "ts", "+ interval '0 seconds'", 6), (mapped[2], "ts", "+ interval '3 seconds'", 7),  # counted
+        (spare, "ts", "+ interval '4 seconds'", 8), (elsewhere, "ts", "+ interval '5 seconds'", 9),  # not mapped / not this source: not counted
     ):
-        await db.execute(
-            f"INSERT INTO readings (point_id, ts, value) SELECT $1, ts {shift}, {value} FROM audit_log WHERE id = $2", point, audit_id
-        )
+        await put_reading(db, audit_id, point, anchor, shift, value)
     response = await undo(client, audit_id)
     assert response.status_code == 200, response.text
     assert response.json()["readings_since_move"] == 4
-    assert response.json()["text"] == "Moved back to 172.20.0.3:4840. 4 readings taken at the new address stay."
+    assert response.json()["text"] == "Moved back to 172.20.0.3:4840. 4 readings taken since the last answer from the old address stay."
     [detail] = await audit_rows(db, "source.move_undone")
     assert detail["readings_since_move"] == 4
-    assert await db.fetchval("SELECT count(*) FROM readings") == 8  # the Undo deleted none
+    assert await db.fetchval("SELECT count(*) FROM readings") == 9  # the Undo deleted none
+
+
+async def test_what_the_history_backfill_writes_for_the_outage_after_the_move_is_counted(client, db):
+    """The review's case: 500 rows with a time inside the outage window (before the move) written after the move, and 1 live row."""
+    old, new, audit_id = await moved(client, db)
+    point = await db.fetchval("SELECT id FROM points WHERE source_id = $1 ORDER BY id LIMIT 1", old)
+    await db.execute(
+        "INSERT INTO readings (point_id, ts, value) SELECT $1, (detail->>'last_seen_before')::timestamptz + g * interval '1 minute', g "
+        "FROM audit_log, generate_series(1, 500) g WHERE id = $2", point, audit_id,
+    )
+    await put_reading(db, audit_id, point, "ts", "+ interval '1 second'", 1)
+    response = await undo(client, audit_id)
+    assert response.status_code == 200, response.text
+    assert response.json()["readings_since_move"] == 501
+    assert response.json()["text"] == "Moved back to 172.20.0.3:4840. 501 readings taken since the last answer from the old address stay."
+
+
+async def test_the_move_records_the_last_answer_of_the_old_address(client, db):
+    old, new, audit_id = await moved(client, db)
+    [detail] = await audit_rows(db)
+    assert detail["last_seen_before"] == finished_at(0).isoformat()
+
+
+async def test_a_source_that_never_answered_records_no_last_answer_and_is_still_moved(client, db):
+    await login_as(client, db)
+    old, new = await simulator_case(db)
+    await db.execute("UPDATE sources SET last_seen = NULL WHERE id = $1", old)
+    response = await move(client, old, new)
+    assert response.status_code == 200, response.text
+    [detail] = await audit_rows(db)
+    assert "last_seen_before" in detail and detail["last_seen_before"] is None
+
+
+@pytest.mark.parametrize("how", ["absent", "null"])
+async def test_without_a_recorded_last_answer_the_readings_since_the_move_are_counted(client, db, how):
+    """A move recorded before `last_seen_before` existed (or one whose source never answered): the readings from the moment of the move."""
+    old, new, audit_id = await moved(client, db)
+    await db.execute(
+        "UPDATE audit_log SET detail = " + ("detail - 'last_seen_before'" if how == "absent" else "jsonb_set(detail, '{last_seen_before}', 'null')")
+        + " WHERE id = $1", audit_id,
+    )
+    point = await db.fetchval("SELECT id FROM points WHERE source_id = $1 ORDER BY id LIMIT 1", old)
+    for shift, value in (("- interval '2 hours'", 1), ("- interval '1 second'", 2), ("+ interval '0 seconds'", 3), ("+ interval '2 seconds'", 4)):
+        await put_reading(db, audit_id, point, "ts", shift, value)
+    response = await undo(client, audit_id)
+    assert response.status_code == 200, response.text
+    assert response.json()["readings_since_move"] == 2
+
+
+@pytest.mark.parametrize("recorded", ['5', '"yesterday"', '[]', '"2026-13-45T00:00:00+00:00"'])
+async def test_a_recorded_last_answer_that_is_not_a_time_is_refused_and_nothing_is_written(client, db, recorded):
+    old, new, audit_id = await moved(client, db)
+    await db.execute(f"UPDATE audit_log SET detail = jsonb_set(detail, '{{last_seen_before}}', '{recorded}') WHERE id = $1", audit_id)
+    await refused(client, db, old, audit_id, 409, NOT_UNDOABLE)
 
 
 @pytest.mark.parametrize(
     "number, expected",
     [
-        (1, "Moved back to 172.20.0.3:4840. 1 reading taken at the new address stays."),
-        (1200, "Moved back to 172.20.0.3:4840. 1,200 readings taken at the new address stay."),
+        (1, "Moved back to 172.20.0.3:4840. 1 reading taken since the last answer from the old address stays."),
+        (1200, "Moved back to 172.20.0.3:4840. 1,200 readings taken since the last answer from the old address stay."),
     ],
 )
 async def test_one_reading_is_said_in_the_singular_and_a_thousand_with_a_comma(client, db, number, expected):
@@ -460,12 +532,50 @@ async def test_when_both_changed_the_address_is_the_first_thing_named(client, db
 
 async def test_an_old_name_that_someone_took_in_the_meantime_is_a_409_naming_it(client, db):
     old, new, audit_id = await moved(client, db)
-    taken = await add_source(db, OWNERS_OLD_NAME, "172.20.0.3", origin="manual")  # the old server came back and a person (or a scan) took its name
+    taken = await add_source(db, OWNERS_OLD_NAME, "172.20.0.9", origin="manual")  # a person took the name for a source elsewhere (one AT the old address is the next test's)
     await refused(client, db, old, audit_id, 409, f'the old name "{OWNERS_OLD_NAME}" is taken now; rename that source first')
     await db.execute("UPDATE sources SET name = 'renamed' WHERE id = $1", taken)  # that source is renamed: now it works
     response = await undo(client, audit_id)
     assert response.status_code == 200, response.text
     assert (await row_of(db, old))["name"] == OWNERS_OLD_NAME
+
+
+async def test_another_source_at_the_old_address_now_refuses_the_undo_whatever_the_name_was(client, db):
+    """T5b-M2. After the move a scan found another server at the old address and made a source of it: putting the old source back
+    there would leave two sources on one address, the old one reading a stranger. The case with a typed name: the Undo used to say 200."""
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    await db.execute("UPDATE sources SET name = 'Main incomer meter' WHERE id = $1", old)  # a person typed it: the move leaves it, the Undo has no name to check
+    audit_id = (await move(client, old, new)).json()["audit_id"]
+    later = await make_scan(db, day=5)
+    other = await new_source(db, "some other server", "172.20.0.3", later, identity={"application_uri": "urn:vendor:other"})
+    await refused(
+        client, db, old, audit_id, 409,
+        'Another source ("some other server") is at 172.20.0.3:4840 now; look at Discovery first and decide which one keeps it.',
+    )
+    await db.execute("DELETE FROM sources WHERE id = $1", other)  # that source goes away: now it works
+    assert (await undo(client, audit_id)).status_code == 200
+
+
+async def test_another_source_at_the_old_address_with_the_default_name_is_named_not_the_taken_name(client, db):
+    """The scan names the stranger with the default label of the address, which is exactly the old name: the Undo used to say the old
+    name was taken, and following that advice led to the same duplicate."""
+    old, new, audit_id = await moved(client, db)
+    later = await make_scan(db, day=5)
+    await new_source(db, OWNERS_OLD_NAME, "172.20.0.3", later)
+    await refused(
+        client, db, old, audit_id, 409,
+        f'Another source ("{OWNERS_OLD_NAME}") is at 172.20.0.3:4840 now; look at Discovery first and decide which one keeps it.',
+    )
+
+
+async def test_a_source_at_another_address_or_of_another_kind_does_not_stand_in_the_way(client, db):
+    old, new, audit_id = await moved(client, db)
+    await add_source(db, "same port, other host", "172.20.0.4", origin="manual")
+    await add_source(db, "same host, other port", "172.20.0.3", port=4841, origin="manual")
+    await add_source(db, "same host, a simulator", "172.20.0.3", kind="simulator", port=4840, origin="manual")
+    await add_source(db, "a modbus device", "172.20.0.3", kind="modbus", origin="manual")
+    assert (await undo(client, audit_id)).status_code == 200
 
 
 @pytest.mark.parametrize("status", ["queued", "running"])

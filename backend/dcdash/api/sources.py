@@ -30,6 +30,9 @@ router = APIRouter(prefix="/api", tags=["sources"])
 
 CHECK_LOCK = 7_308_001  # advisory-lock namespace (first int); the source id is the second: one check start per source at a time
 CHECK_COOLDOWN_SECONDS = 5
+STALE_FORM = (
+    "This source was changed since you opened it (for example it was moved to a new address). Close the form and open it again."
+)
 
 
 class SourceIn(BaseModel):
@@ -48,6 +51,10 @@ class SourcePatch(BaseModel):
     # Keys of `config` the admin wants stored without their hidden part (URL credentials) although the form sent the
     # masked value back; see reconcile_config.
     clear_config_credentials: list[str] = Field(default=[], max_length=20)
+    # The masked config the edit form was opened with (what GET /api/sources showed as `config`). When both this and `config` are sent
+    # and the stored config no longer shows the same, the form is stale (for example the source was moved to a new address since)
+    # and saving it would write the old values back: refused with a 409, nothing changed. Absent for an older client: no check.
+    expect_config: dict[str, Any] | None = None
 
 
 class SourceOut(BaseModel):
@@ -361,6 +368,8 @@ async def update_source(
     source = await db.scalar(select(Source).where(Source.id == source_id).with_for_update())
     if source is None:
         raise HTTPException(404, "source not found")
+    if body.config is not None and body.expect_config is not None and safe_config(source.config) != body.expect_config:
+        raise HTTPException(409, STALE_FORM)  # read under the row lock above, so a move that was in flight is already in it (w33 T5b-I1)
     before = _values(source)
     raw_config = copy.deepcopy(source.config)
     if body.name is not None:

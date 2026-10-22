@@ -23,7 +23,7 @@ from helpers import login_as
 from test_api_asset_move_concurrency import finished, pending
 from test_api_delete_locks import WAIT, holder
 from test_api_moves import (
-    MOVE, OWNERS_NEW_NAME, OWNERS_OLD_NAME, audit_rows, counts, expect_of, preview, row_of, with_hint,
+    MOVE, OWNERS_NEW_NAME, OWNERS_OLD_NAME, audit_rows, counts, credentialed_case, expect_of, preview, row_of, with_hint,
 )
 from test_api_scans import create_scope, start_scan
 from test_moves_load import owners_case
@@ -311,3 +311,87 @@ async def test_a_patch_of_the_old_source_waits_for_a_move_in_flight_and_reads_wh
 async def test_a_patch_of_a_missing_source_is_still_a_404(client, db):
     await login_as(client, db)
     assert (await client.patch("/api/sources/99999", json={"name": "x"})).status_code == 404
+
+
+# ---- PATCH with `expect_config`: a form opened before a move cannot write the dead address back (T5b-I1) -------------------------
+
+
+async def shown_config(client, source_id: int) -> dict:
+    """The masked config the Sources page (and so an edit form) shows for the source right now."""
+    return next(row["config"] for row in (await client.get("/api/sources")).json() if row["id"] == source_id)
+
+
+async def test_a_stale_form_that_saves_a_timeout_after_a_move_is_a_409_and_changes_nothing(client, db):
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    opened_with = await shown_config(client, old)  # the form is opened here ...
+    assert (await client.post(MOVE.format(old), json=await body_for(client, old, new))).status_code == 200  # ... the move goes through
+    moved = await row_of(db, old)
+    assert moved["config"] == {"endpoint": "opc.tcp://172.20.0.5:4840/"}
+    response = await client.patch(
+        f"/api/sources/{old}", json={"config": {**opened_with, "timeout_seconds": 9}, "expect_config": opened_with}
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == (
+        "This source was changed since you opened it (for example it was moved to a new address). Close the form and open it again."
+    )
+    assert await row_of(db, old) == moved  # not the dead address, not the timeout
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'source.updated'") == 0
+
+
+async def test_a_form_opened_after_the_move_saves_its_edit(client, db):
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    assert (await client.post(MOVE.format(old), json=await body_for(client, old, new))).status_code == 200
+    opened_with = await shown_config(client, old)
+    assert opened_with == {"endpoint": "opc.tcp://172.20.0.5:4840/"}
+    response = await client.patch(
+        f"/api/sources/{old}", json={"config": {**opened_with, "timeout_seconds": 9}, "expect_config": opened_with}
+    )
+    assert response.status_code == 200, response.text
+    stored = (await row_of(db, old))["config"]  # (the connector fills in its defaults on a save)
+    assert (stored["endpoint"], stored["timeout_seconds"]) == ("opc.tcp://172.20.0.5:4840/", 9)
+
+
+async def test_a_client_that_sends_no_expect_config_behaves_as_before(client, db):
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    opened_with = await shown_config(client, old)
+    assert (await client.post(MOVE.format(old), json=await body_for(client, old, new))).status_code == 200
+    response = await client.patch(f"/api/sources/{old}", json={"config": {**opened_with, "timeout_seconds": 9}})
+    assert response.status_code == 200, response.text  # an older client is not asked to prove anything
+    stored = (await row_of(db, old))["config"]
+    assert (stored["endpoint"], stored["timeout_seconds"]) == ("opc.tcp://172.20.0.3:4840/", 9)  # the dead address is back, as it always was
+
+
+async def test_a_patch_without_a_config_ignores_expect_config(client, db):
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    opened_with = await shown_config(client, old)
+    assert (await client.post(MOVE.format(old), json=await body_for(client, old, new))).status_code == 200
+    response = await client.patch(f"/api/sources/{old}", json={"enabled": True, "expect_config": opened_with})
+    assert response.status_code == 200, response.text  # nothing in the config is written, so a stale picture of it harms nothing
+    assert (await row_of(db, old))["config"] == {"endpoint": "opc.tcp://172.20.0.5:4840/"} and (await row_of(db, old))["enabled"] is True
+
+
+async def test_a_credentialed_address_compares_equal_to_its_own_masked_echo_and_a_stale_one_says_no_secret(client, db):
+    await login_as(client, db)
+    old, new = await credentialed_case(db)
+    opened_with = await shown_config(client, old)
+    assert "pass" not in str(opened_with)  # what the form holds is the masked address
+    response = await client.patch(
+        f"/api/sources/{old}", json={"config": {**opened_with, "timeout_seconds": 12.0}, "expect_config": opened_with}
+    )
+    assert response.status_code == 200, response.text
+    stored = (await row_of(db, old))["config"]
+    assert stored["endpoint"] == "opc.tcp://user:pass@172.20.0.3:4840/dcdash/" and stored["timeout_seconds"] == 12.0  # the hidden part is kept
+    # the move, then the same stale form again
+    still_opened_with = await shown_config(client, old)
+    assert (await client.post(MOVE.format(old), json=await body_for(client, old, new))).status_code == 200
+    moved = await row_of(db, old)
+    stale = await client.patch(
+        f"/api/sources/{old}", json={"config": {**still_opened_with, "timeout_seconds": 5.0}, "expect_config": still_opened_with}
+    )
+    assert stale.status_code == 409, stale.text
+    assert "pass" not in stale.text and "user:" not in stale.text and "s3cret" not in stale.text
+    assert await row_of(db, old) == moved

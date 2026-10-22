@@ -371,6 +371,7 @@ async def move_source(
     if (None if final is None else final["to"]) != name_after:
         raise HTTPException(409, "changed since the preview: the name it would get is not free any more; look at it again")
     name_before, identity_before = old.name, copy.deepcopy(old.identity)
+    last_seen_before = None if old.last_seen is None else old.last_seen.isoformat()
     old.config = new_config
     old.identity = new_identity
     if final is not None:
@@ -388,6 +389,9 @@ async def move_source(
         "address": body.address, "identity_before": identity_before, "identity_after": copy.deepcopy(new_identity),
         "match": _match_for_audit(match), "mappings": mappings, "removed": removed,
         "finding_ids": finding_ids[-MAX_FINDING_IDS:],
+        # O's last answer from the old address, as read under the lock (null: it never answered). Nothing of O can be newer than this
+        # from there, so the Undo counts the readings after it as the ones taken at the new address (T5b-M1).
+        "last_seen_before": last_seen_before,
     }
     response = {
         "dry_run": False, "audit_id": None, "source": {"id": old.id, "name": old.name}, "from": from_, "to": to,
@@ -406,8 +410,9 @@ def _said(value: Any) -> str:
 # Takes back what ONE `source.moved` audit row says the move changed, inside the current state of the source: the host and port in
 # its CURRENT config (every other key, the user info, the path and the secret stay as they are now), its identity, its name, and the
 # scan findings the move re-pointed. It does not recreate the removed duplicate (the next scan finds it again) and it does not undo
-# readings: it counts the ones taken since the move and says they stay. It refuses, saying the first thing that is in the way, when the
-# source is not as the move left it. The order of the locks is the move's: the scan lock, then the source (its row, then its points).
+# readings: it counts the ones taken since the old address last answered (the move's time when that is not recorded) and says they stay.
+# It refuses, saying the first thing that is in the way, when the source is not as the move left it (or another source holds the old
+# address now). The order of the locks is the move's: the scan lock, then the source (its row, then its points).
 
 _ALREADY_UNDONE = text(
     "SELECT 1 FROM audit_log WHERE action = 'source.move_undone' AND id > :id AND detail->>'audit_id' = CAST(:id AS text) LIMIT 1"
@@ -415,7 +420,11 @@ _ALREADY_UNDONE = text(
 _MAPPED_POINTS = text(
     "SELECT DISTINCT m.point_id FROM mappings m JOIN points p ON p.id = m.point_id WHERE p.source_id = :id"
 )
-_READINGS_SINCE = text("SELECT count(*) FROM readings WHERE point_id = ANY(CAST(:ids AS int[])) AND ts >= :since")
+# The readings of those points taken at the new address. With the old source's last answer on record (T5b-M1): everything newer than it,
+# which includes what the history backfill wrote for the outage window after the move (its times lie before the move). Without it (a
+# move recorded before it was kept, or a source that never answered): everything from the moment of the move on.
+_READINGS_AFTER_LAST_ANSWER = text("SELECT count(*) FROM readings WHERE point_id = ANY(CAST(:ids AS int[])) AND ts > :since")
+_READINGS_SINCE_MOVE = text("SELECT count(*) FROM readings WHERE point_id = ANY(CAST(:ids AS int[])) AND ts >= :since")
 
 
 @dataclass(frozen=True)
@@ -432,6 +441,7 @@ class Recorded:
     identity_before: dict[str, Any] | None
     finding_ids: tuple[int, ...]
     authority_before: str | None = None  # the host[:port] text as it was stored; a row written before the move recorded it has none
+    last_seen_before: datetime | None = None  # the old source's last answer; None for a row that predates it or a source that never answered
 
 
 def _whole(value: Any) -> bool:
@@ -442,13 +452,16 @@ def recorded_move(detail: Any) -> Recorded:
     """The audit row's detail as plain values, or a 409 `this audit row does not hold what an undo needs` for a row that lacks a key
     or holds one of the wrong kind (the move writes every one of them; this is a row nobody should have edited)."""
     try:
+        last_seen_before = detail.get("last_seen_before")
+        if isinstance(last_seen_before, str):
+            last_seen_before = datetime.fromisoformat(last_seen_before)
         found = Recorded(
             source_id=detail["source_id"], name_before=detail["name_before"], name_after=detail["name_after"],
             host_before=detail["host_before"], port_before=detail["port_before"], host_after=detail["host_after"],
             port_after=detail["port_after"], identity_before=detail["identity_before"], finding_ids=tuple(detail["finding_ids"]),
-            authority_before=detail.get("authority_before"),
+            authority_before=detail.get("authority_before"), last_seen_before=last_seen_before,
         )
-    except (AttributeError, KeyError, TypeError):
+    except (AttributeError, KeyError, TypeError, ValueError):
         raise HTTPException(409, NOT_UNDOABLE) from None
     valid = (
         _whole(found.source_id) and _whole(found.port_before) and found.port_before <= 65535
@@ -456,6 +469,7 @@ def recorded_move(detail: Any) -> Recorded:
         and all(isinstance(value, str) and value for value in (found.name_before, found.name_after, found.host_before, found.host_after))
         and (found.identity_before is None or isinstance(found.identity_before, dict))
         and (found.authority_before is None or (isinstance(found.authority_before, str) and found.authority_before != ""))
+        and (found.last_seen_before is None or (isinstance(found.last_seen_before, datetime) and found.last_seen_before.tzinfo is not None))
         and isinstance(detail["finding_ids"], list) and all(_whole(i) for i in found.finding_ids)
     )
     if not valid:
@@ -463,15 +477,28 @@ def recorded_move(detail: Any) -> Recorded:
     return found
 
 
+def host_of_authority(authority: str) -> str:
+    """The host of a stored `host[:port]` (`authority_of`) as it is written: its letter case kept, the port and the brackets of an IPv6
+    host left out."""
+    if authority.startswith("["):
+        end = authority.find("]")
+        return authority[1:end] if end > 0 else authority
+    host, colon, port = authority.rpartition(":")
+    return host if colon and port.isdigit() else authority
+
+
+def _host_port(host: str, port: int) -> str:
+    return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+
+
 def undo_sentence(host: str, port: int, readings: int) -> str:
-    """`Moved back to 172.20.0.3:4840.` and, when readings were taken at the new address since the move, that they stay."""
-    where = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    """`Moved back to 172.20.0.3:4840.` and, when readings were taken since the old address last answered, that they stay."""
     stay = ""
     if readings == 1:
-        stay = " 1 reading taken at the new address stays."
+        stay = " 1 reading taken since the last answer from the old address stays."
     elif readings:
-        stay = f" {readings:,} readings taken at the new address stay."
-    return f"Moved back to {where}.{stay}"
+        stay = f" {readings:,} readings taken since the last answer from the old address stay."
+    return f"Moved back to {_host_port(host, port)}.{stay}"
 
 
 def _quoted(name: str) -> str:
@@ -506,6 +533,18 @@ async def undo_move(db: AsyncSession, audit_id: int, detail: Any, moved_at: date
     where = address_key(old.connector_type, old.config)
     if where is None or (where[0], where[1]) != (rec.host_after.lower(), rec.port_after):
         raise HTTPException(409, ADDRESS_CHANGED)
+    restored_host = rec.host_before if rec.authority_before is None else host_of_authority(rec.authority_before)  # the text it had (T5b-M6)
+    # Another source at the address being restored (a scan after the move can have found another server there): the Undo would leave
+    # two sources on one address, the old one reading a stranger. Said before the name checks, which a default name would trip first (T5b-M2).
+    for other in await db.execute(
+        select(Source.name, Source.config).where(Source.connector_type == old.connector_type, Source.id != old.id).order_by(Source.id)
+    ):
+        if address_key(old.connector_type, other.config) == (rec.host_before.lower(), rec.port_before, where[2]):
+            raise HTTPException(
+                409,
+                f"Another source ({_quoted(other.name)}) is at {_host_port(restored_host, rec.port_before)} now; "
+                "look at Discovery first and decide which one keeps it.",
+            )
     if old.name != rec.name_after:
         raise HTTPException(409, NAME_CHANGED)
     if rec.name_before != old.name and await _name_taken(db, rec.name_before, old.id):
@@ -534,8 +573,10 @@ async def undo_move(db: AsyncSession, audit_id: int, detail: Any, moved_at: date
     # 5. the readings taken at the new address since the move: they stay (F13)
     point_ids = list(await db.scalars(_MAPPED_POINTS, {"id": old.id}))
     readings = 0
-    if point_ids:
-        readings = int(await db.scalar(_READINGS_SINCE, {"ids": point_ids, "since": moved_at}) or 0)
+    if point_ids and rec.last_seen_before is not None:
+        readings = int(await db.scalar(_READINGS_AFTER_LAST_ANSWER, {"ids": point_ids, "since": rec.last_seen_before}) or 0)
+    elif point_ids:
+        readings = int(await db.scalar(_READINGS_SINCE_MOVE, {"ids": point_ids, "since": moved_at}) or 0)
 
     # 6. writes
     if rec.finding_ids:
@@ -560,8 +601,8 @@ async def undo_move(db: AsyncSession, audit_id: int, detail: Any, moved_at: date
     }
     response = {
         "source": {"id": old.id, "name": old.name},
-        "restored": {"host": rec.host_before, "port": rec.port_before, "name": old.name},
+        "restored": {"host": restored_host, "port": rec.port_before, "name": old.name},
         "readings_since_move": readings,
-        "text": undo_sentence(rec.host_before, rec.port_before, readings),
+        "text": undo_sentence(restored_host, rec.port_before, readings),
     }
     return response, undone
