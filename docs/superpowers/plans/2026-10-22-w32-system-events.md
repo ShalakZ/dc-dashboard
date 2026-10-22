@@ -212,6 +212,8 @@ I1 -> P4, P11, tests e2/e3. I2 -> P11, test g. I3 -> P11 (sync after the cancels
 ## Merge order
 Gates per RESUME.md; full backend suite once after the last backend commit (detached, under the heavy lock), the full frontend suite, typecheck, build, the e2e type check, `vis-rebuild.sh`, the gallery, the whole-wave Opus review, one fix wave, close-out docs, merge, counts, backup, rebuild, health, counts, 2 MB check, push, branch deletion, memory bullet, MORNING, marker.
 
+- [x] Done 2026-10-22: merged `8741aab` (main `2f3a51c` with the merge-hash docs commit), the dev database counts taken (`.waves/w32/counts-before.txt`), `scripts/backup.sh` wrote `backups/dcdash-20261022-145333.dump` (schema 0016), the dev stack rebuilt at build id `2f3a51c`, `db`, `api` and `web` healthy and `/api/health` 200, the counts equal after except `readings` (5,461,530 to 5,461,863, it grows by itself) and `diag_events` (359 to 360).
+
 ## Execution log (2026-10-22, one unattended session; times from the ledger `.waves/w32/progress.md`, which is kept in the git-ignored workspace)
 - 10:37 start; 10:48 plan; 11:05 plan review (Opus: 0 Critical, 11 Important, 17 Minor, all folded in above); 11:07 Tasks 1a, 2, 4a in parallel.
 - Task 1a `12df275` (the incident book, 38 tests), Task 2 `473ed01` (retention), Task 4a `5e2ee08` (scaffold), Task 3a `d736bc6` (read routes), Task 5 `4bd53ed` (Sources banner), Task 7 `2beda9d` (Storage card), Task 6 `eb67cf5` (Audit outcome), Task 1b `2cc5585` (scheduler and report), Task 4b `32e60af` (the page), Task 3b `b0e9286` (sources fields and audit outcome), Task 9 `7562e3f` (docs), Task 8 `b842694` (the end-to-end spec: 7 cases, passed twice on the look stack).
