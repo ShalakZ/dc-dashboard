@@ -23,6 +23,8 @@ from dcdash.connectors.identity import thumbprints_conflict, usable_key
 # The only connector types whose servers can say who they are. Everything else is never offered.
 MOVABLE_TYPES = frozenset({"opcua", "simulator"})
 
+_HEX = "0123456789abcdefABCDEF"
+
 
 @dataclass(frozen=True)
 class OldSource:
@@ -101,11 +103,11 @@ def _plain(identity: Mapping[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _thumbprint(identity: Mapping[str, Any] | None) -> str | None:
-    """The stored certificate thumbprint, or None when there is none to compare. Read the way `thumbprints_conflict` reads it (colons
-    and spaces do not count): what is left empty ("::", spaces) is no certificate, so it can neither prove a server nor spare the
-    tick. Anything left, hex or not, stays a thumbprint, so it can still conflict."""
+    """The stored certificate thumbprint, or None when there is none to compare: a value with no hex digit in it ("::", spaces,
+    "unknown") is no certificate, so it can neither prove a server nor spare the tick (two equal junk values must not look like two
+    equal certificates). A value with at least one hex digit stays a thumbprint and is compared as `thumbprints_conflict` does."""
     value = identity.get("thumbprint") if isinstance(identity, Mapping) else None
-    return value if isinstance(value, str) and "".join(value.replace(":", "").split()) else None
+    return value if isinstance(value, str) and any(char in _HEX for char in value) else None
 
 
 def _endpoint(host: str, port: int) -> tuple[str, int]:

@@ -458,13 +458,9 @@ def test_same_server_by_uri_without_certificates_and_a_c_that_was_never_browsed_
     assert (offer.match.needs_tick, offer.match.missing_addresses) == (True, None)
 
 
-def test_a_thumbprint_with_something_left_after_the_colons_and_spaces_still_conflicts_with_a_real_one():
-    o = old(identity=ident_opcua(URI_A, "zz:zz"))
-    nothing(decide([o], [new(o, identity=ident_opcua(URI_A, THUMB_1))], {}))
-
-
-# A thumbprint with no hex digit in it ("::", spaces) is no certificate: the tick stays and it cannot conflict.
-@pytest.mark.parametrize("junk", ["::", " ", ":: ::", "\t:\n"])
+# A thumbprint with no hex digit in it ("::", spaces, "unknown") is no certificate: the tick stays and it cannot conflict. Only a
+# hand edit can store one (`thumbprint_of` always writes hex), and a real certificate on the other side is then compared to nothing.
+@pytest.mark.parametrize("junk", ["::", " ", ":: ::", "\t:\n", "unknown", "zz:zz", "--"])
 def test_a_junk_thumbprint_is_no_thumbprint_so_the_tick_is_needed(junk):
     o = old(identity=ident_opcua(URI_A, junk))
     offer = only_offer(decide([o], [new(o, identity=ident_opcua(URI_A, THUMB_1))], {}))
@@ -473,6 +469,17 @@ def test_a_junk_thumbprint_is_no_thumbprint_so_the_tick_is_needed(junk):
     assert only_offer(decide([o2], [new(o2, identity=ident_opcua(URI_A, junk))], {})).match.needs_tick is True
     o3 = old(identity=ident_opcua(URI_A, junk))
     assert only_offer(decide([o3], [new(o3, identity=ident_opcua(URI_A, junk))], {})).match.needs_tick is True
+
+
+def test_two_equal_junk_thumbprints_are_not_two_equal_certificates():
+    o = old(identity=ident_opcua(URI_A, "unknown"))
+    offer = only_offer(decide([o], [new(o, identity=ident_opcua(URI_A, "UNKNOWN"))], {}))
+    assert (offer.match.kind, offer.match.needs_tick) == ("same_server", True)
+
+
+def test_a_thumbprint_with_one_hex_digit_in_it_is_still_a_thumbprint_and_still_conflicts():
+    o = old(identity=ident_opcua(URI_A, "a:zz"))
+    nothing(decide([o], [new(o, identity=ident_opcua(URI_A, THUMB_1))], {}))
 
 
 # -------------------------------------------------------------------------------------------------------------- holders

@@ -2,7 +2,7 @@
 
 The pure matcher is tested in test_source_identity.py. These tests are about what the loader FEEDS it: which sources are old ones
 (offline, OPC UA or simulator, something mapped, unreachable by an open incident or by "not seen"), which are new ones (discovered,
-nothing mapped, found by a scan that finished after the old one last answered), the (address, name) overlap, the holders of every
+nothing mapped, first found by a finished scan that STARTED after the old one last answered), the (address, name) overlap, the holders of every
 identity key, and the number of statements (at most 9 however many sources there are; none when nothing is offline).
 """
 from dataclasses import replace
