@@ -20,10 +20,15 @@ The preview takes no lock at all (a big server has thousands of points) and, whi
 refusing. It never changes an attribute of a loaded row, so nothing is flushed.
 
 Nothing here writes an endpoint with its user info: answers and the audit detail carry host, port and `display_endpoint` only.
+
+`undo_move` (further down) takes a move back from the audit row that recorded it; it is the move's mirror and takes the same locks in the
+same order (the scan lock, then the source and its points).
 """
 import copy
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import HTTPException
@@ -59,6 +64,15 @@ NOT_MOVABLE = (
     "so edit its address by hand."
 )
 CANNOT_WRITE = "the new address could not be written into this source; edit its address by hand"
+
+# The Undo's refusals (each is a rolled-back 409 and says the first thing that is in the way).
+UNDO_SCAN_RUNNING = "A scan is running. Undo the move when it has finished."
+ALREADY_UNDONE = "this move was already undone"
+DELETED_SINCE = "the source was deleted after the move"
+ADDRESS_CHANGED = "the source's address was changed after the move; edit it by hand"
+NAME_CHANGED = "the source's name was changed after the move; edit it by hand"
+NOT_UNDOABLE = "this audit row does not hold what an undo needs"
+CANNOT_PUT_BACK = "the old address could not be written back into this source; edit its address by hand"
 
 _HOST_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?")
 
@@ -353,3 +367,163 @@ async def move_source(
 def _said(value: Any) -> str:
     """A value of `expect` or of the server, in words for the refusal: numbers and addresses as they are, no new name as "the same"."""
     return "the same name" if value is None else str(value)
+
+
+# ---- the Undo (w33 R5, P9, F8, F9, F10, F13, F-M4) ---------------------------------------------------------------------------------
+#
+# Takes back what ONE `source.moved` audit row says the move changed, inside the current state of the source: the host and port in
+# its CURRENT config (every other key, the user info, the path and the secret stay as they are now), its identity, its name, and the
+# scan findings the move re-pointed. It does not recreate the removed duplicate (the next scan finds it again) and it does not undo
+# readings: it counts the ones taken since the move and says they stay. It refuses, saying the first thing that is in the way, when the
+# source is not as the move left it. The order of the locks is the move's: the scan lock, then the source (its row, then its points).
+
+_ALREADY_UNDONE = text(
+    "SELECT 1 FROM audit_log WHERE action = 'source.move_undone' AND id > :id AND detail->>'audit_id' = CAST(:id AS text) LIMIT 1"
+)
+_MAPPED_POINTS = text(
+    "SELECT DISTINCT m.point_id FROM mappings m JOIN points p ON p.id = m.point_id WHERE p.source_id = :id"
+)
+_READINGS_SINCE = text("SELECT count(*) FROM readings WHERE point_id = ANY(CAST(:ids AS int[])) AND ts >= :since")
+
+
+@dataclass(frozen=True)
+class Recorded:
+    """What a `source.moved` audit row says: where the source was and is, and what the move re-pointed."""
+
+    source_id: int
+    name_before: str
+    name_after: str
+    host_before: str
+    port_before: int
+    host_after: str
+    port_after: int
+    identity_before: dict[str, Any] | None
+    finding_ids: tuple[int, ...]
+
+
+def _whole(value: Any) -> bool:
+    return type(value) is int and 0 < value <= INT32_MAX
+
+
+def recorded_move(detail: Any) -> Recorded:
+    """The audit row's detail as plain values, or a 409 `this audit row does not hold what an undo needs` for a row that lacks a key
+    or holds one of the wrong kind (the move writes every one of them; this is a row nobody should have edited)."""
+    try:
+        found = Recorded(
+            source_id=detail["source_id"], name_before=detail["name_before"], name_after=detail["name_after"],
+            host_before=detail["host_before"], port_before=detail["port_before"], host_after=detail["host_after"],
+            port_after=detail["port_after"], identity_before=detail["identity_before"], finding_ids=tuple(detail["finding_ids"]),
+        )
+    except (KeyError, TypeError):
+        raise HTTPException(409, NOT_UNDOABLE) from None
+    valid = (
+        _whole(found.source_id) and _whole(found.port_before) and found.port_before <= 65535
+        and _whole(found.port_after) and found.port_after <= 65535
+        and all(isinstance(value, str) and value for value in (found.name_before, found.name_after, found.host_before, found.host_after))
+        and (found.identity_before is None or isinstance(found.identity_before, dict))
+        and isinstance(detail["finding_ids"], list) and all(_whole(i) for i in found.finding_ids)
+    )
+    if not valid:
+        raise HTTPException(409, NOT_UNDOABLE)
+    return found
+
+
+def undo_sentence(host: str, port: int, readings: int) -> str:
+    """`Moved back to 172.20.0.3:4840.` and, when readings were taken at the new address since the move, that they stay."""
+    where = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    stay = ""
+    if readings == 1:
+        stay = " 1 reading taken at the new address stays."
+    elif readings:
+        stay = f" {readings:,} readings taken at the new address stay."
+    return f"Moved back to {where}.{stay}"
+
+
+def _quoted(name: str) -> str:
+    return '"' + "".join(char if char.isprintable() else "?" for char in name)[:80] + '"'
+
+
+async def _name_taken(db: AsyncSession, name: str, source_id: int) -> bool:
+    """Another source (discovered ones nobody mapped included: the name is unique across all) already has this name."""
+    return await db.scalar(select(Source.id).where(Source.name == name, Source.id != source_id).limit(1)) is not None
+
+
+async def undo_move(db: AsyncSession, audit_id: int, detail: Any, moved_at: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Take back the move of the `source.moved` audit row `audit_id` (its `detail` and time `moved_at`). Returns `(answer, audit detail
+    of the Undo)`; the caller audits and commits, inside a rolled-back-409 block (api/moves.py). A refusal is an `HTTPException`."""
+    rec = recorded_move(detail)
+
+    # 1. a scan (the move's own first step: no scan starts or finishes under us)
+    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": SCAN_START_LOCK})
+    if await db.scalar(select(func.count()).select_from(Scan).where(Scan.status.in_(("queued", "running")))):
+        raise HTTPException(409, UNDO_SCAN_RUNNING)
+
+    # 2. the source and its points, then the row as the database holds it now (a PATCH that committed while this waited counts)
+    if not await _lock_source(db, rec.source_id):
+        raise HTTPException(409, DELETED_SINCE)
+    if (await db.execute(_ALREADY_UNDONE, {"id": audit_id})).first() is not None:
+        raise HTTPException(409, ALREADY_UNDONE)
+    old = await _fresh(db, rec.source_id)
+    if old is None:  # cannot happen under the lock
+        raise HTTPException(409, DELETED_SINCE)
+
+    # 3. is it as the move left it? The address first, then the name; the host compared without regard to case (F-M4).
+    where = address_key(old.connector_type, old.config)
+    if where is None or (where[0], where[1]) != (rec.host_after.lower(), rec.port_after):
+        raise HTTPException(409, ADDRESS_CHANGED)
+    if old.name != rec.name_after:
+        raise HTTPException(409, NAME_CHANGED)
+    if rec.name_before != old.name and await _name_taken(db, rec.name_before, old.id):
+        raise HTTPException(409, f"the old name {_quoted(rec.name_before)} is taken now; rename that source first")
+
+    # 4. the address back, inside the current config: only the host and port change, as in the move (F10, F-M4)
+    key = URL_KEYS.get(old.connector_type)
+    if key is None:
+        raise HTTPException(409, ADDRESS_CHANGED)
+    try:
+        swapped = swap_host_port(old.config[key], rec.host_before, rec.port_before)
+    except (CannotRewrite, KeyError, TypeError):
+        raise HTTPException(409, CANNOT_PUT_BACK) from None
+    candidate = copy.deepcopy(old.config)
+    candidate[key] = swapped
+    checked = validated_config(old.connector_type, candidate)  # 422 when the connector will not take it; it echoes no input
+    new_config = copy.deepcopy(old.config)
+    new_config[key] = checked[key]
+    written = address_key(old.connector_type, new_config)
+    if written is None or written != (rec.host_before.lower(), rec.port_before, where[2]):
+        raise HTTPException(409, CANNOT_PUT_BACK)
+
+    # 5. the readings taken at the new address since the move: they stay (F13)
+    point_ids = list(await db.scalars(_MAPPED_POINTS, {"id": old.id}))
+    readings = 0
+    if point_ids:
+        readings = int(await db.scalar(_READINGS_SINCE, {"ids": point_ids, "since": moved_at}) or 0)
+
+    # 6. writes
+    if rec.finding_ids:
+        await db.execute(
+            update(ScanFinding)
+            .where(ScanFinding.id.in_(rec.finding_ids), ScanFinding.source_id == old.id)
+            .values(source_id=None)
+            .execution_options(synchronize_session=False)
+        )
+    name_moved = old.name
+    old.config = new_config
+    old.identity = rec.identity_before
+    old.name = rec.name_before
+    await db.flush()  # a name someone took in the meantime is an IntegrityError here, inside the caller's try-again block
+    await notify(db, CONFIG_CHANNEL)  # the collector polls the old address at once
+
+    # The `_before` side is the source as this Undo found it (the moved state), the `_after` side what it put back.
+    undone = {
+        "audit_id": audit_id, "source_id": old.id, "name_before": name_moved, "name_after": old.name,
+        "host_before": rec.host_after, "port_before": rec.port_after, "host_after": rec.host_before, "port_after": rec.port_before,
+        "readings_since_move": readings,
+    }
+    response = {
+        "source": {"id": old.id, "name": old.name},
+        "restored": {"host": rec.host_before, "port": rec.port_before, "name": old.name},
+        "readings_since_move": readings,
+        "text": undo_sentence(rec.host_before, rec.port_before, readings),
+    }
+    return response, undone
