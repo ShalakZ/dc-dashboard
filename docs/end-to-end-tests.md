@@ -503,6 +503,17 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   (5) the `file` source reads "filled by file import" and "Filled by importing files", has no **Test**, **Check connection** or **Browse
   points**, and its Points page says where its points come from. Lookups use `exact: true` where a name is part of another ("File" is
   inside "Profile", "Undo" inside "Undo this tag list").
+- `w32.spec.ts` (its own project, last in the list, after `w31`; 1440 x 900) checks System events. It makes its own data (the asset
+  `W32 <run>`, a `simulator` source at the live simulator with one mapped point, and the account and role `w32-...` of case 6), removes it
+  in `afterAll` also after a failed case, never restarts the collector, and its cases are serial and depend on each other. Cases: (1) the
+  source's address is changed to one nothing listens at and the sources list says `offline`, since when, and how many reads failed;
+  (2) with the page's clock put three minutes ahead before it loads (Playwright's clock, so the two-minute banner needs no real wait), a
+  plain banner (no alert role, no live region) names the source and offers **See its events**; (3) System events shows ONE open line and
+  ONE row for it, and after about 70 to 100 s of real time (the count is written once a minute) the count has grown, still one; (4) the
+  address is put back, the incident closes, the list holds the recovery row and the closed incident, and the banner is gone; (5) a
+  connection check's audit entry carries a `passed` tag and an Outcome row whose link opens the event, which links back; (6) a role
+  without `diagnostics.view` has no Events link, the page says No access and the API answers 403; (7) the Storage card reads `90 days`.
+  Lookups use `exact: true` ("System events" is part of "System events and the audit log").
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
