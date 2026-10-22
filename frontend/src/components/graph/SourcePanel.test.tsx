@@ -64,8 +64,16 @@ describe("SourcePanel", () => {
     it("a source with something mapped also says what to do, in a line of its own", () => {
       mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
       const mapped = { id: 1, address: "a1", name: "kW", unit_hint: null, mapping_id: 3, asset_id: 10, mapped_metric: "active_power_kw" as const, suggestion: { metric: "custom" as const, scale: 1, interval_seconds: 5, custom_unit: null } };
-      open(source({ not_seen: miss, ungrouped: [mapped] }), false, () => {}, LINE);
+      open(source({ not_seen: miss, ungrouped: [mapped], status: "offline" }), false, () => {}, LINE);
       expect(within(panel()).getByText("Mapped: move it or delete it on Sources")).toHaveClass("muted");
+    });
+
+    it("a mapped source that is not seen but still polls fine has no such line: there is nothing to move or delete", () => {
+      mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+      const mapped = { id: 1, address: "a1", name: "kW", unit_hint: null, mapping_id: 3, asset_id: 10, mapped_metric: "active_power_kw" as const, suggestion: { metric: "custom" as const, scale: 1, interval_seconds: 5, custom_unit: null } };
+      open(source({ not_seen: miss, ungrouped: [mapped], status: "online" }), false, () => {}, LINE);
+      expect(within(panel()).queryByText(/Mapped: move it/)).not.toBeInTheDocument();
+      expect(within(panel()).getByText(`${LINE}. A later scan of the same range did not find it.`)).toBeInTheDocument();
     });
 
     it("an unmapped one has no such line, and a seen one keeps its sentence as it is", () => {
@@ -87,7 +95,8 @@ describe("SourcePanel", () => {
     it("falls back to the instance id, then the application name, and has no certificate line without a thumbprint", () => {
       mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
       open(source({ identity: { ...identity, application_uri: null, instance: "dev", thumbprint: null } }), false);
-      expect(within(panel()).getByText("Server: dev")).toBeInTheDocument();
+      expect(within(panel()).getByText("Simulator instance dev")).toHaveClass("muted", "gsrc-fact");
+      expect(within(panel()).queryByText(/^Server:/)).not.toBeInTheDocument();
       expect(within(panel()).queryByText(/^certificate/)).not.toBeInTheDocument();
     });
 
@@ -106,13 +115,14 @@ describe("SourcePanel", () => {
       kind: "offer" as const, from_source_id: 2, from_name: OLD, from_endpoint: "opc.tcp://172.20.0.3:4840/dcdash/", from_since: "2026-10-18T04:52:51Z", mappings: 12, assets: 3,
       match: { kind: "same_server" as const, evidence: "uri" as const, value: "urn:dcdash:simulator:dev", addresses: 12, missing_addresses: 0, needs_tick: false },
     };
-    const SENTENCE = `This looks like ${OLD} (12 mappings on 3 assets), which stopped answering at 172.20.0.3:4840`;
+    // the name holds the address, so without a time the sentence does not say it twice
+    const SENTENCE = `This looks like ${OLD} (12 mappings on 3 assets)`;
     const different = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: true };
     const panel = () => screen.getByRole("complementary", { name: "Source details" });
-    const show = (s: GraphSource, canEdit: boolean, onMoveSource?: () => void) => {
+    const show = (s: GraphSource, canEdit: boolean, onMoveSource?: () => void, looks?: string) => {
       mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
       return renderWithProviders(
-        <><GraphProbe /><SourcePanel source={s} canEdit={canEdit} seen="Seen in scan #8, 2 min ago" onMoveSource={onMoveSource} onClose={() => {}} /></>,
+        <><GraphProbe /><SourcePanel source={s} canEdit={canEdit} seen="Seen in scan #8, 2 min ago" looks={looks} onMoveSource={onMoveSource} onClose={() => {}} /></>,
         { route: "/discovery", path: "/discovery" },
       );
     };
@@ -142,10 +152,25 @@ describe("SourcePanel", () => {
 
     it("says the mapping and asset counts in the singular", () => {
       show(source({ move_candidate: { ...offer, mappings: 1, assets: 1 } }), true, vi.fn());
-      expect(within(panel()).getByText(`This looks like ${OLD} (1 mapping on 1 asset), which stopped answering at 172.20.0.3:4840`)).toBeInTheDocument();
+      expect(within(panel()).getByText(`This looks like ${OLD} (1 mapping on 1 asset)`)).toBeInTheDocument();
     });
 
-    it("two candidates: the sentence, and no button for anyone", () => {
+    it("shows the page's sentence when it gives one (the time it stopped answering, written in the site's zone), and says nothing twice", () => {
+      const looks = `${SENTENCE}, which has not answered since 18 Oct 07:52`;
+      show(source({ move_candidate: offer }), true, vi.fn(), looks);
+      expect(within(panel()).getByText(looks)).toHaveClass("muted", "gsrc-fact");
+      expect(within(panel()).queryByText(SENTENCE)).not.toBeInTheDocument();
+    });
+
+    it("a name that is not the address (one somebody typed) says where it stopped answering when there is no time", () => {
+      show(source({ move_candidate: { ...offer, from_name: "Meter room 2" } }), true, vi.fn());
+      expect(within(panel()).getByText("This looks like Meter room 2 (12 mappings on 3 assets), which stopped answering at 172.20.0.3:4840")).toBeInTheDocument();
+    });
+
+    it("two candidates: the sentence, and no button for anyone; more than two say Several", () => {
+      show(source({ move_candidate: { kind: "two", count: 3 } }), true, vi.fn());
+      expect(within(panel()).getByText("Several servers could be this one; edit the address by hand")).toHaveClass("muted", "gsrc-fact");
+      cleanup();
       show(source({ move_candidate: { kind: "two", count: 2 } }), true, vi.fn());
       expect(within(panel()).getByText("Two servers could be this one; edit the address by hand")).toHaveClass("muted", "gsrc-fact");
       expect(within(panel()).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
@@ -167,9 +192,9 @@ describe("SourcePanel", () => {
       expect(within(panel()).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
     });
 
-    it("a Docker name hint is left to the move dialog: the panel says nothing about it", () => {
+    it("a name hint is left to the move dialog: the panel says nothing about it", () => {
       show(source({ name_hint: "simulator" }), true, vi.fn());
-      expect(within(panel()).queryByText(/container/)).not.toBeInTheDocument();
+      expect(within(panel()).queryByText(/container|Docker|simulator/)).not.toBeInTheDocument();
     });
   });
 

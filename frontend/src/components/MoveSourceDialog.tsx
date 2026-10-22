@@ -49,7 +49,7 @@ const WarnIcon = () => (
  * ticked. Move works only on the preview of the choice on screen NOW, and it sends back the numbers and texts the preview showed: the server refuses in
  * words if anything differs by then (and a refusal of that kind asks for the preview again).
  *
- * When the new address has a Docker name the choice is the name (the default) or the address. The first preview is always for the address the scan found;
+ * When the new address has a name the choice is the name (the default) or the address. The first preview is always for the address the scan found;
  * if it carries a name the dialog asks again with the name, and shows nothing until it has the preview it will use.
  *
  * Frame as in HistoryFillDialog: portaled, `useDialogFocus` (focus on Cancel, Tab wraps, Escape closes only this dialog and never mid-move), `type="button"`

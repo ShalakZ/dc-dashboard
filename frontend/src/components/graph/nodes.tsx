@@ -167,7 +167,7 @@ function mappedPoints(source: GraphSource): number {
  * `groups` stay in the data for the page and are not read here.
  */
 function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
-  const { source, expanded, onToggle, onSelect, onMenu, onMoveSource, seen } = data;
+  const { source, expanded, onToggle, onSelect, onMenu, onMoveSource, seen, looks } = data;
   const status = sourceStatus(source);
   const protocol = protocolLabel(source.connector_type);
   const address = sourceAddress(source);
@@ -178,7 +178,7 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
   const share = total > 0 ? Math.round((mapped / total) * 100) : 0;
   // (w33) A source the newest scan of its range did not find is drawn quieter (graph-source-card.css); a mapped one swaps its seen line for what to do about it (graph.ts `seenCard`).
   const missing = isNotSeen(source);
-  const last = seen ? seenCard(source, seen) : null;
+  const last = seen ? seenCard(source, seen, looks) : null;
   // (w33) A new source that looks like an old one: its Move... button stands beside Details (the same 20px row, so the card is no taller), for a person who may edit sources (the page gives the callback).
   const offer = onMoveSource ? moveOfferFor(source) : null;
   return (

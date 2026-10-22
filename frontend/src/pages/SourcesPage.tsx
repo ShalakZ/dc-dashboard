@@ -26,7 +26,7 @@ import { useNow } from "../hooks/useNow";
 import { ageNow, formatAge, formatSpan, secondsSince } from "../lib/age";
 import { historyLine } from "../lib/historyLine";
 import { sourceDeletePath, sourceImpact, sourceLoss, sourceNote } from "../lib/impact";
-import { offerOf, TWO_SERVERS_TEXT } from "../lib/moves";
+import { DIFFERENT_SERVER_ROW, DIFFERENT_SERVER_WHY, offerOf, twoServersText } from "../lib/moves";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { formatOfflineSince, longOffline, MOVE_LINK_TEXT, offlineBannerParts, sourceStatusText } from "../lib/sourceStatus";
 
@@ -275,7 +275,7 @@ export function SourcesPage() {
                 const offlineAt = s.status === "offline" && s.offline_since && timezone ? formatOfflineSince(s.offline_since, timezone) : null;
                 // (w33) Two new servers look like this one: the tooltip says why no move is offered, after the date when there is one.
                 const chipTitle = s.status === "offline" && s.move_candidate?.kind === "two"
-                  ? `${offlineAt ? `offline since ${offlineAt}. ` : ""}${TWO_SERVERS_TEXT}.`
+                  ? `${offlineAt ? `offline since ${offlineAt}. ` : ""}${twoServersText(s.move_candidate.count)}.`
                   : offlineAt ? `offline since ${offlineAt}` : undefined;
                 return (
                   <tr key={s.id} data-source={s.id}>
@@ -285,7 +285,11 @@ export function SourcesPage() {
                       {history !== null && <span className="cell-history muted" title={history}>{history}</span>}
                     </td>
                     <td>{s.connector_type}</td><td>{s.enabled ? "yes" : "no"}</td>
-                    <td>{status.polled ? <span className={`chip ${STATUS_CHIP[status.text] ?? "chip-stale"}`} title={chipTitle}>{status.text}</span> : <span className="muted st st-off note">{status.text}</span>}</td>
+                    <td>
+                      {status.polled ? <span className={`chip ${STATUS_CHIP[status.text] ?? "chip-stale"}`} title={chipTitle}>{status.text}</span> : <span className="muted st st-off note">{status.text}</span>}
+                      {/* (w33) A scan, test or check met another server at this address; polling goes on, so the row must not look healthy without saying it. A block under the chip. */}
+                      {s.identity_different === true && <span className="cell-different warning" title={DIFFERENT_SERVER_WHY}>{DIFFERENT_SERVER_ROW}</span>}
+                    </td>
                     <td className="nowrap">{s.last_seen && site.data ? formatSiteDateTime(s.last_seen, site.data.timezone) : "—"}</td>
                     <td className="num">{formatAge(ageNow(s.last_reading_age_seconds, sourcesAnsweredAt, now))}</td>
                     <td className="error">{s.last_error ?? ""}</td>

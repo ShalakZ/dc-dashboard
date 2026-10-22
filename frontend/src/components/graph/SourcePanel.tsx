@@ -5,9 +5,8 @@ import { keys } from "../../api/queries";
 import type { GraphSource } from "../../api/types";
 import { useAction } from "../../hooks/useAction";
 import {
-  certificateLine, DIFFERENT_SERVER, isDifferentServer, isNotSeen, isRemovable, looksLikeSentence, MAPPED_NOT_SEEN, moveOfferFor, notSeenSentence, serverLine, twoServers,
+  certificateLine, DIFFERENT_SERVER, isDifferentServer, isMappedNotSeen, looksLikeSentence, MAPPED_NOT_SEEN, moveOfferFor, notSeenSentence, serverLine, twoServersLine,
 } from "../../lib/graph";
-import { TWO_SERVERS_TEXT } from "../../lib/moves";
 import { useJob } from "../../hooks/useJob";
 import { JobStatus } from "../JobStatus";
 
@@ -17,13 +16,15 @@ interface Props {
   canEdit: boolean;
   /** When a scan last found the source, worded by the page (`seenLine`): the time needs the site's clock, and the node shows the same line. */
   seen: string;
+  /** (w33) The whole sentence for an offer (`looksLikeSentence` with the time it formatted in the site's zone); without it the panel words the offer without a time. */
+  looks?: string;
   /** (w33) Open the move dialog for the old source this one looks like (the page gives it only to a person who may edit sources, and only while there is an offer). */
   onMoveSource?: () => void;
   onClose: () => void;
 }
 
 /** Facts about one source, and, for someone who may edit sources, the way to give it credentials (or browse it again). Never shows a stored secret. */
-export function SourcePanel({ source, canEdit, seen, onMoveSource, onClose }: Props) {
+export function SourcePanel({ source, canEdit, seen, looks, onMoveSource, onClose }: Props) {
   const queryClient = useQueryClient();
   const { run, busy, error } = useAction();
   const heading = useRef<HTMLHeadingElement>(null);
@@ -63,8 +64,9 @@ export function SourcePanel({ source, canEdit, seen, onMoveSource, onClose }: Pr
   const server = serverLine(source.identity);
   const certificate = certificateLine(source.identity);
   // (w33) What the scan and the checks learned about a move: the source looks like an old one that stopped answering (with the Move... button for a person who may edit sources),
-  // two old ones could be it, or another server answers at its address. The Docker name hint is not shown here: the move dialog offers the name when it moves.
+  // two old ones could be it, or another server answers at its address. The name hint is not shown here: the move dialog offers the name when it moves.
   const offer = moveOfferFor(source);
+  const two = twoServersLine(source);
 
   return (
     <aside
@@ -79,15 +81,15 @@ export function SourcePanel({ source, canEdit, seen, onMoveSource, onClose }: Pr
       </div>
       <p className="muted">{source.connector_type} · {source.origin} · {source.status} · {source.point_count} points</p>
       <p className="muted gsrc-fact">{notSeenSentence(source, seen)}</p>
-      {isNotSeen(source) && !isRemovable(source) && <p className="muted">{MAPPED_NOT_SEEN}</p>}
+      {isMappedNotSeen(source) && <p className="muted">{MAPPED_NOT_SEEN}</p>}
       {server && <p className="muted gsrc-fact">{server}</p>}
       {certificate && <p className="muted gsrc-fact" title={certificate.title}>{certificate.text}</p>}
       {isDifferentServer(source) && <p className="warning gsrc-fact">{DIFFERENT_SERVER}</p>}
-      {offer && <p className="muted gsrc-fact">{looksLikeSentence(offer)}</p>}
+      {offer && <p className="muted gsrc-fact">{looks ?? looksLikeSentence(offer)}</p>}
       {offer && canEdit && onMoveSource && (
         <div className="row"><button type="button" aria-label={`Move ${offer.from_name} to this address...`} onClick={onMoveSource}>Move...</button></div>
       )}
-      {twoServers(source) && <p className="muted gsrc-fact">{TWO_SERVERS_TEXT}</p>}
+      {two && <p className="muted gsrc-fact">{two}</p>}
       {source.last_error && <p className="error">Last error: {source.last_error}</p>}
       {source.needs_credentials && <p>This source needs credentials.</p>}
       {canEdit && source.needs_credentials && (

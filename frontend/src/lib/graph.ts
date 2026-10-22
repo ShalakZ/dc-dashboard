@@ -1,7 +1,7 @@
 import type { Edge, FitViewOptions, Node } from "@xyflow/react";
 import type { Asset, GraphModel, GraphPoint, GraphSource, RemoveSourcesResult, SourceMoveCandidateForNew } from "../api/types";
-import { isLive } from "./graphStatus";
-import { hostPortOfEndpoint, TWO_SERVERS_TEXT } from "./moves";
+import { isLive, sourceTitle } from "./graphStatus";
+import { hostPortOfEndpoint, twoServersText } from "./moves";
 import { relativeTime } from "./relativeTime";
 
 /** Key of the pseudo-cluster that holds a source's points that have no cluster of their own. */
@@ -68,6 +68,8 @@ export type SourceNodeData = NodeActions & {
   source: GraphSource; expanded: boolean;
   /** The muted line saying when a scan last found the source (`seenLine`); the page words it, since the time needs the site's clock. */
   seen?: string;
+  /** (w33) The whole sentence for an offer (`looksLikeSentence` with the time the page formatted in the site's zone): the card's tooltip. Absent = the card words it without a time. */
+  looks?: string;
   /** How many groups "Create assets" would turn into assets: it is in the button's name. */
   groups?: number;
 };
@@ -622,8 +624,14 @@ export function notSeenCount(sources: readonly GraphSource[]): number {
   return sources.filter(isNotSeen).length;
 }
 
-/** (w33) What a not-seen source with a mapped point says in place of its seen line: it cannot be removed here; its mappings are moved or the source deleted on Sources. */
+/** (w33) What a not-seen source with a mapped point that has stopped answering says in place of its seen line: it cannot be removed here; its mappings are moved or the source deleted on Sources. */
 export const MAPPED_NOT_SEEN = "Mapped: move it or delete it on Sources";
+
+/**
+ * (w33) True when `MAPPED_NOT_SEEN` applies: the source is not seen AND has something mapped (so Remove not seen cannot take it) AND its status is `offline`. A mapped source that
+ * still polls fine (online, or one the sweep missed once) has nothing to move or delete, so it keeps its seen line.
+ */
+export const isMappedNotSeen = (source: GraphSource): boolean => isNotSeen(source) && !isRemovable(source) && source.status === "offline";
 
 /** (w33) What a card and a panel say when another server than the one the source remembers answers at its address (`identity.different`, any source). */
 export const DIFFERENT_SERVER = "A different server answers at this address";
@@ -635,52 +643,72 @@ export const isDifferentServer = (source: GraphSource): boolean => source.identi
 export const moveOfferFor = (source: GraphSource): SourceMoveCandidateForNew | null =>
   source.move_candidate?.kind === "offer" ? source.move_candidate : null;
 
-/** (w33) True when two old sources could be this one: nothing is offered, the address is edited by hand (`TWO_SERVERS_TEXT`). */
+/** (w33) True when several old sources could be this one: nothing is offered, the address is edited by hand (`twoServersText`). */
 export const twoServers = (source: GraphSource): boolean => source.move_candidate?.kind === "two";
 
 const countNumber = (n: number) => n.toLocaleString("en-US");
 
-/** (w33) The card's line for an offer: short, the name of the old source only (an ellipsis and the tooltip carry the rest). */
-export const looksLikeLine = (offer: SourceMoveCandidateForNew): string => `Looks like ${offer.from_name}`;
+const mappingsWord = (n: number) => `${countNumber(n)} ${n === 1 ? "mapping" : "mappings"}`;
 
 /**
- * (w33) The whole sentence of an offer, for the card's tooltip and the panel: `This looks like <old name> (12 mappings on 3 assets), which stopped answering at
- * 172.20.0.3:4840`. The address is the old source's host and port (the endpoint carries no user name or password); no assets, no "on 0 assets".
+ * (w33) The card's line for an offer: `Looks like OPC UA server (12 mappings)`. It leads with the part that tells the old source apart (its title without the address its name ends
+ * with: the helper of the card's own title, given the endpoint the offer carries) and the stylesheet's ellipsis cuts after it; the whole sentence is the tooltip (`looksLikeSentence`).
  */
-export function looksLikeSentence(offer: SourceMoveCandidateForNew): string {
-  const mappings = `${countNumber(offer.mappings)} ${offer.mappings === 1 ? "mapping" : "mappings"}`;
+export const looksLikeLine = (offer: SourceMoveCandidateForNew): string =>
+  `Looks like ${sourceTitle({ name: offer.from_name, config: { endpoint: offer.from_endpoint } })} (${mappingsWord(offer.mappings)})`;
+
+/**
+ * (w33) The whole sentence of an offer, for the card's tooltip and the panel: `This looks like <old name> (12 mappings on 3 assets), which has not answered since 18 Oct 07:52`.
+ * `since` is that time, already written in the site's zone by the caller (it needs the zone: `formatOfflineSince(offer.from_since, timezone)`); null when unknown. Without it
+ * the sentence says where the old source stopped answering (the host and port of its endpoint, which carries no user name or password), unless its name already holds the
+ * address (the scan's names end with it), when it says nothing more. No assets, no "on 0 assets".
+ */
+export function looksLikeSentence(offer: SourceMoveCandidateForNew, since: string | null = null): string {
   const assets = offer.assets > 0 ? ` on ${countNumber(offer.assets)} ${offer.assets === 1 ? "asset" : "assets"}` : "";
-  return `This looks like ${offer.from_name} (${mappings}${assets}), which stopped answering at ${hostPortOfEndpoint(offer.from_endpoint)}`;
+  const address = hostPortOfEndpoint(offer.from_endpoint);
+  const stopped = since ? `, which has not answered since ${since}` : address !== "" && !offer.from_name.includes(address) ? `, which stopped answering at ${address}` : "";
+  return `This looks like ${offer.from_name} (${mappingsWord(offer.mappings)}${assets})${stopped}`;
 }
 
 /**
  * (w33) The last line of the source card and its tooltip. The card has no room for a seventh line (SOURCE_H), so the one seen line trades places with what matters more,
  * in this order, and the tooltip keeps every sentence:
  * - another server answers at the address: `A different server answers at this address` (tone "warn": the card draws it in the warning ink);
- * - the source looks like an old one that stopped answering: `Looks like <old name>` (the Move... button is on the card's button row);
- * - two old sources could be it: `Two servers could be this one; edit the address by hand`;
- * - not seen and something mapped: what to do about it.
- * Every other source shows its seen line as it is.
+ * - the source looks like an old one that stopped answering: `Looks like <old title> (12 mappings)` (the Move... button is on the card's button row);
+ * - several old sources could be it: `Two servers could be this one; edit the address by hand` (`Several` for more than two);
+ * - not seen, something mapped and offline: what to do about it.
+ * Every other source shows its seen line as it is. `looks` is the page's whole sentence for an offer (`looksLikeSentence` with the time it formatted in the site's zone); without it
+ * the card builds the sentence without a time.
  */
-export function seenCard(source: GraphSource, seen: string): { line: string; title: string; tone?: "warn" } {
+export function seenCard(source: GraphSource, seen: string, looks?: string): { line: string; title: string; tone?: "warn" } {
   const offer = moveOfferFor(source);
+  const sentence = offer && (looks ?? looksLikeSentence(offer));
   const joined = (...sentences: (string | false | null)[]) => sentences.filter((s): s is string => !!s).join(". ");
-  if (isDifferentServer(source)) return { line: DIFFERENT_SERVER, title: joined(DIFFERENT_SERVER, offer && looksLikeSentence(offer), seen), tone: "warn" };
-  if (offer) return { line: looksLikeLine(offer), title: joined(looksLikeSentence(offer), seen) };
-  if (twoServers(source)) return { line: TWO_SERVERS_TEXT, title: joined(TWO_SERVERS_TEXT, seen) };
-  if (isNotSeen(source) && !isRemovable(source)) return { line: MAPPED_NOT_SEEN, title: `${seen}. ${MAPPED_NOT_SEEN}` };
+  if (isDifferentServer(source)) return { line: DIFFERENT_SERVER, title: joined(DIFFERENT_SERVER, sentence, seen), tone: "warn" };
+  if (offer) return { line: looksLikeLine(offer), title: joined(sentence, seen) };
+  const two = twoServersLine(source);
+  if (two) return { line: two, title: joined(two, seen) };
+  if (isMappedNotSeen(source)) return { line: MAPPED_NOT_SEEN, title: `${seen}. ${MAPPED_NOT_SEEN}` };
   return { line: seen, title: seen };
 }
+
+/** (w33) The sentence for several old sources that could be this one, from the count in the candidate (`Two` for 2, `Several` for more); null for any other source. */
+export const twoServersLine = (source: GraphSource): string | null =>
+  source.move_candidate?.kind === "two" ? twoServersText(source.move_candidate.count) : null;
 
 /** (w33) The panel's sentence for the seen line: a not-seen source gets the reason after the line itself. */
 export function notSeenSentence(source: GraphSource, seen: string): string {
   return isNotSeen(source) ? `${seen}. A later scan of the same range did not find it.` : seen;
 }
 
-/** (w33) "Server: urn:dcdash:simulator:dev": who the server said it is (its application URI, else the simulator's instance id, else its name); null when nothing is known. Read-only. */
+/**
+ * (w33) Who the server said it is: `Server: urn:dcdash:simulator:dev` (its application URI), else `Simulator instance dev` (the simulator's instance id), else `Server: <its name>`; null
+ * when nothing is known. Read-only.
+ */
 export function serverLine(identity: GraphSource["identity"]): string | null {
-  const who = identity?.application_uri || identity?.instance || identity?.application_name;
-  return who ? `Server: ${who}` : null;
+  if (identity?.application_uri) return `Server: ${identity.application_uri}`;
+  if (identity?.instance) return `Simulator instance ${identity.instance}`;
+  return identity?.application_name ? `Server: ${identity.application_name}` : null;
 }
 
 /** The thumbprint kept to its first 5 and last 2 characters (`3A:5F:...:91`); a short one is shown whole. */

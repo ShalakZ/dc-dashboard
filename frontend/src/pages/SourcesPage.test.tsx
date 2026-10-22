@@ -1627,6 +1627,12 @@ describe("SourcesPage, moving a source to the address where its device turned up
       expect(screen.getByText("offline", { selector: ".chip" })).toHaveAttribute("title", "offline since 18 Oct 07:52. Two servers could be this one; edit the address by hand.");
     });
 
+    it("says Several servers when more than two look like it", async () => {
+      await show([{ ...down, move_candidate: { kind: "two", count: 3 } }]);
+      expect(banner()).toHaveTextContent(`${SENTENCE} Several servers could be this one; edit the address by hand.`);
+      expect(screen.getByText("offline", { selector: ".chip" })).toHaveAttribute("title", "offline since 18 Oct 07:52. Several servers could be this one; edit the address by hand.");
+    });
+
     it("leaves the chip's tooltip as it was for a source with an offer", async () => {
       await show([down]);
       expect(screen.getByText("offline", { selector: ".chip" })).toHaveAttribute("title", "offline since 18 Oct 07:52");
@@ -1636,6 +1642,35 @@ describe("SourcesPage, moving a source to the address where its device turned up
       await show([down, { ...down, id: 3, name: "second", move_candidate: null }]);
       expect(banner()).toHaveTextContent("A scan found a new address for 1 of them: use Move to new address... in its row menu.");
       expect(within(banner()).queryByRole("button", { name: "Move to new address..." })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("a different server answers at the address (identity_different)", () => {
+    const SAYS = "Another server answers at this address";
+    const WHY = "A scan, test or check met a different server at this address than the one this source used to talk to. Polling continues. See System events.";
+    const up = { ...down, status: "online", offline_since: null, last_error: null, move_candidate: null };
+    const row = () => document.querySelector("tr[data-source=\"2\"]") as HTMLElement;
+
+    it("shows a small warning line under the status chip, with the whole reason in its tooltip", async () => {
+      await show([{ ...up, identity_different: true }]);
+      const line = within(row()).getByText(SAYS);
+      expect(line).toHaveClass("cell-different", "warning");
+      expect(line).toHaveAttribute("title", WHY);
+      expect(line.closest("td")).toContainElement(screen.getByText("online", { selector: ".chip" }));
+    });
+
+    it("is shown for an offline source and for one that is not polled, and the row menu is the one it was", async () => {
+      await show([{ ...down, identity_different: true }]);
+      expect(within(row()).getByText(SAYS)).toBeInTheDocument();
+      expect(await menuTexts()).toEqual(["Move to new address...", "Test", "Check connection", "Edit", "Points", "Import file...", "Map tag list...", "Events"]);
+      cleanup();
+      await show([{ ...up, enabled: false, status: "unknown", identity_different: true }]);
+      expect(within(row()).getByText(SAYS)).toBeInTheDocument();
+    });
+
+    it.each([["false", { identity_different: false }], ["absent", {}], ["null", { identity_different: null }]])("has no line when it is %s", async (_name, over) => {
+      await show([{ ...up, ...over }]);
+      expect(screen.queryByText(SAYS)).not.toBeInTheDocument();
     });
   });
 });

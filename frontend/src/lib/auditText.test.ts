@@ -1818,6 +1818,23 @@ describe("describeAudit: imports, import profiles, tag lists and history fills",
       expect(say("source.move_undone", {}).summary).toBe("Undid the move of a source");
       expect(say("source.move_undone", { source_id: 2 }, sources).summary).toBe("Undid the move of source Meter 1");
     });
+
+    it("adds how many readings taken at the new address stay, when the entry says a positive number of them", () => {
+      const undone = {
+        audit_id: 31, source_id: 2, name_after: "OPC UA server at 172.20.0.3:4840", host_after: "172.20.0.3", port_after: 4840,
+      };
+      expect(say("source.move_undone", { ...undone, readings_since_move: 668 }).summary).toBe(
+        "Undid the move of OPC UA server at 172.20.0.3:4840: back at 172.20.0.3:4840 (668 readings taken at the new address stay)",
+      );
+      expect(say("source.move_undone", { ...undone, readings_since_move: 1 }).summary).toBe(
+        "Undid the move of OPC UA server at 172.20.0.3:4840: back at 172.20.0.3:4840 (1 reading taken at the new address stays)",
+      );
+      expect(say("source.move_undone", { ...undone, readings_since_move: 12345 }).summary).toContain("(12,345 readings taken at the new address stay)");
+      // none, a missing value, and a value that is not a number say nothing (the old sentence)
+      for (const readings of [0, -3, null, "668", 1.5, undefined]) {
+        expect(say("source.move_undone", { ...undone, readings_since_move: readings }).summary).toBe("Undid the move of OPC UA server at 172.20.0.3:4840: back at 172.20.0.3:4840");
+      }
+    });
   });
 
   describe("history.fill_requested", () => {

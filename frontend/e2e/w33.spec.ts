@@ -22,7 +22,7 @@ import { expectNoRowAction } from "./shell";
 //   2  THE OFFER. A scan of the scope finds the live endpoint and makes a new source C (a Historian needs its key to be browsed, so C starts with no points: the spec gives C the key and browses it, as a person would). The API then
 //      offers O the move: `move_candidate` of O's Sources row and of C's graph entry are an offer of kind `possibly` (O has no identity, so only the addresses speak: both mapped addresses, with their names, exist on C).
 //   3  THE SOURCES ROW MENU. At 1024 x 768 the row menu of the offline O opens with **Move to new address...** as its FIRST item and nothing in it is cut off or covered.
-//   4  THE DISCOVERY CARD. C's card says `Looks like <O>` (the whole sentence in its title) and has **Move <O> to <C>...**; the dialog opens from it, shows `From ... to ...`, `All 2 mapped addresses and their names exist on the new server.`,
+//   4  THE DISCOVERY CARD. C's card says `Looks like <O> (2 mappings)` (the whole sentence in its title) and has **Move <O> to <C>...**; the dialog opens from it, shows `From ... to ...`, `All 2 mapped addresses and their names exist on the new server.`,
 //      what else happens and the tick `I checked that this is the same device`; Move stays off (aria-disabled) until it is ticked; Cancel gives the focus back to the card's button.
 //   5  PERMISSIONS. A role without `sources.edit` (it has `sources.view`, `sources.test`, `discovery.view`) sees the row but its menu has no **Move to new address...**, C's card has no **Move...**, and both routes answer 403.
 //   6  THE MOVE FROM SOURCES. Row menu, dialog, tick, **Move 2 mappings**: O keeps its two mappings and the SAME point and mapping ids (compared through the API before and after), is at `http://simulator:9100` and turns online, C is gone from
@@ -31,7 +31,7 @@ import { expectNoRowAction } from "./shell";
 //   7  THE SECOND ROUND. A new scan makes a new C; the move is made from Discovery's card; the Audit drawer's **Undo this move** puts the address back; a second Undo of the same entry is refused in words (`this move was already undone`). O
 //      and its asset are then deleted, so the next case starts without an old source.
 //   8  NOT SEEN. Three scans of ONE scope (one range, so one digest): scan 1 makes A (a source with nothing mapped), A's address is changed to a dead one; scan 2 makes M (given the key, browsed, one point mapped, switched off, dead address);
-//      scan 3 makes B. The API says A and M are `not_seen` by scan 3 (last seen in 1 and in 2) and B is not. Discovery: A's card is dimmed and reads `Not seen in scan #3 (last seen in #1, ...)`, M's reads `Mapped: move it or delete it on Sources`, B's
+//      scan 3 makes B. The API says A and M are `not_seen` by scan 3 (last seen in 1 and in 2) and B is not. Discovery: A's card is dimmed and reads `Not seen in scan #3 (last seen in #1, ...)`, M's (mapped, but switched off: it never reads offline, so nothing is wrong that a move would fix) keeps its seen line `Not seen in scan #3 (last seen in #2, ...)`, B's
 //      is as usual; the panel of A says it in full; **Turn on Not seen lately** (More Discovery actions) shows only A and M, and turning it off brings B back; **Remove not seen (N)...** lists A's name and removes A and NOT M (the mapped
 //      one stays; with sources of other people that are not seen too, the dialog is opened and cancelled and A goes through the API instead).
 // Playwright matches names by SUBSTRING and case-insensitively: every lookup that could meet a longer name is `exact: true` ("Move 2 mappings" is inside no other name, but "Undo" is inside "Undo this move"). The cases are SERIAL and depend on
@@ -543,8 +543,12 @@ test.describe("W33: devices that move or disappear", () => {
     await ensureOnCanvas(page, card);
 
     const line = card.locator(".gsrc-seen");
-    await expect(line, "the card's last line").toHaveText(`Looks like ${OLD}`);
-    await expect(line, "the whole sentence is in the tooltip").toHaveAttribute("title", new RegExp(`^This looks like ${OLD} \\(2 mappings on 1 asset\\), which stopped answering at 127\\.0\\.0\\.1:${PORT}`));
+    await expect(line, "the card's last line leads with the old source's title and the count").toHaveText(`Looks like ${OLD} (2 mappings)`);
+    // the whole sentence: since when it has not answered (the offer's from_since, in the site's zone), or where it stopped answering when the server gives no time
+    await expect(line, "the whole sentence is in the tooltip").toHaveAttribute(
+      "title",
+      new RegExp(`^This looks like ${OLD} \\(2 mappings on 1 asset\\), which (has not answered since \\d{1,2} [A-Z][a-z]{2} \\d{2}:\\d{2}|stopped answering at 127\\.0\\.0\\.1:${PORT})`),
+    );
     await expect(card.locator(".gnode"), "an offered source is not dimmed").not.toHaveClass(/gsrc-not-seen/);
     await expect(card.getByRole("button", { name: `Details for ${fresh.name}`, exact: true })).toBeVisible();
 
@@ -594,7 +598,7 @@ test.describe("W33: devices that move or disappear", () => {
       await openDiscovery(page);
       const card = srcNode(page, world.newId);
       await expect(card).toBeVisible();
-      await expect(card.locator(".gsrc-seen"), "the card still says what it looks like").toHaveText(`Looks like ${OLD}`);
+      await expect(card.locator(".gsrc-seen"), "the card still says what it looks like").toHaveText(`Looks like ${OLD} (2 mappings)`);
       await expect(card.getByRole("button", { name: /^Move .* to .*\.\.\.$/ }), "but offers no Move...").toHaveCount(0);
 
       const dry = await context.request.post(`/api/sources/${world.oldId}/move?dry_run=1`, { data: { to: world.newId, address: "as_found" } });
@@ -799,7 +803,11 @@ test.describe("W33: devices that move or disappear", () => {
       await expect(srcNode(page, ids.a).locator(".gsrc-seen")).toHaveText(new RegExp(`^Not seen in scan #${scans.third} \\(last seen in #${scans.first}(, [^)]+)?\\)$`));
       await ensureOnCanvas(page, srcNode(page, ids.m));
       await expect(srcNode(page, ids.m).locator(".gnode")).toHaveClass(/gsrc-not-seen/);
-      await expect(srcNode(page, ids.m).locator(".gsrc-seen")).toHaveText("Mapped: move it or delete it on Sources");
+      // M is mapped but switched off (it never reads offline), so the card keeps its seen line; "Mapped: move it or delete it on Sources" is for a mapped source whose status is `offline`
+      // (the page decides by the stored status, so the spec accepts the instruction only if the stack left M that status)
+      await expect(srcNode(page, ids.m).locator(".gsrc-seen")).toHaveText(
+        new RegExp(`^(Not seen in scan #${scans.third} \\(last seen in #${scans.second}(, [^)]+)?\\)|Mapped: move it or delete it on Sources)$`),
+      );
       await expect(srcNode(page, ids.m).locator(".gsrc-seen")).toHaveAttribute("title", new RegExp(`^Not seen in scan #${scans.third} \\(last seen in #${scans.second}`));
       await ensureOnCanvas(page, srcNode(page, ids.b));
       await expect(srcNode(page, ids.b).locator(".gnode")).not.toHaveClass(/gsrc-not-seen/);

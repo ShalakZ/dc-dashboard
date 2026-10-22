@@ -103,6 +103,8 @@ export interface Source {
   failed_reads?: number | null;
   /** The list endpoint only (w33): for an offline source that a scan may have found again at a new address: the new source (`offer`), or several (`two`); null otherwise. */
   move_candidate?: SourceMoveCandidateForOld | SourceMoveTwo | null;
+  /** The list endpoint only (w33): true while another server than the one this source used to talk to answers at its address (polling goes on). Left out by older answers: a missing value counts as false. */
+  identity_different?: boolean;
 }
 /**
  * The `history` object of a source list row (GET /api/sources): the part of the `history_status` row the Sources page shows. `supports_history` is the
@@ -280,7 +282,7 @@ export interface GraphSource {
   not_seen?: NotSeen | null;
   /** (w33) What the source's server said about itself (read-only); `usable` = it identifies a server (not a default URI); `different` = another server answered at this address; null until learned. */
   identity?: SourceIdentity | null;
-  /** (w33) A Docker container name for the source's current host (`simulator`), or null. */
+  /** (w33) A host name that stands for the source's current address (`simulator`), or null. */
   name_hint?: string | null;
   /** (w33) On a new unmapped source: it looks like an old mapped one that stopped answering (`offer`), or several old ones could be it (`two`). */
   move_candidate?: SourceMoveCandidateForNew | SourceMoveTwo | null;

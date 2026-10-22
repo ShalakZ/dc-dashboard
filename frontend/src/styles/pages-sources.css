@@ -8,6 +8,9 @@
   /* w31: the second line under a source's name (its history line, Sources only). A block of its own, as wide as the name cell allows and at most three lines: a
      long reason ("History: waiting, ...") must not widen the Name column; the full text is the title attribute. */
   .cell-history { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; max-width: 220px; margin-top: 2px; overflow: hidden; overflow-wrap: anywhere; font-size: var(--fs-xs); font-weight: 400; }
+  /* w33: the warning under a status chip that another server answers at the source's address (identity_different). A block of its own under the chip, at most three short lines (the sentence is
+     "Another server / answers at this / address" at 120px), in the warning ink (the .warning class); the full reason is its title. Only a row that has the warning draws it, so a row without one is as tall as before. */
+  .cell-different { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; max-width: 120px; margin-top: 2px; overflow: hidden; overflow-wrap: anywhere; font-size: var(--fs-xs); font-weight: 400; }
   .cell-trunc { max-width: 360px; }
   .wrap-any { overflow-wrap: anywhere; }
   .nowrap, .table-wrap.dense td.num { white-space: nowrap; }

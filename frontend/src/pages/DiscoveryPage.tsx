@@ -43,8 +43,8 @@ import { useValueTip } from "../hooks/useValueTip";
 import { afterPaint } from "../lib/afterPaint";
 import { dropPayload, mappableClusters, multiPointDrop, pickDropTarget, takenMetrics, type DropPayload } from "../lib/drop";
 import {
-  buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isNotSeen, isRemovable, layoutBatches, moreNodeIds, moveOfferFor, nodeId, notSeenCount, ownPlaces, PAGE_SIZE, pruneShown,
-  removableNotSeen, removalDialogText, removalOutcome, seenLine, shiftedPlaces, sourceIdOfNode, visiblePoints,
+  buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isNotSeen, isRemovable, layoutBatches, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, ownPlaces,
+  PAGE_SIZE, pruneShown, removableNotSeen, removalDialogText, removalOutcome, seenLine, shiftedPlaces, sourceIdOfNode, visiblePoints,
   type AssetNodeData, type ClusterNodeData, type Group, type GraphView, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
 import { cameraMs, keepInView, overlayMargin, unionRect } from "../lib/graphCamera";
@@ -60,6 +60,7 @@ import {
   type Change,
 } from "../lib/graphView";
 import { mappedRefs, mappedSourcesByAsset, mappingsWhat } from "../lib/mappedRefs";
+import { formatOfflineSince } from "../lib/sourceStatus";
 
 /**
  * The one sentence under the title, the same in all three states of the page (loading, empty, loaded) so the header never changes height. The rest of what the
@@ -173,7 +174,14 @@ const NEVER_VALID = () => false;
 interface NodeGates { canAccept: boolean; canRemove: boolean; canEdit: boolean; canForm: boolean; formWait: boolean; canMove: boolean }
 
 /** What the page works out about a source once per graph, so a toggle or a drag does not do it again for every node. */
-interface SourceFacts { seen: string; groups: number; removable: boolean }
+interface SourceFacts { seen: string; groups: number; removable: boolean; looks?: string }
+
+/** (w33) The whole sentence of a source's move offer, with the time it stopped answering written in the site's zone (the zone is the page's); undefined without an offer. */
+function looksOf(source: GraphSource, siteZone: string | undefined): string | undefined {
+  const offer = moveOfferFor(source);
+  if (!offer) return undefined;
+  return looksLikeSentence(offer, offer.from_since && siteZone ? formatOfflineSince(offer.from_since, siteZone) : null);
+}
 
 /**
  * The callbacks a node gets in its data (it renders a button only for a callback it has). Sources and clusters toggle and
@@ -208,7 +216,7 @@ function nodeData(
     const creates = fact !== undefined && fact.groups > 0;
     const removes = canRemove && fact?.removable === true;
     return {
-      ...data, onToggle, onSelect, seen: fact?.seen,
+      ...data, onToggle, onSelect, seen: fact?.seen, ...(fact?.looks ? { looks: fact.looks } : {}),
       ...(creates ? { onCreateAssets, groups: fact.groups } : {}),
       ...(removes ? { onRemove } : {}),
       ...(canMove && moveOfferFor(data.source) !== null ? { onMoveSource } : {}),
@@ -248,7 +256,8 @@ function Canvas({ model }: { model: GraphModel }) {
   const movedToast = useMovedToast(); // (w33) "Moved ... 12 mappings kept." with an Undo for 10 seconds: the one toast of a finished move
   const removeSources = useRemoveDiscoveredSources();
   const { run, error: saveError } = useAction();
-  const timezone = useSite().data?.timezone ?? "UTC"; // the "10 min ago" of a source counts on the site's clock; UTC until it is read
+  const siteZone = useSite().data?.timezone;
+  const timezone = siteZone ?? "UTC"; // the "10 min ago" of a source counts on the site's clock; UTC until it is read (a wall-clock time is left out until then: `looksOf`)
   const [open, setOpen] = useState<OpenState>({ sources: new Set(), clusters: new Set() });
   // ---- The view (W12b): the filter and the folded assets are remembered per browser, the pages only for this visit (a closed group starts again at one page) ----
   const [unmappedOnly, setUnmappedOnlyState] = useState(readUnmappedOnly);
@@ -518,8 +527,8 @@ function Canvas({ model }: { model: GraphModel }) {
   // assets (a role that may not accept has none) and whether it is removable. `asOf` moves with each read of the graph: the "ago" is as old as the data.
   const asOf = useMemo(() => new Date(), [model]);
   const facts = useMemo(() => new Map<number, SourceFacts>(model.sources.map((s) => [s.id, {
-    seen: seenLine(s, asOf, timezone), groups: canAccept ? mappableClusters(s).length : 0, removable: isRemovable(s),
-  }])), [model, asOf, timezone, canAccept]);
+    seen: seenLine(s, asOf, timezone), groups: canAccept ? mappableClusters(s).length : 0, removable: isRemovable(s), looks: looksOf(s, siteZone),
+  }])), [model, asOf, timezone, siteZone, canAccept]);
 
   // ---- Unmap and move (W12a): the module's confirmation, Move dialog, toasts and Undo; the page names the mappings and where the focus goes afterwards ----
   const kinds = useAssetKinds(can("assets.view")).data; // for the note about a room or a hall (the Move dialog's and the Review's)
@@ -1203,7 +1212,7 @@ function Canvas({ model }: { model: GraphModel }) {
         find={find} onFindKey={openFind}
         onRefresh={() => invalidate(keys.graph)} refreshRef={refreshRef}
         clear={canRemove ? { count: removable.length, onClear: clearUnmapped } : undefined}
-        notSeen={canRemove ? { count: notSeenTotal, filtered: notSeenOnly, onFilter: onNotSeenFilter, removable: missing.length, onRemove: removeNotSeen } : undefined}
+        notSeen={{ count: notSeenTotal, filtered: notSeenOnly, onFilter: onNotSeenFilter, ...(canRemove ? { removable: missing.length, onRemove: removeNotSeen } : {}) }}
         shortcuts={<ShortcutsBubble openRef={keysRef} />}
       />
       {saveError && <p className="error" role="alert">{saveError}</p>}
@@ -1272,7 +1281,7 @@ function Canvas({ model }: { model: GraphModel }) {
         </div>
         {selected && (
           <SourcePanel
-            key={selected.id} source={selected} canEdit={canEditSource} seen={facts.get(selected.id)?.seen ?? ""} onClose={closePanel}
+            key={selected.id} source={selected} canEdit={canEditSource} seen={facts.get(selected.id)?.seen ?? ""} looks={facts.get(selected.id)?.looks} onClose={closePanel}
             onMoveSource={canEditSource && moveOfferFor(selected) !== null ? () => onMoveSource(nodeId.source(selected.id)) : undefined}
           />
         )}

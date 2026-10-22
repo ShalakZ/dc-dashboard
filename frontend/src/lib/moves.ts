@@ -16,9 +16,14 @@ import { upperFirst } from "./upperFirst";
 export const MOVE_REFRESHED = [keys.sources, keys.graph, keys.scans, keys.auditAll, keys.eventsAll] as const;
 
 /** Shown while a scan is queued or running: the dry run says so, and the real run would be refused. */
-export const SCAN_RUNNING_TEXT = "A scan is running; you can move when it has finished";
-/** On the row, the banner and the card of a source that two new servers look like: no move is offered. */
-export const TWO_SERVERS_TEXT = "Two servers could be this one; edit the address by hand";
+export const SCAN_RUNNING_TEXT = "A scan is running; you can move when it has finished.";
+/** On the row, the banner and the card of a source that several new servers look like (`count` of them: `Two` for 2, `Several` for more): no move is offered. */
+export const twoServersText = (count: number) => `${count === 2 ? "Two" : "Several"} servers could be this one; edit the address by hand`;
+
+/** The small warning line under a Sources row's status chip while another server answers at the source's address (`identity_different`), and what its tooltip says. */
+export const DIFFERENT_SERVER_ROW = "Another server answers at this address";
+export const DIFFERENT_SERVER_WHY =
+  "A scan, test or check met a different server at this address than the one this source used to talk to. Polling continues. See System events.";
 
 const num = (n: number) => n.toLocaleString("en-US");
 
@@ -142,23 +147,28 @@ export function tickLabel(preview: SourceMovePreview): string | null {
 export const moveButtonLabel = (mappings: number | null) => (mappings === null ? "Move" : `Move ${num(mappings)} ${mappings === 1 ? "mapping" : "mappings"}`);
 
 /**
- * The choice of address when the new one has a Docker name: the name first (the default; it keeps working when Docker gives the container a new address) and
- * the address the scan found as the other way. `foundHost` is the address of the as-found preview. No choice at all without a name.
+ * The choice of address when the new one has a name: the name first (the default; a name keeps working if the device gets a new address) and the address the
+ * scan found as the other way. `foundHost` is the address of the as-found preview. No choice at all without a name. The words name no tool: the name may come
+ * from any network (a plant DNS as well as a lab one), and the front end cannot tell.
  */
 export function addressOptions(preview: SourceMovePreview, foundHost: string | null): { value: "as_found" | "name"; label: string }[] {
   if (!preview.name_hint) return [];
   return [
-    { value: "name", label: `Use the name ${preview.name_hint} (it keeps working when Docker gives the container a new address)` },
+    { value: "name", label: `Use the name ${preview.name_hint} (a name keeps working if the device gets a new address)` },
     { value: "as_found", label: foundHost ? `Use the address ${foundHost}` : "Use the address found by the scan" },
   ];
 }
 
+/** `172.20.0.5:4840` as a person reads it: an IPv6 host (one with a colon, not yet bracketed) is written in brackets, `[fe80::1]:4840`. `hostPort` stays plain: it is what `expect` sends. */
+const shownHostPort = (address: { host: string; port: number }) =>
+  `${address.host.includes(":") && !address.host.startsWith("[") ? `[${address.host}]` : address.host}:${address.port}`;
+
 /**
  * The toast after a finished move: `Moved "OPC UA server at 172.20.0.5:4840" to 172.20.0.5:4840. 12 mappings kept.` `mappings` is what the preview showed (the
- * answer of the real run does not carry it); an opener that does not know it leaves the clause out.
+ * answer of the real run does not carry it); an opener that does not know it leaves the clause out. An IPv6 host is bracketed, as in the Undo sentence.
  */
 export const movedSentence = (done: SourceMoveDone, mappings?: number | null) =>
-  `Moved "${done.source.name}" to ${hostPort(done.to)}.${mappings === undefined || mappings === null ? "" : ` ${num(mappings)} ${mappings === 1 ? "mapping" : "mappings"} kept.`}`;
+  `Moved "${done.source.name}" to ${shownHostPort(done.to)}.${mappings === undefined || mappings === null ? "" : ` ${num(mappings)} ${mappings === 1 ? "mapping" : "mappings"} kept.`}`;
 
 /** Undo a move (`sources.edit`): within 24 hours, while nothing has changed since. The audit entry's number is the one the real run answered with (`audit_id`). */
 export const undoMove = (auditId: number) => api.post<SourceMoveUndoResult>(`/api/sources/moves/${auditId}/undo`);
@@ -172,7 +182,7 @@ const closed = (sentence: string) => (/[.!?]$/.test(sentence) ? sentence : `${se
  */
 export function undoMoveSentence(result: SourceMoveUndoResult): string {
   const said = result.text?.trim();
-  const base = closed(said ? said : `"${result.restored.name}" is back at ${hostPort(result.restored)}`);
+  const base = closed(said ? said : `"${result.restored.name}" is back at ${shownHostPort(result.restored)}`);
   const readings = result.readings_since_move;
   if (!(readings > 0) || /reading/i.test(base)) return base;
   return `${base} ${num(readings)} ${readings === 1 ? "reading taken at the new address stays" : "readings taken at the new address stay"}.`;

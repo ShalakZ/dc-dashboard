@@ -170,7 +170,7 @@ describe("MoveSourceDialog", () => {
       renderDialog();
       expect(await screen.findByText("From opc.tcp://172.20.0.3:4840/dcdash/ to opc.tcp://simulator:4840/dcdash/")).toBeInTheDocument();
       expect(dryRuns.map((d) => d.body)).toEqual([{ to: 7, address: "as_found" }, { to: 7, address: "name" }]);
-      const name = within(dialog()).getByRole("radio", { name: "Use the name simulator (it keeps working when Docker gives the container a new address)" });
+      const name = within(dialog()).getByRole("radio", { name: "Use the name simulator (a name keeps working if the device gets a new address)" });
       const found = within(dialog()).getByRole("radio", { name: "Use the address 172.20.0.5" });
       expect(name).toBeChecked();
       expect(found).not.toBeChecked();
@@ -240,7 +240,7 @@ describe("MoveSourceDialog", () => {
       const { realRuns, dryRuns } = serve((n) => show(movePreview({ scan_running: n < 3 })));
       renderDialog({ recheckMs: 150 });
       await arrived();
-      expect(slot()).toHaveTextContent("A scan is running; you can move when it has finished");
+      expect(slot()).toHaveTextContent("A scan is running; you can move when it has finished.");
       expect(moveButton()).toHaveAttribute("aria-disabled", "true");
       expect(moveButton()).not.toBeDisabled();
       await userEvent.click(moveButton());

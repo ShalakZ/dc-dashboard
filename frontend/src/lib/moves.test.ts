@@ -5,7 +5,7 @@ import { INSTANCE_MATCH, moveBody, movePreview, moveDone, moveUndone, NEW_NAME, 
 import { mockFetch } from "../test/fetchMock";
 import {
   addressOptions, effectLines, fromToLine, hostNameLine, hostPort, hostPortOfEndpoint, isChangedSincePreview, isIpAddress, MOVE_REFRESHED, moveButtonLabel,
-  movedSentence, moveRequest, needsConfirmation, offerOf, previewMove, runMove, SCAN_RUNNING_TEXT, tickLabel, TWO_SERVERS_TEXT, undoMove, undoMoveSentence, undoRefusal, warningLines,
+  movedSentence, moveRequest, needsConfirmation, offerOf, previewMove, runMove, SCAN_RUNNING_TEXT, tickLabel, twoServersText, undoMove, undoMoveSentence, undoRefusal, warningLines,
   whyLines,
 } from "./moves";
 
@@ -120,23 +120,34 @@ describe("the sentences of the preview", () => {
     expect(moveButtonLabel(null)).toBe("Move");
   });
 
-  it("offers the container's name first when the address has one, and the address as the other way", () => {
+  it("offers the name first when the address has one, and the address as the other way; the words name no tool (Docker or otherwise)", () => {
     expect(addressOptions(movePreview(), "172.20.0.5")).toEqual([]);
-    expect(addressOptions(movePreview({ name_hint: "simulator" }), "172.20.0.5")).toEqual([
-      { value: "name", label: "Use the name simulator (it keeps working when Docker gives the container a new address)" },
+    const options = addressOptions(movePreview({ name_hint: "simulator" }), "172.20.0.5");
+    expect(options).toEqual([
+      { value: "name", label: "Use the name simulator (a name keeps working if the device gets a new address)" },
       { value: "as_found", label: "Use the address 172.20.0.5" },
     ]);
+    expect(JSON.stringify(options)).not.toMatch(/docker|container/i);
+    expect(addressOptions(movePreview({ name_hint: "meter-12" }), null)[1]).toEqual({ value: "as_found", label: "Use the address found by the scan" });
   });
 
-  it("has the two fixed sentences", () => {
-    expect(SCAN_RUNNING_TEXT).toBe("A scan is running; you can move when it has finished");
-    expect(TWO_SERVERS_TEXT).toBe("Two servers could be this one; edit the address by hand");
+  it("has the fixed scan sentence (it ends with a full stop), and words the two-servers sentence from the count", () => {
+    expect(SCAN_RUNNING_TEXT).toBe("A scan is running; you can move when it has finished.");
+    expect(twoServersText(2)).toBe("Two servers could be this one; edit the address by hand");
+    expect(twoServersText(3)).toBe("Several servers could be this one; edit the address by hand");
+    expect(twoServersText(12)).toBe("Several servers could be this one; edit the address by hand");
   });
 
   it("words the toast of a finished move from the answer: the new name and address, and how many mappings were kept", () => {
     expect(movedSentence(moveDone(), 12)).toBe(`Moved "${NEW_NAME}" to 172.20.0.5:4840. 12 mappings kept.`);
     expect(movedSentence(moveDone(), 1)).toBe(`Moved "${NEW_NAME}" to 172.20.0.5:4840. 1 mapping kept.`);
     expect(movedSentence(moveDone(), 1234)).toBe(`Moved "${NEW_NAME}" to 172.20.0.5:4840. 1,234 mappings kept.`);
+  });
+
+  it("brackets an IPv6 host in the toast, like the Undo sentence does", () => {
+    const v6 = moveDone({ to: { host: "fe80::1", port: 4840, endpoint: "opc.tcp://[fe80::1]:4840/dcdash/" } });
+    expect(movedSentence(v6, 2)).toBe(`Moved "${NEW_NAME}" to [fe80::1]:4840. 2 mappings kept.`);
+    expect(movedSentence(moveDone({ to: { host: "[fe80::1]", port: 4840, endpoint: "opc.tcp://[fe80::1]:4840/dcdash/" } }))).toBe(`Moved "${NEW_NAME}" to [fe80::1]:4840.`);
   });
 
   it("leaves the count of mappings out, and still ends the sentence, when the opener does not know it", () => {

@@ -702,10 +702,15 @@ function sourceMoved(c: Context): string {
   ].join("");
 }
 
-/** "Undid the move of OPC UA server at 172.20.0.3:4840: back at 172.20.0.3:4840" (the `_after` side of an Undo entry is the state it restored). */
+/**
+ * "Undid the move of OPC UA server at 172.20.0.3:4840: back at 172.20.0.3:4840 (668 readings taken at the new address stay)" (the `_after` side of an Undo entry is the state it restored).
+ * The readings are the ones taken at the new address since the move, which an Undo leaves where they are; left out when the entry does not say, or says none.
+ */
 function sourceMoveUndone(c: Context): string {
   const back = hostPort(c.d.host_after, c.d.port_after);
-  return `Undid the move of ${movedSource(c)}${back ? `: back at ${back}` : ""}`;
+  const n = c.d.readings_since_move;
+  const stay = typeof n === "number" && Number.isSafeInteger(n) && n > 0 ? ` (${n === 1 ? "1 reading taken at the new address stays" : `${grouped(n)} readings taken at the new address stay`})` : "";
+  return `Undid the move of ${movedSource(c)}${back ? `: back at ${back}` : ""}${stay}`;
 }
 
 /** "2026-10-01 00:00 UTC" from the ISO time a fill stored; any other text as it is (cut), nothing for a value that is not text. */

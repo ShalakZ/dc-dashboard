@@ -1,6 +1,6 @@
 import type { Source } from "../api/types";
 import { formatSpanLong } from "./age";
-import { hostPortOfEndpoint, offerOf, TWO_SERVERS_TEXT } from "./moves";
+import { hostPortOfEndpoint, offerOf, twoServersText } from "./moves";
 import { formatSiteDateHour } from "./siteTime";
 
 /**
@@ -106,7 +106,7 @@ export function offlineBannerParts(list: readonly LongOffline[], timezone: strin
         ? { text: `${base} A scan found it at ${hostPort}:`, move: { sourceId: source.id, name: source.name, hostPort } }
         : { text: `${base} A scan found it at ${hostPort}.`, move: null };
     }
-    if (source.move_candidate?.kind === "two") return { text: `${base} ${TWO_SERVERS_TEXT}.`, move: null };
+    if (source.move_candidate?.kind === "two") return { text: `${base} ${twoServersText(source.move_candidate.count)}.`, move: null };
     return { text: base, move: null };
   }
   const found = list.filter((item) => offerOf(item.source) !== null).length;

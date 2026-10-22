@@ -2,7 +2,7 @@ import type { Edge, Node } from "@xyflow/react";
 import type { GraphModel, RemoveSourcesResult } from "../api/types";
 import {
   BLOCK_GAP, DIFFERENT_SERVER, FAN_DASH_LIMIT, LIVE_EDGE_LIMIT, MAPPED_NOT_SEEN, MAX_LAYOUT_ID, NO_VIEW, PAGE_SIZE, SOURCE_H, UNGROUPED, buildGraph, certificateLine, childNodeIds, descendantNodeIds,
-  initialView, isDifferentServer, isNotSeen, isRemovable, layoutBatches, looksLikeLine, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, notSeenSentence, ownPlaces,
+  initialView, isDifferentServer, isMappedNotSeen, isNotSeen, isRemovable, layoutBatches, looksLikeLine, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, notSeenSentence, ownPlaces,
   removableNotSeen, removalDialogText, removalOutcome, seenCard, seenLine,
   serverLine, shiftedPlaces, sourceIdOfNode, sourceVisible, twoServers, type GraphView, type OpenState, type XY,
 } from "./graph";
@@ -877,15 +877,25 @@ describe("what the card and the panel say about a source that is not seen (w33)"
 
   it("seenCard: an unmapped one keeps its line and tooltip; a mapped one says what to do instead, with both sentences in the tooltip", () => {
     expect(seenCard(source(1, { not_seen: miss }), LINE)).toEqual({ line: LINE, title: LINE });
-    expect(seenCard(source(1, { not_seen: miss, ungrouped: [mapped] }), LINE)).toEqual({ line: MAPPED_NOT_SEEN, title: `${LINE}. ${MAPPED_NOT_SEEN}` });
+    expect(seenCard(source(1, { not_seen: miss, ungrouped: [mapped], status: "offline" }), LINE)).toEqual({ line: MAPPED_NOT_SEEN, title: `${LINE}. ${MAPPED_NOT_SEEN}` });
     expect(MAPPED_NOT_SEEN).toBe("Mapped: move it or delete it on Sources");
     expect(seenCard(source(1, { ungrouped: [mapped] }), "Seen in scan #6")).toEqual({ line: "Seen in scan #6", title: "Seen in scan #6" }); // seen sources are left alone
+  });
+
+  it("a mapped source that is not seen but polls fine (online, or never polled) keeps its seen line: nothing is wrong that moving or deleting would fix", () => {
+    for (const status of ["online", "unknown", "error"]) {
+      expect(seenCard(source(1, { not_seen: miss, ungrouped: [mapped], status }), LINE)).toEqual({ line: LINE, title: LINE });
+    }
+    expect(isMappedNotSeen(source(1, { not_seen: miss, ungrouped: [mapped], status: "offline" }))).toBe(true);
+    expect(isMappedNotSeen(source(1, { not_seen: miss, ungrouped: [mapped], status: "online" }))).toBe(false);
+    expect(isMappedNotSeen(source(1, { not_seen: miss, status: "offline" }))).toBe(false); // nothing mapped: Remove not seen takes it
+    expect(isMappedNotSeen(source(1, { ungrouped: [mapped], status: "offline" }))).toBe(false); // seen
   });
 
   it("serverLine: the application URI, else the simulator's instance id, else the application name; nothing for no identity", () => {
     const id = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: false };
     expect(serverLine({ ...id, application_uri: "urn:dcdash:simulator:dev", instance: "dev", application_name: "Sim" })).toBe("Server: urn:dcdash:simulator:dev");
-    expect(serverLine({ ...id, instance: "dev", application_name: "Sim" })).toBe("Server: dev");
+    expect(serverLine({ ...id, instance: "dev", application_name: "Sim" })).toBe("Simulator instance dev");
     expect(serverLine({ ...id, application_name: "Sim" })).toBe("Server: Sim");
     expect(serverLine(id)).toBeNull();
     expect(serverLine(null)).toBeNull();
@@ -1538,7 +1548,8 @@ describe("what the card and the panel say about a move offer, two candidates and
   };
   const identity = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: false };
   const SEEN = "Seen in scan #8, 2 min ago";
-  const SENTENCE = "This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets), which stopped answering at 172.20.0.3:4840";
+  const SENTENCE = "This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets), which has not answered since 18 Oct 07:52";
+  const LINE = "Looks like OPC UA server (12 mappings)";
 
   it("moveOfferFor: the offer of a source, and nothing for two candidates, a null or an absent candidate", () => {
     expect(moveOfferFor(source(1, { move_candidate: offer }))).toBe(offer);
@@ -1558,23 +1569,49 @@ describe("what the card and the panel say about a move offer, two candidates and
     expect(DIFFERENT_SERVER).toBe("A different server answers at this address");
   });
 
-  it("looksLikeLine is the short line of the card; looksLikeSentence is the whole sentence, with the old address and the mappings in words", () => {
-    expect(looksLikeLine(offer)).toBe("Looks like OPC UA server at 172.20.0.3:4840");
-    expect(looksLikeSentence(offer)).toBe(SENTENCE);
-    expect(looksLikeSentence({ ...offer, mappings: 1, assets: 1 })).toBe(
-      "This looks like OPC UA server at 172.20.0.3:4840 (1 mapping on 1 asset), which stopped answering at 172.20.0.3:4840");
-    expect(looksLikeSentence({ ...offer, mappings: 1200, assets: 0 })).toBe(
-      "This looks like OPC UA server at 172.20.0.3:4840 (1,200 mappings), which stopped answering at 172.20.0.3:4840"); // en-US thousands; no assets, no "on 0 assets"
-    expect(looksLikeSentence({ ...offer, from_endpoint: "opc.tcp://[::1]:4840" })).toContain("which stopped answering at [::1]:4840");
+  it("looksLikeLine leads with the identifying part: the old source's title without the address its name ends with, then the mappings; the ellipsis cuts after it", () => {
+    expect(looksLikeLine(offer)).toBe(LINE);
+    expect(looksLikeLine({ ...offer, mappings: 1 })).toBe("Looks like OPC UA server (1 mapping)");
+    expect(looksLikeLine({ ...offer, mappings: 1200 })).toBe("Looks like OPC UA server (1,200 mappings)");
+    // a name somebody typed, or an address that is not the source's own, stays whole (the helper of the card's title)
+    expect(looksLikeLine({ ...offer, from_name: "Meter room 2" })).toBe("Looks like Meter room 2 (12 mappings)");
+    expect(looksLikeLine({ ...offer, from_name: "OPC UA server at 10.9.9.9:4840" })).toBe("Looks like OPC UA server at 10.9.9.9:4840 (12 mappings)");
+    expect(looksLikeLine({ ...offer, from_endpoint: "" })).toBe("Looks like OPC UA server at 172.20.0.3:4840 (12 mappings)");
+  });
+
+  it("looksLikeSentence is the whole sentence: the full name, the mappings in words, and since when it has not answered (the time the page formats from from_since)", () => {
+    expect(looksLikeSentence(offer, "18 Oct 07:52")).toBe(SENTENCE);
+    expect(looksLikeSentence({ ...offer, mappings: 1, assets: 1 }, "18 Oct 07:52")).toBe(
+      "This looks like OPC UA server at 172.20.0.3:4840 (1 mapping on 1 asset), which has not answered since 18 Oct 07:52");
+    expect(looksLikeSentence({ ...offer, mappings: 1200, assets: 0 }, "18 Oct 07:52")).toBe(
+      "This looks like OPC UA server at 172.20.0.3:4840 (1,200 mappings), which has not answered since 18 Oct 07:52"); // en-US thousands; no assets, no "on 0 assets"
+  });
+
+  it("looksLikeSentence without a time: the address is said only when the name does not hold it already, and never twice", () => {
+    // from_since null (or a time that cannot be read): the name holds the address, so the sentence just stops after the counts
+    expect(looksLikeSentence({ ...offer, from_since: null })).toBe("This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets)");
+    expect(looksLikeSentence(offer, null)).toBe("This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets)");
+    // a name that is not the address (a name somebody typed): the old fallback
+    expect(looksLikeSentence({ ...offer, from_name: "Meter room 2" })).toBe("This looks like Meter room 2 (12 mappings on 3 assets), which stopped answering at 172.20.0.3:4840");
+    expect(looksLikeSentence({ ...offer, from_name: "Meter room 2", from_endpoint: "opc.tcp://[::1]:4840" })).toContain("which stopped answering at [::1]:4840");
+    // no endpoint at all (a connector without a URL): no empty "at"
+    expect(looksLikeSentence({ ...offer, from_name: "Meter room 2", from_endpoint: "" })).toBe("This looks like Meter room 2 (12 mappings on 3 assets)");
   });
 
   it("seenCard, an offer: the short line, and the tooltip carries the whole sentence and then the seen line", () => {
-    expect(seenCard(source(1, { move_candidate: offer }), SEEN)).toEqual({ line: "Looks like OPC UA server at 172.20.0.3:4840", title: `${SENTENCE}. ${SEEN}` });
+    expect(seenCard(source(1, { move_candidate: offer }), SEEN, SENTENCE)).toEqual({ line: LINE, title: `${SENTENCE}. ${SEEN}` });
+    // without the page's sentence (a caller that has no site clock) the card builds one without the time
+    expect(seenCard(source(1, { move_candidate: offer }), SEEN)).toEqual({
+      line: LINE, title: `This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets). ${SEEN}`,
+    });
   });
 
   it("seenCard, two candidates: the sentence, no button's worth of anything else", () => {
     expect(seenCard(source(1, { move_candidate: { kind: "two", count: 2 } }), SEEN)).toEqual({
       line: "Two servers could be this one; edit the address by hand", title: `Two servers could be this one; edit the address by hand. ${SEEN}`,
+    });
+    expect(seenCard(source(1, { move_candidate: { kind: "two", count: 3 } }), SEEN)).toEqual({
+      line: "Several servers could be this one; edit the address by hand", title: `Several servers could be this one; edit the address by hand. ${SEEN}`,
     });
   });
 
@@ -1582,7 +1619,7 @@ describe("what the card and the panel say about a move offer, two candidates and
     const different = { ...identity, different: true };
     expect(seenCard(source(1, { identity: different }), SEEN)).toEqual({ line: DIFFERENT_SERVER, title: `${DIFFERENT_SERVER}. ${SEEN}`, tone: "warn" });
     expect(seenCard(source(1, { origin: "manual", identity: different }), "Added by hand")).toEqual({ line: DIFFERENT_SERVER, title: `${DIFFERENT_SERVER}. Added by hand`, tone: "warn" });
-    expect(seenCard(source(1, { identity: different, move_candidate: offer }), SEEN)).toEqual({ line: DIFFERENT_SERVER, title: `${DIFFERENT_SERVER}. ${SENTENCE}. ${SEEN}`, tone: "warn" });
+    expect(seenCard(source(1, { identity: different, move_candidate: offer }), SEEN, SENTENCE)).toEqual({ line: DIFFERENT_SERVER, title: `${DIFFERENT_SERVER}. ${SENTENCE}. ${SEEN}`, tone: "warn" });
   });
 
   it("seenCard leaves every other source as it was: the seen line, and the mapped not-seen sentence", () => {
@@ -1590,6 +1627,6 @@ describe("what the card and the panel say about a move offer, two candidates and
     expect(seenCard(source(1), SEEN)).toEqual({ line: SEEN, title: SEEN });
     const miss = { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" };
     const mapped = point(9, "M kW", { asset_id: 10, mapping_id: 3, mapped_metric: "active_power_kw" });
-    expect(seenCard(source(1, { not_seen: miss, ungrouped: [mapped] }), "Not seen in scan #7")).toEqual({ line: MAPPED_NOT_SEEN, title: `Not seen in scan #7. ${MAPPED_NOT_SEEN}` });
+    expect(seenCard(source(1, { not_seen: miss, ungrouped: [mapped], status: "offline" }), "Not seen in scan #7")).toEqual({ line: MAPPED_NOT_SEEN, title: `Not seen in scan #7. ${MAPPED_NOT_SEEN}` });
   });
 });
