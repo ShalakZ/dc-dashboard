@@ -50,7 +50,9 @@ export function SourcePanel({ source, canEdit, seen, onMoveSource, onClose }: Pr
     void run(async () => {
       const config = { ...source.config, ...(username ? { username } : {}) };
       // An empty secret is left out: sending "" would erase the stored one.
-      await api.patch(`/api/sources/${source.id}`, { ...(secret ? { secret } : {}), config });
+      // (w33) `config` replaces the stored one as a whole, so it carries `expect_config`, the masked config this panel was opened with (unchanged): the server answers
+      // 409 "This source was changed since you opened it ..." (shown in the error line below) when the source was moved since, instead of writing the old address back.
+      await api.patch(`/api/sources/${source.id}`, { ...(secret ? { secret } : {}), config, expect_config: source.config });
       setSecret("");
       const { job_id } = await api.post<{ job_id: number }>(`/api/sources/${source.id}/browse`);
       setJobId(job_id);

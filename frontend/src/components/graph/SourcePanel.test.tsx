@@ -215,6 +215,7 @@ describe("SourcePanel", () => {
     expect(order).toEqual(["PATCH /api/sources/5", "POST /api/sources/5/browse"]);
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({
       secret: "s3cret", config: { endpoint: "opc.tcp://plc:4840", username: "operator" },
+      expect_config: { endpoint: "opc.tcp://plc:4840", username: "svc" }, // the config the panel was opened with, not what was typed
     });
     expect(screen.getByLabelText("Secret")).toHaveValue(""); // cleared once sent
   });
@@ -232,7 +233,7 @@ describe("SourcePanel", () => {
     await userEvent.type(screen.getByLabelText("Secret"), "pw");
     await userEvent.click(screen.getByRole("button", { name: "Save and browse" }));
     await screen.findByText("found 60 points");
-    expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ secret: "pw", config: s.config });
+    expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ secret: "pw", config: s.config, expect_config: s.config });
   });
 
   it("only opcua sources ask for a username", async () => {
@@ -248,7 +249,7 @@ describe("SourcePanel", () => {
     await userEvent.type(screen.getByLabelText("Secret"), "pw");
     await userEvent.click(screen.getByRole("button", { name: "Save and browse" }));
     await screen.findByText("found 60 points");
-    expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ secret: "pw", config: { host: "sim" } });
+    expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ secret: "pw", config: { host: "sim" }, expect_config: { host: "sim" } });
   });
 
   it("refreshes the graph and the sources once the browse job has finished", async () => {
@@ -282,6 +283,22 @@ describe("SourcePanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save and browse" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("admin only");
     expect(calls.some((c) => c.path.endsWith("/browse"))).toBe(false);
+  });
+
+  it("a panel opened before the source was moved shows the server's 409 sentence in its error line and browses nothing (w33)", async () => {
+    const sentence = "This source was changed since you opened it (for example it was moved to a new address). Close the form and open it again.";
+    const calls = mockFetch({
+      ...base,
+      "GET /api/discovery/graph": { body: graph },
+      "PATCH /api/sources/5": { status: 409, body: { detail: sentence } },
+    });
+    open(source({ needs_credentials: true }), true);
+    await userEvent.type(screen.getByLabelText("Secret"), "pw");
+    await userEvent.click(screen.getByRole("button", { name: "Save and browse" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(sentence);
+    expect(calls.find((c) => c.method === "PATCH")?.body).toMatchObject({ expect_config: { endpoint: "opc.tcp://plc:4840", username: "svc" } });
+    expect(calls.some((c) => c.path.endsWith("/browse"))).toBe(false);
+    expect(screen.getByLabelText("Secret")).toHaveValue("pw"); // nothing was saved, so what was typed stays
   });
 
   it("a source that failed for another reason shows the error and no credentials hint", () => {
