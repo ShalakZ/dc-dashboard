@@ -448,15 +448,15 @@ test.describe("W33: devices that move or disappear", () => {
     await test.step(`the scan's endpoint ${HOST}:${PORT} is free (a source this run finds there before it makes any is somebody else's)`, async () => {
       const before = await knownIds(request);
       const finding = (await runScan(request)).findings.find((f) => f.port === PORT);
-      if (!finding || finding.source_id === null) {
-        world.blocked = `nothing answers at ${HOST}:${PORT}${finding ? ` (${finding.outcome}: ${finding.detail})` : ""}, so there is no server to move`;
-      } else if (before.has(finding.source_id)) {
-        const holder = (await graphOf(request)).sources.find((s) => s.id === finding.source_id);
-        world.blocked = `${HOST}:${PORT} is already held by the source "${holder?.name ?? finding.source_id}", which this spec did not make: a scan would link to it and make no new source`;
+      // Nothing answering at the Historian's port is a broken stack (the dev profile starts it), not somebody else's source: this fails, it does not skip.
+      expect(finding?.source_id ?? null, `a server answers at ${HOST}:${PORT} (the simulator's stand-in Historian)${finding ? ` - the scan said ${finding.outcome}: ${finding.detail}` : ""}`).not.toBeNull();
+      if (before.has(finding!.source_id!)) {
+        const holder = (await graphOf(request)).sources.find((s) => s.id === finding!.source_id);
+        world.blocked = `${HOST}:${PORT} is already held by the source "${holder?.name ?? finding!.source_id}", which this spec did not make: a scan would link to it and make no new source`;
       } else {
         // The scan made it: it is removed again (an unmapped discovered source), and the endpoint is free for the real run of this case.
-        const removed = await removeDiscovered(request, [finding.source_id]);
-        expect(removed.removed.map((r) => r.id)).toEqual([finding.source_id]);
+        const removed = await removeDiscovered(request, [finding!.source_id!]);
+        expect(removed.removed.map((r) => r.id)).toEqual([finding!.source_id]);
       }
     });
     test.skip(world.blocked !== null, world.blocked ?? "");
