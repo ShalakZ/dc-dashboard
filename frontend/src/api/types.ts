@@ -102,7 +102,7 @@ export interface Source {
   /** The list endpoint only (w32): how many readings of this source failed since it went offline (the open incident's count); null without an open incident. */
   failed_reads?: number | null;
   /** The list endpoint only (w33): for an offline source that a scan may have found again at a new address: the new source (`offer`), or several (`two`); null otherwise. */
-  move_candidate?: MoveCandidateForOld | MoveTwo | null;
+  move_candidate?: SourceMoveCandidateForOld | SourceMoveTwo | null;
 }
 /**
  * The `history` object of a source list row (GET /api/sources): the part of the `history_status` row the Sources page shows. `supports_history` is the
@@ -283,7 +283,7 @@ export interface GraphSource {
   /** (w33) A Docker container name for the source's current host (`simulator`), or null. */
   name_hint?: string | null;
   /** (w33) On a new unmapped source: it looks like an old mapped one that stopped answering (`offer`), or several old ones could be it (`two`). */
-  move_candidate?: MoveCandidateForNew | MoveTwo | null;
+  move_candidate?: SourceMoveCandidateForNew | SourceMoveTwo | null;
 }
 export interface NotSeen { scan_id: number; at: string; last_seen_scan_id: number; last_seen_at: string }
 export interface SourceIdentity {
@@ -291,7 +291,7 @@ export interface SourceIdentity {
   usable: boolean; different: boolean;
 }
 /** Why a move is offered: `same_server` (equal application URI or instance id) or `possibly` (every mapped address and point name exists on the new server). */
-export interface MoveMatch {
+export interface SourceMoveMatch {
   kind: "same_server" | "possibly"; evidence: "uri" | "instance" | "addresses"; value: string | null;
   /** How many of the old source's mapped (address, name) pairs the new server has. */
   addresses: number;
@@ -299,30 +299,30 @@ export interface MoveMatch {
   missing_addresses: number | null;
   needs_tick: boolean;
 }
-export interface MoveTwo { kind: "two"; count: number }
+export interface SourceMoveTwo { kind: "two"; count: number }
 /** On the NEW source's card (Discovery): the old source it looks like. Endpoints carry no user name or password. */
-export interface MoveCandidateForNew {
-  kind: "offer"; from_source_id: number; from_name: string; from_endpoint: string; from_since: string | null; mappings: number; assets: number; match: MoveMatch;
+export interface SourceMoveCandidateForNew {
+  kind: "offer"; from_source_id: number; from_name: string; from_endpoint: string; from_since: string | null; mappings: number; assets: number; match: SourceMoveMatch;
 }
 /** On the OLD source's row (Sources): the new source a scan found. */
-export interface MoveCandidateForOld { kind: "offer"; to_source_id: number; to_name: string; to_endpoint: string; match: MoveMatch }
-export interface MoveAddress { host: string; port: number; endpoint: string }
+export interface SourceMoveCandidateForOld { kind: "offer"; to_source_id: number; to_name: string; to_endpoint: string; match: SourceMoveMatch }
+export interface SourceMoveAddress { host: string; port: number; endpoint: string }
 /** The body of POST /api/sources/{id}/move; `expect` is required for a real run (the numbers and texts the preview showed). */
-export interface MoveIn {
+export interface SourceMoveIn {
   to: number; address: "as_found" | "name";
   expect?: { mappings: number; address_before: string; address_after: string; name_after: string | null };
 }
 /** The answer to POST /api/sources/{id}/move?dry_run=1. `scan_running`: a scan is queued or running (the real run would be refused). */
-export interface MovePreview {
+export interface SourceMovePreview {
   dry_run: true; scan_running: boolean; source: { id: number; name: string }; target: { id: number; name: string; points: number };
-  from: MoveAddress; to: MoveAddress; address: "as_found" | "name"; name_hint: string | null; rename: { from: string; to: string } | null;
-  match: MoveMatch; mappings: number; mapped_points: number; assets: number; needs_tick: boolean;
+  from: SourceMoveAddress; to: SourceMoveAddress; address: "as_found" | "name"; name_hint: string | null; rename: { from: string; to: string } | null;
+  match: SourceMoveMatch; mappings: number; mapped_points: number; assets: number; needs_tick: boolean;
 }
-export interface MoveDone {
-  dry_run: false; audit_id: number; source: { id: number; name: string }; from: MoveAddress; to: MoveAddress; rename: { from: string; to: string } | null; undo_until: string;
+export interface SourceMoveDone {
+  dry_run: false; audit_id: number; source: { id: number; name: string }; from: SourceMoveAddress; to: SourceMoveAddress; rename: { from: string; to: string } | null; undo_until: string;
 }
 /** The answer to POST /api/sources/moves/{audit_id}/undo; `readings_since_move` stay after an Undo. */
-export interface MoveUndoResult { source: { id: number; name: string }; restored: { host: string; port: number; name: string }; readings_since_move: number; text: string }
+export interface SourceMoveUndoResult { source: { id: number; name: string }; restored: { host: string; port: number; name: string }; readings_since_move: number; text: string }
 export interface GraphModel {
   sources: GraphSource[];
   unidentified: { host: string; port: number; scan_id: number }[];
