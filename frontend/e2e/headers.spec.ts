@@ -172,13 +172,14 @@ test("every page an admin can open runs under the policy without one violation, 
     await settled("/tariffs", "Tariffs");
     await settled("/storage", "Storage");
     await settled("/audit", "Audit log");
+    await settled("/events", "System events"); // w32
     await settled("/password", "Change password");
     await settled("/no-such-page", "Page not found");
   });
 
   await test.step("no console message and no event named a policy", async () => {
     await test.info().attach("visited-routes", { body: visited.join("\n"), contentType: "text/plain" }); // what "zero" covered
-    expect(visited.length, "routes visited").toBe(16);
+    expect(visited.length, "routes visited").toBe(17);
     expect(violations, `violations while visiting ${visited.join(", ")}`).toEqual([]);
   });
 });

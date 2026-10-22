@@ -47,11 +47,11 @@ const STAFF_USER: Account = { username: "w9a-staffer", password: "w9a-staffer-pa
 // The sidebar in the order it is drawn (components/navItems.ts): three groups.
 const MONITOR = ["Assets Tree", "Dashboards", "Billing"];
 const OPERATE = ["Sources", "Scans", "Discovery"];
-const ADMINISTER = ["Users & Roles", "Settings", "Tariffs", "Storage", "Displays", "Audit", "Diagnostics"];
+const ADMINISTER = ["Users & Roles", "Settings", "Tariffs", "Storage", "Displays", "Audit", "Events", "Diagnostics"];
 const EVERY_LINK = [...MONITOR, ...OPERATE, ...ADMINISTER];
 const PAGE_OF: Record<string, string> = {
   Sources: "/sources", Scans: "/scans", Discovery: "/discovery",
-  "Users & Roles": "/users", Settings: "/settings", Tariffs: "/tariffs", Storage: "/storage", Displays: "/displays", Audit: "/audit", Diagnostics: "/diagnostics",
+  "Users & Roles": "/users", Settings: "/settings", Tariffs: "/tariffs", Storage: "/storage", Displays: "/displays", Audit: "/audit", Events: "/events", Diagnostics: "/diagnostics",
 };
 // The one Administer page the built-in Operator opens since W9b (tariffs.view): read-only.
 const OPERATOR_ADMINISTER = ["Tariffs"];
@@ -99,6 +99,9 @@ const ADMIN_TIER: Probe[] = [
   get("/api/settings/general"), get("/api/settings/sign-in"), get("/api/tls/status"),
   put("/api/settings/general"), put("/api/settings/sign-in"),
   get("/api/audit"), get("/api/audit/options"), get("/api/audit/position"), get("/api/audit/1"), get("/api/audit.csv"),
+  // w32: the retention of the system events is storage.view / storage.edit like the other storage routes; the five read routes of the journal are diagnostics.view (a Viewer and an Operator hold neither)
+  get("/api/settings/events"), put("/api/settings/events"),
+  get("/api/events"), get("/api/events/1"), get("/api/events/options"), get("/api/events/summary"), get("/api/events.csv"),
   get("/api/users"), post("/api/users"), patch(`/api/users/${GONE}`), del(`/api/users/${GONE}`), post(`/api/users/${GONE}/unblock`),
   get("/api/roles"), get("/api/permissions"), post("/api/roles"), patch(`/api/roles/${GONE}`), del(`/api/roles/${GONE}`),
   post(`/api/roles/${GONE}/duplicate`),
@@ -341,7 +344,7 @@ test.describe("W9a: roles and permissions", () => {
   test("an administrator sees every page and every permission", async ({ browser }) => {
     test.setTimeout(180_000);
     await asUser(browser, ADMIN, async (page) => {
-      await test.step("the sidebar holds all twelve pages in three groups", async () => {
+      await test.step("the sidebar holds every page in three groups", async () => {
         await expectSidebar(page, EVERY_LINK, ["Monitor", "Operate", "Administer"]);
       });
       await test.step("the Users & Roles page and the Assets Tree open, with their buttons", async () => {

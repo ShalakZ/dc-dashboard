@@ -424,5 +424,16 @@ export default defineConfig({
       dependencies: ["w29"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // System events (w32). It MAKES ITS OWN DATA through the API (`W32 <run> ...`: the asset, a `simulator` source at the live simulator with one mapped point, and the account and role `w32-...` of case 6) and removes it
+    // all in afterAll, also after a failed case; it needs no scratch stack and never restarts the collector (it changes the source's URL through the API: the dead address `http://simulator:9`, then the live one back). Cases
+    // (serial): the source goes offline (`offline_since`, `failed_reads`); the Sources banner, with the page's clock put three minutes ahead before it loads, is a plain banner that names the source and links to its events;
+    // System events shows ONE open incident, pinned and as one row, whose count grows by itself (up to about 100 s of real time); the way back closes it (the recovery row with its duration, the pinned line and the banner
+    // gone); a connection check's audit entry shows its outcome (tag, drawer row) and the link to the event and back; a role without diagnostics.view has no Events link; the Storage card says 90 days and has Change....
+    {
+      name: "w32",
+      testMatch: "w32.spec.ts",
+      dependencies: ["w31"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

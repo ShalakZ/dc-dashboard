@@ -4,7 +4,7 @@ import { expect, test, type Locator, type Page, type Route } from "@playwright/t
 // sign-ins of every project before this one), a site currency and a site default rate. Nothing is created or changed: the pages are only
 // opened, measured and (the Details button) clicked, and the admin signs in through the API.
 //
-// What it pins, for the five pages Audit log, Storage, Tariffs, Settings and Diagnostics: no sideways scroll at 1920, 1440 and 1024 px; at
+// What it pins, for the six pages Audit log, Storage, Tariffs, Settings, Diagnostics and System events (w32; held to the first rule only): no sideways scroll at 1920, 1440 and 1024 px; at
 // 1440 px the card pairs sit side by side (Settings' two cards have one height and their Save buttons one top; Tariffs' Currency card is a row
 // of its own above its two rate cards) and at 1024 px they stack; Tariffs' description is wide; the Audit toolbar is at most two rows and keeps
 // every accessible name, its table has a header row and Details opens the entry's drawer (W7l; it was a detail row); the version line never says "built unknown"; and the
@@ -105,13 +105,14 @@ function rowStarts(tops: number[], tolerance: number): number[] {
   return rows;
 }
 
-// The five pages: where they are, their h1 and the h2 of their cards (the page is loaded when every one is there and no skeleton is left).
+// The six pages: where they are, their h1 and the h2 of their cards (the page is loaded when every one is there and no skeleton is left).
 const PAGES = [
   { path: "/audit", title: "Audit log", ready: (page: Page) => page.locator(".audit-page .audit-table") },
   { path: "/storage", title: "Storage", ready: (page: Page) => heading2(page, "Retention and capacity") },
   { path: "/tariffs", title: "Tariffs", ready: (page: Page) => heading2(page, "Asset overrides") },
   { path: "/settings", title: "Settings", ready: (page: Page) => heading2(page, "Sign-in protection") },
   { path: "/diagnostics", title: "Diagnostics", ready: (page: Page) => heading2(page, "Connection check") },
+  { path: "/events", title: "System events", ready: (page: Page) => heading2(page, "Happening now") }, // w32
 ];
 
 /** Opens a page and waits until it is the loaded page: its h1, its last card and no skeleton region. */
