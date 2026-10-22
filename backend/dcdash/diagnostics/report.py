@@ -34,6 +34,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dcdash.collector.incidents import KINDS as INCIDENT_KINDS
 from dcdash.core import journal
 from dcdash.core.audit import SENSITIVE_KEYS, plain, without_credentials
 from dcdash.core.build import build_info, uptime_seconds
@@ -887,7 +888,19 @@ async def _checks(db: AsyncSession, source_id: int | None) -> tuple[CheckInfo, .
 
 
 async def _journal(db: AsyncSession, source_id: int | None, limit: int) -> tuple[Event, ...]:
-    return tuple(_event(row) for row in await journal.recent(db, limit=limit, source_id=source_id))
+    """The newest `limit` events and, on top of that cap, every open incident of the shown sources, however old: an incident's row
+    keeps the time it began, so a long outage would otherwise fall out of the window while it is the thing to report."""
+    rows = await journal.recent(db, limit=limit, source_id=source_id)
+    standing = (
+        select(DiagEvent).where(DiagEvent.kind.in_(INCIDENT_KINDS), DiagEvent.detail["state"].astext == "open")
+        .order_by(DiagEvent.ts.desc(), DiagEvent.id.desc()).limit(limit)
+    )
+    if source_id is not None:
+        standing = standing.where(DiagEvent.source_id == source_id)
+    shown = {row.id for row in rows}
+    rows = [*rows, *(row for row in (await db.scalars(standing)).all() if row.id not in shown)]
+    rows.sort(key=lambda row: (row.ts, row.id), reverse=True)
+    return tuple(_event(row) for row in rows)
 
 
 async def _api_errors(db: AsyncSession, limit: int) -> tuple[Event, ...]:
@@ -1062,6 +1075,20 @@ def _days(days: float | None) -> str:
 def _same(a: Event, b: Event) -> bool:
     key = lambda e: (e.level, e.component, e.kind, e.source_id, e.code, e.message)  # noqa: E731
     return key(a) == key(b)
+
+
+def _is_open_incident(event: Event) -> bool:
+    return event.kind in INCIDENT_KINDS and event.detail.get("state") == "open"
+
+
+def _open_tail(event: Event) -> str:
+    """The end of the line of a standing incident (w32): ` [open, 1204 times]`; empty for every other row."""
+    if not _is_open_incident(event):
+        return ""
+    count = event.detail.get("count")
+    if isinstance(count, bool) or not isinstance(count, int):
+        return " [open]"
+    return f" [open, {count} time{'' if count == 1 else 's'}]"
 
 
 def _signed(seconds: float) -> str:
@@ -1427,7 +1454,7 @@ class _Renderer:
         found = [
             (min(e.ts for e in same), max(e.ts for e in same), len(same), max(same, key=lambda e: e.ts)) for same in groups.values()
         ]
-        return sorted(found, key=lambda g: g[1], reverse=True)
+        return sorted(found, key=lambda g: (_is_open_incident(g[3]), g[1]), reverse=True)  # a standing incident first
 
     def points(self, info: PointsInfo) -> list[str]:
         total = sum(n for _, n in info.counts)
@@ -1536,16 +1563,27 @@ class _Renderer:
             head.append(f"code={self.text(event.code, 40)}")
         if count > 1:
             head.append(f"x{count} since {_iso(first)}")
-        detail = ""
-        if event.detail:
-            detail = " " + self.compact(event.detail, 120)
-        return " ".join(head) + ": " + self.text(event.message, MESSAGE_CHARS) + detail
+        tail = _open_tail(event)
+        if not tail:
+            detail = ""
+            if event.detail:
+                detail = " " + self.compact(event.detail, 120)
+            return " ".join(head) + ": " + self.text(event.message, MESSAGE_CHARS) + detail
+        # A standing incident keeps its ending whatever the line limit does: the message and then the detail give way to it.
+        line = " ".join(head) + ": "
+        line += self.text(event.message, max(min(MESSAGE_CHARS, LINE_LIMIT - len(line) - len(tail)), 10))
+        room = min(120, LINE_LIMIT - len(line) - len(tail) - 1)
+        if event.detail and room >= 20:
+            line += " " + self.compact(event.detail, room)
+        return line + tail
 
     def events(self, events: Sequence[Event], cap: int, empty: str) -> list[str]:
         if not events:
             return [empty]
         runs: list[tuple[Event, int, datetime]] = []
-        for event in events:  # newest first: a run of identical events is one line with a count
+        # A standing incident (w32) is the fact to report, however old its row: it goes first, each group still newest first.
+        # A run of identical events is one line with a count.
+        for event in sorted(events, key=lambda e: not _is_open_incident(e)):
             if runs and _same(runs[-1][0], event):
                 runs[-1] = (runs[-1][0], runs[-1][1] + 1, event.ts)
             else:
