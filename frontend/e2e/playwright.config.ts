@@ -435,5 +435,17 @@ export default defineConfig({
       dependencies: ["w31"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // Devices that move or disappear (w33). It MAKES ITS OWN DATA through the API (`W33 <run> ...`: the asset, a hand-added `simulator` source at the stand-in Historian `simulator:9100`, the scope, and the account and role `w33-...` of
+    // case 5; the sources a scan makes there are renamed `W33 <run> ...` at once) and removes it all in afterAll, also after a failed case; it needs no scratch stack. The Historian's port is the one endpoint no other spec keeps a source
+    // at, which a scan needs to make a NEW source. Cases (serial): an old source with two mappings and no identity is offline at a dead address; a scan makes the new source and the API offers the move as "possibly" (by addresses);
+    // Move to new address... is the first item of the row menu at 1024 x 768; Discovery's card offers Move... and the dialog asks for the tick; a role without sources.edit sees neither; the move from Sources keeps the point and
+    // mapping ids, brings the source online and removes the duplicate, Undo in the toast and the Audit page; a second round moves from Discovery and undoes from the Audit drawer; three scans of one range mark what they did not
+    // find as Not seen (dimmed cards, the filter, Remove not seen leaves the mapped source). When somebody else holds the endpoint every case skips with the holder's name; nothing of anybody else's is deleted.
+    {
+      name: "w33",
+      testMatch: "w33.spec.ts",
+      dependencies: ["w32"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

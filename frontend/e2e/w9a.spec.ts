@@ -88,6 +88,7 @@ const ADMIN_TIER: Probe[] = [
   put("/api/settings/billing"), // the GET moved to OPERATOR_TIER in W9b: the Tariffs page reads the currency with tariffs.view
   post("/api/sources"), patch(`/api/sources/${GONE}`), del(`/api/sources/${GONE}`), post(`/api/sources/${GONE}/browse`),
   post(`/api/sources/${GONE}/move`), // w33: sources.edit; an empty body from a role without it is a 403, a gate that lets it through answers 422 and moves nothing
+  post(`/api/sources/moves/${GONE}/undo`), // w33: sources.edit; a gate that lets it through answers 404 (no such move) and undoes nothing
   get("/api/connectors"),
   get("/api/diagnostics/report?format=bogus"), // a gate that lets it through answers 422 and builds no report
   put("/api/discovery/layout"),
