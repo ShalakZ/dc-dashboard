@@ -106,7 +106,7 @@ lacks says "No access".
   (N)...**, which uses the same dialog as Clear unmapped and never removes a mapped or hand-added source (a marked source with
   something mapped and offline reads `Mapped: move it or delete it on Sources`; while **Turn on Not seen lately** is on, the bar's
   summary strip says `Only not seen lately (2)`, and that filter, unlike **Remove not seen**, needs only `discovery.view`). A new source
-  that looks like an old one that stopped answering reads `Looks like <that source> (12 mappings)` and has **Move...** beside
+  that looks like an old one that stopped answering reads `Looks like <its short name> (12 mappings)` and has **Move...** beside
   **Details** (needs `sources.edit`); `Two servers could be this one; edit
   the address by hand` and `A different server answers at this address` take the same line, and the Details panel adds the server's
   name (`Server: urn:dcdash:simulator:dev`) and its certificate (`certificate 3A:5F:...:91`). What each of these means is on

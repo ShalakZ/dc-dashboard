@@ -126,14 +126,15 @@ scan's untouched copy). The offer still shows; the dialog, which asks the server
   scan does not have, so it has no points) cannot be checked this way: the move is still offered, and the dialog says so.
 - **Possibly the same server.** The old source remembers nothing (every source made before this update, until it is reached again,
   and a source whose address was edited by hand since), or what it remembers says that a different server answers at its address now
-  (then it counts as remembering nothing). Then the new server must have **every** address mapped on the old source **with the same
+  (then it counts as having no usable identity; its certificate is still compared). Then the new server must have **every** address mapped on the old source **with the same
   point name** (numeric node ids repeat across servers of one make, so the address alone proves little), and you must tick `I checked
   that this is the same device`.
 
 **Never:** a different application URI or instance id; different certificates; a default URI as the only evidence; an old source that
 remembers a server while the new one says nothing; a name (two sources with equal names and different servers never match); a Modbus
 source. And **never two candidates**: if two servers could be the old source, or one new server fits two old sources, nothing is
-offered and the card says `Two servers could be this one; edit the address by hand`.
+offered and the card says `Two servers could be this one; edit the address by hand` (`Several servers could be this one; ...` for
+more than two).
 
 A source whose address is a host **name** (such as `opc.tcp://simulator:4840/dcdash/`) is matched by the scan at wherever the name
 resolves now, so it follows its container by itself and does not go offline when Docker gives the container a new address; it is not
@@ -147,9 +148,10 @@ is replaced.
   With several offline sources the banner says for how many a scan found a new address and sends you to the row menus. The first item
   of the row menu of such a source is **Move to new address...**. A person without `sources.edit` reads the same sentence and has no
   button.
-- **Discovery.** The new source's card says `Looks like OPC UA server at 172.20.0.3:4840` and has a **Move...** button beside
-  **Details**; its panel says `This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets), which stopped answering at
-  172.20.0.3:4840`.
+- **Discovery.** The new source's card says `Looks like OPC UA server (12 mappings)`, the old source's short name first, and has a
+  **Move...** button beside **Details**; the whole sentence is its tooltip. Its panel says `This looks like OPC UA server at
+  172.20.0.3:4840 (12 mappings on 3 assets), which has not answered since 18 Oct 07:52` (when the time is not known, `which stopped
+  answering at 172.20.0.3:4840`; the address is left out when the old name already holds it).
 
 ## The preview and the move
 
@@ -261,7 +263,7 @@ An update recreated every container, and Docker gave the simulator a new address
    4840)`: another container holds the old address and refuses the connection.
 2. A scan of the same range was run. Because a scan matches by address, it made a new source, `OPC UA server at
    172.20.0.5:4840`, and **Discovery** shows the old items beside the new ones. The old source, which has 12 mappings, reads `Mapped:
-   move it or delete it on Sources`; the new one reads `Looks like OPC UA server at 172.20.0.3:4840` and has a **Move...** button.
+   move it or delete it on Sources`; the new one reads `Looks like OPC UA server (12 mappings)` and has a **Move...** button.
 3. On Sources the banner ends `A scan found it at 172.20.0.5:4840:` with **Move to new address...**. The old source was made before
    the update and remembers no server, so this is a **possible** match: all 12 mapped addresses and their names exist on the new
    server, and the dialog asks for the tick `I checked that this is the same device`. When the scan found a name for the new
