@@ -5,9 +5,19 @@ This file pins the head (the newest migration's test does). The upgrade adds the
 value and reads NULL, no other table moves. The downgrade drops the column; the stored identities are lost by design (the next scan
 learns them again) and every other column of every table is identical before and after."""
 import ast
+import importlib.util
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+from alembic.operations import Operations
+from alembic.runtime.migration import MigrationContext
+from sqlalchemy import exc as sa_exc
+from sqlalchemy.ext.asyncio import create_async_engine
+
+from dcdash.core.config import get_settings
 from helpers import make_asset, make_mapping, run_alembic
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "versions" / "0017_source_identity.py"
@@ -211,3 +221,142 @@ def head_revision() -> str:
 def test_the_migration_follows_0016_and_is_the_only_head():
     assert "0016 -> 0017" in run_alembic("history", "-r", "0016:0017").stdout
     assert head_revision() == "0017"
+
+
+def migration():
+    """The migration module (its file name starts with a digit, so it cannot be imported by name)."""
+    spec = importlib.util.spec_from_file_location("migration_0017", MIGRATION)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class RecordingBind:
+    """A stand-in for the connection a migration gets: it records every statement, and raises `error` for the ALTER if it has one."""
+
+    def __init__(self, error: BaseException | None = None):
+        self.error = error
+        self.statements: list[str] = []
+
+    def execute(self, statement, *args):
+        recorded = " ".join(str(statement).split())
+        self.statements.append(recorded)
+        if self.error is not None and recorded.startswith("ALTER"):
+            raise self.error
+        return self
+
+
+class DriverError(Exception):
+    """What the database driver raises: it carries the SQLSTATE, as psycopg's and asyncpg's errors do."""
+
+    def __init__(self, sqlstate: str):
+        super().__init__(f"SQLSTATE {sqlstate}")
+        self.sqlstate = sqlstate
+
+
+def run_against(direction: str, bind: RecordingBind) -> None:
+    module = migration()
+    module.op = SimpleNamespace(get_bind=lambda: bind, execute=lambda statement: bind.execute(statement))
+    getattr(module, direction)()
+
+
+LOCK_REFUSAL = (
+    "migration 0017 could not get the lock it needs on sources within 30 seconds (the collector, a long query or an earlier step "
+    "of this upgrade holds it); nothing has been changed; starting the api again retries the upgrade"
+)
+
+
+def test_the_upgrade_bounds_its_wait_and_adds_the_column_without_if_not_exists():
+    bind = RecordingBind()
+    run_against("upgrade", bind)
+    assert bind.statements == ["SET LOCAL lock_timeout = '30s'", "ALTER TABLE sources ADD COLUMN identity JSONB"]  # the wait is bounded first
+    assert migration().LOCK_TIMEOUT_SECONDS == 30
+
+
+def test_the_downgrade_drops_the_column_if_it_is_there():
+    bind = RecordingBind()
+    run_against("downgrade", bind)
+    assert bind.statements == ["ALTER TABLE sources DROP COLUMN IF EXISTS identity"]
+
+
+@pytest.mark.parametrize("sqlstate", ["55P03", "40P01"])  # lock not available, deadlock detected
+def test_a_lock_that_is_not_got_and_a_deadlock_give_the_plain_message(sqlstate):
+    error = sa_exc.DBAPIError("ALTER TABLE sources ADD COLUMN identity JSONB", {}, DriverError(sqlstate))
+    with pytest.raises(RuntimeError) as caught:
+        run_against("upgrade", RecordingBind(error))
+    assert str(caught.value) == LOCK_REFUSAL
+    assert caught.value.__cause__ is None and caught.value.__suppress_context__  # not the driver's message with a chain behind it
+
+
+def test_another_database_error_is_not_turned_into_the_lock_message():
+    error = sa_exc.DBAPIError("ALTER TABLE sources ADD COLUMN identity JSONB", {}, DriverError("42701"))  # duplicate column
+    with pytest.raises(sa_exc.DBAPIError) as caught:
+        run_against("upgrade", RecordingBind(error))
+    assert caught.value is error
+
+
+async def upgrade_while_sources_is_locked(db, seconds: int):
+    """Run the migration's `upgrade` on a SQLAlchemy connection while a second connection holds a lock on sources that conflicts
+    with the ALTER (what a long query holds). Returns (the error it raised, how long it waited)."""
+    module = migration()
+    module.LOCK_TIMEOUT_SECONDS = seconds
+
+    def upgrade(sync) -> None:
+        with Operations.context(MigrationContext.configure(sync)):
+            module.upgrade()
+
+    holder = await db.acquire()
+    transaction = holder.transaction()
+    await transaction.start()
+    engine = create_async_engine(get_settings().sqlalchemy_url)
+    try:
+        await holder.execute("LOCK TABLE sources IN ACCESS SHARE MODE")
+        async with engine.connect() as connection:
+            started = time.monotonic()
+            try:
+                await connection.run_sync(upgrade)
+            except Exception as error:  # noqa: BLE001 - the caller looks at it
+                caught = error
+            else:
+                caught = None
+            waited = time.monotonic() - started
+            await connection.rollback()
+        return caught, waited
+    finally:
+        await engine.dispose()
+        await transaction.rollback()
+        await db.release(holder)
+
+
+async def test_a_lock_that_is_not_got_in_time_gives_a_plain_message_and_the_upgrade_works_once_it_is_free(db):
+    try:
+        down = run_alembic("downgrade", "0016")
+        assert down.returncode == 0, down.stderr
+        caught, waited = await upgrade_while_sources_is_locked(db, 1)
+        assert isinstance(caught, RuntimeError), repr(caught)
+        assert str(caught) == LOCK_REFUSAL.replace("within 30 seconds", "within 1 seconds")  # it names the timeout it really used
+        assert 0.9 <= waited < 30, waited  # it waited for the timeout (1 second here), not for the holder
+        assert await db.fetchval("SELECT version_num FROM alembic_version") == "0016"
+        assert await column(db) is None  # nothing was changed
+
+        up = run_alembic("upgrade", "0017")  # the lock is free again: the same upgrade works
+        assert up.returncode == 0, up.stderr
+        assert await db.fetchval("SELECT version_num FROM alembic_version") == "0017"
+        assert (await column(db))["data_type"] == "jsonb"
+    finally:
+        run_alembic("upgrade", "head")
+
+
+async def test_a_hand_made_identity_column_of_another_type_stops_the_upgrade_loudly(db):
+    try:
+        down = run_alembic("downgrade", "0016")
+        assert down.returncode == 0, down.stderr
+        await db.execute("ALTER TABLE sources ADD COLUMN identity TEXT")
+        up = run_alembic("upgrade", "0017")
+        assert up.returncode != 0
+        assert "identity" in up.stderr and "already exists" in up.stderr  # the database's own words: nothing is skipped silently
+        assert await db.fetchval("SELECT version_num FROM alembic_version") == "0016"
+        assert (await column(db))["data_type"] == "text"  # and nothing was recorded over it
+    finally:
+        await db.execute("ALTER TABLE sources DROP COLUMN IF EXISTS identity")
+        run_alembic("upgrade", "head")
