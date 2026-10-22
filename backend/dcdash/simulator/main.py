@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from collections.abc import Mapping
 
 import uvicorn
@@ -23,6 +24,16 @@ from dcdash.simulator.model import Simulator
 from dcdash.simulator.opcua import OpcUaSim
 
 log = logging.getLogger("dcdash.simulator")
+DEFAULT_INSTANCE = "dev"
+_INSTANCE_ID = re.compile(r"[A-Za-z0-9._-]{1,40}")
+
+
+def instance_id(environ: Mapping[str, str]) -> str:
+    """SIM_INSTANCE_ID: who this simulator is, announced over HTTP (`GET /`) and as the OPC UA application URI
+    (`urn:dcdash:simulator:<id>`). Letters, digits, dot, underscore and dash, 1 to 40 characters; anything else (or nothing) is
+    `dev`, so a typo never puts a strange text into a URI."""
+    value = environ.get("SIM_INSTANCE_ID", "")
+    return value if _INSTANCE_ID.fullmatch(value) else DEFAULT_INSTANCE
 
 
 def announce_faults(faults: Faults) -> None:
@@ -39,20 +50,22 @@ def announce_historian_faults(config: HistorianConfig) -> None:
 
 async def serve(http_port: int = 9000, opcua_port: int = 4840, modbus_port: int = 5020, host: str = "0.0.0.0",
                 api_key: str | None = None, opcua_password: str | None = None, faults: Faults | None = None,
-                historian_port: int | None = None, historian: HistorianConfig | None = None) -> None:
+                historian_port: int | None = None, historian: HistorianConfig | None = None, instance: str = DEFAULT_INSTANCE) -> None:
     sim = Simulator()
     faults = faults or Faults()
-    ua = OpcUaSim(sim, opcua_port, password=opcua_password, faults=faults)  # refuses a fault it cannot honour, before any socket
+    ua = OpcUaSim(sim, opcua_port, password=opcua_password, faults=faults, instance=instance)  # refuses a fault it cannot honour, before any socket
     announce_faults(faults)
     ua.endpoint = f"opc.tcp://{host}:{opcua_port}/dcdash/"
     mb = ModbusSim(sim, modbus_port)
     mb.host = host
-    config = uvicorn.Config(create_sim_app(sim, api_key=api_key), host=host, port=http_port, log_level="warning")
+    config = uvicorn.Config(create_sim_app(sim, api_key=api_key, instance=instance), host=host, port=http_port, log_level="warning")
     servers = [uvicorn.Server(config).serve(), ua.run(), mb.run()]
     if historian_port is not None:  # optional: a caller that does not ask for it gets the three servers it always had
         historian = historian or HistorianConfig()
         announce_historian_faults(historian)
-        stand_in = uvicorn.Config(create_historian_app(historian, api_key=api_key), host=host, port=historian_port, log_level="warning")
+        stand_in = uvicorn.Config(
+            create_historian_app(historian, api_key=api_key, instance=instance), host=host, port=historian_port, log_level="warning",
+        )
         servers.append(uvicorn.Server(stand_in).serve())
     await asyncio.gather(*servers)
 
@@ -69,6 +82,7 @@ def main(environ: Mapping[str, str] = os.environ) -> None:
             faults=Faults.from_env(environ),  # read once here; a typo in a name or a bad value stops the start
             historian_port=historian.port,
             historian=historian,
+            instance=instance_id(environ),
         ))
     except FaultConfigError as exc:
         raise SystemExit(f"simulator: {exc}") from None

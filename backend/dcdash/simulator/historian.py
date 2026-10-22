@@ -3,7 +3,8 @@
 It lets the history read, the backfill and the normalisation rules be rehearsed without a real Historian, whose brand nobody knows yet.
 GET only, the same `X-API-Key` as the plain simulator, on its own port (SIM_HISTORIAN_PORT, 9100). Wire format (plan D9):
 
-  GET /                                        no key; {"service": "dcdash-simulator", "history": true} so the existing probe recognises it
+  GET /                                        no key; {"service": "dcdash-simulator", "history": true, "instance": "<id>:historian"} so the
+                                               existing probe recognises it (<id> is the plain simulator's SIM_INSTANCE_ID)
   GET /points                                  {"points": [{address, name, unit, kind, zone, stamp_start, stamp_end, interval}]}
   GET /read?addresses=A,B                      {"values": [item]}: each tag's newest visible sample (an unknown address is left out)
   GET /history?addresses=&start=&end=&limit=   {"values": [item], "complete_until", "unknown"}: raw samples, start and end inclusive,
@@ -374,7 +375,9 @@ def _addresses(text: str) -> list[str]:
     return list(dict.fromkeys(part.strip() for part in text.split(",") if part.strip()))
 
 
-def create_historian_app(config: HistorianConfig, *, clock: Callable[[], datetime] = _utc_now, api_key: str | None = None) -> FastAPI:
+def create_historian_app(
+    config: HistorianConfig, *, clock: Callable[[], datetime] = _utc_now, api_key: str | None = None, instance: str = "dev",
+) -> FastAPI:
     key = api_key or os.environ.get("SIM_API_KEY", "sim-key")
     historian = Historian(config, clock)
     stats = _Stats()
@@ -425,7 +428,9 @@ def create_historian_app(config: HistorianConfig, *, clock: Callable[[], datetim
 
     @app.get("/")
     def identify() -> dict:
-        return {"service": "dcdash-simulator", "history": True}
+        # `<id>:historian`, not the plain simulator's id: both answer on one stack, and one id for two servers would make each
+        # the other's twin when the platform compares them
+        return {"service": "dcdash-simulator", "history": True, "instance": f"{instance}:historian"}
 
     @app.get("/points", dependencies=[Depends(guard), Depends(pace(False))])
     def points() -> JSONResponse:

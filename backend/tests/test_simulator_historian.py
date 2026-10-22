@@ -119,7 +119,14 @@ def test_describe_lists_only_the_faults_that_are_on():
 async def test_the_root_needs_no_key_and_lets_the_existing_probe_recognise_the_simulator():
     async with client_for(make_app(), headers={}) as c:
         response = await c.get("/")
-    assert response.status_code == 200 and response.json() == {"service": "dcdash-simulator", "history": True}
+    # `instance` is `<id>:historian`, so the stand-in does not share the plain simulator's id (the platform compares servers by it)
+    assert response.status_code == 200 and response.json() == {"service": "dcdash-simulator", "history": True, "instance": "dev:historian"}
+
+
+async def test_the_stand_in_names_itself_after_the_simulator_id_it_was_started_with():
+    app = create_historian_app(HistorianConfig(), clock=Clock(), api_key="k", instance="lab-2")
+    async with client_for(app, headers={}) as c:
+        assert (await c.get("/")).json()["instance"] == "lab-2:historian"
 
 
 def test_the_routes_are_exactly_these_and_all_are_get():

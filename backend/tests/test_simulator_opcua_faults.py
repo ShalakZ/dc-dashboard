@@ -94,7 +94,8 @@ async def test_the_server_certificate_names_the_application_uri_and_every_host_a
             fault_server(POLICIES="basic256sha256") as second:
         der = (await endpoints_of(first))[0].ServerCertificate
         names = x509.load_der_x509_certificate(der).extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-        assert names.get_values_for_type(x509.UniformResourceIdentifier) == ["urn:freeopcua:python:server"]  # namespace 1 is untouched
+        # the certificate names the URI the server announces (w33: urn:dcdash:simulator:<SIM_INSTANCE_ID>, set before it is made)
+        assert names.get_values_for_type(x509.UniformResourceIdentifier) == ["urn:dcdash:simulator:dev"]
         dns = names.get_values_for_type(x509.DNSName)
         assert {"simulator", "localhost", "scada-gw.plant.local", "other.plant.local", socket.gethostname()} <= set(dns)
         assert [str(ip) for ip in names.get_values_for_type(x509.IPAddress)] == ["127.0.0.1"]

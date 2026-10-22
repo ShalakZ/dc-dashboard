@@ -13,6 +13,7 @@ from dcdash.connectors.base import (
     BAD, GOOD, Claim, ConnectionCheck, Connector, ConnectorError, HistoryPage, PointDescriptor, PointValue, register,
     url_host_port,
 )
+from dcdash.connectors.identity import clip
 from dcdash.ingest import normalise  # the module, not its names: normalise imports connectors.base, so either import order must work
 
 CHUNK = 200  # addresses in one request: a longer query string is refused by some servers, and one answer stays a size to reason about
@@ -137,12 +138,14 @@ class SimulatorConnector(Connector):
             # httpx timeouts apply per phase; the outer deadline bounds a server that trickles bytes.
             async with asyncio.timeout(timeout), httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.get(f"{url}/")
-            if response.status_code != 200 or response.json().get("service") != "dcdash-simulator":
+            body = response.json() if response.status_code == 200 else None
+            if not isinstance(body, dict) or body.get("service") != "dcdash-simulator":
                 return None
             config = SimulatorConfig(url=url).model_dump(mode="json")
         except (httpx.HTTPError, httpx.InvalidURL, TimeoutError, ValueError, AttributeError):  # ValueError: JSON, pydantic
             return None
-        return Claim("simulator", config, f"DCDash simulator at {host}:{port}")
+        instance = clip(body.get("instance"))  # a simulator from before w33 does not say; a text is cut at 256 characters
+        return Claim("simulator", config, f"DCDash simulator at {host}:{port}", {"instance": instance} if instance else None)
 
     @classmethod
     def endpoint_key(cls, config: dict[str, Any]) -> tuple[str, int, str] | None:
@@ -187,6 +190,17 @@ class SimulatorConnector(Connector):
             return response.json()
         except ValueError as exc:
             raise ConnectorError("protocol_error", "response is not JSON") from exc
+
+    async def identity(self) -> dict[str, Any] | None:
+        """The instance id the server announces at `GET /` (it needs no key), or None when it is not a simulator or does not say."""
+        try:
+            data = await self._get("/")
+        except Exception:  # noqa: BLE001 - a refused, unreachable or odd answer is "unknown", never an error
+            return None
+        if not isinstance(data, dict) or data.get("service") != "dcdash-simulator":
+            return None
+        instance = clip(data.get("instance"))
+        return {"instance": instance} if instance else None
 
     async def test(self) -> ConnectionCheck:
         started = time.perf_counter()
