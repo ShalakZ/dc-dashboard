@@ -7,6 +7,8 @@ A wrong match sends a meter's readings (and the bills built on them) to the wron
 * two different identities, or two different certificates, never match; a default application URI is no identity at all;
 * a URI that sources at OTHER endpoints also report is no identity either;
 * a candidate where ANOTHER server answers now (`identity["different"]`) is no candidate, whatever else is equal;
+* an OLD source where another server answers now has NO usable key (its stored URI belongs to the first server, and the source may
+  have been pointed at a different device): it can only be offered as `possibly`, and that asks for the tick;
 * a candidate must have appeared after O went silent (its earliest sighting, `found_at`), and a same-server claim without a
   certificate on both sides needs every pair O has mapped on a candidate that was browsed;
 * a pairing must be unique in both directions, otherwise the person is told that several servers could be it.
@@ -123,7 +125,8 @@ def another_server_answers(identity: Mapping[str, Any] | None) -> bool:
     """True when the stored identity says a DIFFERENT server answers at this source's address now (`identity["different"]`, set by the
     collector's `remember()`, which keeps the first server's identity and notes the other one only there). Such a source still looks like
     the first server (its stored URI and points), but what answers there is not it: moving onto it would send a meter's readings to a
-    stranger. It stays set until the stored server answers again."""
+    stranger. It stays set until the stored server answers again, or until an edit of the source's address clears the whole identity
+    (`api/sources.py` `update_source`)."""
     return isinstance(identity, Mapping) and bool(identity.get("different"))
 
 
@@ -154,7 +157,9 @@ def _ambiguous(key: tuple[str, str], old: OldSource, new: NewSource, holders: Ma
 
 def _evaluate(old: OldSource, new: NewSource, holders: Mapping[tuple[str, str], Sequence[Holder]]) -> Match | None:
     """The evidence rule for one candidate pair, or None when the pair is not a match."""
-    old_key = usable_key(old.connector_type, _plain(old.identity))
+    # An old source where ANOTHER server answers now has no usable key: what it stored was the first server's, and the source may have
+    # been pointed at a different device since (whole-wave review I1). It can only be a `possibly`, with the tick.
+    old_key = None if another_server_answers(old.identity) else usable_key(old.connector_type, _plain(old.identity))
     new_key = usable_key(new.connector_type, _plain(new.identity))
     # (a) two usable identities that differ: two servers.
     if old_key is not None and new_key is not None and old_key != new_key:

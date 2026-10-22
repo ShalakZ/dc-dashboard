@@ -857,9 +857,29 @@ async def test_the_scan_stops_at_fifty_hosts_and_never_looks_up_names_or_public_
 
     monkeypatch.setattr(names_module, "_reverse", reverse_lookup)
     monkeypatch.setattr(names_module, "_forward", lambda name: ["10.0.0.1"])
+    monkeypatch.setattr(names_module, "MAX_LOOKUPS_PER_SCAN", 10_000)  # (the total cap on lookups has its own test below)
     private = [f"10.0.0.{n}" for n in range(1, 61)]
     endpoints = [(host, 4840, claimed()) for host in ["8.8.8.8", "plc.lab.example", *private]]
     result = await scan_module._with_name_hints(endpoints)
     assert reversed_for == private[:50]  # the first fifty private hosts, in order; the public address and the name cost nothing
     assert result[2][2].identity == {"name_hint": {"name": "box", "host": "10.0.0.1"}}
     assert all(claim.identity is None for _, _, claim in result[:2] + result[3:])  # only 10.0.0.1 leads back to "box"
+
+
+async def test_the_scan_makes_at_most_sixty_name_lookups_in_all(monkeypatch):
+    calls: list[str] = []
+
+    def reverse_lookup(address):
+        calls.append(address)
+        return "a-b-c-d-e-f-g-h-1.deep.lab"  # six lookups per host, none of which leads back
+
+    def forward_lookup(name):
+        calls.append(name)
+        raise OSError("no such name")
+
+    monkeypatch.setattr(names_module, "_reverse", reverse_lookup)
+    monkeypatch.setattr(names_module, "_forward", forward_lookup)
+    endpoints = [(f"10.0.0.{n}", 4840, claimed()) for n in range(1, 51)]
+    result = await scan_module._with_name_hints(endpoints)
+    assert len(calls) == names_module.MAX_LOOKUPS_PER_SCAN == 60  # 50 hosts x 6 lookups would have been 300 (whole-wave review, minor 9)
+    assert all(claim.identity is None for _, _, claim in result)  # and the scan still finished, with no hint

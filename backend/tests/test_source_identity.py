@@ -395,6 +395,48 @@ def test_a_c_with_a_different_server_does_not_count_as_a_second_candidate():
     only_offer(decide([o], [stale, clean], {}), new_id=3)
 
 
+# Whole-wave review I1: an OLD source that was pointed at another device (or whose server was replaced) keeps the first server's
+# URI and certificate, and `remember()` notes the stranger in `identity["different"]`. What that source says about itself is then not
+# evidence of anything: no `same_server`, whatever the certificates say; at most a `possibly`, and that asks for the tick.
+
+
+@pytest.mark.parametrize("thumbprint", [None, THUMB_1], ids=["no certificate", "equal certificates"])
+def test_an_old_source_where_another_server_answers_is_never_the_same_server_it_is_at_most_possibly_with_the_tick(thumbprint):
+    o = old(identity={**ident_opcua(URI_A, thumbprint), "different": DIFFERENT})
+    offer = only_offer(decide([o], [new(o, identity=ident_opcua(URI_A, thumbprint))], {}))
+    assert (offer.match.kind, offer.match.evidence, offer.match.value, offer.match.needs_tick) == ("possibly", "addresses", None, True)
+    assert offer.match.addresses == o.mapped_pairs and offer.match.missing_addresses == 0
+
+
+def test_an_old_simulator_where_another_server_answers_is_at_most_possibly_with_the_tick():
+    o = sim_old(identity={**ident_sim("dev"), "different": {"instance": "other", "at": "2026-10-21T00:00:00+00:00"}})
+    offer = only_offer(decide([o], [new(o, host="172.20.0.5", identity=ident_sim("dev"))], {}))
+    assert (offer.match.kind, offer.match.needs_tick) == ("possibly", True)
+
+
+def test_an_old_source_where_another_server_answers_needs_every_mapped_pair_on_the_new_one():
+    o = old(identity={**ident_opcua(URI_A, THUMB_1), "different": DIFFERENT})
+    nothing(decide([o], [new(o, identity=ident_opcua(URI_A, THUMB_1), overlap={o.id: o.mapped_pairs - 1})], {}))
+
+
+def test_an_old_source_where_another_server_answers_keeps_the_certificate_veto():
+    o = old(identity={**ident_opcua(URI_A, THUMB_1), "different": DIFFERENT})
+    nothing(decide([o], [new(o, identity=ident_opcua(URI_A, THUMB_2))], {}))
+
+
+def test_an_old_source_where_another_server_answers_has_no_key_to_veto_a_candidate_with_but_the_tick_is_asked():
+    o = old(identity={**ident_opcua(URI_A), "different": DIFFERENT})
+    offer = only_offer(decide([o], [new(o, identity=ident_opcua(URI_B))], {}))
+    assert (offer.match.kind, offer.match.needs_tick) == ("possibly", True)
+
+
+def test_an_old_different_that_is_not_set_does_not_change_the_offer():
+    for empty in (None, {}, False):
+        o = old(identity={**ident_opcua(URI_A, THUMB_1), "different": empty})
+        offer = only_offer(decide([o], [new(o, identity=ident_opcua(URI_A, THUMB_1))], {}))
+        assert (offer.match.kind, offer.match.needs_tick) == ("same_server", False), empty
+
+
 # ------------------------------------------------------------------------------------------------------ needs_tick etc
 
 def test_same_server_with_equal_thumbprints_on_both_sides_needs_no_tick():

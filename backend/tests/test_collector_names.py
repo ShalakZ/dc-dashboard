@@ -163,7 +163,7 @@ async def test_every_private_range_is_looked_up(monkeypatch, host):
 async def test_at_most_fifty_hosts_per_scan_get_an_attempt(monkeypatch):
     hosts = [f"10.0.{n // 200}.{n % 200 + 1}" for n in range(60)]
     resolver = Resolver(monkeypatch, {h: "box-1.net" for h in hosts}, {"box": hosts[:1]})
-    budget = LookupBudget()
+    budget = LookupBudget(max_lookups=10_000)  # (the scan's total cap on lookups is tested below; this one is about hosts)
     answers = [await name_hint(h, lookups=budget) for h in hosts]
     assert len(resolver.reversed) == 50 == names.MAX_HOSTS_PER_SCAN
     assert resolver.reversed == hosts[:50]  # the first fifty, in order
@@ -186,6 +186,77 @@ async def test_one_host_makes_about_six_lookups_at_most(monkeypatch):
     assert await hint(DOCKER_HOST) is None
     assert len(resolver.reversed) == 1 and resolver.calls == names.MAX_LOOKUPS_PER_HOST == 6
     assert resolver.forwarded[0] == "h"  # the shortest first; the long tail is what the cap cuts
+
+
+DEEP = "a-b-c-d-e-f-g-h-1.deep.lab"  # a reverse name that leads nowhere and has more candidates than a host may check: six lookups each
+
+
+def deep_hosts(count: int) -> list[str]:
+    return [f"10.1.{n // 200}.{n % 200 + 1}" for n in range(count)]
+
+
+async def test_a_scan_makes_at_most_sixty_lookups_in_all_whatever_the_hosts(monkeypatch):
+    # 50 hosts x 6 lookups would be 300 lookups of up to 3 seconds each (whole-wave review, minor 9): the total is capped as well.
+    hosts = deep_hosts(50)
+    resolver = Resolver(monkeypatch, {h: DEEP for h in hosts}, {})
+    budget = LookupBudget()
+    assert budget.lookups_left == names.MAX_LOOKUPS_PER_SCAN == 60
+    assert [await name_hint(h, lookups=budget) for h in hosts] == [None] * 50
+    assert resolver.calls == 60  # reverse and forward lookups counted together
+    assert len(resolver.reversed) == 10 and len(resolver.forwarded) == 50  # ten hosts of six lookups; the eleventh was never started
+    assert resolver.reversed == hosts[:10]
+    assert budget.lookups_left == 0 and budget.hosts_left == 50 - 10  # a host the spent budget refused did not use up a host slot
+
+
+async def test_the_total_cap_stops_a_host_in_the_middle_and_counts_the_reverse_lookup(monkeypatch):
+    resolver = Resolver(monkeypatch, {DOCKER_HOST: DEEP}, {})
+    budget = LookupBudget(max_lookups=3)
+    assert await name_hint(DOCKER_HOST, lookups=budget) is None
+    assert len(resolver.reversed) == 1 and resolver.forwarded == ["h", "g-h"]  # the reverse lookup and two checks, then nothing
+    assert budget.lookups_left == 0
+
+
+async def test_a_name_found_before_the_cap_is_still_the_answer(monkeypatch):
+    resolver = Resolver(monkeypatch, {DOCKER_HOST: DOCKER_NAME}, {"simulator": [DOCKER_HOST]})
+    budget = LookupBudget(max_lookups=2)
+    assert await name_hint(DOCKER_HOST, lookups=budget) == "simulator"
+    assert resolver.calls == 2 and budget.lookups_left == 0
+
+
+async def test_failed_lookups_count_against_the_total_as_well(monkeypatch):
+    resolver = Resolver(monkeypatch, {}, {})  # every reverse lookup fails
+    budget = LookupBudget(max_lookups=4)
+    for host in deep_hosts(10):
+        assert await name_hint(host, lookups=budget) is None
+    assert len(resolver.reversed) == 4 and budget.lookups_left == 0
+
+
+async def test_a_host_that_is_never_looked_up_costs_the_total_nothing(monkeypatch):
+    Resolver(monkeypatch, {}, {})
+    budget = LookupBudget()
+    for host in ("8.8.8.8", "127.0.0.1", "not-an-address", "fe80::1"):
+        assert await name_hint(host, lookups=budget) is None
+    assert budget.lookups_left == names.MAX_LOOKUPS_PER_SCAN and budget.hosts_left == names.MAX_HOSTS_PER_SCAN
+
+
+async def test_a_slow_resolver_costs_at_most_the_total_not_every_host(monkeypatch):
+    release = threading.Event()
+    asked: list[str] = []
+
+    def slow(_value):
+        asked.append(_value)
+        release.wait(0.05)  # slower than the timeout below, but it answers: "no such host" resets the count of timeouts in a row
+        raise OSError("no such host")
+
+    monkeypatch.setattr(names, "_reverse", slow)
+    monkeypatch.setattr(names, "LOOKUP_TIMEOUT", 5)
+    budget = LookupBudget(max_lookups=7)
+    try:
+        for host in deep_hosts(50):
+            await name_hint(host, lookups=budget)
+    finally:
+        release.set()
+    assert len(asked) == 7  # a slow resolver that never times out in a row is stopped by the total, not by the timeouts rule
 
 
 # --- failure: it never raises, never hangs --------------------------------------------------------------------------------------

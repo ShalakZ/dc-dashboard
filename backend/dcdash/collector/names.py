@@ -9,7 +9,8 @@ offered, so the hint can never point a source at a different machine.
 
 Lookups block, so they run in a small pool of their own (never the loop's default executor: asyncio's own `getaddrinfo` uses that
 one, and a hung lookup must not starve it). A thread cannot be stopped when its lookup times out; that is why the pool is small and
-why a few timeouts in a row switch the lookups off for the rest of the scan. Nothing here raises, and nothing is logged above DEBUG.
+why a few timeouts in a row switch the lookups off for the rest of the scan, and why one scan makes at most 60 lookups in all (a slow
+resolver that still answers is stopped by that total). Nothing here raises, and nothing is logged above DEBUG.
 """
 import asyncio
 import ipaddress
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 LOOKUP_TIMEOUT = 3.0  # seconds for ONE lookup; read when a lookup starts so a test can shorten it
 MAX_HOSTS_PER_SCAN = 50  # hosts that get an attempt in one scan
 MAX_LOOKUPS_PER_HOST = 6  # the reverse lookup plus up to five forward checks
+MAX_LOOKUPS_PER_SCAN = 60  # in all, reverse and forward ones together: 50 hosts x 6 lookups x 3 s would stall a scan for minutes
 MAX_TIMEOUTS_IN_A_ROW = 4  # a resolver that times out this often in a row is not asked again in this scan
 POOL_WORKERS = 4
 
@@ -36,20 +38,34 @@ _TRAILING_NUMBER = re.compile(r"(.+)-[0-9]+")
 
 
 class LookupBudget:
-    """What one scan may spend on name lookups: a number of hosts, and a stop after a few timeouts in a row. The scan creates one
-    and hands it to every `name_hint` call, so the cap is per scan. (The loop is single-threaded: no locking is needed.)"""
+    """What one scan may spend on name lookups: a number of hosts, a TOTAL number of lookups (a slow resolver that always answers in the
+    end is stopped by this one, not by the timeouts), and a stop after a few timeouts in a row. The scan creates one and hands it to
+    every `name_hint` call, so the caps are per scan. (The loop is single-threaded: no locking is needed.)"""
 
-    def __init__(self, max_hosts: int | None = None, per_host: int | None = None) -> None:
+    def __init__(self, max_hosts: int | None = None, per_host: int | None = None, max_lookups: int | None = None) -> None:
         self.hosts_left = MAX_HOSTS_PER_SCAN if max_hosts is None else max_hosts
         self.per_host = MAX_LOOKUPS_PER_HOST if per_host is None else per_host
+        self.lookups_left = MAX_LOOKUPS_PER_SCAN if max_lookups is None else max_lookups
         self.timeouts = 0  # in a row; any answer, even a failure, proves the resolver is alive and resets it
 
     def take_host(self) -> bool:
-        """Spend one host of the budget; False when none is left or the resolver has stopped answering."""
-        if self.hosts_left <= 0 or self.timeouts >= MAX_TIMEOUTS_IN_A_ROW:
+        """Spend one host of the budget; False when none is left, the lookups are used up or the resolver has stopped answering."""
+        if self.hosts_left <= 0 or self.spent or self.timeouts >= MAX_TIMEOUTS_IN_A_ROW:
             return False
         self.hosts_left -= 1
         return True
+
+    def take_lookup(self) -> bool:
+        """Spend one lookup of the budget (the only place that does); False when the scan's total is used up."""
+        if self.lookups_left <= 0:
+            return False
+        self.lookups_left -= 1
+        return True
+
+    @property
+    def spent(self) -> bool:
+        """True when the scan's total of lookups is used up."""
+        return self.lookups_left <= 0
 
     @property
     def stopped(self) -> bool:
@@ -103,7 +119,9 @@ def _forward(name: str) -> list[str]:
 
 async def _run(function: Callable[[str], Any], argument: str, lookups: LookupBudget) -> Any:
     """One lookup in the pool under the timeout; None when it fails, answers nothing or takes too long. A cancellation of the scan
-    is not swallowed."""
+    is not swallowed. Every lookup of a scan goes through here and is counted against its total first."""
+    if not lookups.take_lookup():
+        return None
     try:
         result = await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(_POOL, function, argument), LOOKUP_TIMEOUT)
     except TimeoutError:  # the thread keeps running until the resolver gives up; that is what the small pool is for
@@ -124,7 +142,7 @@ async def _find(host: str, lookups: LookupBudget) -> str | None:
     if not isinstance(reverse, str):
         return None
     for candidate in candidates(reverse):
-        if left <= 0 or lookups.stopped:
+        if left <= 0 or lookups.stopped or lookups.spent:
             break
         left -= 1
         forward = await _run(_forward, candidate, lookups)

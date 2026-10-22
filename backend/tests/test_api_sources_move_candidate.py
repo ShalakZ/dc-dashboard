@@ -77,6 +77,18 @@ async def test_a_same_server_offer_says_which_server(client, db):
     }
 
 
+async def test_an_old_source_where_another_server_answers_is_offered_only_as_possibly_with_the_tick(client, db):
+    # Whole-wave review I1: its stored URI and certificate belong to the first server, so equal certificates prove nothing.
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    identity = {"application_uri": "urn:vendor:meter-7", "thumbprint": "AA:BB:CC:DD"}
+    await db.execute("UPDATE sources SET identity = $2 WHERE id = $1", old, {**identity, "different": {"application_uri": "urn:other", "at": "x"}})
+    await db.execute("UPDATE sources SET identity = $2 WHERE id = $1", new, identity)
+    row = (await listed(client))["OPC UA server at 172.20.0.3:4840"]
+    assert row["identity_different"] is True
+    assert row["move_candidate"]["match"] == MATCH and row["move_candidate"]["to_source_id"] == new
+
+
 async def test_a_hand_added_offline_source_is_offered_too(client, db):
     await login_as(client, db)
     await make_scan(db, day=0)
@@ -101,6 +113,7 @@ async def test_a_source_that_is_not_offline_has_none_whatever_a_scan_found(clien
         rows = await listed(client)
         assert rows["OPC UA server at 172.20.0.3:4840"]["move_candidate"] is None, status
         assert all("move_candidate" in row for row in rows.values())  # the key is always there
+        assert all(row["identity_different"] is False for row in rows.values())  # and so is `identity_different` (a plain boolean)
 
 
 async def test_an_offline_source_with_no_twin_has_none(client, db):

@@ -23,8 +23,8 @@ from dcdash.core.models import Mapping, Point, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
 from dcdash.events import read as events_read
 from dcdash.moves.load import load_offers
-from dcdash.moves.match import MOVABLE_TYPES, Offer, Two
-from dcdash.moves.urls import display_endpoint
+from dcdash.moves.match import MOVABLE_TYPES, Offer, Two, another_server_answers
+from dcdash.moves.urls import address_key, display_endpoint
 
 router = APIRouter(prefix="/api", tags=["sources"])
 
@@ -107,6 +107,9 @@ class SourceListOut(SourceOut):
     # w33 R8: while offline and a scan found its server again at another address, the new source it could move to
     # (`{kind: "offer", to_source_id, to_name, to_endpoint, match}`), or `{kind: "two", count}`; else null. No user info anywhere in it.
     move_candidate: dict[str, Any] | None = None
+    # w33 whole-wave review I3: a scan, Test or check met ANOTHER server at this address than the one the source used to talk to
+    # (`identity.different`; polling goes on). Only the fact: never what the other server said. False for no identity.
+    identity_different: bool = False
 
 
 class SourceHistoryOut(BaseModel):
@@ -209,6 +212,13 @@ def _values(source: Source) -> dict[str, Any]:
     }
 
 
+def _host_and_port(source: Source) -> tuple[str, int] | None:
+    """Where the source's server is, as the matcher reads it (`moves.urls.address_key`: host lower-cased, the effective port, so a
+    default port written out is the same port); the path and the scheme do not count. None for a type with no such address."""
+    key = address_key(source.connector_type, source.config)
+    return None if key is None else key[:2]
+
+
 def _history_line(source: Source, row: Any, types: dict[str, Any]) -> SourceHistoryLine:
     """The list's `history` of one source: its `history_status` row, or "never_run" when it has none yet (as the `/history` route
     answers). `last_error` is scrubbed with the source's own hidden values, exactly as that route does it."""
@@ -290,6 +300,7 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
             polls=getattr(types.get(s.connector_type), "polls", True),  # a type this build does not know counts as polling
             history=_history_line(s, history.get(s.id), types),
             move_candidate=candidates.get(s.id),
+            identity_different=another_server_answers(s.identity),  # the column is on the row already: no statement
             **_offline_fields(s, incidents.get(s.id)),
         )
         for s in sources
@@ -372,6 +383,7 @@ async def update_source(
         raise HTTPException(409, STALE_FORM)  # read under the row lock above, so a move that was in flight is already in it (w33 T5b-I1)
     before = _values(source)
     raw_config = copy.deepcopy(source.config)
+    place_before = _host_and_port(source)
     if body.name is not None:
         source.name = body.name
     if body.config is not None:
@@ -380,6 +392,11 @@ async def update_source(
         submitted = reconcile_config(source.config, body.config, body.clear_config_credentials)
         reject_hidden_marker(submitted, source.config)
         source.config = validated_config(source.connector_type, submitted)
+    # A source that now points at another host or port is not talking to the server it remembers (w33 whole-wave review I1): forget it,
+    # so a stale identity cannot read "a different server answers here" for good or carry a move offer. A Test learns it again.
+    identity_cleared = source.identity is not None and body.config is not None and _host_and_port(source) != place_before
+    if identity_cleared:
+        source.identity = None
     if "secret" in body.model_fields_set:
         source.secret = encrypt(body.secret) if body.secret else None
     if body.enabled is not None:
@@ -392,6 +409,8 @@ async def update_source(
         # What safe_config hides (URL credentials, a masked key) changed, whatever else changed with it: record that,
         # never the values (hidden_parts is only compared here).
         before["config_credentials"], after["config_credentials"] = "unchanged", "changed"
+    if identity_cleared:
+        before["identity_cleared"], after["identity_cleared"] = False, True  # only the fact, never the identity that was dropped
     await audit_change(db, user.id, "source.updated", {"source_id": source.id, "name": source.name}, before, after)
     await _publish(db)
     return SourceOut.of(source)

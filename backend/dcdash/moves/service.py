@@ -59,7 +59,7 @@ ALREADY_MOVED = "this source was already moved"
 NOT_OFFLINE = "This source is not offline any more, so there is nothing to move. Nothing was changed."
 NO_LONGER_UNIQUE = "The new source is no longer the one match for this source. Nothing was changed; look at Sources again."
 DIFFERENT_SERVER = "A different server answers at the new address now; scan again before moving"
-NEEDS_TICK = "The match needs your confirmation: tick that you checked it is the same device"
+NEEDS_TICK = "The match needs your confirmation: tick the box that says you checked this is the same device or server."
 TWO_SERVERS = "Two servers could be this one; edit the address by hand"
 GOT_A_MAPPING = "The new source got a mapping since you looked. Nothing was moved."
 HOLDS_READINGS = "The new source holds readings, so it is not the scan's copy that nothing uses. Nothing was moved."
@@ -374,6 +374,7 @@ async def move_source(
     last_seen_before = None if old.last_seen is None else old.last_seen.isoformat()
     old.config = new_config
     old.identity = new_identity
+    old.last_error = None  # an error from the old address must not sit beside the new name until the first poll; `status` is left as it is
     if final is not None:
         old.name = final["to"]
     await db.flush()  # a name someone else took in the meantime is an IntegrityError here, inside the caller's try-again block

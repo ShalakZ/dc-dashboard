@@ -250,6 +250,33 @@ async def test_the_move_of_the_owners_case_changes_the_address_and_the_name_and_
     assert await db.fetchval("SELECT user_id FROM audit_log WHERE id = $1", audit_id) == admin
 
 
+async def test_a_move_clears_the_stale_error_of_the_old_address_and_leaves_the_status_to_the_first_poll(client, db):
+    # Whole-wave review, minor 3: for some seconds the renamed row showed "Connect call failed ('172.20.0.3', 4840)" beside the new name.
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    error = "Connect call failed ('172.20.0.3', 4840)"
+    await db.execute("UPDATE sources SET last_error = $2 WHERE id = $1", old, error)
+    assert await db.fetchval("SELECT last_error FROM sources WHERE id = $1", old) == error
+    assert (await move(client, old, new)).status_code == 200
+    stored = await db.fetchrow("SELECT status, last_error, last_seen FROM sources WHERE id = $1", old)
+    assert stored["last_error"] is None
+    assert stored["status"] == "offline"  # the first poll at the new address decides this, as before
+    assert stored["last_seen"] is not None  # (and what the source last answered is not erased)
+    row = next(r for r in (await client.get("/api/sources")).json() if r["id"] == old)
+    assert row["last_error"] is None and "172.20.0.3" not in json.dumps(row)
+
+
+async def test_a_refused_move_keeps_the_error(client, db):
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    error = "Connect call failed ('172.20.0.3', 4840)"
+    await db.execute("UPDATE sources SET last_error = $2 WHERE id = $1", old, error)
+    shown = (await preview(client, old, new)).json()
+    refused = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": False})
+    assert refused.status_code == 409
+    assert await db.fetchval("SELECT last_error FROM sources WHERE id = $1", old) == error
+
+
 async def test_the_audit_list_shows_one_source_moved_row(client, db):
     await login_as(client, db)
     old, new = await owners_case(db)
@@ -683,7 +710,7 @@ async def test_the_identity_the_old_source_takes_never_carries_a_different_note(
 
 # ---- the tick and the match are part of what the person confirmed (fix 5a M1) ---------------------------------------------------
 
-NEEDS_TICK = "The match needs your confirmation: tick that you checked it is the same device"
+NEEDS_TICK = "The match needs your confirmation: tick the box that says you checked this is the same device or server."
 
 
 async def test_a_match_that_asks_for_a_tick_is_not_moved_without_one_and_nothing_is_written(client, db):
