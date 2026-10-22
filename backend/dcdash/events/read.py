@@ -336,7 +336,7 @@ def _obj(value: Any) -> Any:
 # The newest open `source.offline` row of each source asked about: one statement for all of them, never one per source.
 _OPEN_OFFLINE = text(
     """
-    SELECT DISTINCT ON (source_id) source_id, ts, detail
+    SELECT DISTINCT ON (source_id) source_id, ts, code, detail
     FROM diag_events
     WHERE kind = 'source.offline' AND detail->>'state' = 'open' AND source_id = ANY(:ids)
     ORDER BY source_id, id DESC
@@ -345,10 +345,12 @@ _OPEN_OFFLINE = text(
 
 
 async def open_incidents(db: AsyncSession, source_ids: Iterable[int]) -> dict[int, dict[str, Any]]:
-    """The open `source.offline` incident of each source that has one: `{source_id: {"first_at": datetime, "count": int}}`.
+    """The open `source.offline` incident of each source that has one:
+    `{source_id: {"first_at": datetime, "count": int, "code": str | None}}`.
 
-    `first_at` is the true start (`detail.since`, else the row's time), `count` the failed reads counted so far. One query for
-    all the sources, none for an empty list. A source with no open incident is not in the answer."""
+    `first_at` is the true start (`detail.since`, else the row's time), `count` the failed reads counted so far, `code` the failure
+    code of the row (`unreachable`, `timeout`, ...; the move offers of w33 read it). One query for all the sources, none for an
+    empty list. A source with no open incident is not in the answer."""
     ids = sorted(set(source_ids))
     if not ids:
         return {}
@@ -357,7 +359,7 @@ async def open_incidents(db: AsyncSession, source_ids: Iterable[int]) -> dict[in
     for row in (await db.execute(_OPEN_OFFLINE, {"ids": ids})).all():
         view = incident(row.ts, _obj(row.detail), now)
         if view is not None:
-            found[row.source_id] = {"first_at": view["first_at"], "count": view["count"]}
+            found[row.source_id] = {"first_at": view["first_at"], "count": view["count"], "code": row.code}
     return found
 
 
