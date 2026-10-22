@@ -11,7 +11,7 @@ import { renderWithProviders } from "../test/render";
 import { spyToasts } from "../test/toasts";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
-import { movePreview, moveDone, URI_MATCH } from "../test/moveFixtures";
+import { movePreview, moveDone, moveUndone, URI_MATCH } from "../test/moveFixtures";
 import { SOURCE_KEEP_NOTE } from "../lib/impact";
 import type { PermissionId } from "../lib/permissions";
 import { SourcesPage } from "./SourcesPage";
@@ -1475,7 +1475,8 @@ describe("SourcesPage, moving a source to the address where its device turned up
 
   const dryRuns: { url: string; body: unknown }[] = [];
   const realRuns: { url: string; body: unknown }[] = [];
-  beforeEach(() => { dryRuns.length = 0; realRuns.length = 0; });
+  const undoRuns: string[] = [];
+  beforeEach(() => { dryRuns.length = 0; realRuns.length = 0; undoRuns.length = 0; });
 
   /** The page for `role` (a built-in role, or "custom" with `permissions`), with these rows and the move routes; waits for the account. */
   const show = async (rows: Record<string, unknown>[], role = "admin", permissions: PermissionId[] = []) => {
@@ -1489,6 +1490,7 @@ describe("SourcesPage, moving a source to the address where its device turned up
         realRuns.push({ url, body });
         return { body: moveDone() };
       },
+      "POST /api/sources/moves/31/undo": ({ url }) => { undoRuns.push(url); return { body: moveUndone({ readings_since_move: 120 }) }; },
     });
     renderWithProviders(<><SourcesPage /><SignedIn /></>, { route: "/sources", path: "/sources", toasts: toasts.api });
     await screen.findByText(String(rows[0].name));
@@ -1561,9 +1563,30 @@ describe("SourcesPage, moving a source to the address where its device turned up
       await userEvent.click(within(dialog()).getByRole("button", { name: "Move 12 mappings" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(realRuns).toHaveLength(1);
-      expect(toasts.calls).toEqual([{ kind: "success", text: `Moved "${NEW}" to 172.20.0.5:4840` }]);
+      // The toast says what moved and how many mappings were kept (the number the preview showed), and carries an Undo for 10 seconds.
+      expect(toasts.calls).toHaveLength(1);
+      expect(toasts.calls[0]).toMatchObject({
+        kind: "success", text: `Moved "${NEW}" to 172.20.0.5:4840. 12 mappings kept.`,
+        options: { durationMs: 10_000, action: { label: "Undo" } },
+      });
       expect(calls.filter((c) => c.method === "GET" && c.path === "/api/sources").length).toBeGreaterThan(before);
       expect(screen.getByRole("button", { name: /^Actions for / })).toHaveFocus();
+    });
+
+    it("undoes the move from the toast: posts to the Undo of that audit entry, says the server's sentence and reads the sources again", async () => {
+      const { calls, toasts } = await show([down]);
+      await userEvent.click(await screen.findByRole("button", { name: /^Actions for / }));
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Move to new address..." }));
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      await userEvent.click(within(dialog()).getByRole("button", { name: "Move 12 mappings" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(undoRuns).toEqual([]); // nothing is undone by itself
+      const before = calls.filter((c) => c.method === "GET" && c.path === "/api/sources").length;
+      toasts.calls[0].options!.action!.onAction();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+      expect(undoRuns).toEqual(["/api/sources/moves/31/undo"]);
+      expect(toasts.calls[1]).toEqual({ kind: "success", text: `Moved "${OLD}" back to 172.20.0.3:4840. 120 readings taken at the new address stay.` });
+      await waitFor(() => expect(calls.filter((c) => c.method === "GET" && c.path === "/api/sources").length).toBeGreaterThan(before));
     });
   });
 

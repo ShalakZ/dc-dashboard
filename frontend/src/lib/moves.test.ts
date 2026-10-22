@@ -1,11 +1,12 @@
 import { keys } from "../api/queries";
 import { ApiError } from "../api/client";
 import type { Source } from "../api/types";
-import { INSTANCE_MATCH, movePreview, moveDone, NEW_NAME, OLD_NAME, POSSIBLY_MATCH, URI_MATCH } from "../test/moveFixtures";
+import { INSTANCE_MATCH, movePreview, moveDone, moveUndone, NEW_NAME, OLD_NAME, POSSIBLY_MATCH, URI_MATCH } from "../test/moveFixtures";
 import { mockFetch } from "../test/fetchMock";
 import {
   addressOptions, effectLines, fromToLine, hostNameLine, hostPort, hostPortOfEndpoint, isChangedSincePreview, isIpAddress, MOVE_REFRESHED, moveButtonLabel,
-  movedSentence, moveRequest, offerOf, previewMove, runMove, SCAN_RUNNING_TEXT, tickLabel, TWO_SERVERS_TEXT, warningLines, whyLines,
+  movedSentence, moveRequest, offerOf, previewMove, runMove, SCAN_RUNNING_TEXT, tickLabel, TWO_SERVERS_TEXT, undoMove, undoMoveSentence, undoRefusal, warningLines,
+  whyLines,
 } from "./moves";
 
 describe("hostPort and hostPortOfEndpoint", () => {
@@ -132,8 +133,15 @@ describe("the sentences of the preview", () => {
     expect(TWO_SERVERS_TEXT).toBe("Two servers could be this one; edit the address by hand");
   });
 
-  it("words the toast of a finished move from the answer", () => {
-    expect(movedSentence(moveDone())).toBe(`Moved "${NEW_NAME}" to 172.20.0.5:4840`);
+  it("words the toast of a finished move from the answer: the new name and address, and how many mappings were kept", () => {
+    expect(movedSentence(moveDone(), 12)).toBe(`Moved "${NEW_NAME}" to 172.20.0.5:4840. 12 mappings kept.`);
+    expect(movedSentence(moveDone(), 1)).toBe(`Moved "${NEW_NAME}" to 172.20.0.5:4840. 1 mapping kept.`);
+    expect(movedSentence(moveDone(), 1234)).toBe(`Moved "${NEW_NAME}" to 172.20.0.5:4840. 1,234 mappings kept.`);
+  });
+
+  it("leaves the count of mappings out, and still ends the sentence, when the opener does not know it", () => {
+    expect(movedSentence(moveDone())).toBe(`Moved "${NEW_NAME}" to 172.20.0.5:4840.`);
+    expect(movedSentence(moveDone(), null)).toBe(`Moved "${NEW_NAME}" to 172.20.0.5:4840.`);
   });
 });
 
@@ -177,9 +185,50 @@ describe("the calls", () => {
   });
 });
 
+describe("the Undo of a move", () => {
+  it("posts to /api/sources/moves/{audit_id}/undo and gives the answer back", async () => {
+    const seen: { url: string; body: unknown }[] = [];
+    mockFetch({ "POST /api/sources/moves/31/undo": ({ url, body }) => { seen.push({ url, body }); return { body: moveUndone() }; } });
+    const got = await undoMove(31);
+    expect(got.restored).toEqual({ host: "172.20.0.3", port: 4840, name: OLD_NAME });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].url).toBe("/api/sources/moves/31/undo");
+  });
+
+  it("says the server's sentence when readings were taken at the new address, and adds the readings that stay", () => {
+    const plain = moveUndone({ readings_since_move: 0 });
+    expect(undoMoveSentence(plain)).toBe(plain.text);
+    expect(undoMoveSentence(moveUndone({ readings_since_move: 120 }))).toBe(`${plain.text} 120 readings taken at the new address stay.`);
+    expect(undoMoveSentence(moveUndone({ readings_since_move: 1 }))).toBe(`${plain.text} 1 reading taken at the new address stays.`);
+    expect(undoMoveSentence(moveUndone({ readings_since_move: 12_345 }))).toContain("12,345 readings taken at the new address stay.");
+  });
+
+  it("does not say the readings twice when the server's own sentence already tells about them, and closes a sentence that has no full stop", () => {
+    const told = moveUndone({ text: "Moved back to 172.20.0.3:4840. 120 readings taken at the new address stay.", readings_since_move: 120 });
+    expect(undoMoveSentence(told)).toBe(told.text);
+    expect(undoMoveSentence(moveUndone({ text: "Moved back", readings_since_move: 3 }))).toBe("Moved back. 3 readings taken at the new address stay.");
+  });
+
+  it("falls back to its own words from the restored address when an answer carries no sentence", () => {
+    expect(undoMoveSentence(moveUndone({ text: "", readings_since_move: 0 }))).toBe(`"${OLD_NAME}" is back at 172.20.0.3:4840.`);
+    expect(undoMoveSentence(moveUndone({ text: "  ", readings_since_move: 2 }))).toBe(`"${OLD_NAME}" is back at 172.20.0.3:4840. 2 readings taken at the new address stay.`);
+  });
+
+  it("starts the server's refusal with a capital and ends it with a full stop (409 already undone, 410 too old)", () => {
+    expect(undoRefusal(new ApiError(409, "this move was already undone"))).toBe("This move was already undone.");
+    expect(undoRefusal(new ApiError(410, "this move is older than 24 hours and can no longer be undone."))).toBe("This move is older than 24 hours and can no longer be undone.");
+    expect(undoRefusal(new Error("Failed to fetch"))).toBe("Failed to fetch.");
+    expect(undoRefusal("odd")).toBe("Odd.");
+  });
+});
+
 describe("what a move makes stale", () => {
   it("refreshes the sources (and so their points), the graph, the scans, the audit log and the events", () => {
     expect(MOVE_REFRESHED).toEqual([keys.sources, keys.graph, keys.scans, keys.auditAll, keys.eventsAll]);
+  });
+
+  it("covers the points queries of a source: they sit under the sources prefix, which the refresh matches by prefix", () => {
+    expect(keys.points(2).slice(0, keys.sources.length)).toEqual([...keys.sources]);
   });
 });
 

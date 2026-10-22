@@ -12,15 +12,15 @@ const incident = (extra: Partial<Incident> = {}): Incident => ({
   state: "open", count: 1204, first_at: "2026-10-18T04:52:00Z", last_at: "2026-10-22T08:00:00Z", closed_at: null, duration_seconds: 4 * 86400 + 2 * 3600, closed_by: null, ...extra,
 });
 
-// The 15 kinds the backend writes (core/journal.py and ingest/kinds.py) and the codes of source.offline; the parity test in the backend reads this file's text.
+// The 16 kinds the backend writes (core/journal.py, ingest/kinds.py and collector/identity.py) and the codes of source.offline; the parity test in the backend reads this file's text.
 const KINDS = [
   "collector.started", "source.offline", "source.online", "points.bad", "points.recovered", "job.finished", "check.finished", "clock.skew", "http.5xx",
-  "figures.mismatch", "readings.conflict", "history.filled", "history.failed", "history.closed_month", "import.finished",
+  "figures.mismatch", "readings.conflict", "history.filled", "history.failed", "history.closed_month", "import.finished", "source.identity_changed",
 ];
 const CODES = ["unreachable", "auth_failed", "timeout", "protocol_error", "exception", "config_invalid", "secret_undecryptable", "needs_profile", "not_supported"];
 
 describe("eventText (w32): the one table of words", () => {
-  it("has a name and a sentence for each of the 15 kinds, and none of the sentences is the raw kind", () => {
+  it("has a name and a sentence for each of the 16 kinds, and none of the sentences is the raw kind", () => {
     expect(Object.keys(KIND_NAMES).sort()).toEqual([...KINDS].sort());
     for (const kind of KINDS) {
       expect(kindName(kind), kind).not.toBe(kind);
@@ -139,6 +139,72 @@ describe("eventText (w32): the one table of words", () => {
     expect(describeEvent(event({ kind: "history.closed_month", detail: { month: "2026-09" } })).headline).toBe("Readings were filled into 2026-09, a month that is closed");
     expect(describeEvent(event({ kind: "import.finished", level: "warning" })).headline).toBe("A file import stopped half-way");
     expect(describeEvent(event({ kind: "import.finished", level: "info" })).headline).toBe("A file import finished");
+  });
+
+  describe("source.identity_changed (w33): another server answers, or the same server renewed its certificate", () => {
+    const THUMB_OLD = "3A:5F:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:12:91";
+    const THUMB_NEW = "7C:01:02:03:04:05:06:07:08:09:0A:0B:0C:0D:0E:0F:10:11:12:E2";
+    const different = (extra: Partial<SystemEvent> = {}) => event({
+      kind: "source.identity_changed", level: "warning", code: null, message: "The server answering at this address is not the one this source used to talk to.",
+      detail: {
+        before: { application_uri: "urn:dcdash:simulator:dev", thumbprint: THUMB_OLD },
+        after: { application_uri: "urn:dcdash:simulator:other", thumbprint: THUMB_NEW },
+      },
+      ...extra,
+    });
+    const renewed = (extra: Partial<SystemEvent> = {}) => event({
+      kind: "source.identity_changed", level: "info", code: null, message: "The server's certificate changed.",
+      detail: {
+        before: { application_uri: "urn:dcdash:simulator:dev", thumbprint: THUMB_OLD },
+        after: { application_uri: "urn:dcdash:simulator:dev", thumbprint: THUMB_NEW },
+      },
+      ...extra,
+    });
+
+    it("is named in the Kind filter and says in the headline that a different server answers at the address", () => {
+      expect(kindName("source.identity_changed")).toBe("Server identity");
+      expect(describeEvent(different()).headline).toBe("A different server answers at this address");
+    });
+
+    it("names the old and the new server and their certificates in the line under the headline, the thumbprints cut short", () => {
+      const text = describeEvent(different());
+      expect(text.reason).toBe(
+        "It used to be urn:dcdash:simulator:dev, certificate 3A:5F:...:91. Now it is urn:dcdash:simulator:other, certificate 7C:01:...:E2.",
+      );
+      expect(text.count).toBeNull();
+      expect(text.span).toBeNull();
+      expect(JSON.stringify(text)).not.toContain(THUMB_OLD); // the whole fingerprint is in the stored detail, one click away
+    });
+
+    it("reads the simulator's instance id and an application name when there is no application URI", () => {
+      const text = describeEvent(different({
+        detail: { before: { instance: "dev", thumbprint: null }, after: { application_name: "Prosys OPC UA Simulation Server" } },
+      }));
+      expect(text.reason).toBe('It used to be the simulator "dev". Now it is Prosys OPC UA Simulation Server.');
+    });
+
+    it("reads as a notice, not a warning, when the same server renewed its certificate (the same kind at the info level)", () => {
+      const text = describeEvent(renewed());
+      expect(text.headline).toBe("The server's certificate changed");
+      expect(text.headline).not.toMatch(/different/i);
+      expect(text.reason).toBe("It is still urn:dcdash:simulator:dev. Certificate 3A:5F:...:91 was replaced by 7C:01:...:E2.");
+      // the level tag the page draws comes from the row, not from the words: the kind is the same, the level is info
+      expect(renewed().level).toBe("info");
+    });
+
+    it("never throws and keeps the headline when the detail is missing, of the wrong shape or half there", () => {
+      for (const detail of [{}, { before: null, after: "x" }, { before: [], after: [] }, { before: { thumbprint: 7 }, after: { application_uri: 4 } }, { before: {} }]) {
+        expect(() => describeEvent(different({ detail })), JSON.stringify(detail)).not.toThrow();
+        expect(describeEvent(different({ detail })).headline).toBe("A different server answers at this address");
+        expect(describeEvent(renewed({ detail })).headline).toBe("The server's certificate changed");
+      }
+      expect(describeEvent(different({ detail: {} })).reason).toBeNull();
+      expect(describeEvent(renewed({ detail: { before: { application_uri: "urn:a" } } })).reason).toBe("It is still urn:a.");
+      expect(() => describeEvent({ ...different(), detail: null as unknown as Record<string, unknown> })).not.toThrow();
+      // a short thumbprint is shown whole
+      expect(describeEvent(different({ detail: { before: { application_uri: "urn:a", thumbprint: "AB:CD" }, after: { application_uri: "urn:b" } } })).reason)
+        .toBe("It used to be urn:a, certificate AB:CD. Now it is urn:b.");
+    });
   });
 
   it("writes the line of an open problem the way the page pins it", () => {

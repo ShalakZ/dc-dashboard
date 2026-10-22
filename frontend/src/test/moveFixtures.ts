@@ -1,4 +1,4 @@
-import type { SourceMoveDone, SourceMoveMatch, SourceMovePreview } from "../api/types";
+import type { SourceMoveDone, SourceMoveMatch, SourceMovePreview, SourceMoveUndoResult } from "../api/types";
 
 /** Why a move is offered, for the tests of the move dialog (w33). No endpoint here carries a user name or a password. */
 export const URI_MATCH: SourceMoveMatch = {
@@ -45,6 +45,17 @@ export function moveDone(over: Partial<SourceMoveDone> = {}): SourceMoveDone {
     to: { host: "172.20.0.5", port: 4840, endpoint: "opc.tcp://172.20.0.5:4840/dcdash/" },
     rename: { from: OLD_NAME, to: NEW_NAME },
     undo_until: "2026-10-23T08:00:00+00:00",
+    ...over,
+  };
+}
+
+/** The answer to the Undo of that move: the old source is back at its old address and name. */
+export function moveUndone(over: Partial<SourceMoveUndoResult> = {}): SourceMoveUndoResult {
+  return {
+    source: { id: 2, name: OLD_NAME },
+    restored: { host: "172.20.0.3", port: 4840, name: OLD_NAME },
+    readings_since_move: 0,
+    text: `Moved "${OLD_NAME}" back to 172.20.0.3:4840.`,
     ...over,
   };
 }

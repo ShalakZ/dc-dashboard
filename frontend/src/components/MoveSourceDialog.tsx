@@ -26,8 +26,8 @@ export interface MoveSourceDialogProps {
   open?: boolean;
   /** Cancel, Escape (never while the move is running) and nothing else: the backdrop does not close it. */
   onClose: () => void;
-  /** The move has happened and the lists are read again. The parent closes the dialog and says so (the toast). */
-  onDone: (result: SourceMoveDone) => void;
+  /** The move has happened and the lists are read again. The parent closes the dialog and says so (the toast, `useMovedToast`); `preview` is the one that was moved on (the answer of the real run does not carry the mappings). */
+  onDone: (result: SourceMoveDone, preview: SourceMovePreview) => void;
   /** Where the focus goes when the dialog goes away; without it, what had the focus when the dialog opened (if it is still in the page). */
   returnFocusTo?: () => HTMLElement | null;
   /** Milliseconds between two dry runs while a scan runs (tests shorten it). */
@@ -190,7 +190,7 @@ function MoveDialogBody({ oldId, oldName, newId, onClose, onDone, returnFocusTo,
     }
     if (done !== null) {
       if (alive.current) setMoving(false);
-      keep.current.onDone(done);
+      keep.current.onDone(done, preview);
       return;
     }
     if (!alive.current) return;

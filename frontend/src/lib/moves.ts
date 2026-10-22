@@ -1,6 +1,7 @@
 import { ApiError, api } from "../api/client";
 import { keys } from "../api/queries";
-import type { Source, SourceMoveCandidateForOld, SourceMoveDone, SourceMoveIn, SourceMovePreview } from "../api/types";
+import type { Source, SourceMoveCandidateForOld, SourceMoveDone, SourceMoveIn, SourceMovePreview, SourceMoveUndoResult } from "../api/types";
+import { upperFirst } from "./upperFirst";
 
 /**
  * Moving a source to the address where its device turned up (w33): the two calls, the query keys a move makes stale, and every sentence the move dialog, the
@@ -141,5 +142,30 @@ export function addressOptions(preview: SourceMovePreview, foundHost: string | n
   ];
 }
 
-/** The toast after a finished move. */
-export const movedSentence = (done: SourceMoveDone) => `Moved "${done.source.name}" to ${hostPort(done.to)}`;
+/**
+ * The toast after a finished move: `Moved "OPC UA server at 172.20.0.5:4840" to 172.20.0.5:4840. 12 mappings kept.` `mappings` is what the preview showed (the
+ * answer of the real run does not carry it); an opener that does not know it leaves the clause out.
+ */
+export const movedSentence = (done: SourceMoveDone, mappings?: number | null) =>
+  `Moved "${done.source.name}" to ${hostPort(done.to)}.${mappings === undefined || mappings === null ? "" : ` ${num(mappings)} ${mappings === 1 ? "mapping" : "mappings"} kept.`}`;
+
+/** Undo a move (`sources.edit`): within 24 hours, while nothing has changed since. The audit entry's number is the one the real run answered with (`audit_id`). */
+export const undoMove = (auditId: number) => api.post<SourceMoveUndoResult>(`/api/sources/moves/${auditId}/undo`);
+
+const closed = (sentence: string) => (/[.!?]$/.test(sentence) ? sentence : `${sentence}.`);
+
+/**
+ * What an Undo of a move says, in the toast and in the audit drawer: the server's sentence (or, when it sends none, one made from the address it restored), and the
+ * readings taken at the new address, which an Undo leaves where they are (`120 readings taken at the new address stay.`). A server sentence that already tells
+ * about the readings is not added to.
+ */
+export function undoMoveSentence(result: SourceMoveUndoResult): string {
+  const said = result.text?.trim();
+  const base = closed(said ? said : `"${result.restored.name}" is back at ${hostPort(result.restored)}`);
+  const readings = result.readings_since_move;
+  if (!(readings > 0) || /reading/i.test(base)) return base;
+  return `${base} ${num(readings)} ${readings === 1 ? "reading taken at the new address stays" : "readings taken at the new address stay"}.`;
+}
+
+/** The server's refusal of an Undo (409 already undone or changed since, 410 too old, 404) as a sentence: it writes them in lower case and without a full stop. */
+export const undoRefusal = (error: unknown): string => closed(upperFirst(error instanceof Error ? error.message : String(error)));

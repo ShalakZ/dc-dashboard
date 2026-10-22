@@ -21,11 +21,12 @@ import { TagListDialog } from "../components/TagListDialog";
 import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
+import { useMovedToast } from "../hooks/useMovedToast";
 import { useNow } from "../hooks/useNow";
 import { ageNow, formatAge, formatSpan, secondsSince } from "../lib/age";
 import { historyLine } from "../lib/historyLine";
 import { sourceDeletePath, sourceImpact, sourceLoss, sourceNote } from "../lib/impact";
-import { movedSentence, offerOf, TWO_SERVERS_TEXT } from "../lib/moves";
+import { offerOf, TWO_SERVERS_TEXT } from "../lib/moves";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { formatOfflineSince, longOffline, MOVE_LINK_TEXT, offlineBannerParts, sourceStatusText } from "../lib/sourceStatus";
 
@@ -61,6 +62,7 @@ export function SourcesPage() {
   const site = useSite();
   const invalidate = useInvalidate();
   const toast = useToast();
+  const movedToast = useMovedToast(); // (w33) "Moved ... 12 mappings kept." with an Undo for 10 seconds
   const [jobs, setJobs] = useState<Record<number, number>>({});
   const [showAdd, setShowAdd] = useState(false);
   // The source as it was when Edit was pressed, not a lookup into the list: the list is fetched every 10 s with new objects, which would reset the open form.
@@ -238,9 +240,9 @@ export function SourcesPage() {
         <MoveSourceDialog
           oldId={moving.oldId} oldName={moving.oldName} newId={moving.newId}
           onClose={() => closeDialog(() => setMoving(null), moving.oldId)}
-          onDone={(done) => {
+          onDone={(done, preview) => {
             closeDialog(() => setMoving(null), moving.oldId);
-            toast.success(movedSentence(done));
+            movedToast(done, preview.mappings);
           }}
         />
       )}

@@ -281,7 +281,8 @@ describe("MoveSourceDialog", () => {
         url: "/api/sources/2/move?dry_run=0",
         body: { to: 7, address: "as_found", expect: { mappings: 12, address_before: "172.20.0.3:4840", address_after: "172.20.0.5:4840", name_after: NEW_NAME } },
       }]);
-      expect(onDone).toHaveBeenCalledWith(moveDone());
+      // the preview that was moved on goes with the answer: the real run does not carry the number of mappings, and the toast says it
+      expect(onDone).toHaveBeenCalledWith(moveDone(), expect.objectContaining({ mappings: 12, mapped_points: 12 }));
     });
 
     it("sends name_after null when the name stays", async () => {
