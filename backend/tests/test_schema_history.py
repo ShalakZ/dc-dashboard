@@ -1,7 +1,7 @@
 """Migration 0016 (W30): the unique key `readings_point_ts_key` on readings (point_id, ts DESC), which replaces the plain index
 `readings_point_ts`, and the table `history_status` (the backfill's bookkeeping, one row per source: DERIVED data).
 
-This file pins the head (the newest migration's test does; test_schema_displays.py pins only that 0015 follows 0014). The upgrade
+This file pins only that 0016 follows 0015 (the newest migration's test, test_schema_source_identity.py, pins the head). The upgrade
 refuses, before it changes anything, to run over a table that holds one reading twice (compressed chunks included); with no
 duplicate it swaps the index and creates one empty table. The downgrade restores the plain index and drops the table, and no
 reading is lost either way (an index holds no data and the table is derived)."""
@@ -67,6 +67,22 @@ def migration():
     return module
 
 
+# Columns of LATER migrations (0017, w33: sources.identity): they exist at head and not at 0015, so a comparison made at head and
+# again at 0015 must not see them (`as_it_was_at_0015` leaves them out of a snapshot, `row_text` out of a row's fingerprint).
+LATER_COLUMNS = {("sources", "identity")}
+
+
+async def row_text(db, name: str) -> str:
+    """The SQL for the text of one row of table `name` (the table is aliased `t`), without the columns of later migrations."""
+    later = {column for table, column in LATER_COLUMNS if table == name}
+    if not later:
+        return "t::text"
+    columns = [r["column_name"] for r in await db.fetch(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position",
+        name) if r["column_name"] not in later]
+    return "row(" + ", ".join(f't."{column}"' for column in columns) + ")::text"
+
+
 async def snapshot(db) -> dict:
     """Columns, indexes, constraints and triggers of every table."""
     return {
@@ -85,8 +101,10 @@ async def snapshot(db) -> dict:
 
 def as_it_was_at_0015(snap: dict) -> dict:
     """A snapshot taken at 0016 as it must look at 0015: `history_status` taken out, and the unique key under the name and the
-    definition of the plain index it replaced (a deliberate difference that the tests below pin on their own)."""
+    definition of the plain index it replaced (a deliberate difference that the tests below pin on their own). The columns of
+    LATER migrations are taken out too: a snapshot taken at head has them and one taken at 0015 does not."""
     out = {kind: [row for row in entries if row[0] != "history_status"] for kind, entries in snap.items()}
+    out["columns"] = [row for row in out["columns"] if (row[0], row[1]) not in LATER_COLUMNS]
     out["indexes"] = sorted(
         ("readings", "readings_point_ts", PLAIN_INDEX) if row[1] == "readings_point_ts_key" else row for row in out["indexes"])
     return out
@@ -101,7 +119,8 @@ async def fingerprints(db) -> dict[str, str | None]:
     for name in names:
         if name == "history_status":  # the table under test: its rows are what the downgrade loses, on purpose
             continue
-        fingerprint[name] = await db.fetchval(f'SELECT md5(string_agg(t::text, E\'\\n\' ORDER BY t::text)) FROM "{name}" t')
+        text_of = await row_text(db, name)
+        fingerprint[name] = await db.fetchval(f'SELECT md5(string_agg({text_of}, E\'\\n\' ORDER BY {text_of})) FROM "{name}" t')
     return fingerprint
 
 
@@ -200,7 +219,7 @@ async def back_to_head(db, *, clear_readings: bool = True) -> None:
 
 
 def head_revision() -> str:
-    """The one head alembic reports (this file's pin below is the only place that names a revision number as the head)."""
+    """The one head alembic reports (the newest migration's test pins which revision that is; this file only compares with it)."""
     heads = run_alembic("heads")
     assert heads.returncode == 0, heads.stderr
     revisions = [line.split()[0] for line in heads.stdout.splitlines() if line.strip()]
@@ -210,9 +229,8 @@ def head_revision() -> str:
 
 # ---- the head -----------------------------------------------------------------------------------------------------------------
 
-def test_the_migration_follows_0015_and_is_the_only_head():
-    assert "0015 -> 0016" in run_alembic("history", "-r", "0015:0016").stdout
-    assert head_revision() == "0016"
+def test_the_migration_follows_0015():
+    assert "0015 -> 0016" in run_alembic("history", "-r", "0015:0016").stdout  # the one head is pinned by the newest migration's test
 
 
 # ---- at the head: the key and the table ----------------------------------------------------------------------------------------
@@ -438,7 +456,7 @@ async def test_up_down_up_gives_the_same_catalogue_and_the_same_readings(db):
         assert down.returncode == 0, down.stderr
         up = run_alembic("upgrade", "head")
         assert up.returncode == 0, up.stderr
-        assert await db.fetchval("SELECT version_num FROM alembic_version") == "0016"
+        assert await db.fetchval("SELECT version_num FROM alembic_version") == head_revision()
         assert await snapshot(db) == at_head  # the same key, table, constraints and names as before the round trip
         assert await fingerprints(db) == before
         assert await readings_hash(db) == readings
@@ -474,7 +492,7 @@ async def test_up_runs_where_the_key_was_already_built_by_hand(db):
     try:
         await downgrade_to_0015(db)
         await db.execute("CREATE UNIQUE INDEX readings_point_ts_key ON readings (point_id, ts DESC)")
-        up = run_alembic("upgrade", "head")
+        up = run_alembic("upgrade", "0016")
         assert up.returncode == 0, up.stderr
         assert await db.fetchval("SELECT version_num FROM alembic_version") == "0016"
         assert await index_names(db) == {"readings_point_ts_key", "readings_ts_idx"}
@@ -520,7 +538,7 @@ async def test_the_upgrade_refuses_a_duplicate_with_a_plain_message_and_changes_
         assert await index_names(db) == {"readings_point_ts", "readings_ts_idx"}
 
         assert await take_duplicates_away(db) == pairs
-        up = run_alembic("upgrade", "head")
+        up = run_alembic("upgrade", "0016")
         assert up.returncode == 0, up.stderr
         assert await db.fetchval("SELECT version_num FROM alembic_version") == "0016"
         assert await index_names(db) == {"readings_point_ts_key", "readings_ts_idx"}

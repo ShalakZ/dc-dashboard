@@ -24,9 +24,25 @@ TYPE_CHECKS = (  # every CHECK of widgets over exactly the type column
 )
 
 
+# 0017 (w33) added a column to an old table: it exists at head and not below 0017, so `snapshot` leaves it out and `fingerprints`
+# hashes the rows of that table without it (`row_text`).
+LATER_COLUMNS = {("sources", "identity")}
+
+
+async def row_text(db, name: str) -> str:
+    """The SQL for the text of one row of table `name` (the table is aliased `t`), without the columns of later migrations."""
+    later = {column for table, column in LATER_COLUMNS if table == name}
+    if not later:
+        return "t::text"
+    columns = [r["column_name"] for r in await db.fetch(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position",
+        name) if r["column_name"] not in later]
+    return "row(" + ", ".join(f't."{column}"' for column in columns) + ")::text"
+
+
 async def snapshot(db) -> dict:
-    """Columns, indexes, constraints and triggers of every table."""
-    return {
+    """Columns, indexes, constraints and triggers of every table (except the columns of later migrations)."""
+    taken = {
         "columns": [tuple(r) for r in await db.fetch(
             "SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns "
             "WHERE table_schema = 'public' ORDER BY 1, ordinal_position")],
@@ -38,6 +54,8 @@ async def snapshot(db) -> dict:
         "triggers": [tuple(r) for r in await db.fetch(
             "SELECT tgrelid::regclass::text, tgname FROM pg_trigger WHERE NOT tgisinternal ORDER BY 1, 2")],
     }
+    taken["columns"] = [row for row in taken["columns"] if (row[0], row[1]) not in LATER_COLUMNS]
+    return taken
 
 
 async def fingerprints(db) -> dict[str, str | None]:
@@ -48,9 +66,11 @@ async def fingerprints(db) -> dict[str, str | None]:
         "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename NOT IN "
         "('alembic_version', 'figure_ledger', 'playlists', 'playlist_items', 'displays', 'history_status') ORDER BY 1")]
     assert {"users", "roles", "assets", "settings", "audit_log", "dashboards", "widgets"} <= set(names)
-    return {
-        name: await db.fetchval(f'SELECT md5(string_agg(t::text, E\'\\n\' ORDER BY t::text)) FROM "{name}" t') for name in names
-    }
+    fingerprint = {}
+    for name in names:
+        text_of = await row_text(db, name)
+        fingerprint[name] = await db.fetchval(f'SELECT md5(string_agg({text_of}, E\'\\n\' ORDER BY {text_of})) FROM "{name}" t')
+    return fingerprint
 
 
 async def five_types_check(db) -> tuple[str, str]:

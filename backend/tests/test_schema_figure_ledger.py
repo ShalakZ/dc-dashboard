@@ -35,6 +35,9 @@ NOON = datetime(2026, 10, 20, 12, 0, 5, 123456, tzinfo=timezone.utc)
 # Tables of LATER migrations (0015, w28 and 0016, w30): they exist at head and not below 0015, so a comparison made at head and
 # again below it must not see them. They are left out of `snapshot` and `fingerprints` below.
 LATER_TABLES = ("playlists", "playlist_items", "displays", "history_status")
+# 0017 (w33) added a column to an old table: it exists at head and not below 0017, so `snapshot` leaves it out and `fingerprints`
+# hashes the rows of that table without it (`row_text`).
+LATER_COLUMNS = {("sources", "identity")}
 # 0016 also replaced the plain index of readings by a unique key: `snapshot` shows the key under the name and the definition of the
 # plain index, for the same reason (test_schema_history.py pins the swap itself).
 PLAIN_READINGS_INDEX = "CREATE INDEX readings_point_ts ON public.readings USING btree (point_id, ts DESC)"
@@ -57,7 +60,19 @@ async def snapshot(db) -> dict:
     taken["indexes"] = sorted(
         ("readings", "readings_point_ts", PLAIN_READINGS_INDEX) if row[1] == "readings_point_ts_key" else row
         for row in taken["indexes"])
+    taken["columns"] = [row for row in taken["columns"] if (row[0], row[1]) not in LATER_COLUMNS]
     return {kind: [row for row in entries if row[0] not in LATER_TABLES] for kind, entries in taken.items()}
+
+
+async def row_text(db, name: str) -> str:
+    """The SQL for the text of one row of table `name` (the table is aliased `t`), without the columns of later migrations."""
+    later = {column for table, column in LATER_COLUMNS if table == name}
+    if not later:
+        return "t::text"
+    columns = [r["column_name"] for r in await db.fetch(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position",
+        name) if r["column_name"] not in later]
+    return "row(" + ", ".join(f't."{column}"' for column in columns) + ")::text"
 
 
 def without_the_table(snap: dict) -> dict:
@@ -76,7 +91,8 @@ async def fingerprints(db) -> dict[str, str | None]:
             continue
         if name in LATER_TABLES:  # 0015's tables exist at head and a downgrade through 0014 drops them, on purpose
             continue
-        fingerprint[name] = await db.fetchval(f'SELECT md5(string_agg(t::text, E\'\\n\' ORDER BY t::text)) FROM "{name}" t')
+        text_of = await row_text(db, name)
+        fingerprint[name] = await db.fetchval(f'SELECT md5(string_agg({text_of}, E\'\\n\' ORDER BY {text_of})) FROM "{name}" t')
     return fingerprint
 
 
