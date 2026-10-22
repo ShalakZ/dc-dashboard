@@ -1,0 +1,17 @@
+@layer w6 {
+  /* w32: the Change... dialog of the System events card on the Storage page (pages/StoragePage.tsx, EventsRetentionForm). The card itself needs no rule of its own:
+     it is a .page-card of the Storage page grid that spans both columns (.span-all, app.css), and .storage-page .page-card p already takes the browser margin off its lines.
+     The dialog is the base Modal (.dialog narrow, app.css); the form inside carries .storage-events-dialog, the one class this file writes on its own (app.css.test.ts: a page
+     file's bare class may not be named in another file, so every rule below starts with it). Tokens only. */
+
+  /* The line under a field: its bounds and the factory value, directly under the input (the ? tip sits at the end of the label line, as in the Storage form). */
+  .storage-events-dialog .storage-events-hint { display: block; margin-top: 6px; }
+
+  /* The room for the question the server asks and for a refusal. It is there from the start and three lines tall (the question wraps to three at the dialog's width, the
+     refusals to one or two), so a message arriving moves neither the fields above it nor the buttons under it; a longer text grows it, which is the rare case. */
+  .storage-events-dialog .storage-events-slot { min-height: 3lh; }
+  .storage-events-dialog .storage-events-slot > p { font-weight: 600; }
+
+  /* The buttons wait with aria-disabled, never disabled: the one that was pressed holds the focus. They look the way a disabled button does. */
+  .storage-events-dialog button[aria-disabled="true"], .storage-events-dialog button[aria-disabled="true"]:hover { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); cursor: not-allowed; }
+}
