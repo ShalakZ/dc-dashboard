@@ -212,5 +212,10 @@ I1 -> P4, P11, tests e2/e3. I2 -> P11, test g. I3 -> P11 (sync after the cancels
 ## Merge order
 Gates per RESUME.md; full backend suite once after the last backend commit (detached, under the heavy lock), the full frontend suite, typecheck, build, the e2e type check, `vis-rebuild.sh`, the gallery, the whole-wave Opus review, one fix wave, close-out docs, merge, counts, backup, rebuild, health, counts, 2 MB check, push, branch deletion, memory bullet, MORNING, marker.
 
-## Execution log
-(see `.waves/w32/progress.md`; boxes above are ticked as tasks land)
+## Execution log (2026-10-22, one unattended session; times from the ledger `.waves/w32/progress.md`, which is kept in the git-ignored workspace)
+- 10:37 start; 10:48 plan; 11:05 plan review (Opus: 0 Critical, 11 Important, 17 Minor, all folded in above); 11:07 Tasks 1a, 2, 4a in parallel.
+- Task 1a `12df275` (the incident book, 38 tests), Task 2 `473ed01` (retention), Task 4a `5e2ee08` (scaffold), Task 3a `d736bc6` (read routes), Task 5 `4bd53ed` (Sources banner), Task 7 `2beda9d` (Storage card), Task 6 `eb67cf5` (Audit outcome), Task 1b `2cc5585` (scheduler and report), Task 4b `32e60af` (the page), Task 3b `b0e9286` (sources fields and audit outcome), Task 9 `7562e3f` (docs), Task 8 `b842694` (the end-to-end spec: 7 cases, passed twice on the look stack).
+- Per-task Opus reviews: Tasks 1a+1b 0 Critical, 0 Important, 9 Minor (parked); Tasks 2+3a+3b 0 Critical, 1 Important (a password with a no-break space escaped the scrub of the outcome reason: fixed in `a3453af`), 6 Minor.
+- Whole-wave review in a real browser (1920, 1440, 1024, 800; light and dark; keyboard; calm refresh measured): 0 Critical, 1 Important (a failed test's outcome and events row showed the raw connector error, R11), 9 Minor; fix wave `e3adf05`, `a776c0c`, `3494c3e`; scoped re-review: 0 Critical, 0 Important, 5 Minor (parked in BQ).
+- Gates: the credential-gate test needed an id for the new route (`8285aed`, it now also proves the second scrub); the first whole Playwright run stopped at `w7k.spec.ts:624`: the eight-item Sources row menu of the last row reached into the toast at 1024x768, fixed in `0c0eaf3` (a row menu keeps clear of the toast stack).
+- The backend suite on this machine was disk bound (see BQ): chunked runs from frozen worktrees, the second set with a fsync-off throw-away Postgres in the frozen copy only.
