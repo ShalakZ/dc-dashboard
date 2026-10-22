@@ -195,5 +195,6 @@ def test_thumbprints_conflict_only_when_both_are_present_and_different():
     assert ident.thumbprints_conflict(a, b) is True
     assert ident.thumbprints_conflict(a, a) is False
     assert ident.thumbprints_conflict(a, a.lower()) is False  # the same bytes in another case
+    assert ident.thumbprints_conflict(a, a.replace(":", "")) is False and ident.thumbprints_conflict(a, a.replace(":", " ")) is False
     assert ident.thumbprints_conflict(a, None) is False and ident.thumbprints_conflict(None, b) is False
     assert ident.thumbprints_conflict(None, None) is False and ident.thumbprints_conflict("", b) is False

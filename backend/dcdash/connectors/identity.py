@@ -119,7 +119,13 @@ def usable_key(connector_type: str | None, identity: object) -> tuple[str, str] 
 
 
 def thumbprints_conflict(a: object, b: object) -> bool:
-    """True when both thumbprints are present and differ (case does not matter); a missing one never conflicts."""
-    if not isinstance(a, str) or not isinstance(b, str) or not a.strip() or not b.strip():
+    """True when both thumbprints are present and differ; a missing one never conflicts. Case, colons and spaces do not matter, so
+    `AB:CD` (what is stored) and `abcd` (how some tools print it) are the same thumbprint."""
+    if not isinstance(a, str) or not isinstance(b, str):
         return False
-    return a.strip().upper() != b.strip().upper()
+    left, right = _digits(a), _digits(b)
+    return bool(left) and bool(right) and left != right
+
+
+def _digits(thumbprint: str) -> str:
+    return "".join(thumbprint.replace(":", "").split()).upper()

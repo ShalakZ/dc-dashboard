@@ -127,3 +127,42 @@ async def test_the_uri_is_still_the_one_the_server_reports_after_the_offline_tog
         await srv.stop()
         await srv.start()
         assert {e.Server.ApplicationUri for e in await endpoints_of(srv)} == {"urn:dcdash:simulator:dev"}
+
+
+# ---- the wiring: one id reaches every server serve() starts ----------------------------------------------------------------
+
+
+async def test_serve_hands_the_instance_to_the_http_the_opcua_and_the_historian_servers(monkeypatch):
+    seen: dict[str, str] = {}
+
+    class Idle:  # stands in for a server: it takes its arguments and "runs" at once
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self):
+            return None
+
+        async def serve(self):
+            return None
+
+    class FakeOpcUa(Idle):
+        def __init__(self, sim, port, **kwargs):
+            seen["opcua"] = kwargs["instance"]
+
+    def fake_http(sim, api_key=None, instance=None):
+        seen["http"] = instance
+
+    def fake_historian(config, api_key=None, instance=None):
+        seen["historian"] = instance
+
+    monkeypatch.setattr(simulator_main, "OpcUaSim", FakeOpcUa)
+    monkeypatch.setattr(simulator_main, "ModbusSim", Idle)
+    monkeypatch.setattr(simulator_main, "create_sim_app", fake_http)
+    monkeypatch.setattr(simulator_main, "create_historian_app", fake_historian)
+    monkeypatch.setattr(simulator_main.uvicorn, "Config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(simulator_main.uvicorn, "Server", Idle)
+    await simulator_main.serve(historian_port=9100, instance="other")
+    assert seen == {"opcua": "other", "http": "other", "historian": "other"}
+    seen.clear()
+    await simulator_main.serve(historian_port=9100)  # the default is dev everywhere
+    assert seen == {"opcua": "dev", "http": "dev", "historian": "dev"}
