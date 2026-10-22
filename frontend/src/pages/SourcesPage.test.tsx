@@ -11,6 +11,7 @@ import { renderWithProviders } from "../test/render";
 import { spyToasts } from "../test/toasts";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
+import { movePreview, moveDone, URI_MATCH } from "../test/moveFixtures";
 import { SOURCE_KEEP_NOTE } from "../lib/impact";
 import type { PermissionId } from "../lib/permissions";
 import { SourcesPage } from "./SourcesPage";
@@ -1453,6 +1454,162 @@ describe("SourcesPage, the long-offline banner, the offline-since tooltip and th
     it("is there for a source that is filled by importing files too (it has events of its own)", async () => {
       await show([{ ...down, polls: false, mapped_points: 0, status: "unknown", offline_since: null }], "custom", all);
       expect(await menuTexts()).toEqual(["Edit", "Points", "Import file...", "Map tag list...", "Events"]);
+    });
+  });
+});
+
+describe("SourcesPage, moving a source to the address where its device turned up (w33)", () => {
+  // The clock stands still at 2026-10-22 07:00 UTC; the source went offline at 04:52:51 on the 18th (4 d 2 h before).
+  const NOW = new Date("2026-10-22T07:00:00Z");
+  const SINCE = "2026-10-18T04:52:51Z";
+  const OLD = "OPC UA server at 172.20.0.3:4840";
+  const NEW = "OPC UA server at 172.20.0.5:4840";
+  const offer = { kind: "offer" as const, to_source_id: 7, to_name: NEW, to_endpoint: "opc.tcp://172.20.0.5:4840/dcdash/", match: URI_MATCH };
+  const down = {
+    ...source, id: 2, name: OLD, connector_type: "opcua", config: { endpoint: "opc.tcp://172.20.0.3:4840/dcdash/" }, status: "offline", mapped_points: 12, polls: true,
+    last_error: "Connect call failed", offline_since: SINCE, move_candidate: offer,
+  };
+  const SENTENCE = `1 source is offline: ${OLD}, for 4 d 2 h (since 18 Oct 07:52): Connect call failed.`;
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"], now: NOW }); });
+  afterEach(() => vi.useRealTimers());
+
+  const dryRuns: { url: string; body: unknown }[] = [];
+  const realRuns: { url: string; body: unknown }[] = [];
+  beforeEach(() => { dryRuns.length = 0; realRuns.length = 0; });
+
+  /** The page for `role` (a built-in role, or "custom" with `permissions`), with these rows and the move routes; waits for the account. */
+  const show = async (rows: Record<string, unknown>[], role = "admin", permissions: PermissionId[] = []) => {
+    const toasts = spyToasts();
+    const calls = mockFetch({
+      ...routes(role), "GET /api/import-profiles": { body: { profiles: [] } },
+      ...(role === "custom" ? { "GET /api/me": { body: userFor("custom", { permissions: ["sources.view", ...permissions] }) } } : {}),
+      "GET /api/sources": { body: rows },
+      "POST /api/sources/2/move": ({ url, body }) => {
+        if (url.includes("dry_run=1")) { dryRuns.push({ url, body }); return { body: movePreview() }; }
+        realRuns.push({ url, body });
+        return { body: moveDone() };
+      },
+    });
+    renderWithProviders(<><SourcesPage /><SignedIn /></>, { route: "/sources", path: "/sources", toasts: toasts.api });
+    await screen.findByText(String(rows[0].name));
+    await accountKnown();
+    return { calls, toasts };
+  };
+  const menuTexts = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: /^Actions for / }));
+    return screen.getAllByRole("menuitem").map((el) => el.textContent);
+  };
+  const banner = () => screen.getByText(/ (is|are) offline: /).closest(".banner") as HTMLElement;
+  const dialog = () => screen.getByRole("dialog", { name: `Move to new address: ${OLD}` });
+
+  describe("the row menu", () => {
+    it("starts with Move to new address... for an offline source a scan found again, for a person who can edit sources", async () => {
+      await show([down]);
+      expect(await menuTexts()).toEqual(["Move to new address...", "Test", "Check connection", "Edit", "Points", "Import file...", "Map tag list...", "Events"]);
+    });
+
+    it("is the first item even when the person holds sources.edit alone", async () => {
+      await show([down], "custom", ["sources.edit"]);
+      expect(await menuTexts()).toEqual(["Move to new address...", "Edit", "Points"]);
+    });
+
+    it("is not offered without sources.edit, whatever else the person may do", async () => {
+      await show([down], "operator");
+      const texts = await menuTexts();
+      expect(texts).not.toContain("Move to new address...");
+      expect(texts[0]).toBe("Test");
+    });
+
+    it.each([
+      ["no candidate", {}],
+      ["a null candidate", { move_candidate: null }],
+      ["two candidates", { move_candidate: { kind: "two", count: 2 } }],
+    ])("is not offered for a source with %s", async (_name, over) => {
+      await show([{ ...down, move_candidate: undefined, ...over }]);
+      expect(await menuTexts()).not.toContain("Move to new address...");
+    });
+
+    it("opens the dialog with a dry run for this source and the new one, and puts the focus back on the row's menu button on Cancel", async () => {
+      await show([down]);
+      await userEvent.click(await screen.findByRole("button", { name: /^Actions for / }));
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Move to new address..." }));
+      expect(await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/)).toBeInTheDocument();
+      expect(dialog()).toBeInTheDocument();
+      expect(dryRuns).toEqual([{ url: "/api/sources/2/move?dry_run=1", body: { to: 7, address: "as_found" } }]);
+      await userEvent.click(within(dialog()).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(screen.getByRole("button", { name: /^Actions for / })).toHaveFocus();
+    });
+
+    it("keeps the rest of the page from opening a second dialog while this one is open", async () => {
+      await show([down]);
+      await userEvent.click(await screen.findByRole("button", { name: /^Actions for / }));
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Move to new address..." }));
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      expect(screen.getByRole("button", { name: `Delete ${OLD}` })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Add source" })).toBeDisabled();
+    });
+  });
+
+  describe("moving", () => {
+    it("sends the real run, closes the dialog, says so in a toast and reads the list again", async () => {
+      const { calls, toasts } = await show([down]);
+      await userEvent.click(await screen.findByRole("button", { name: /^Actions for / }));
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Move to new address..." }));
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      const before = calls.filter((c) => c.method === "GET" && c.path === "/api/sources").length;
+      await userEvent.click(within(dialog()).getByRole("button", { name: "Move 12 mappings" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(realRuns).toHaveLength(1);
+      expect(toasts.calls).toEqual([{ kind: "success", text: `Moved "${NEW}" to 172.20.0.5:4840` }]);
+      expect(calls.filter((c) => c.method === "GET" && c.path === "/api/sources").length).toBeGreaterThan(before);
+      expect(screen.getByRole("button", { name: /^Actions for / })).toHaveFocus();
+    });
+  });
+
+  describe("the Status chip and the banner", () => {
+    it("ends the banner sentence of a source with an offer with where it was found and a button that opens the dialog", async () => {
+      await show([down]);
+      expect(banner()).toHaveTextContent(`${SENTENCE} A scan found it at 172.20.0.5:4840:`);
+      const button = within(banner()).getByRole("button", { name: "Move to new address..." });
+      expect(button).toHaveAttribute("type", "button");
+      expect(banner()).toHaveTextContent(`${SENTENCE} A scan found it at 172.20.0.5:4840:Move to new address...`);
+      await userEvent.click(button);
+      expect(await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/)).toBeInTheDocument();
+      expect(dryRuns).toHaveLength(1);
+      await userEvent.click(within(dialog()).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    it("still says where it was found, but has no button, for a person who cannot edit sources", async () => {
+      await show([down], "operator");
+      expect(banner()).toHaveTextContent(`${SENTENCE} A scan found it at 172.20.0.5:4840.`);
+      expect(within(banner()).queryByRole("button")).not.toBeInTheDocument();
+    });
+
+    it("keeps the old sentence, and no button, for a source without a candidate", async () => {
+      await show([{ ...down, move_candidate: null }]);
+      expect(banner()).toHaveTextContent(SENTENCE);
+      expect(banner()).not.toHaveTextContent("A scan found");
+      expect(within(banner()).queryByRole("button")).not.toBeInTheDocument();
+    });
+
+    it("says two servers could be this one, in the banner and in the Status chip's tooltip, and offers no move", async () => {
+      await show([{ ...down, move_candidate: { kind: "two", count: 2 } }]);
+      expect(banner()).toHaveTextContent(`${SENTENCE} Two servers could be this one; edit the address by hand.`);
+      expect(within(banner()).queryByRole("button")).not.toBeInTheDocument();
+      expect(screen.getByText("offline", { selector: ".chip" })).toHaveAttribute("title", "offline since 18 Oct 07:52. Two servers could be this one; edit the address by hand.");
+    });
+
+    it("leaves the chip's tooltip as it was for a source with an offer", async () => {
+      await show([down]);
+      expect(screen.getByText("offline", { selector: ".chip" })).toHaveAttribute("title", "offline since 18 Oct 07:52");
+    });
+
+    it("with several sources offline sends the person to the row menus", async () => {
+      await show([down, { ...down, id: 3, name: "second", move_candidate: null }]);
+      expect(banner()).toHaveTextContent("A scan found a new address for 1 of them: use Move to new address... in its row menu.");
+      expect(within(banner()).queryByRole("button", { name: "Move to new address..." })).not.toBeInTheDocument();
     });
   });
 });

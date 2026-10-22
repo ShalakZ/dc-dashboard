@@ -1,5 +1,6 @@
 import type { Source } from "../api/types";
 import { formatSpanLong } from "./age";
+import { hostPortOfEndpoint, offerOf, TWO_SERVERS_TEXT } from "./moves";
 import { formatSiteDateHour } from "./siteTime";
 
 /**
@@ -60,8 +61,9 @@ const stop = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
  * The sentence of the Sources banner. One source: its name, how long, since when (site zone; left out while the zone is unknown) and its last error:
  * `1 source is offline: OPC UA server at 172.20.0.3:4840, for 4 d 2 h (since 18 Oct 07:52): Connect call failed ('172.20.0.3', 4840).` A source that never
  * answered has not answered since it was added. Several: at most three named, each with how long, then `and 2 more`. Plain text, no markup.
+ * (w33 adds to this sentence only for a source with a move candidate: see `offlineBannerParts`.)
  */
-export function offlineBannerText(list: readonly LongOffline[], timezone: string | undefined): string {
+function plainBannerText(list: readonly LongOffline[], timezone: string | undefined): string {
   if (list.length === 0) return "";
   const when = (item: LongOffline) => (timezone ? formatOfflineSince(item.since, timezone) : null);
   if (list.length === 1) {
@@ -77,4 +79,44 @@ export function offlineBannerText(list: readonly LongOffline[], timezone: string
   if (more > 0) named.push(`${more} more`);
   const last = named.pop() as string;
   return `${list.length} sources are offline: ${named.length > 0 ? `${named.join(", ")} and ` : ""}${last}.`;
+}
+
+/** The words of the link that opens the move dialog (the row menu's item and the banner's button say the same). */
+export const MOVE_LINK_TEXT = "Move to new address...";
+
+/** What the banner's button opens: the source that was found again at a new address, and where (`172.20.0.5:4840`). */
+export interface BannerMove { sourceId: number; name: string; hostPort: string }
+
+/**
+ * The sentence of the Sources banner (`plainBannerText`) with what a scan found added to it (w33), and the one source its link opens.
+ * - One source with an offer: `... A scan found it at 172.20.0.5:4840:`, and `move` names it. A person who cannot edit sources reads the same sentence ending
+ *   in a full stop and gets no `move` (there is no link for them).
+ * - One source that two new servers look like: `Two servers could be this one; edit the address by hand.`
+ * - Several sources, some with an offer: how many a scan found a new address for, and where to go (the row menus); no `move`.
+ * A source without a candidate changes nothing: the text is exactly `plainBannerText`.
+ */
+export function offlineBannerParts(list: readonly LongOffline[], timezone: string | undefined, canMove: boolean): { text: string; move: BannerMove | null } {
+  const base = plainBannerText(list, timezone);
+  if (list.length === 1) {
+    const { source } = list[0];
+    const offer = offerOf(source);
+    if (offer) {
+      const hostPort = hostPortOfEndpoint(offer.to_endpoint);
+      return canMove
+        ? { text: `${base} A scan found it at ${hostPort}:`, move: { sourceId: source.id, name: source.name, hostPort } }
+        : { text: `${base} A scan found it at ${hostPort}.`, move: null };
+    }
+    if (source.move_candidate?.kind === "two") return { text: `${base} ${TWO_SERVERS_TEXT}.`, move: null };
+    return { text: base, move: null };
+  }
+  const found = list.filter((item) => offerOf(item.source) !== null).length;
+  if (found === 0) return { text: base, move: null };
+  const where = canMove ? `: use ${MOVE_LINK_TEXT} in ${found === 1 ? "its row menu" : "the row menu of each"}` : "";
+  return { text: `${base} A scan found a new address for ${found} of them${where}.`, move: null };
+}
+
+/** The whole banner sentence as plain text: `offlineBannerParts`' text, and the words of the link after it when the person can move the source. */
+export function offlineBannerText(list: readonly LongOffline[], timezone: string | undefined, canMove = false): string {
+  const parts = offlineBannerParts(list, timezone, canMove);
+  return parts.move ? `${parts.text} ${MOVE_LINK_TEXT}` : parts.text;
 }
