@@ -26,14 +26,15 @@ const EXPECTED: Record<string, AuditKind> = {
   "display.connected": "signin", "display.claim_blocked": "problem",
   "readings.imported": "create", "import_profile.saved": "change", "import_profile.deleted": "delete",
   "tags.mapped": "create", "tags.unmapped": "delete", "history.fill_requested": "other",
+  "events.retention_changed": "change",
 };
 
 describe("auditKind", () => {
-  it("names the kind of every one of the 68 actions in the audit text table", () => {
+  it("names the kind of every one of the 69 actions in the audit text table", () => {
     const source = readFileSync("src/lib/auditText.ts", "utf8"); // vitest runs from the frontend directory
     const table = source.slice(source.indexOf("const RULES"), source.indexOf("function build("));
     const actions = [...table.matchAll(/^ {2}"([a-z_.]+)":/gm)].map((m) => m[1]);
-    expect(actions).toHaveLength(68);
+    expect(actions).toHaveLength(69);
     expect([...actions].sort()).toEqual(Object.keys(EXPECTED).sort());
     for (const action of actions) expect(auditKind(action), action).toBe(EXPECTED[action]);
   });
@@ -55,6 +56,7 @@ describe("auditKind", () => {
     expect(auditKind("billing.reopened")).toBe("settings");
     expect(auditKind("password.change_failed")).toBe("problem"); // not change, although it starts like password.changed
     expect(auditKind("dashboard.default_changed")).toBe("change");
+    expect(auditKind("events.retention_changed")).toBe("change"); // the _changed suffix; "events." is not a settings prefix (the Storage card lives on a settings page, the action is a change)
     expect(auditKind("login.unblocked")).toBe("change");
     expect(auditKind("kind.renamed")).toBe("change"); // a rename is a change, not "other"
     expect(auditKind("kind.starter_pack_added")).toBe("create"); // the pack registers kinds: a creation, by name, not by a broad "_added" suffix

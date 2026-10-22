@@ -5,7 +5,7 @@ import { auditPageOptions, auditPosition, keys, useAudit, useAuditEntry, useAudi
 import { ApiError } from "../api/client";
 import type { AuditEntry } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
-import { KindTile, UserLabel } from "../components/AuditCells";
+import { KindTile, OutcomeTag, UserLabel } from "../components/AuditCells";
 import { AuditDrawer, EntrySteps, type AuditDrawerStatus, type StepDirection } from "../components/AuditDrawer";
 import { AuditFilterBar } from "../components/AuditFilterBar";
 import { AuditPager } from "../components/AuditPager";
@@ -15,7 +15,7 @@ import { PageHeader } from "../components/PageHeader";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { apiQuery, isFiltered, nextOffset, previousOffset, readUrl, writeUrl, type AuditFilters, type AuditUrlState } from "../lib/auditFilters";
-import { describeAudit } from "../lib/auditText";
+import { describeAudit, outcomeOf } from "../lib/auditText";
 import { downloadCsv } from "../lib/download";
 import { relativeTime } from "../lib/relativeTime";
 import { formatSiteDateTime, siteDay } from "../lib/siteTime";
@@ -101,6 +101,7 @@ interface RowProps { entry: AuditEntry; timezone: string; now: Date; search: str
 /** One friendly row: the event's icon, the sentence and the link to the thing; the full account opens in the drawer (chevron, time or the row). */
 function FriendlyRow({ entry, timezone, now, search, isOpen, open }: RowProps) {
   const { summary, link } = describeAudit(entry);
+  const outcome = outcomeOf(entry);
   return (
     <tr data-entry-id={entry.id} data-open={isOpen || undefined} onClick={(e) => rowClick(e, () => open(entry.id))}>
       <td className="cell-more">
@@ -123,6 +124,8 @@ function FriendlyRow({ entry, timezone, now, search, isOpen, open }: RowProps) {
           <div className="what-text">
             <span className="what">{summary}</span>
             {link && <>{" "}<Link className="what-link" to={link.to}>{link.label}</Link></>}
+            {/* How a started check or test ended (w32): after the sentence, in its line, so the row's height and its columns do not change. */}
+            {outcome && outcome.state !== "gone" && <>{" "}<OutcomeTag outcome={outcome} /></>}
           </div>
         </div>
       </td>
