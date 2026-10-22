@@ -25,6 +25,12 @@
   }
   .table-wrap.dense td.error { min-width: 140px; max-width: 260px; overflow-wrap: break-word; } /* never squeezed to a few letters per line: the wrap scrolls instead */
 
+  /* w32: the banner of the sources that have been offline for more than two minutes (Sources only; the shared .banner and .banner-warn dress it). Layout rule (A2): it is
+     drawn above the table once the list has arrived and only while a source qualifies, so the table moves down once when it appears and up once when it goes. No slot is
+     reserved for it, because an empty band on every Sources page would cost more than that one move; the loading skeleton does not draw it (nothing is known yet). It is
+     not an alert and not a live region, so it never speaks again at the 10 s refresh. A last error is often one long run of addresses: it wraps instead of widening the page. */
+  .offline-banner > span { overflow-wrap: anywhere; }
+
   /* Row actions: the three-dot menu and the trash button (app.css) side by side at the right of the row, in the narrowest cell the
      controls fit (two 28px boxes); the Scans history keeps its one quiet Details button here. The cell stays a table cell (it must not be display: flex). */
   td.row-actions, th.row-actions { display: table-cell; } /* belt: no other rule may turn the cell into a flex box and tear the row */

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import { api } from "../api/client";
 import { keys, loadSourceImpact, useCollectorStatus, useInvalidate, useSecretKeyStatus, useSite, useSources } from "../api/queries";
 import type { Source, SourceImpact } from "../api/types";
@@ -24,7 +25,7 @@ import { ageNow, formatAge, formatSpan, secondsSince } from "../lib/age";
 import { historyLine } from "../lib/historyLine";
 import { sourceDeletePath, sourceImpact, sourceLoss, sourceNote } from "../lib/impact";
 import { formatSiteDateTime } from "../lib/siteTime";
-import { sourceStatusText } from "../lib/sourceStatus";
+import { formatOfflineSince, longOffline, offlineBannerText, sourceStatusText } from "../lib/sourceStatus";
 
 /** The collector status counts as unreadable when its last answer is older than this. It is the backend's STALE_AFTER_SECONDS (backend/dcdash/core/heartbeat.py), the age at which a heartbeat reads as silent. */
 const COLLECTOR_STATUS_STALE_SECONDS = 30;
@@ -123,7 +124,8 @@ export function SourcesPage() {
   const canOpenPoints = meets(PAGE_NEED.sourcePoints, can); // the points page has its own permission
   const canImport = can("readings.import");
   const canMapTags = can("discovery.accept"); // the tag list creates mappings (and, if asked, assets) the way accepting a scan result does
-  // The w31 items come after the old ones, which keep their order and their words. Test and Check connection are for a source that is polled: a
+  const canSeeEvents = meets(PAGE_NEED.events, can); // the System events page has its own need (w32): the journal's permission, and the sources it names
+  // The w31 items come after the old ones, which keep their order and their words, and the w32 Events item comes last. Test and Check connection are for a source that is polled: a
   // source filled by importing files has nothing to reach. Fill older range needs a connector that keeps history (the list row says so).
   const actionsOf = (s: Source): RowAction[] => [
     ...(canTest && polls(s) ? [{ label: "Test", onSelect: () => testOne(s.id), disabled: locked }] : []),
@@ -133,7 +135,12 @@ export function SourcesPage() {
     ...(canImport ? [{ label: "Import file...", onSelect: () => openImport(s), disabled: locked }] : []),
     ...(canMapTags ? [{ label: "Map tag list...", onSelect: () => openMapping(s), disabled: locked }] : []),
     ...(canEdit && s.history?.supports_history ? [{ label: "Fill older range...", onSelect: () => openFill(s), disabled: locked }] : []),
+    ...(canSeeEvents ? [{ label: "Events", to: `/events?source=${s.id}` }] : []), // every source has events, a file source too
   ];
+  // The banner: the sources that have been offline for more than two minutes. `now` ticks every few seconds, so the banner appears when a source
+  // crosses the line without waiting for a refetch, and it is built from the answer the page already holds: a refetch that brings the same facts changes nothing.
+  const timezone = site.data?.timezone;
+  const longDown = longOffline(sources, now);
 
   if (isLoading) {
     // The 10 s poll sets a list that failed before pending again for a second, with no error: the skeleton would take turns with the error at every poll.
@@ -185,6 +192,14 @@ export function SourcesPage() {
           </span>
         </div>
       )}
+      {longDown.length > 0 && (
+        // Not an alert and not a live region (the page has two alert banners already and the list is fetched every 10 s): it is read where it stands.
+        <div className="banner banner-warn offline-banner">
+          <WarnIcon />
+          <span>{offlineBannerText(longDown, timezone)}</span>
+          {canSeeEvents && <Link className="b-link" to={longDown.length === 1 ? `/events?source=${longDown[0].source.id}` : "/events"}>See its events</Link>}
+        </div>
+      )}
       {showAdd && (
         <Modal title="Add source" onClose={() => setShowAdd(false)}>
           <SourceForm onDone={() => setShowAdd(false)} />
@@ -229,6 +244,8 @@ export function SourcesPage() {
               {sources.map((s) => {
                 const status = sourceStatusText(s);
                 const history = historyLine(s, now);
+                // The chip's tooltip dates an outage in the site zone; with no zone to read it in, it says nothing rather than a time in the browser's zone.
+                const offlineAt = s.status === "offline" && s.offline_since && timezone ? formatOfflineSince(s.offline_since, timezone) : null;
                 return (
                   <tr key={s.id} data-source={s.id}>
                     <td>
@@ -237,7 +254,7 @@ export function SourcesPage() {
                       {history !== null && <span className="cell-history muted" title={history}>{history}</span>}
                     </td>
                     <td>{s.connector_type}</td><td>{s.enabled ? "yes" : "no"}</td>
-                    <td>{status.polled ? <span className={`chip ${STATUS_CHIP[status.text] ?? "chip-stale"}`}>{status.text}</span> : <span className="muted st st-off note">{status.text}</span>}</td>
+                    <td>{status.polled ? <span className={`chip ${STATUS_CHIP[status.text] ?? "chip-stale"}`} title={offlineAt ? `offline since ${offlineAt}` : undefined}>{status.text}</span> : <span className="muted st st-off note">{status.text}</span>}</td>
                     <td className="nowrap">{s.last_seen && site.data ? formatSiteDateTime(s.last_seen, site.data.timezone) : "—"}</td>
                     <td className="num">{formatAge(ageNow(s.last_reading_age_seconds, sourcesAnsweredAt, now))}</td>
                     <td className="error">{s.last_error ?? ""}</td>

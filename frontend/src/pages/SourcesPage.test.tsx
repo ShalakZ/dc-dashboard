@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { MockInstance } from "vitest";
 import { api } from "../api/client";
@@ -138,8 +138,8 @@ describe("SourcesPage", () => {
       expect(triggers).toHaveLength(2);
       expect(screen.getAllByRole("button", { name: /^Delete / })).toHaveLength(2);
       await userEvent.click(triggers[1]);
-      // (w31: the Import and Map tag list items come after the old four; the fixture has no history, so no Fill older range)
-      expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Test", "Check connection", "Edit", "Points", "Import file...", "Map tag list..."]);
+      // (w31: the Import and Map tag list items come after the old four; the fixture has no history, so no Fill older range; w32: Events, which an Admin may open, comes last)
+      expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Test", "Check connection", "Edit", "Points", "Import file...", "Map tag list...", "Events"]);
       admin.unmount();
       // (a viewer is not in this loop any more: it holds no permission of this page, so it cannot open it at all, see builtinAccess.test.tsx)
       for (const role of ["operator"]) {
@@ -1283,6 +1283,176 @@ describe("SourcesPage, importing, mapping a tag list and filling (w31)", () => {
       await userEvent.click(screen.getByRole("button", { name: "Check range" }));
       await screen.findByText("p");
       expect(calls.filter((c) => c.method === "POST" && c.path === "/api/sources/2/history/fill")).toHaveLength(1);
+    });
+  });
+});
+
+describe("SourcesPage, the long-offline banner, the offline-since tooltip and the Events item (w32)", () => {
+  // 2026-10-22 07:00 UTC. A source that went offline at 2026-10-18 04:52:51 UTC (07:52 in Qatar, UTC+3) has been out of reach for 4 d 2 h 7 min.
+  // Only the clock is faked (fake timers would hang React Query), and it stands still: the page's own ticking clock reads this time.
+  const NOW = new Date("2026-10-22T07:00:00Z");
+  const SINCE = "2026-10-18T04:52:51Z";
+  const secondsAgo = (n: number) => new Date(NOW.getTime() - n * 1000).toISOString();
+  const down = {
+    ...source, id: 2, name: "OPC UA server at 172.20.0.3:4840", status: "offline", mapped_points: 3, polls: true,
+    last_error: "[Errno 111] Connect call failed ('172.20.0.3', 4840)", offline_since: SINCE, failed_reads: 1204,
+  };
+  const SENTENCE = "1 source is offline: OPC UA server at 172.20.0.3:4840, for 4 d 2 h (since 18 Oct 07:52): [Errno 111] Connect call failed ('172.20.0.3', 4840).";
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"], now: NOW }); });
+  afterEach(() => vi.useRealTimers());
+
+  /** The page for `role` (a built-in role, or "custom" with `permissions`), with these rows; waits for the account, so an absent control is really absent. */
+  const show = async (rows: Record<string, unknown>[], role = "admin", permissions: PermissionId[] = [], over: Record<string, unknown> = {}) => {
+    const calls = mockFetch({
+      ...routes(role), "GET /api/import-profiles": { body: { profiles: [] } },
+      ...(role === "custom" ? { "GET /api/me": { body: userFor("custom", { permissions: ["sources.view", ...permissions] }) } } : {}),
+      "GET /api/sources": { body: rows },
+      ...over,
+    });
+    renderWithProviders(<><SourcesPage /><SignedIn /><RefetchSources /></>, { route: "/sources", path: "/sources" });
+    await screen.findByText(String(rows[0].name));
+    await accountKnown();
+    return calls;
+  };
+  const banner = () => screen.getByText(/ (is|are) offline: /);
+
+  describe("the banner", () => {
+    it("names the source, how long it has been out of reach, since when on the site's wall clock, and its last error, in one sentence", async () => {
+      await show([down]);
+      expect(banner()).toHaveTextContent(SENTENCE);
+    });
+
+    it("is a plain block: no alert role, no live region, so nothing is read out at each 10 s refresh", async () => {
+      await show([down]);
+      const box = banner().closest(".banner")!;
+      expect(box).not.toHaveAttribute("role");
+      expect(box.querySelector("[aria-live], [role]")).toBeNull();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    it("leaves the alerts as they were: a silent collector is still the one alert on the page", async () => {
+      await show([down], "admin", [], { "GET /api/collector/status": { body: { alive: false, age_seconds: 95 } } });
+      expect(await screen.findByText(/The collector has not reported for 1 min/)).toBeInTheDocument();
+      expect(screen.getAllByRole("alert")).toHaveLength(1);
+      expect(banner()).toBeInTheDocument();
+    });
+
+    it.each([
+      ["a disabled source", { enabled: false }],
+      ["a source filled by importing files", { polls: false, mapped_points: 0 }],
+      ["a source with no mapped points", { mapped_points: 0 }],
+      ["a source that is online", { status: "online" }],
+      ["a source that has been offline for 90 seconds", { offline_since: secondsAgo(90) }],
+      ["a source with no offline_since", { offline_since: null }],
+      ["a list from an older API (no offline_since at all)", { offline_since: undefined }],
+    ])("shows nothing for %s", async (_name, over) => {
+      await show([{ ...down, ...over }]);
+      expect(screen.queryByText(/ (is|are) offline: /)).not.toBeInTheDocument();
+      expect(document.querySelector(".offline-banner")).toBeNull();
+    });
+
+    it("says a source that never answered has not answered since it was added", async () => {
+      await show([{ ...down, last_seen: null, offline_since: secondsAgo(600) }]);
+      expect(banner()).toHaveTextContent("1 source is offline: OPC UA server at 172.20.0.3:4840, which has not answered since it was added: [Errno 111] Connect call failed ('172.20.0.3', 4840).");
+    });
+
+    it("names at most three sources, the longest outage first, then says how many more", async () => {
+      const rows = [
+        { ...down, id: 1, name: "e", offline_since: secondsAgo(200) }, { ...down, id: 2, name: "a", offline_since: secondsAgo(2 * 86400) },
+        { ...down, id: 3, name: "b", offline_since: secondsAgo(7200) }, { ...down, id: 4, name: "c", offline_since: secondsAgo(300) },
+        { ...down, id: 5, name: "d", offline_since: secondsAgo(250) }, { ...down, id: 6, name: "fine", status: "online", offline_since: null },
+      ];
+      await show(rows);
+      expect(banner()).toHaveTextContent("5 sources are offline: a (for 2 d), b (for 2 h), c (for 5 min) and 2 more.");
+    });
+
+    it("offers See its events (with diagnostics.view) to that source's events for one source, and to all events for several", async () => {
+      await show([down]);
+      expect(screen.getByRole("link", { name: "See its events" })).toHaveAttribute("href", "/events?source=2");
+    });
+
+    it("offers See its events to all events when several sources are offline", async () => {
+      await show([down, { ...down, id: 3, name: "second" }]);
+      expect(screen.getByRole("link", { name: "See its events" })).toHaveAttribute("href", "/events");
+    });
+
+    it("has no See its events without diagnostics.view (an Operator still sees the banner), and has it for a role that holds it", async () => {
+      await show([down], "operator");
+      expect(banner()).toHaveTextContent(SENTENCE);
+      expect(screen.queryByRole("link", { name: "See its events" })).not.toBeInTheDocument();
+      cleanup(); // a second page in the same test
+      await show([down], "custom", ["diagnostics.view"]);
+      expect(screen.getByRole("link", { name: "See its events" })).toHaveAttribute("href", "/events?source=2");
+    });
+
+    it("leaves the time out, not the browser's, while the site zone is unavailable", async () => {
+      await show([down], "admin", [], { "GET /api/site": { status: 500, body: { detail: "site unavailable" } } });
+      expect(banner()).toHaveTextContent("1 source is offline: OPC UA server at 172.20.0.3:4840, for 4 d 2 h: [Errno 111] Connect call failed ('172.20.0.3', 4840).");
+    });
+
+    it("is the same element after each refetch, and stays when a refetch fails (no flash, no re-announcement)", async () => {
+      let failing = false;
+      const calls = await show([down], "admin", [], { "GET /api/sources": () => (failing ? { status: 500, body: { detail: "database is down" } } : { body: [{ ...down }] }) });
+      const before = banner();
+      const sourceCalls = () => calls.filter((c) => c.path === "/api/sources").length;
+      const start = sourceCalls();
+      fireEvent.click(screen.getByRole("button", { name: "refetch sources" }));
+      await waitFor(() => expect(sourceCalls()).toBe(start + 1));
+      await act(async () => {});
+      expect(banner()).toBe(before);
+      failing = true;
+      fireEvent.click(screen.getByRole("button", { name: "refetch sources" }));
+      expect(await screen.findByText("database is down")).toBeInTheDocument();
+      expect(banner()).toBe(before);
+    });
+  });
+
+  describe("the Status chip", () => {
+    it("says when an offline source went offline, on the wall clock of the site zone", async () => {
+      await show([down]);
+      expect(screen.getByText("offline", { selector: ".chip" })).toHaveAttribute("title", "offline since 18 Oct 07:52");
+    });
+
+    it("has no such tooltip for an online source, one with no offline_since, or while the site zone is unavailable", async () => {
+      await show([{ ...down, status: "online", offline_since: null }, { ...down, id: 3, name: "undated", offline_since: null }]);
+      for (const chip of document.querySelectorAll(".chip")) expect(chip).not.toHaveAttribute("title");
+      cleanup(); // a second page in the same test
+      await show([down], "admin", [], { "GET /api/site": { status: 500, body: { detail: "site unavailable" } } });
+      expect(screen.getByText("offline", { selector: ".chip" })).not.toHaveAttribute("title");
+    });
+
+    it("tells a source that has been offline for under two minutes too (the tooltip is a fact; only the banner waits)", async () => {
+      await show([{ ...down, offline_since: secondsAgo(30) }]);
+      expect(screen.getByText("offline", { selector: ".chip" })).toHaveAttribute("title", "offline since 22 Oct 09:59"); // 06:59:30 UTC
+      expect(document.querySelector(".offline-banner")).toBeNull();
+    });
+  });
+
+  describe("the row menu", () => {
+    const menuTexts = async () => {
+      await userEvent.click(await screen.findByRole("button", { name: /^Actions for / }));
+      return screen.getAllByRole("menuitem").map((el) => el.textContent);
+    };
+    const all: PermissionId[] = ["sources.test", "diagnostics.run", "sources.edit", "readings.import", "discovery.accept", "diagnostics.view"];
+
+    it("gains Events after every other item, with diagnostics.view, and it opens that source's events", async () => {
+      await show([{ ...down, history: { supports_history: true, state: "idle", answered_through: null, last_success_at: null, next_try_at: null, last_error: null } }], "custom", all);
+      expect(await menuTexts()).toEqual(["Test", "Check connection", "Edit", "Points", "Import file...", "Map tag list...", "Fill older range...", "Events"]);
+      expect(screen.getByRole("menuitem", { name: "Events" })).toHaveAttribute("href", "/events?source=2");
+    });
+
+    it("is the only item for a role that holds diagnostics.view alone, and is absent without it", async () => {
+      await show([down], "custom", ["diagnostics.view"]);
+      expect(await menuTexts()).toEqual(["Events"]);
+      cleanup(); // a second page in the same test
+      await show([down], "custom", ["sources.test"]);
+      expect(await menuTexts()).toEqual(["Test"]);
+    });
+
+    it("is there for a source that is filled by importing files too (it has events of its own)", async () => {
+      await show([{ ...down, polls: false, mapped_points: 0, status: "unknown", offline_since: null }], "custom", all);
+      expect(await menuTexts()).toEqual(["Edit", "Points", "Import file...", "Map tag list...", "Events"]);
     });
   });
 });
