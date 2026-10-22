@@ -141,6 +141,10 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     _all("readings.import", "POST /api/sources/{source_id}/import"),
     _all("storage.view", "GET /api/storage", "GET /api/storage/rows-per-day", "GET /api/settings/storage"),
     _all("storage.edit", "PUT /api/settings/storage", "PUT /api/settings/storage/default"),
+    # Added in W32 (how long system events are kept: the Storage card): after the freeze, so not in auth_matrix_pre_w9a.json; the gate
+    # and isolation tests cover them. The read routes of the events themselves are listed by their own task.
+    _all("storage.view", "GET /api/settings/events"),
+    _all("storage.edit", "PUT /api/settings/events"),
     _all("settings.view", "GET /api/settings/general", "GET /api/settings/sign-in", "GET /api/tls/status"),
     _all("settings.edit", "PUT /api/settings/general"),
     # Added in W9b: the sign-in protection left settings.edit. The built-in roles are unaffected (Admin holds every id).
