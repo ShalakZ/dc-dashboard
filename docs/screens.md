@@ -164,7 +164,7 @@ lacks says "No access".
   `source.tested`, `source.test_all`) also says how it ended: in the friendly view a small square tag after the sentence (`passed`,
   `failed` or `running`; none once the outcome is no longer kept), and in the drawer an **Outcome** row, always the last one, with a
   plain sentence ("The connection check failed at "Session"."; a failed test says why in plain words from its failure code, "The test
-  failed. Could not connect to the server."; for Test all, "3 passed, 1 failed"). With `diagnostics.view` the
+  failed. Could not connect to the server."; for Test all, "3 passed, 1 failed"). With `diagnostics.view` and `sources.view` (what the System events page needs) the
   row also has **Open in System events**, which opens the event that ended the job. The outcome is looked up when the entry is shown: it
   is not written into the audit row and not in the CSV, and a drawer showing "Still running." asks again every 5 seconds until the job ends.
 - **System events** (admin): needs `diagnostics.view` and `sources.view` (the first opens its routes, the second is needed because each
