@@ -9,6 +9,7 @@ from typing import Any
 import asyncpg
 
 from dcdash.collector.browse import browse_source, connector_for
+from dcdash.collector.identity import remember_safely
 from dcdash.collector.scan import run_scan
 from dcdash.collector.scheduler import mark_source
 from dcdash.connectors.base import ConnectorFactory, create_connector
@@ -39,8 +40,28 @@ _CLAIM = """
 # A handler gets the pool, the job's params, the connector factory, the job's id and the `known` values of its source (what must
 # not reach any stored text); it returns the job's result.
 CHECK_POINT_LIMIT = 200  # mapped addresses a connection check reads
+IDENTITY_SECONDS = 15.0  # the most Test or the check waits for a server to say who it is, after it has answered
 CLOCK_SKEW_JOURNAL_SECONDS = 60
 HIDDEN_VALUES_UNAVAILABLE = "the job was not run: the values to hide could not be read from the database"
+
+
+async def _learn_identity(pool: asyncpg.Pool, source_id: int, connector: Any) -> None:
+    """After a decisive success of Test or the connection check: ask the server who it is (read-only) and remember the answer.
+
+    Called while the connector is still open, never from the poll loop. It must not fail the job, so nothing escapes: a connector
+    that cannot say (no `identity`, a failure, nothing to report) just learns nothing. The config the server was asked through is
+    handed on, and `remember` writes only if the source still has that address.
+    """
+    try:
+        ask = getattr(connector, "identity", None)
+        async with asyncio.timeout(IDENTITY_SECONDS):
+            seen = await ask() if ask is not None else None
+        if seen:
+            config = connector.config
+            observed = config.model_dump(mode="json") if hasattr(config, "model_dump") else dict(config)
+            await remember_safely(pool, source_id, seen, expected_config=observed)
+    except Exception:  # noqa: BLE001 - see the docstring
+        log.warning("could not learn the identity of source %s", source_id, exc_info=True)
 
 
 async def _test_source(
@@ -50,6 +71,8 @@ async def _test_source(
     connector = await connector_for(pool, source_id, factory)
     try:
         check = await connector.test()
+        if check.ok:
+            await _learn_identity(pool, source_id, connector)
     finally:
         await connector.close()
     # A source that is never polled (`file`) keeps its status: "offline" or "online" would say something about a connection it does not have.
@@ -70,6 +93,17 @@ async def _scan(
 ) -> dict[str, Any]:
     await run_scan(pool, params["scan_id"], factory)
     return {"scan_id": params["scan_id"]}
+
+
+def _decisive_step(result: CheckResult) -> Any:
+    """The step that says whether the source works: the `session` step (the `test` step of a connector without more), or, when
+    that was skipped, the first step that failed; None when there is none."""
+    decisive = result.step("session") or result.step("test")
+    if decisive is not None and decisive.ok is None:
+        # The session was skipped because a step before it failed (dns, tcp, endpoints, certificates): the source cannot be reached,
+        # and the first failed step says why. A failed diagnostic step while the session RAN decides nothing (handled above).
+        decisive = next((step for step in result.steps if step.ok is False), None)
+    return decisive
 
 
 async def _check_connection(
@@ -102,14 +136,12 @@ async def _check_connection(
 
     try:
         result = await connector.check(points, publish)
+        result.source_id = source_id
+        decisive = _decisive_step(result)
+        if decisive is not None and decisive.ok is True:
+            await _learn_identity(pool, source_id, connector)  # still open: the HTTP simulator's client is gone after close()
     finally:
         await connector.close()
-    result.source_id = source_id
-    decisive = result.step("session") or result.step("test")
-    if decisive is not None and decisive.ok is None:
-        # The session was skipped because a step before it failed (dns, tcp, endpoints, certificates): the source cannot be reached,
-        # and the first failed step says why. A failed diagnostic step while the session RAN decides nothing (handled above).
-        decisive = next((step for step in result.steps if step.ok is False), None)
     if decisive is not None and decisive.ok is not None and getattr(connector, "polls", True):  # as in _test_source
         error = decisive.error or {}
         reason = error.get("message") or error.get("class") or "connection check failed"

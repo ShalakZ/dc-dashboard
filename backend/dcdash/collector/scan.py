@@ -11,6 +11,7 @@ from typing import Any
 import asyncpg
 
 from dcdash.collector.browse import browse_source
+from dcdash.collector.identity import DIFFERENT, clean_identity, remember_safely
 from dcdash.collector.scheduler import mark_source
 from dcdash.collector.sweep import sweep
 from dcdash.connectors.base import Claim, Connector, ConnectorError, ConnectorFactory, connector_types, create_connector
@@ -32,6 +33,7 @@ _quiet_depth = 0
 _saved_levels: dict[str, int] = {}
 
 SourceKey = tuple[str, str, int, str]  # (connector type, resolved host, port, qualifier)
+DIFFERENT_SERVER_DETAIL = "a different server answers here"
 
 
 @dataclass
@@ -199,14 +201,17 @@ async def _probe_stage(
 
 
 async def _insert_source(pool: asyncpg.Pool, claim: Claim) -> int:
-    """Create a disabled, discovered source; `sources.name` is unique, so a clashing label gets a number."""
+    """Create a disabled, discovered source; `sources.name` is unique, so a clashing label gets a number.
+
+    The identity the probe found (the server's own name for itself) is stored with the source; NULL when it found none."""
+    identity = clean_identity(claim.identity) or None
     attempt = 1
     while True:
         name = claim.label if attempt == 1 else f"{claim.label} ({attempt})"
         source_id = await pool.fetchval(
-            "INSERT INTO sources (name, connector_type, config, enabled, origin) "
-            "VALUES ($1, $2, $3, false, 'discovered') ON CONFLICT (name) DO NOTHING RETURNING id",
-            name, claim.connector_type, claim.config,
+            "INSERT INTO sources (name, connector_type, config, enabled, origin, identity) "
+            "VALUES ($1, $2, $3, false, 'discovered', $4) ON CONFLICT (name) DO NOTHING RETURNING id",
+            name, claim.connector_type, claim.config, identity,
         )
         if source_id is not None:
             return source_id
@@ -216,39 +221,49 @@ async def _insert_source(pool: asyncpg.Pool, claim: Claim) -> int:
 async def _adopt(
     pool: asyncpg.Pool, endpoints: list[tuple[str, int, Claim | None]], types: dict[str, type[Connector]]
 ) -> tuple[list[_Finding], list[int]]:
-    """One finding per open endpoint, plus the discovered sources to browse (each once, in order)."""
+    """One finding per open endpoint, plus the discovered sources to browse (each once, in order).
+
+    A claim that meets an existing source (hand-added included) hands the identity it found to `remember_safely`. When another
+    server than the remembered one answers at a DISCOVERED source's address, that source is not browsed in this scan (its points
+    would be refreshed from the wrong server) and its finding says so; the source itself is not touched beyond the note."""
     rows = await pool.fetch("SELECT id, connector_type, config, origin FROM sources ORDER BY id")
     keys = await asyncio.gather(*(_source_key(types, row["connector_type"], row["config"]) for row in rows))
-    # key -> (source id, origin). The oldest source wins, except that a hand-added source beats a discovered one at the same
+    # key -> (source id, origin, config). The oldest source wins, except that a hand-added source beats a discovered one at the same
     # endpoint whichever is older: the admin added it on purpose, so a scan reports it as "existing source" and no longer
     # browses the discovered duplicate (which keeps its points and stays on Discovery until it is cleared).
-    index: dict[SourceKey, tuple[int, str]] = {}
+    index: dict[SourceKey, tuple[int, str, dict[str, Any]]] = {}
     for row, key in zip(rows, keys):
         if key is None:
             continue
         held = index.get(key)
         if held is None or (held[1] == "discovered" and row["origin"] == "manual"):
-            index[key] = (row["id"], row["origin"])
+            index[key] = (row["id"], row["origin"], row["config"])
     findings: list[_Finding] = []
     to_browse: dict[int, None] = {}
+    held_back: set[int] = set()  # discovered sources another server answers for
     for host, port, claim in endpoints:
         if claim is None:
             findings.append(_Finding(host, port))
             continue
         key = await _source_key(types, claim.connector_type, claim.config)
+        remembered = None
         if key is not None and key in index:
-            source_id, origin = index[key]  # a match is reused untouched
+            source_id, origin, config = index[key]  # a match is reused untouched, but it learns (or compares) who its server is
+            remembered = await remember_safely(pool, source_id, claim.identity, expected_config=config)
         else:
             source_id, origin = await _insert_source(pool, claim), "discovered"
             if key is not None:
-                index[key] = (source_id, origin)
+                index[key] = (source_id, origin, claim.config)
         finding = _Finding(host, port, "claimed", "", source_id, claim.connector_type)
-        if origin == "discovered":
-            to_browse[source_id] = None  # filled in once browsed; includes sources from earlier scans
-        else:
+        if origin != "discovered":
             finding.detail = "existing source"  # hand-added: never touched
+        elif remembered == DIFFERENT:
+            held_back.add(source_id)
+            finding.detail = DIFFERENT_SERVER_DETAIL
+        else:
+            to_browse[source_id] = None  # filled in once browsed; includes sources from earlier scans
         findings.append(finding)
-    return findings, list(to_browse)
+    return findings, [source_id for source_id in to_browse if source_id not in held_back]
 
 
 async def _browse_one(pool: asyncpg.Pool, source_id: int, factory: ConnectorFactory) -> _BrowseResult:
