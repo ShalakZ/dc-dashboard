@@ -49,7 +49,7 @@ those, the page or the control shows nothing. The server does not enforce these 
 | Users | `users.view` | See users | see | Open the Users tab of Users & Roles. | |
 | | `users.edit` | Change users | change | Create, edit, deactivate and delete accounts; reset passwords; lift sign-in blocks. | `users.view` |
 | Roles | `roles.manage` | Manage roles | risky | Create, edit and delete roles. Only the built-in Admin role holds it. | |
-| Diagnostics | `diagnostics.view` | See diagnostics | see | Open the Diagnostics page and build a report, which includes settings, retention, the audit tail and each source's security settings. | `sources.view` |
+| Diagnostics | `diagnostics.view` | See diagnostics | see | Open the Diagnostics page and build a report, which includes settings, retention, the audit tail and each source's security settings. It also opens the System events page, the system's own journal: its events, their CSV and, for a check or test someone started, who started it (only with `audit.view` as well). The Roles tab's own description of this permission still names only the report. | `sources.view` |
 | | `diagnostics.run` | Run the connection check | change | Run the step-by-step connection check of a source. | `sources.view` |
 
 `readings.import` lets a person write readings into any source from a file and save the import profiles. The report of its dry run can show
@@ -133,10 +133,14 @@ What the three roles mean for dashboards, billing and tariffs is summed up in [D
   needs `roles.manage`, which no custom role has.
 - **Changes to yourself are refused.** Changing your own role is refused (409), and so is deactivating or deleting yourself; the last
   active Admin can never be removed (409).
-- **Two pages need more than their own permission.** The Diagnostics page needs `diagnostics.view` and `sources.view`, and the
-  Tariffs page needs `tariffs.view` and `assets.view` (it lists the assets its rates belong to); `tariffs.edit` turns its forms on. A role
-  with only `diagnostics.view` gets "No access" on the Diagnostics page, and one with only `tariffs.view` gets it on Tariffs. The Roles tab
-  says so in words under the role's ticks ("... also needs ...") before you save.
+- **Three pages need more than their own permission.** The Diagnostics page and the System events page need `diagnostics.view` and
+  `sources.view` (the second because each event names its source), and the Tariffs page needs `tariffs.view` and `assets.view` (it lists the
+  assets its rates belong to); `tariffs.edit` turns its forms on. A role with only `diagnostics.view` gets "No access" on the Diagnostics
+  and System events pages, and one with only `tariffs.view` gets it on Tariffs. The Roles tab says so in words under the role's ticks
+  ("... also needs ...") before you save. Around it, the notice on the Sources page about a source that has been offline for
+  more than 2 minutes needs only `sources.view` (so an Operator, who has no `diagnostics.view`, sees it), while its **See its events** link
+  and the **Events** item of a source's row menu need both permissions; and `storage.view` and `storage.edit` cover the Storage card that
+  shows and changes how long system events are kept.
 - **A role that accounts hold cannot be deleted** (409, with the number of accounts). Duplicating Admin gives a role with every
   permission except `roles.manage`.
 - **There is no per-site or per-asset scoping yet.** A permission applies to the whole site: `assets.view` shows every asset.

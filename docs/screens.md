@@ -66,10 +66,16 @@ lacks says "No access".
 ## Operate
 
 - **Sources** (operators and admins): needs `sources.view`. The data sources with their status, last error and the age of their
-  newest reading, and a notice when the collector has gone quiet (see [Health](operating.md#health)). **Test** and **Test all**
+  newest reading, and a notice when the collector has gone quiet (see [Health](operating.md#health)). A second notice above the table
+  names the sources that have been offline for more than 2 minutes (only enabled sources with a mapped point; at most three names, then
+  "and 2 more"): for how long and since when, and the last error, or "has not answered since it was added" for a source that never
+  answered, with **See its events** for a person who also has `diagnostics.view`. It needs only `sources.view`; it is a plain notice, not
+  an alert, so a screen reader does not read it out again at every refresh. Resting the pointer on an offline source's Status chip says
+  `offline since 18 Oct 07:52`. **Test** and **Test all**
   need `sources.test`; adding, editing and deleting sources needs `sources.edit`. A row's menu also has **Import file...**
   (`readings.import`), **Map tag list...** (`discovery.accept`) and **Fill older range...** (`sources.edit`, and only for a source whose
-  connector keeps history); each shows only to a person who holds its permission. Under a source's name a line gives the state of its history
+  connector keeps history); each shows only to a person who holds its permission. The last item, **Events** (`diagnostics.view`), opens
+  the System events page for that source. Under a source's name a line gives the state of its history
   fill ("History: up to date, last fill 3 min ago"); a source of type `file` is never polled, so its status reads "filled by file import",
   its line "Filled by importing files", and its menu has no **Test** or **Check connection**. **Import file...** opens a dialog that
   asks for a file and a saved or new profile; **Check file** shows the counts in place and writes nothing, and only then does
@@ -136,7 +142,8 @@ lacks says "No access".
   currency, the site default rate and per-asset rates, each with the date it is effective from. Give a new rate the date of the
   day it should start: a rate applies to whole local days. How cost is worked out from the rates, and what a move in the tree
   does to it, is in [Dashboards and billing](dashboards-and-billing.md).
-- **Storage** (admin): needs `storage.view`; changes need `storage.edit`. See [Storage](storage.md).
+- **Storage** (admin): needs `storage.view`; changes need `storage.edit`. See [Storage](storage.md). Its card **System events and the
+  audit log** says how long system events are kept and, with `storage.edit`, changes it (**Change...**).
 - **Displays** (admin): needs `displays.manage` and `dashboards.view`. Playlists (an ordered list of dashboards, each with an optional
   focus asset and 10 to 3600 seconds on screen) and displays, the screens that show one playlist from a secret link, with no sign-in.
   **New display** shows the link once, with **Copy link**. A screen's row menu has **Rename**, **Change playlist** and **Revoke**
@@ -153,7 +160,31 @@ lacks says "No access".
   last 24 hours has **Undo this tag list** in its drawer for a person with `discovery.accept`; the server refuses it, in words, when
   anything the list made has changed since. Excel cuts a CSV cell at 32,767 characters, and a `tags.mapped` row can be longer. What is
   and is not recorded is listed under
-  [Discovery](sources-and-discovery.md#discovery).
+  [Discovery](sources-and-discovery.md#discovery). The entry of a started connection check, test or Test all (`source.checked`,
+  `source.tested`, `source.test_all`) also says how it ended: in the friendly view a small square tag after the sentence (`passed`,
+  `failed` or `running`; none once the outcome is no longer kept), and in the drawer an **Outcome** row, always the last one, with a
+  plain sentence ("The connection check failed at "secure channel"."; for Test all, "3 passed, 1 failed"). With `diagnostics.view` the
+  row also has **Open in System events**, which opens the event that ended the job. The outcome is looked up when the entry is shown: it
+  is not written into the audit row and not in the CSV, and a drawer showing "Still running." asks again every 5 seconds until the job ends.
+- **System events** (admin): needs `diagnostics.view` and `sources.view` (the first opens its routes, the second is needed because each
+  event names its source). What the system did by itself: sources going offline and coming back, connection checks, imports, history
+  fills and errors. The audit log records who did what; System events records what the system did, and each links to the other where one
+  caused the other (the **Open in System events** of an audit entry, and **Open the audit entry** in an event's drawer, for a person with
+  `audit.view`, on the event that ended a check or a test someone started). A source that is down or reading badly is **one row that
+  counts**, not a row for every failed read: it stays open ("ongoing") with its count and how long it has lasted, and when the source
+  answers again it is closed and one recovery row says how long it lasted ("back online after 4 d 2 h"). The collector's own
+  `scan.finished` entries (a scan ended) stay in the Audit log, where they were always written. On top, four tiles: **Open problems**
+  (red above zero), **Warnings, last 24 h**, **Errors, last 24 h** and **Kept** (how many events and the oldest); under them **Happening
+  now** lists the open problems, the first ten (**Show all open problems** shows the rest), one line each (`OPC UA server at 172.20.0.3:4840 is offline since 18 Oct 07:52 (4 d 2 h), 1,204 failed
+  reads. Could not connect: the connection was refused.`). The toolbar filters by source, kind, level (Info, Warning, Error) and a From to
+  To range, has **Open only** and **Export CSV** (at most 20,000 events; a longer range is refused with a sentence); the filters are in the
+  address. **Friendly** shows a sentence per event with a square level tag, its source, and for an incident its count and duration;
+  **Raw** shows the stored kind, code, message and data. A row, its chevron or its time opens the event in a drawer on the right (`/events/ID`) with
+  when it began, last failed and ended (one time for an event that is not an incident), source, kind, code, count, duration, the message, **Copy**, **Show the stored JSON** (closed until
+  you open it) and **Previous** and **Next**; Esc, Close or Back returns to the list as it was. The page refreshes itself every 10 seconds
+  while no To day is set and no drawer is open: counts and closings change in place, and events that are new appear as one button
+  ("3 new events") instead of moving the list. How long events are kept, and the card that changes it, are on Storage (see
+  [Storage](storage.md#how-long-system-events-are-kept)).
 - **Diagnostics** (admin): needs `diagnostics.view` and `sources.view`; the connection check needs `diagnostics.run`. Builds a
   report to paste when a real source fails, and runs a step-by-step connection check of one source. See
   [Field debugging](field-debugging.md).

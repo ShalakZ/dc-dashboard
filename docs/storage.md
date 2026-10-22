@@ -51,6 +51,28 @@ saved values) and, for a confirmed save, `confirmed_loss`.
 
 The hourly rollup is the only permanent copy of the energy data: back it up ([Backup and restore](backup-and-restore.md)).
 
+## How long system events are kept
+
+The card **System events and the audit log** (at the bottom of the Storage page) says how long the system's own events are kept
+([System events](screens.md), the journal of sources going offline and coming back, checks, imports and errors): by default **90 days or
+the newest 100,000 events, whichever is fewer** (before w32 it was a fixed 14 days and 20,000, not a setting), and how many are kept now
+with the day of the oldest ("Kept now: 3,412, the oldest from 24 Jul."). Under it the card says that **the audit log is kept forever**:
+nothing deletes it, so the record of who did what is not part of this limit.
+
+**Change...** (needs `storage.edit`; `storage.view` shows the card) opens a small dialog with the two limits and the range each accepts:
+7 to 400 days, and 10,000 to 1,000,000 events. A value outside the range, or a half-filled form, is refused. The collector applies the
+setting at its next hourly clean-up (if the stored value is missing or broken it uses the defaults, so the clean-up always has a rule).
+
+**Shortening asks first.** Saving a shorter time or a lower number first asks the server what it would delete: when events would go, the
+dialog says "About N events will be deleted within the hour" and the button becomes **Confirm and save**; the events themselves are
+deleted by the next hourly clean-up, not by the save. N counts the events the new limits delete that the old ones would not, each once even
+if both limits reach it, and leaves out open problems. Lengthening needs no confirmation. The audit row `events.retention_changed`
+records the values before and after and, for a confirmed save, how many events were about to go.
+
+**What is never deleted early.** A problem that is still open (a source that is down or reading badly and has not answered again) is never
+deleted, by age or by count, however old it is, because it is the one row that says the source is still down. A closed one is kept until
+its *closing* is older than the limit, so a long outage that has just ended is not removed at the next clean-up.
+
 ## Filling older gaps
 
 When a source keeps its own history, the platform can fill the holes an outage leaves

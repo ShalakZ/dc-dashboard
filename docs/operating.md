@@ -52,8 +52,10 @@ from the last answer. After a restore the old heartbeat reads as "silent" until 
 
 ## Housekeeping
 
-Every hour the collector deletes expired sessions, finished jobs older than 7 days, and diagnostic journal events older than
-14 days or beyond the newest 20 000 (`backend/dcdash/collector/housekeeping.py`). The collector runs at most 4 jobs (connection
+Every hour the collector deletes expired sessions, finished jobs older than 7 days, and diagnostic journal events (the System events
+page) older than the Storage page's limit or beyond the newest rows it allows, by default 90 days or the newest 100 000
+(`backend/dcdash/collector/housekeeping.py`; [Storage](storage.md#how-long-system-events-are-kept)). A problem that is still open is never
+deleted, and a closed one is kept until its closing is older than the limit. The collector runs at most 4 jobs (connection
 tests, browses, checks) at once, so "Test all" tests at most 4 sources at a time and queues the rest.
 
 ## The figures service
