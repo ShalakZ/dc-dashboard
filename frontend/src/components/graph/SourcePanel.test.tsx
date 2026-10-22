@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useGraph } from "../../api/queries";
 import type { GraphSource } from "../../api/types";
@@ -96,6 +96,80 @@ describe("SourcePanel", () => {
       open(source({ identity: null }), true);
       expect(within(panel()).queryByText(/^Server:/)).not.toBeInTheDocument();
       expect(within(panel()).queryByText(/^certificate/)).not.toBeInTheDocument();
+    });
+  });
+
+  // (w33) A new source that looks like an old one that stopped answering, two such old ones, and another server answering at the address.
+  describe("a move offer, two candidates and a different server (w33)", () => {
+    const OLD = "OPC UA server at 172.20.0.3:4840";
+    const offer = {
+      kind: "offer" as const, from_source_id: 2, from_name: OLD, from_endpoint: "opc.tcp://172.20.0.3:4840/dcdash/", from_since: "2026-10-18T04:52:51Z", mappings: 12, assets: 3,
+      match: { kind: "same_server" as const, evidence: "uri" as const, value: "urn:dcdash:simulator:dev", addresses: 12, missing_addresses: 0, needs_tick: false },
+    };
+    const SENTENCE = `This looks like ${OLD} (12 mappings on 3 assets), which stopped answering at 172.20.0.3:4840`;
+    const different = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: true };
+    const panel = () => screen.getByRole("complementary", { name: "Source details" });
+    const show = (s: GraphSource, canEdit: boolean, onMoveSource?: () => void) => {
+      mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+      return renderWithProviders(
+        <><GraphProbe /><SourcePanel source={s} canEdit={canEdit} seen="Seen in scan #8, 2 min ago" onMoveSource={onMoveSource} onClose={() => {}} /></>,
+        { route: "/discovery", path: "/discovery" },
+      );
+    };
+
+    it("says the whole sentence of an offer, with the old address and the mappings, and has a Move... button that calls the page", async () => {
+      const onMoveSource = vi.fn();
+      show(source({ move_candidate: offer }), true, onMoveSource);
+      expect(within(panel()).getByText(SENTENCE)).toHaveClass("muted", "gsrc-fact");
+      const button = within(panel()).getByRole("button", { name: `Move ${OLD} to this address...` });
+      expect(button).toHaveTextContent("Move...");
+      expect(button).toHaveAttribute("type", "button");
+      await userEvent.click(button);
+      expect(onMoveSource).toHaveBeenCalledTimes(1);
+    });
+
+    it("without sources.edit the sentence stays and there is no Move... button", () => {
+      show(source({ move_candidate: offer }), false, vi.fn());
+      expect(within(panel()).getByText(SENTENCE)).toBeInTheDocument();
+      expect(within(panel()).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+    });
+
+    it("without the page's callback there is no button either, even for a person who may edit", () => {
+      show(source({ move_candidate: offer }), true);
+      expect(within(panel()).getByText(SENTENCE)).toBeInTheDocument();
+      expect(within(panel()).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+    });
+
+    it("says the mapping and asset counts in the singular", () => {
+      show(source({ move_candidate: { ...offer, mappings: 1, assets: 1 } }), true, vi.fn());
+      expect(within(panel()).getByText(`This looks like ${OLD} (1 mapping on 1 asset), which stopped answering at 172.20.0.3:4840`)).toBeInTheDocument();
+    });
+
+    it("two candidates: the sentence, and no button for anyone", () => {
+      show(source({ move_candidate: { kind: "two", count: 2 } }), true, vi.fn());
+      expect(within(panel()).getByText("Two servers could be this one; edit the address by hand")).toHaveClass("muted", "gsrc-fact");
+      expect(within(panel()).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+      expect(within(panel()).queryByText(/This looks like/)).not.toBeInTheDocument();
+    });
+
+    it("a different server: the warning in the warning ink (not muted), for a source added by hand too", () => {
+      show(source({ identity: different }), false);
+      expect(within(panel()).getByText("A different server answers at this address")).toHaveClass("warning", "gsrc-fact");
+      expect(within(panel()).getByText("A different server answers at this address")).not.toHaveClass("muted");
+      cleanup();
+      show(source({ origin: "manual", identity: different }), false);
+      expect(within(panel()).getByText("A different server answers at this address")).toBeInTheDocument();
+    });
+
+    it("says none of it for a source with no candidate and an identity that is the same server", () => {
+      show(source({ move_candidate: null, identity: { ...different, different: false } }), true, vi.fn());
+      expect(within(panel()).queryByText(/This looks like|Two servers|different server/)).not.toBeInTheDocument();
+      expect(within(panel()).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+    });
+
+    it("a Docker name hint is left to the move dialog: the panel says nothing about it", () => {
+      show(source({ name_hint: "simulator" }), true, vi.fn());
+      expect(within(panel()).queryByText(/container/)).not.toBeInTheDocument();
     });
   });
 

@@ -6,6 +6,7 @@ import { AddConnectionLine } from "../components/graph/nodes";
 import { resetUndoForTests, type MappedInfo } from "../hooks/useMappingActions";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
+import { moveDone, movePreview, moveUndone } from "../test/moveFixtures";
 import { useScans, useSources } from "../api/queries";
 import { renderWithProviders } from "../test/render";
 import { spyToasts } from "../test/toasts";
@@ -4890,6 +4891,237 @@ describe("DiscoveryPage not seen (w33)", () => {
       };
       await refreshedAfter({});
       await refreshedAfter({ "POST /api/discovery/sources/remove": { status: 409, body: { detail: "A scan is running." } } });
+    });
+  });
+});
+
+// ---- w33: a new source that looks like an old one that stopped answering: the card says so, and Move... opens the move dialog ----
+describe("DiscoveryPage the move offer, two candidates and a different server (w33)", () => {
+  const OLD = "OPC UA server at 172.20.0.3:4840";
+  const NEW = "OPC UA server at 172.20.0.5:4840";
+  const SEEN = "Seen in scan #8, ";
+  const offer = {
+    kind: "offer" as const, from_source_id: 2, from_name: OLD, from_endpoint: "opc.tcp://172.20.0.3:4840/dcdash/", from_since: "2026-10-18T04:52:51Z", mappings: 12, assets: 3,
+    match: { kind: "same_server" as const, evidence: "uri" as const, value: "urn:dcdash:simulator:dev", addresses: 12, missing_addresses: 0, needs_tick: false },
+  };
+  const SENTENCE = `This looks like ${OLD} (12 mappings on 3 assets), which stopped answering at 172.20.0.3:4840`;
+  const BUTTON = `Move ${OLD} to ${NEW}...`;
+  const identity = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: false };
+  const fresh = { last_scan: { scan_id: 8, at: minutesAgo(2) }, not_seen: null };
+  /** The old source (mapped, scan #5 was the last to find it) and the new one the scan found at the new address, which looks like it. */
+  const oldSource = () => ({ ...mappedSource(2, OLD), last_scan: { scan_id: 5, at: minutesAgo(5760) }, status: "offline" });
+  const newSource = (over: Partial<GraphSource> = {}) => srcOf(3, NEW, { ...fresh, move_candidate: offer, ...over });
+  const dryRuns: { url: string; body: unknown }[] = [];
+  const realRuns: { url: string; body: unknown }[] = [];
+  const undoRuns: string[] = [];
+  beforeEach(() => { dryRuns.length = 0; realRuns.length = 0; undoRuns.length = 0; });
+
+  /** The page with the move routes: the real run removes the new source from the graph, as the server does. */
+  function show(role: string, sources: GraphSource[]) {
+    const ctx = {} as { state: { sources: GraphSource[] } };
+    const world = serverWith(role, sources, {}, {
+      "POST /api/sources/2/move": ({ url, body }: { url: string; body: unknown }) => {
+        if (url.includes("dry_run=1")) { dryRuns.push({ url, body }); return { body: movePreview({ target: { id: 3, name: NEW, points: 40 } }) }; }
+        realRuns.push({ url, body });
+        ctx.state.sources = ctx.state.sources.filter((s) => s.id !== 3);
+        return { body: moveDone() };
+      },
+      "POST /api/sources/moves/31/undo": ({ url }: { url: string }) => { undoRuns.push(url); return { body: moveUndone() }; },
+    });
+    ctx.state = world.state;
+    return { ...world, ...openToasts() };
+  }
+  const moveDialog = () => screen.getByRole("dialog", { name: `Move to new address: ${OLD}` });
+  const cardMove = () => within(node("src:3")).queryByRole("button", { name: BUTTON });
+
+  describe("the card", () => {
+    it("says Looks like <old name> on its last line, the whole sentence in the title, and has a Move... button beside Details (one 20px row, six lines)", async () => {
+      show("admin", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      const line = within(node("src:3")).getByText(`Looks like ${OLD}`);
+      expect(line).toHaveClass("gsrc-seen", "muted");
+      expect(line.getAttribute("title")).toMatch(new RegExp(`^${SENTENCE.replace(/[.()]/g, "\\$&")}\\. ${SEEN}`));
+      const row = within(node("src:3")).getByRole("button", { name: `Details for ${NEW}` }).parentElement!;
+      expect(row).toHaveClass("gsrc-actions");
+      expect(within(row).getByRole("button", { name: BUTTON })).toHaveTextContent("Move...");
+      expect(Array.from(node("src:3").querySelectorAll(".gsrc-body > *")).map((el) => el.className.split(" ")[0])).toEqual(
+        ["gsrc-head", "gsrc-sub", "gsrc-status", "gsrc-mapped", "gsrc-actions", "gsrc-seen"],
+      );
+    });
+
+    it("keeps the sentence but draws no Move... button for a person without sources.edit", async () => {
+      show("operator", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      expect(within(node("src:3")).getByText(`Looks like ${OLD}`)).toBeInTheDocument();
+      expect(cardMove()).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+    });
+
+    it("the old source's own card is untouched: no sentence about a move, no button", async () => {
+      show("admin", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      expect(within(node("src:2")).queryByText(/Looks like/)).not.toBeInTheDocument();
+      expect(within(node("src:2")).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+      expect(within(node("src:2")).getByText(/^Seen in scan #5, /)).toBeInTheDocument();
+    });
+
+    it("two candidates: the sentence on the card, no button for anyone", async () => {
+      show("admin", [oldSource(), newSource({ move_candidate: { kind: "two", count: 2 } })]);
+      await screen.findByText(NEW);
+      expect(within(node("src:3")).getByText("Two servers could be this one; edit the address by hand")).toHaveClass("gsrc-seen");
+      expect(screen.queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+    });
+
+    it("a different server: the warning on the card in the warning ink, for a source added by hand too", async () => {
+      show("admin", [newSource({ move_candidate: null, identity: { ...identity, different: true } }), srcOf(4, "Bench", { origin: "manual", identity: { ...identity, different: true } })]);
+      await screen.findByText(NEW);
+      for (const id of ["src:3", "src:4"]) {
+        const line = within(node(id)).getByText("A different server answers at this address");
+        expect(line).toHaveClass("gsrc-seen", "gsrc-warn", "warning");
+        expect(line).not.toHaveClass("muted");
+      }
+    });
+
+    it("a mapped source the scan did not find still says what to do on Sources, and has no Move... button here (the offer is on the new source)", async () => {
+      const miss = { scan_id: 8, at: minutesAgo(2), last_seen_scan_id: 5, last_seen_at: minutesAgo(5760) };
+      show("admin", [{ ...oldSource(), not_seen: miss }, newSource()]);
+      await screen.findByText(NEW);
+      expect(within(node("src:2")).getByText("Mapped: move it or delete it on Sources")).toBeInTheDocument();
+      expect(within(node("src:2")).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+      expect(screen.getAllByText("Mapped: move it or delete it on Sources")).toHaveLength(1); // not said twice
+    });
+  });
+
+  describe("the panel", () => {
+    it("says the whole sentence and has a Move... button of its own for a person with sources.edit", async () => {
+      show("admin", [oldSource(), newSource()]);
+      await userEvent.click(await screen.findByRole("button", { name: `Details for ${NEW}` }));
+      const panel = await screen.findByRole("complementary", { name: "Source details" });
+      expect(within(panel).getByText(SENTENCE)).toBeInTheDocument();
+      expect(within(panel).getByRole("button", { name: `Move ${OLD} to this address...` })).toBeInTheDocument();
+    });
+
+    it("keeps the sentence and draws no button without sources.edit; two candidates and a different server are said in full", async () => {
+      show("operator", [oldSource(), newSource()]);
+      await userEvent.click(await screen.findByRole("button", { name: `Details for ${NEW}` }));
+      const panel = await screen.findByRole("complementary", { name: "Source details" });
+      expect(within(panel).getByText(SENTENCE)).toBeInTheDocument();
+      expect(within(panel).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+    });
+
+    it("two candidates and a different server are said in the panel", async () => {
+      show("admin", [newSource({ move_candidate: { kind: "two", count: 3 }, identity: { ...identity, different: true } })]);
+      await userEvent.click(await screen.findByRole("button", { name: `Details for ${NEW}` }));
+      const panel = await screen.findByRole("complementary", { name: "Source details" });
+      expect(within(panel).getByText("Two servers could be this one; edit the address by hand")).toBeInTheDocument();
+      expect(within(panel).getByText("A different server answers at this address")).toHaveClass("warning");
+      expect(within(panel).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("moving", () => {
+    it("opens the dialog for the old source and this one, asks for the preview, and gives the focus back to the card's button on Cancel", async () => {
+      show("admin", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      const button = within(node("src:3")).getByRole("button", { name: BUTTON });
+      await userEvent.click(button);
+      expect(await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/)).toBeInTheDocument();
+      expect(moveDialog()).toBeInTheDocument();
+      expect(dryRuns).toEqual([{ url: "/api/sources/2/move?dry_run=1", body: { to: 3, address: "as_found" } }]);
+      await userEvent.click(within(moveDialog()).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(button).toHaveFocus();
+      expect(realRuns).toHaveLength(0);
+    });
+
+    it("Escape closes it and nothing is moved", async () => {
+      const { toasts } = show("admin", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      await userEvent.click(within(node("src:3")).getByRole("button", { name: BUTTON }));
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      await userEvent.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(realRuns).toHaveLength(0);
+      expect(toasts.calls).toEqual([]);
+    });
+
+    it("the panel's Move... opens the same dialog, and Cancel puts the focus back on that button", async () => {
+      show("admin", [oldSource(), newSource()]);
+      await userEvent.click(await screen.findByRole("button", { name: `Details for ${NEW}` }));
+      const panel = await screen.findByRole("complementary", { name: "Source details" });
+      const button = within(panel).getByRole("button", { name: `Move ${OLD} to this address...` });
+      await userEvent.click(button);
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      expect(dryRuns).toEqual([{ url: "/api/sources/2/move?dry_run=1", body: { to: 3, address: "as_found" } }]);
+      await userEvent.click(within(moveDialog()).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(button).toHaveFocus();
+    });
+
+    it("the real run: one toast with an Undo for 10 seconds, the graph is read again and the new source is gone, and the focus lands on the old source's card", async () => {
+      const { calls, toasts } = show("admin", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      await userEvent.click(within(node("src:3")).getByRole("button", { name: BUTTON }));
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      const reads = () => calls.filter((c) => c.method === "GET" && c.path === "/api/discovery/graph").length;
+      const before = reads();
+      await userEvent.click(within(moveDialog()).getByRole("button", { name: "Move 12 mappings" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(realRuns).toHaveLength(1);
+      expect(realRuns[0].url).toBe("/api/sources/2/move?dry_run=0");
+      expect(toasts.calls).toHaveLength(1); // one toast, not two
+      expect(toasts.calls[0]).toMatchObject({
+        kind: "success", text: `Moved "${NEW}" to 172.20.0.5:4840. 12 mappings kept.`,
+        options: { durationMs: 10_000, action: { label: "Undo" } },
+      });
+      expect(reads()).toBeGreaterThan(before);
+      await waitFor(() => expect(node("src:3")).toBeNull()); // the new source is gone
+      expect(node("src:2")).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole("button", { name: `Details for ${OLD}` })).toHaveFocus());
+    });
+
+    it("the toast's Undo posts to the Undo of that audit entry, and nothing is undone by itself", async () => {
+      const { toasts } = show("admin", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      await userEvent.click(within(node("src:3")).getByRole("button", { name: BUTTON }));
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      await userEvent.click(within(moveDialog()).getByRole("button", { name: "Move 12 mappings" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      expect(undoRuns).toEqual([]);
+      toasts.calls[0].options!.action!.onAction();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+      expect(undoRuns).toEqual(["/api/sources/moves/31/undo"]);
+      expect(toasts.calls[1]).toMatchObject({ kind: "success" });
+    });
+
+    it("a move done from the panel closes the panel with the new source, and the focus is not lost", async () => {
+      show("admin", [oldSource(), newSource()]);
+      await userEvent.click(await screen.findByRole("button", { name: `Details for ${NEW}` }));
+      const panel = await screen.findByRole("complementary", { name: "Source details" });
+      await userEvent.click(within(panel).getByRole("button", { name: `Move ${OLD} to this address...` }));
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      await userEvent.click(within(moveDialog()).getByRole("button", { name: "Move 12 mappings" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.queryByRole("complementary", { name: "Source details" })).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole("button", { name: `Details for ${OLD}` })).toHaveFocus());
+    });
+
+    it("a refusal (409) keeps the dialog open with the server's sentence, the graph is read again and no toast is shown", async () => {
+      const { calls } = serverWith("admin", [oldSource(), newSource()], {}, {
+        "POST /api/sources/2/move": ({ url }: { url: string }) => (url.includes("dry_run=1")
+          ? { body: movePreview({ target: { id: 3, name: NEW, points: 40 } }) }
+          : { status: 409, body: { detail: "a scan is running; try again when it has finished" } }),
+      });
+      const { toasts } = openToasts();
+      await screen.findByText(NEW);
+      await userEvent.click(within(node("src:3")).getByRole("button", { name: BUTTON }));
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      const reads = () => calls.filter((c) => c.method === "GET" && c.path === "/api/discovery/graph").length;
+      const before = reads();
+      await userEvent.click(within(moveDialog()).getByRole("button", { name: "Move 12 mappings" }));
+      expect(await within(moveDialog()).findByText(/A scan is running; try again when it has finished/)).toBeInTheDocument();
+      expect(reads()).toBeGreaterThan(before);
+      expect(toasts.calls).toEqual([]);
     });
   });
 });

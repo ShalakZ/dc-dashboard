@@ -2,7 +2,7 @@ import { getBezierPath, Handle, Position, type ConnectionLineComponentProps, typ
 import { memo, useMemo, type KeyboardEvent, type MouseEvent, type ReactElement, type ReactNode } from "react";
 import type { GraphSource } from "../../api/types";
 import { Icon, type IconName } from "../Icon";
-import { isNotSeen, seenCard } from "../../lib/graph";
+import { isNotSeen, moveOfferFor, seenCard } from "../../lib/graph";
 import type {
   AssetNodeData, ClusterNodeData, MoreNodeData, NodeActions, PointNodeData, SourceNodeData, UnidentifiedNodeData,
 } from "../../lib/graph";
@@ -160,11 +160,14 @@ function mappedPoints(source: GraphSource): number {
  *   them (decoration); Details when the page gave `onSelect`; the last-seen line when there is one.
  * (w33) A source the newest scan of its range did not find wears `gsrc-not-seen` (a quieter ground and edge, nothing taller), and its last line is the same one line: `Not seen in scan #7
  * (last seen in #5, 4 days ago)`, or, when something is mapped, `Mapped: move it or delete it on Sources` with both sentences in the tooltip (`seenCard`).
+ * (w33) A new source that looks like an old one that stopped answering says so on that same last line (`Looks like <old name>`; the whole sentence in the tooltip) and, for a person who may
+ * edit sources, gets a Move... button beside Details in the same 20px row; two such old sources, or another server answering at the address, replace the seen line in the same way
+ * (the latter in the warning ink, `gsrc-warn`). The card is no taller (`seenCard`).
  * Create assets and Remove are not drawn: they are items of the menu the page opens from the `⋯` button (and from a right click), so `onCreateAssets`, `onRemove` and
  * `groups` stay in the data for the page and are not read here.
  */
 function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
-  const { source, expanded, onToggle, onSelect, onMenu, seen } = data;
+  const { source, expanded, onToggle, onSelect, onMenu, onMoveSource, seen } = data;
   const status = sourceStatus(source);
   const protocol = protocolLabel(source.connector_type);
   const address = sourceAddress(source);
@@ -176,6 +179,8 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
   // (w33) A source the newest scan of its range did not find is drawn quieter (graph-source-card.css); a mapped one swaps its seen line for what to do about it (graph.ts `seenCard`).
   const missing = isNotSeen(source);
   const last = seen ? seenCard(source, seen) : null;
+  // (w33) A new source that looks like an old one: its Move... button stands beside Details (the same 20px row, so the card is no taller), for a person who may edit sources (the page gives the callback).
+  const offer = onMoveSource ? moveOfferFor(source) : null;
   return (
     <div className={missing ? `gnode gnode-source ${source.origin} gsrc-not-seen` : `gnode gnode-source ${source.origin}`}>
       <Handles>
@@ -196,12 +201,15 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
             <div className="gsrc-words">{total > 0 ? `${mapped} of ${total} mapped` : "No points yet"}</div>
             <div className="gsrc-bar" aria-hidden="true"><span className="gsrc-fill" style={{ width: `${share}%` }} /></div>
           </div>
-          {onSelect && (
+          {(onSelect || offer) && (
             <div className="gsrc-actions">
-              <button type="button" className="nodrag gsrc-details" aria-label={`Details for ${source.name}`} onClick={press(() => onSelect(id))}>Details</button>
+              {onSelect && <button type="button" className="nodrag gsrc-details" aria-label={`Details for ${source.name}`} onClick={press(() => onSelect(id))}>Details</button>}
+              {offer && onMoveSource && (
+                <button type="button" className="nodrag gsrc-move" aria-label={`Move ${offer.from_name} to ${source.name}...`} onClick={press(() => onMoveSource(id))}>Move...</button>
+              )}
             </div>
           )}
-          {last && <div className="gsrc-seen muted" title={last.title}>{last.line}</div>}
+          {last && <div className={last.tone === "warn" ? "gsrc-seen gsrc-warn warning" : "gsrc-seen muted"} title={last.title}>{last.line}</div>}
         </div>
       </Handles>
     </div>

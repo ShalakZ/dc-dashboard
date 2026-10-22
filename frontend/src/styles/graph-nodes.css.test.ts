@@ -359,3 +359,41 @@ describe("a source that is not seen (w33, graph-source-card.css)", () => {
     });
   });
 });
+
+// (w33) The card's last line in the warning ink (`A different server answers at this address`, nodes.tsx: the classes `gsrc-seen gsrc-warn warning`, no `muted`): the ink is the existing --warn-ink
+// (app.css `.warning`), so what has to hold is its contrast on the two grounds a card has (--bg, and --surface when the card is also drawn as not seen), in every look and both modes.
+// The Move... button beside Details takes the row's 20px and a 4px gap; the card is no taller (the six lines above still add up to 134).
+describe("the warning line and the Move... button of the source card (w33, graph-source-card.css)", () => {
+  const cardRules = parseRules(stripComments(readFileSync("src/styles/graph-source-card.css", "utf8")));
+  const card = (selector: string) => {
+    const found = cardRules.filter((r) => r.selector === selector && r.at.join(" > ") === "@layer w6");
+    expect(found, `exactly one rule for "${selector}"`).toHaveLength(1);
+    return found[0].body;
+  };
+
+  it("the button row has a 4px gap and keeps its 20px; Move... is 20px high like Details, and nothing here names a colour of its own", () => {
+    expect(card(".gsrc-actions")).toMatch(/(?:^|[;\s])gap:\s*4px/);
+    expect(card(".gsrc-actions")).toMatch(/(?:^|[;\s])height:\s*20px/);
+    expect(card(".gsrc-actions .gsrc-move")).toMatch(/(?:^|[;\s])height:\s*20px/);
+    expect(card(".gsrc-actions .gsrc-move")).not.toMatch(/color|background|opacity|width|margin|padding/);
+  });
+
+  it("the warning line has no rule of its own: it wears app.css's `.warning` (--warn-ink), so no colour is added", () => {
+    expect(cardRules.filter((r) => /gsrc-warn/.test(r.selector))).toEqual([]);
+    const warning = app.filter((r) => r.selector === ".warning" && r.at.join(" > ") === "@layer w6");
+    expect(warning).toHaveLength(1);
+    expect(warning[0].body).toMatch(/color:\s*var\(--warn-ink\)/);
+  });
+
+  describe.each(THEMES.flatMap((t) => (["light", "dark"] as const).map((mode) => ({ id: t.id, mode }))))("$id, $mode", ({ id, mode }) => {
+    it("--warn-ink reads at 4.5:1 on --bg (the card) and on --surface (the card when it is also not seen)", () => {
+      const tokens = cascade(id, mode);
+      for (const ground of ["bg", "surface"]) {
+        const [ink, behind] = [tokens.get("warn-ink"), tokens.get(ground)];
+        expect(ink, "--warn-ink").toMatch(/^#[0-9a-fA-F]{6}$/);
+        expect(behind, `--${ground}`).toMatch(/^#[0-9a-fA-F]{6}$/);
+        expect(contrast(ink!, behind!), `--warn-ink on --${ground} (${id}, ${mode})`).toBeGreaterThanOrEqual(AA);
+      }
+    });
+  });
+});

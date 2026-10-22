@@ -1,9 +1,10 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { GraphModel, RemoveSourcesResult } from "../api/types";
 import {
-  BLOCK_GAP, FAN_DASH_LIMIT, LIVE_EDGE_LIMIT, MAPPED_NOT_SEEN, MAX_LAYOUT_ID, NO_VIEW, PAGE_SIZE, SOURCE_H, UNGROUPED, buildGraph, certificateLine, childNodeIds, descendantNodeIds,
-  initialView, isNotSeen, isRemovable, layoutBatches, moreNodeIds, nodeId, notSeenCount, notSeenSentence, ownPlaces, removableNotSeen, removalDialogText, removalOutcome, seenCard, seenLine,
-  serverLine, shiftedPlaces, sourceIdOfNode, sourceVisible, type GraphView, type OpenState, type XY,
+  BLOCK_GAP, DIFFERENT_SERVER, FAN_DASH_LIMIT, LIVE_EDGE_LIMIT, MAPPED_NOT_SEEN, MAX_LAYOUT_ID, NO_VIEW, PAGE_SIZE, SOURCE_H, UNGROUPED, buildGraph, certificateLine, childNodeIds, descendantNodeIds,
+  initialView, isDifferentServer, isNotSeen, isRemovable, layoutBatches, looksLikeLine, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, notSeenSentence, ownPlaces,
+  removableNotSeen, removalDialogText, removalOutcome, seenCard, seenLine,
+  serverLine, shiftedPlaces, sourceIdOfNode, sourceVisible, twoServers, type GraphView, type OpenState, type XY,
 } from "./graph";
 import { model, point, source } from "../test/graphFixtures";
 
@@ -1525,5 +1526,70 @@ describe("buildGraph with a view (W12b)", () => {
         }
       }
     });
+  });
+});
+
+// ---- w33: a new source that looks like an old one that stopped answering, and a different server at an address ----
+describe("what the card and the panel say about a move offer, two candidates and a different server (w33)", () => {
+  const match = { kind: "same_server" as const, evidence: "uri" as const, value: "urn:dcdash:simulator:dev", addresses: 12, missing_addresses: 0, needs_tick: false };
+  const offer = {
+    kind: "offer" as const, from_source_id: 2, from_name: "OPC UA server at 172.20.0.3:4840", from_endpoint: "opc.tcp://172.20.0.3:4840/dcdash/", from_since: "2026-10-18T04:52:51Z",
+    mappings: 12, assets: 3, match,
+  };
+  const identity = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: false };
+  const SEEN = "Seen in scan #8, 2 min ago";
+  const SENTENCE = "This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets), which stopped answering at 172.20.0.3:4840";
+
+  it("moveOfferFor: the offer of a source, and nothing for two candidates, a null or an absent candidate", () => {
+    expect(moveOfferFor(source(1, { move_candidate: offer }))).toBe(offer);
+    expect(moveOfferFor(source(1, { move_candidate: { kind: "two", count: 2 } }))).toBeNull();
+    expect(moveOfferFor(source(1, { move_candidate: null }))).toBeNull();
+    expect(moveOfferFor(source(1))).toBeNull();
+  });
+
+  it("twoServers and isDifferentServer read the two flags and nothing else", () => {
+    expect(twoServers(source(1, { move_candidate: { kind: "two", count: 3 } }))).toBe(true);
+    expect(twoServers(source(1, { move_candidate: offer }))).toBe(false);
+    expect(twoServers(source(1))).toBe(false);
+    expect(isDifferentServer(source(1, { identity: { ...identity, different: true } }))).toBe(true);
+    expect(isDifferentServer(source(1, { identity: { ...identity, different: false } }))).toBe(false);
+    expect(isDifferentServer(source(1, { identity: null }))).toBe(false);
+    expect(isDifferentServer(source(1))).toBe(false);
+    expect(DIFFERENT_SERVER).toBe("A different server answers at this address");
+  });
+
+  it("looksLikeLine is the short line of the card; looksLikeSentence is the whole sentence, with the old address and the mappings in words", () => {
+    expect(looksLikeLine(offer)).toBe("Looks like OPC UA server at 172.20.0.3:4840");
+    expect(looksLikeSentence(offer)).toBe(SENTENCE);
+    expect(looksLikeSentence({ ...offer, mappings: 1, assets: 1 })).toBe(
+      "This looks like OPC UA server at 172.20.0.3:4840 (1 mapping on 1 asset), which stopped answering at 172.20.0.3:4840");
+    expect(looksLikeSentence({ ...offer, mappings: 1200, assets: 0 })).toBe(
+      "This looks like OPC UA server at 172.20.0.3:4840 (1,200 mappings), which stopped answering at 172.20.0.3:4840"); // en-US thousands; no assets, no "on 0 assets"
+    expect(looksLikeSentence({ ...offer, from_endpoint: "opc.tcp://[::1]:4840" })).toContain("which stopped answering at [::1]:4840");
+  });
+
+  it("seenCard, an offer: the short line, and the tooltip carries the whole sentence and then the seen line", () => {
+    expect(seenCard(source(1, { move_candidate: offer }), SEEN)).toEqual({ line: "Looks like OPC UA server at 172.20.0.3:4840", title: `${SENTENCE}. ${SEEN}` });
+  });
+
+  it("seenCard, two candidates: the sentence, no button's worth of anything else", () => {
+    expect(seenCard(source(1, { move_candidate: { kind: "two", count: 2 } }), SEEN)).toEqual({
+      line: "Two servers could be this one; edit the address by hand", title: `Two servers could be this one; edit the address by hand. ${SEEN}`,
+    });
+  });
+
+  it("seenCard, a different server: the warning line first (any source, added by hand too), with the tone, and the tooltip keeps the offer and the seen line", () => {
+    const different = { ...identity, different: true };
+    expect(seenCard(source(1, { identity: different }), SEEN)).toEqual({ line: DIFFERENT_SERVER, title: `${DIFFERENT_SERVER}. ${SEEN}`, tone: "warn" });
+    expect(seenCard(source(1, { origin: "manual", identity: different }), "Added by hand")).toEqual({ line: DIFFERENT_SERVER, title: `${DIFFERENT_SERVER}. Added by hand`, tone: "warn" });
+    expect(seenCard(source(1, { identity: different, move_candidate: offer }), SEEN)).toEqual({ line: DIFFERENT_SERVER, title: `${DIFFERENT_SERVER}. ${SENTENCE}. ${SEEN}`, tone: "warn" });
+  });
+
+  it("seenCard leaves every other source as it was: the seen line, and the mapped not-seen sentence", () => {
+    expect(seenCard(source(1, { move_candidate: null, identity }), SEEN)).toEqual({ line: SEEN, title: SEEN });
+    expect(seenCard(source(1), SEEN)).toEqual({ line: SEEN, title: SEEN });
+    const miss = { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" };
+    const mapped = point(9, "M kW", { asset_id: 10, mapping_id: 3, mapped_metric: "active_power_kw" });
+    expect(seenCard(source(1, { not_seen: miss, ungrouped: [mapped] }), "Not seen in scan #7")).toEqual({ line: MAPPED_NOT_SEEN, title: `Not seen in scan #7. ${MAPPED_NOT_SEEN}` });
   });
 });

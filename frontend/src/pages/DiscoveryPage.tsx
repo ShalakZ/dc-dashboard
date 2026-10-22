@@ -18,6 +18,7 @@ import { CanvasTools } from "../components/graph/CanvasTools";
 import { GraphBar } from "../components/graph/GraphBar";
 import { GraphContextMenu } from "../components/graph/GraphContextMenu";
 import { GraphMiniMap } from "../components/graph/GraphMiniMap";
+import { MoveSourceDialog } from "../components/MoveSourceDialog";
 import { NewAssetDialog } from "../components/graph/NewAssetDialog";
 import { AddConnectionLine, nodeTypes } from "../components/graph/nodes";
 import { PointValueTip } from "../components/graph/PointValueTip";
@@ -36,12 +37,13 @@ import { useCreateAsset } from "../hooks/useCreateAsset";
 import { useGraphHighlight } from "../hooks/useGraphHighlight";
 import { useGraphNav } from "../hooks/useGraphNav";
 import { useMappingActions, type MappedInfo } from "../hooks/useMappingActions";
+import { useMovedToast } from "../hooks/useMovedToast";
 import { reducedMotion, useReducedMotion } from "../hooks/useReducedMotion";
 import { useValueTip } from "../hooks/useValueTip";
 import { afterPaint } from "../lib/afterPaint";
 import { dropPayload, mappableClusters, multiPointDrop, pickDropTarget, takenMetrics, type DropPayload } from "../lib/drop";
 import {
-  buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isNotSeen, isRemovable, layoutBatches, moreNodeIds, nodeId, notSeenCount, ownPlaces, PAGE_SIZE, pruneShown,
+  buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isNotSeen, isRemovable, layoutBatches, moreNodeIds, moveOfferFor, nodeId, notSeenCount, ownPlaces, PAGE_SIZE, pruneShown,
   removableNotSeen, removalDialogText, removalOutcome, seenLine, shiftedPlaces, sourceIdOfNode, visiblePoints,
   type AssetNodeData, type ClusterNodeData, type Group, type GraphView, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
@@ -129,7 +131,7 @@ const toggled = <T,>(set: ReadonlySet<T>, value: T): Set<T> => {
 
 type Callbacks = {
   onToggle: (id: string) => void; onSelect: (id: string) => void; onMap: (id: string) => void; onNewAsset: (id: string) => void;
-  onCreateAssets: (id: string) => void; onRemove: (id: string) => void;
+  onCreateAssets: (id: string) => void; onRemove: (id: string) => void; onMoveSource: (id: string) => void;
   onMenu: (button: HTMLElement) => void; onUnmap: (id: string) => void; onMove: (id: string) => void; onUnmapSource: (id: string, sourceId: number) => void;
   onAdd: (id: string) => void;
   /** W12b: the `more` node's button, and the fold of an asset's sub-assets (the latter is given to every role). */
@@ -167,7 +169,8 @@ const NEEDS_FORM = ["assets.edit", "assets.view"] as const;
 const NEVER_VALID = () => false;
 
 /** What the page's permissions give the nodes (see `nodeData`). `formWait`: the asset list the New asset form needs is not read yet. */
-interface NodeGates { canAccept: boolean; canRemove: boolean; canEdit: boolean; canForm: boolean; formWait: boolean }
+/** `canMove`: sources.edit, the right to move an old source to the address where a scan found its device (w33): the Move... button of a new source that has an offer. */
+interface NodeGates { canAccept: boolean; canRemove: boolean; canEdit: boolean; canForm: boolean; formWait: boolean; canMove: boolean }
 
 /** What the page works out about a source once per graph, so a toggle or a drag does not do it again for every node. */
 interface SourceFacts { seen: string; groups: number; removable: boolean }
@@ -189,12 +192,14 @@ interface SourceFacts { seen: string; groups: number; removable: boolean }
  * For a role that can make an asset by the form (`canForm`: assets.edit and assets.view) an asset node gets the "+" (`onAdd`) and an unmapped point
  * the menu-only New asset… (`menuNewAsset`); the group's New asset… button is given by `canAccept` alone, as before (what it opens depends on `canForm`).
  *
+ * (w33) A source that has an offer (`moveOfferFor`) gets `onMoveSource` for a person with sources.edit (`canMove`): the Move... button beside Details.
+ *
  * W12b: the `more` node gets `onMore` and EVERY asset node gets `onToggleAssets` (the fold only changes the view, so no permission is needed; the node draws
  * the button only when the asset has sub-assets).
  */
 function nodeData(
-  node: Node, { canAccept, canRemove, canEdit, canForm, formWait }: NodeGates, facts: ReadonlyMap<number, SourceFacts>, mappedBy: ReadonlyMap<number, MappedSource[]>,
-  { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets }: Callbacks,
+  node: Node, { canAccept, canRemove, canEdit, canForm, formWait, canMove }: NodeGates, facts: ReadonlyMap<number, SourceFacts>, mappedBy: ReadonlyMap<number, MappedSource[]>,
+  { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets }: Callbacks,
 ): Node["data"] {
   if (node.type === "more") return { ...node.data, onMore };
   if (node.type === "source") {
@@ -206,6 +211,7 @@ function nodeData(
       ...data, onToggle, onSelect, seen: fact?.seen,
       ...(creates ? { onCreateAssets, groups: fact.groups } : {}),
       ...(removes ? { onRemove } : {}),
+      ...(canMove && moveOfferFor(data.source) !== null ? { onMoveSource } : {}),
       // (W12c) The node draws no Create assets and no Remove: they are items of the menu its Source actions button opens (the right-click menu's own).
       // A source with neither has nothing to put in it that Details and the fold do not already do, so it gets no button.
       ...(creates || removes ? { onMenu } : {}),
@@ -239,6 +245,7 @@ function Canvas({ model }: { model: GraphModel }) {
   const canEditSource = can("sources.edit"); // the source panel's credentials and Browse again
   const invalidate = useInvalidate();
   const toast = useToast();
+  const movedToast = useMovedToast(); // (w33) "Moved ... 12 mappings kept." with an Undo for 10 seconds: the one toast of a finished move
   const removeSources = useRemoveDiscoveredSources();
   const { run, error: saveError } = useAction();
   const timezone = useSite().data?.timezone ?? "UTC"; // the "10 min ago" of a source counts on the site's clock; UTC until it is read
@@ -482,6 +489,19 @@ function Canvas({ model }: { model: GraphModel }) {
     const source = sourceOf(id);
     if (source && isRemovable(source)) setRemoval({ sources: [{ id: source.id, name: source.name }], fromNode: true });
   }, [sourceOf]);
+  // (w33) Move... of a new source that looks like an old one: the dialog gets the two ids and the old name as they were when the button was pressed (the graph is read again every few
+  // seconds). `afterMove` is the old source, whose card takes the focus when the opener is gone (a finished move removes the new source's card and closes its panel).
+  const [moving, setMoving] = useState<{ oldId: number; oldName: string; newId: number } | null>(null);
+  const afterMove = useRef<number | null>(null);
+  const onMoveSource = useCallback((id: string) => {
+    const source = sourceOf(id);
+    const offer = source ? moveOfferFor(source) : null;
+    if (source && offer) setMoving({ oldId: offer.from_source_id, oldName: offer.from_name, newId: source.id });
+  }, [sourceOf]);
+  const closeMove = useCallback(() => {
+    afterMove.current = moving?.oldId ?? null;
+    setMoving(null);
+  }, [moving]);
   const removable = useMemo(() => model.sources.filter(isRemovable), [model]);
   const clearUnmapped = () => {
     if (removable.length > 0) setRemoval({ sources: removable.map((s) => ({ id: s.id, name: s.name })), fromNode: false });
@@ -695,12 +715,12 @@ function Canvas({ model }: { model: GraphModel }) {
     const built = buildGraph(model, open, { moved: moved.current, ignoreSaved: tidyRuns > 0, animate: !reduced, view });
     const nodes: Node[] = built.nodes.map((n) => ({
       ...n,
-      data: nodeData(n, { canAccept, canRemove, canEdit: canEditAssets, canForm, formWait }, facts, mappedBy, {
-        onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets,
+      data: nodeData(n, { canAccept, canRemove, canEdit: canEditAssets, canForm, formWait, canMove: canEditSource }, facts, mappedBy, {
+        onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets,
       }),
     }));
     return { nodes, edges: built.edges };
-  }, [model, open, view, tidyRuns, reduced, canAccept, canRemove, canEditAssets, canForm, formWait, facts, mappedBy, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets]);
+  }, [model, open, view, tidyRuns, reduced, canAccept, canRemove, canEditAssets, canForm, formWait, canEditSource, facts, mappedBy, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(seeded.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(seeded.edges);
   useEffect(() => {
@@ -964,6 +984,22 @@ function Canvas({ model }: { model: GraphModel }) {
     focusAfterCreate.current = null;
     (node?.querySelector<HTMLElement>('button[aria-label^="Source actions for"]') ?? node?.querySelector<HTMLElement>('button[aria-label^="Details for"]'))?.focus();
   }, [createFor]);
+
+  // (w33) The move dialog hands the focus back to what opened it (the Move... button of the new source's card or panel). After a finished move that button is gone with the new source
+  // (the dialog has read the graph again before it said done), so the focus goes to the old source's card, the source that was moved; else to the canvas, never to <body>.
+  useEffect(() => {
+    if (moving !== null || afterMove.current === null) return;
+    const oldId = afterMove.current;
+    afterMove.current = null;
+    void (async () => {
+      await afterPaint(); // the dialog's own cleanup has put the focus back, and the refreshed graph is drawn
+      if (!mounted.current) return;
+      const at = document.activeElement;
+      if (at instanceof HTMLElement && at !== document.body && at.isConnected) return;
+      const card = canvas.current?.querySelector(`[data-id="src:${oldId}"]`);
+      (card?.querySelector<HTMLElement>('button[aria-label^="Details for"]') ?? canvas.current ?? document.getElementById("main"))?.focus({ preventScroll: true });
+    })();
+  }, [moving]);
 
   // ---- Find (Ctrl+K on the canvas), the right-click menus and the canvas's keys ----
   const findIndex = useMemo(() => buildFindIndex(model), [model]);
@@ -1234,7 +1270,12 @@ function Canvas({ model }: { model: GraphModel }) {
             </div>
           )}
         </div>
-        {selected && <SourcePanel key={selected.id} source={selected} canEdit={canEditSource} seen={facts.get(selected.id)?.seen ?? ""} onClose={closePanel} />}
+        {selected && (
+          <SourcePanel
+            key={selected.id} source={selected} canEdit={canEditSource} seen={facts.get(selected.id)?.seen ?? ""} onClose={closePanel}
+            onMoveSource={canEditSource && moveOfferFor(selected) !== null ? () => onMoveSource(nodeId.source(selected.id)) : undefined}
+          />
+        )}
       </div>
       {canAccept && review && (
         <ReviewDialog
@@ -1252,6 +1293,18 @@ function Canvas({ model }: { model: GraphModel }) {
       )}
       {askDialog}
       {maps.dialogs}
+      {/* (w33) Beside the other dialogs and outside the canvas: its keys and focus must not reach the canvas's handlers. It reads the graph, the sources and the scans again before it says done. */}
+      {moving && (
+        <MoveSourceDialog
+          oldId={moving.oldId} oldName={moving.oldName} newId={moving.newId}
+          onClose={closeMove}
+          onDone={(done, preview) => {
+            if (selectedId === moving.newId) setSelectedId(null); // the new source is gone: so is its panel
+            closeMove();
+            movedToast(done, preview.mappings);
+          }}
+        />
+      )}
       {/* Outside the canvas, like the menus: a portal of its own on the body. It asks the server for a value only while it shows a card, and only for a role that may read values. */}
       <PointValueTip target={tip.target} canView={can("assets.view")} onDismiss={tipHide} />
       {/* Outside the canvas on purpose: React passes the events of a portal up to its parents, and the canvas's focus and key handlers must not hear the menu. */}

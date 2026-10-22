@@ -1,6 +1,7 @@
 import type { Edge, FitViewOptions, Node } from "@xyflow/react";
-import type { Asset, GraphModel, GraphPoint, GraphSource, RemoveSourcesResult } from "../api/types";
+import type { Asset, GraphModel, GraphPoint, GraphSource, RemoveSourcesResult, SourceMoveCandidateForNew } from "../api/types";
 import { isLive } from "./graphStatus";
+import { hostPortOfEndpoint, TWO_SERVERS_TEXT } from "./moves";
 import { relativeTime } from "./relativeTime";
 
 /** Key of the pseudo-cluster that holds a source's points that have no cluster of their own. */
@@ -42,6 +43,8 @@ export type NodeActions = {
   onCreateAssets?: (nodeId: string) => void;
   /** Ask to remove a discovered source that has nothing mapped (discovery.edit). */
   onRemove?: (nodeId: string) => void;
+  /** (w33) Open the move dialog for a new source that looks like an old one that stopped answering: given only with sources.edit and only while the source has an offer (`moveOfferFor`). */
+  onMoveSource?: (nodeId: string) => void;
   /** W12a: a mapped point or group, for a role with assets.edit: the small menu button on the node calls this with its own element, and the page opens the node's menu next to it (a menu inside the node would leak its keys into the canvas). */
   onMenu?: (button: HTMLElement) => void;
   /** W12a: the menu items "Unmap…" and "Move to another asset…" (a group: "this group"), given only to a role with assets.edit and only while something on the node is mapped. */
@@ -622,11 +625,49 @@ export function notSeenCount(sources: readonly GraphSource[]): number {
 /** (w33) What a not-seen source with a mapped point says in place of its seen line: it cannot be removed here; its mappings are moved or the source deleted on Sources. */
 export const MAPPED_NOT_SEEN = "Mapped: move it or delete it on Sources";
 
+/** (w33) What a card and a panel say when another server than the one the source remembers answers at its address (`identity.different`, any source). */
+export const DIFFERENT_SERVER = "A different server answers at this address";
+
+/** (w33) True when the server says another server answers at this source's address. Any source can carry it, one added by hand too. */
+export const isDifferentServer = (source: GraphSource): boolean => source.identity?.different === true;
+
+/** (w33) The old source a new, unmapped source looks like (the one the Move... button moves), or null: no candidate, `two`, or an API that does not send the field. */
+export const moveOfferFor = (source: GraphSource): SourceMoveCandidateForNew | null =>
+  source.move_candidate?.kind === "offer" ? source.move_candidate : null;
+
+/** (w33) True when two old sources could be this one: nothing is offered, the address is edited by hand (`TWO_SERVERS_TEXT`). */
+export const twoServers = (source: GraphSource): boolean => source.move_candidate?.kind === "two";
+
+const countNumber = (n: number) => n.toLocaleString("en-US");
+
+/** (w33) The card's line for an offer: short, the name of the old source only (an ellipsis and the tooltip carry the rest). */
+export const looksLikeLine = (offer: SourceMoveCandidateForNew): string => `Looks like ${offer.from_name}`;
+
 /**
- * (w33) The last line of the source card and its tooltip. The card has no room for a seventh line (SOURCE_H), so a not-seen source with something mapped trades
- * its seen line for what to do about it; the tooltip keeps both sentences. Every other source shows its seen line as it is.
+ * (w33) The whole sentence of an offer, for the card's tooltip and the panel: `This looks like <old name> (12 mappings on 3 assets), which stopped answering at
+ * 172.20.0.3:4840`. The address is the old source's host and port (the endpoint carries no user name or password); no assets, no "on 0 assets".
  */
-export function seenCard(source: GraphSource, seen: string): { line: string; title: string } {
+export function looksLikeSentence(offer: SourceMoveCandidateForNew): string {
+  const mappings = `${countNumber(offer.mappings)} ${offer.mappings === 1 ? "mapping" : "mappings"}`;
+  const assets = offer.assets > 0 ? ` on ${countNumber(offer.assets)} ${offer.assets === 1 ? "asset" : "assets"}` : "";
+  return `This looks like ${offer.from_name} (${mappings}${assets}), which stopped answering at ${hostPortOfEndpoint(offer.from_endpoint)}`;
+}
+
+/**
+ * (w33) The last line of the source card and its tooltip. The card has no room for a seventh line (SOURCE_H), so the one seen line trades places with what matters more,
+ * in this order, and the tooltip keeps every sentence:
+ * - another server answers at the address: `A different server answers at this address` (tone "warn": the card draws it in the warning ink);
+ * - the source looks like an old one that stopped answering: `Looks like <old name>` (the Move... button is on the card's button row);
+ * - two old sources could be it: `Two servers could be this one; edit the address by hand`;
+ * - not seen and something mapped: what to do about it.
+ * Every other source shows its seen line as it is.
+ */
+export function seenCard(source: GraphSource, seen: string): { line: string; title: string; tone?: "warn" } {
+  const offer = moveOfferFor(source);
+  const joined = (...sentences: (string | false | null)[]) => sentences.filter((s): s is string => !!s).join(". ");
+  if (isDifferentServer(source)) return { line: DIFFERENT_SERVER, title: joined(DIFFERENT_SERVER, offer && looksLikeSentence(offer), seen), tone: "warn" };
+  if (offer) return { line: looksLikeLine(offer), title: joined(looksLikeSentence(offer), seen) };
+  if (twoServers(source)) return { line: TWO_SERVERS_TEXT, title: joined(TWO_SERVERS_TEXT, seen) };
   if (isNotSeen(source) && !isRemovable(source)) return { line: MAPPED_NOT_SEEN, title: `${seen}. ${MAPPED_NOT_SEEN}` };
   return { line: seen, title: seen };
 }

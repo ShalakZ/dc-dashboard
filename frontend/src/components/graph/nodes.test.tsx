@@ -404,6 +404,126 @@ describe("graph nodes", () => {
     });
   });
 
+  // (w33) A new, unmapped source that looks like an old one that stopped answering, two such old ones, and another server at the address. The card keeps its six lines (one last line,
+  // one button row): the offer, the two and the warning replace the seen line, and Move... stands beside Details.
+  describe("a source that looks like an old one, two, or a different server (w33)", () => {
+    const OLD = "OPC UA server at 172.20.0.3:4840";
+    const offer = {
+      kind: "offer" as const, from_source_id: 2, from_name: OLD, from_endpoint: "opc.tcp://172.20.0.3:4840/dcdash/", from_since: "2026-10-18T04:52:51Z", mappings: 12, assets: 3,
+      match: { kind: "same_server" as const, evidence: "uri" as const, value: "urn:dcdash:simulator:dev", addresses: 12, missing_addresses: 0, needs_tick: false },
+    };
+    const SENTENCE = `This looks like ${OLD} (12 mappings on 3 assets), which stopped answering at 172.20.0.3:4840`;
+    const SEEN = "Seen in scan #8, 2 min ago";
+    const identity = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: false };
+    const candidate: GraphSource = { ...source, name: "OPC UA server at 172.20.0.5:4840", move_candidate: offer };
+    const BUTTON = `Move ${OLD} to OPC UA server at 172.20.0.5:4840...`;
+    const lines = () => Array.from(document.querySelectorAll(".gsrc-body > *")).map((line) => line.className.split(" ")[0]);
+
+    it("an offer: the last line says Looks like <old name> on one muted line, with the whole sentence and then the seen line in its title", () => {
+      renderNode("source", "src:1", { source: candidate, expanded: false, onSelect: vi.fn(), onMoveSource: vi.fn(), seen: SEEN });
+      const line = screen.getByText(`Looks like ${OLD}`);
+      expect(line).toHaveClass("muted", "gsrc-seen");
+      expect(line).not.toHaveClass("gsrc-warn");
+      expect(line).toHaveAttribute("title", `${SENTENCE}. ${SEEN}`);
+      expect(screen.queryByText(SEEN)).not.toBeInTheDocument();
+    });
+
+    it("the card keeps its six lines: the same classes in the same order as a source with no offer, and Move... stands in the button row beside Details", () => {
+      renderNode("source", "src:1", { source: candidate, expanded: false, onSelect: vi.fn(), onMoveSource: vi.fn(), seen: SEEN });
+      expect(lines()).toEqual(["gsrc-head", "gsrc-sub", "gsrc-status", "gsrc-mapped", "gsrc-actions", "gsrc-seen"]);
+      const row = document.querySelector(".gsrc-actions") as HTMLElement;
+      const buttons = Array.from(row.querySelectorAll("button"));
+      expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual([`Details for ${candidate.name}`, BUTTON]);
+      expect(buttons[1]).toHaveTextContent("Move...");
+      expect(document.querySelector(".gnode")!.className).toBe("gnode gnode-source discovered"); // no class of its own that changes the card's size
+      cleanup();
+      renderNode("source", "src:1", { source, expanded: false, onSelect: vi.fn(), seen: SEEN });
+      expect(lines()).toEqual(["gsrc-head", "gsrc-sub", "gsrc-status", "gsrc-mapped", "gsrc-actions", "gsrc-seen"]);
+    });
+
+    it("Move... is a button of type button that reports the node id, takes no drag and never selects the node", async () => {
+      const onMoveSource = vi.fn();
+      const onSelect = vi.fn();
+      renderNode("source", "src:1", { source: candidate, expanded: false, onSelect, onMoveSource, seen: SEEN });
+      const button = screen.getByRole("button", { name: BUTTON });
+      expect(button).toHaveAttribute("type", "button");
+      expect(button).toHaveClass("nodrag");
+      await userEvent.click(button);
+      expect(onMoveSource).toHaveBeenCalledTimes(1);
+      expect(onMoveSource).toHaveBeenCalledWith("src:1");
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("the keyboard order is the fold, Details, then Move...; Enter and Space press it", async () => {
+      const onMoveSource = vi.fn();
+      renderNode("source", "src:1", { source: candidate, expanded: false, onToggle: vi.fn(), onSelect: vi.fn(), onMoveSource, seen: SEEN });
+      const order: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        await userEvent.tab();
+        order.push(document.activeElement?.getAttribute("aria-label") ?? "");
+      }
+      expect(order).toEqual([`Expand ${candidate.name}`, `Details for ${candidate.name}`, BUTTON]);
+      await userEvent.keyboard("{Enter}");
+      await userEvent.keyboard(" ");
+      expect(onMoveSource).toHaveBeenCalledTimes(2);
+    });
+
+    it("without the callback (no sources.edit) the sentence stays and there is no button", () => {
+      renderNode("source", "src:1", { source: candidate, expanded: false, onSelect: vi.fn(), seen: SEEN });
+      expect(screen.getByText(`Looks like ${OLD}`)).toHaveAttribute("title", `${SENTENCE}. ${SEEN}`);
+      expect(screen.queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+      expect(screen.getAllByRole("button")).toHaveLength(1); // Details
+    });
+
+    it("a callback on a source with no offer (or with two candidates) draws no button either", () => {
+      renderNode("source", "src:1", { source, expanded: false, onSelect: vi.fn(), onMoveSource: vi.fn(), seen: SEEN });
+      expect(screen.queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+      cleanup();
+      renderNode("source", "src:1", { source: { ...source, move_candidate: { kind: "two", count: 2 } }, expanded: false, onSelect: vi.fn(), onMoveSource: vi.fn(), seen: SEEN });
+      expect(screen.queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+    });
+
+    it("the button row is drawn for Move... even when the page gave no Details", () => {
+      renderNode("source", "src:1", { source: candidate, expanded: false, onMoveSource: vi.fn(), seen: SEEN });
+      expect(document.querySelector(".gsrc-actions")).not.toBeNull();
+      expect(screen.getByRole("button", { name: BUTTON })).toBeInTheDocument();
+    });
+
+    it("two candidates: the sentence on the last line, the seen line in its title, and no button", () => {
+      renderNode("source", "src:1", { source: { ...source, move_candidate: { kind: "two", count: 2 } }, expanded: false, onSelect: vi.fn(), onMoveSource: vi.fn(), seen: SEEN });
+      const line = screen.getByText("Two servers could be this one; edit the address by hand");
+      expect(line).toHaveClass("muted", "gsrc-seen");
+      expect(line).toHaveAttribute("title", `Two servers could be this one; edit the address by hand. ${SEEN}`);
+      expect(screen.queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+      expect(lines()).toEqual(["gsrc-head", "gsrc-sub", "gsrc-status", "gsrc-mapped", "gsrc-actions", "gsrc-seen"]);
+    });
+
+    it("a different server: the warning on the last line in the warning ink (not the muted one), the seen line in its title; a source added by hand too", () => {
+      renderNode("source", "src:1", { source: { ...source, identity: { ...identity, different: true } }, expanded: false, onSelect: vi.fn(), seen: SEEN });
+      const line = screen.getByText("A different server answers at this address");
+      expect(line).toHaveClass("gsrc-seen", "gsrc-warn", "warning");
+      expect(line).not.toHaveClass("muted");
+      expect(line).toHaveAttribute("title", `A different server answers at this address. ${SEEN}`);
+      expect(lines()).toEqual(["gsrc-head", "gsrc-sub", "gsrc-status", "gsrc-mapped", "gsrc-actions", "gsrc-seen"]);
+      cleanup();
+      renderNode("source", "src:1", { source: { ...source, origin: "manual", identity: { ...identity, different: true } }, expanded: false, seen: "Added by hand" });
+      expect(screen.getByText("A different server answers at this address")).toHaveClass("gsrc-warn");
+      expect(screen.queryByText("Added by hand")).not.toBeInTheDocument();
+    });
+
+    it("a different server beats the offer on the line, and keeps both sentences in the title; the button is still there", () => {
+      renderNode("source", "src:1", { source: { ...candidate, identity: { ...identity, different: true } }, expanded: false, onSelect: vi.fn(), onMoveSource: vi.fn(), seen: SEEN });
+      expect(screen.getByText("A different server answers at this address")).toHaveAttribute("title", `A different server answers at this address. ${SENTENCE}. ${SEEN}`);
+      expect(screen.getByRole("button", { name: BUTTON })).toBeInTheDocument();
+    });
+
+    it("a source with an identity that is not different, or none, keeps its seen line", () => {
+      renderNode("source", "src:1", { source: { ...source, identity }, expanded: false, seen: SEEN });
+      expect(screen.getByText(SEEN)).toHaveClass("muted", "gsrc-seen");
+      expect(screen.queryByText(/different server/i)).not.toBeInTheDocument();
+    });
+  });
+
   describe("a group's mapped progress strip (W7u)", () => {
     const strip = () => document.querySelector(".gprogress") as HTMLElement;
 
