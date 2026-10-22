@@ -129,6 +129,9 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     # Added in W31 (a tag list turned into mappings, and its Undo): after the freeze, so not in auth_matrix_pre_w9a.json; the gate and
     # isolation tests cover them. The list is the request body, so the isolation probe (a JSON body) is refused with a 415, after the gate.
     _all("discovery.accept", "POST /api/sources/{source_id}/tag-list", "POST /api/tag-lists/{audit_id}/undo"),
+    # Added in W33 (move a source that stopped answering to the address where its server turned up): after the freeze, so not in
+    # auth_matrix_pre_w9a.json; the gate and isolation tests cover it. The Undo of a move is listed by its own task.
+    _all("sources.edit", "POST /api/sources/{source_id}/move"),
     # Added in W7r (removing discovered sources that have nothing mapped): after the freeze, so not in auth_matrix_pre_w9a.json;
     # the gate and isolation tests cover it.
     _all("discovery.edit", "POST /api/discovery/sources/remove"),

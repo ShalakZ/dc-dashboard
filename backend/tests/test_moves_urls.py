@@ -7,7 +7,9 @@ query or fragment, whatever the stored URL holds; a value nobody can parse is sh
 import pytest
 
 from dcdash.moves.load import _endpoint
-from dcdash.moves.urls import address_key, display_endpoint
+from dcdash.moves.urls import (
+    CannotRewrite, address_key, display_endpoint, is_default_name, label_for, swap_host_port, unique_name,
+)
 
 # ---- address_key -----------------------------------------------------------------------------------------------------------------
 
@@ -116,3 +118,94 @@ def test_display_endpoint_hides_the_values_the_config_marks_as_secret():
     config = {"endpoint": "opc.tcp://svc:pa ss word@host:notaport/x", "username": "svc"}
     shown = display_endpoint("opcua", config)
     assert "pa ss" not in shown and "word" not in shown
+
+
+# ---- swap_host_port (P8, F10, F-M4) ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url, host, port, expected",
+    [
+        ("opc.tcp://172.20.0.3:4840/dcdash/", "172.20.0.5", 4840, "opc.tcp://172.20.0.5:4840/dcdash/"),
+        ("opc.tcp://user:pass@172.20.0.3:4840/dcdash/", "172.20.0.5", 4840, "opc.tcp://user:pass@172.20.0.5:4840/dcdash/"),
+        ("opc.tcp://u%40x:p%3Aw@h:4840/x", "n", 4841, "opc.tcp://u%40x:p%3Aw@n:4841/x"),  # user info kept letter for letter
+        ("opc.tcp://a@b:c@172.20.0.3:4840/", "172.20.0.5", 4840, "opc.tcp://a@b:c@172.20.0.5:4840/"),  # split at the LAST "@"
+        ("opc.tcp://172.20.0.3/dcdash", "172.20.0.5", 4840, "opc.tcp://172.20.0.5:4840/dcdash"),  # no port before: the new one is written
+        ("opc.tcp://172.20.0.3:4840", "172.20.0.5", 4840, "opc.tcp://172.20.0.5:4840"),  # no path stays no path
+        ("opc.tcp://h:4840/p?x=1#frag", "n", 4840, "opc.tcp://n:4840/p?x=1#frag"),  # query and fragment kept
+        ("opc.tcp://h:4840/p?#", "n", 4840, "opc.tcp://n:4840/p?#"),  # an empty "?" and "#" are not dropped
+        ("http://simulator:9000/", "172.20.0.7", 9000, "http://172.20.0.7:9000/"),  # the trailing slash stays
+        ("opc.tcp://[::1]:4840/x", "10.0.0.2", 4840, "opc.tcp://10.0.0.2:4840/x"),  # IPv6 before, IPv4 after: no brackets
+        ("opc.tcp://10.0.0.2:4840/x", "fe80::1", 4840, "opc.tcp://[fe80::1]:4840/x"),  # IPv4 before, IPv6 after: brackets
+        ("opc.tcp://[::1]:4840/x", "[fe80::2]", 4841, "opc.tcp://[fe80::2]:4841/x"),  # brackets given are not doubled
+        ("opc.tcp://u:p@[::1]:4840/x", "fe80::2", 4840, "opc.tcp://u:p@[fe80::2]:4840/x"),
+    ],
+)
+def test_swap_host_port_changes_the_host_and_the_port_and_nothing_else(url, host, port, expected):
+    assert swap_host_port(url, host, port) == expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["not a url", "opc.tcp://", "opc.tcp:///x", "opc.tcp://user:pa/ss@host:4840/x", "opc.tcp://[::1/x", "host:4840"],
+)
+def test_swap_host_port_refuses_an_address_it_cannot_read_and_never_quotes_it(url):
+    with pytest.raises(CannotRewrite) as raised:
+        swap_host_port(url, "172.20.0.5", 4840)
+    assert "pa/ss" not in str(raised.value) and "user" not in str(raised.value)
+
+
+@pytest.mark.parametrize("host, port", [("", 4840), ("a b", 4840), ("a/b", 4840), ("a@b", 4840), ("h", 0), ("h", 70000)])
+def test_swap_host_port_refuses_a_new_address_it_cannot_write(host, port):
+    with pytest.raises(CannotRewrite):
+        swap_host_port("opc.tcp://172.20.0.3:4840/", host, port)
+
+
+def test_a_rewritten_address_is_read_back_as_the_requested_host_and_port():
+    for host in ("172.20.0.5", "Meter-7.Lab", "fe80::1"):
+        new = swap_host_port("opc.tcp://u:p@172.20.0.3:4840/dcdash/", host, 4842)
+        assert address_key("opcua", {"endpoint": new}) == (host.lower(), 4842, "/dcdash/")
+
+
+# ---- the naming rule (R6, P8) ---------------------------------------------------------------------------------------------------
+
+
+def test_label_for_is_the_name_a_scan_gives_a_new_source():
+    assert label_for("opcua", "172.20.0.3", 4840) == "OPC UA server at 172.20.0.3:4840"
+    assert label_for("simulator", "172.20.0.5", 9000) == "DCDash simulator at 172.20.0.5:9000"
+    assert label_for("modbus", "172.20.0.5", 502) is None and label_for(None, "h", 1) is None
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("OPC UA server at 172.20.0.3:4840", True),
+        ("OPC UA server at 172.20.0.3:4840 (2)", True),
+        ("OPC UA server at 172.20.0.3:4840 (17)", True),
+        ("opc ua server at 172.20.0.3:4840", True),  # letters of the host or label: case is not a difference
+        ("OPC UA server at 172.20.0.3:4840 (x)", False),
+        ("OPC UA server at 172.20.0.3:4840 (2) extra", False),
+        ("OPC UA server at 172.20.0.3:48400", False),
+        ("OPC UA server at 172.20.0.30:4840", False),
+        ("Main meter", False),
+        ("Main meter at 172.20.0.3:4840", False),
+    ],
+)
+def test_a_default_name_is_the_label_with_an_optional_number(name, expected):
+    assert is_default_name(name, "opcua", "172.20.0.3", 4840) is expected
+
+
+def test_the_dots_of_an_address_are_not_wildcards_in_the_name_rule():
+    assert not is_default_name("OPC UA server at 172x20x0x3:4840", "opcua", "172.20.0.3", 4840)
+
+
+def test_a_name_is_never_a_default_name_for_a_type_that_has_no_label():
+    assert not is_default_name("Modbus device at h:502", "modbus", "h", 502)
+
+
+def test_unique_name_is_the_first_free_one():
+    assert unique_name("L", set()) == "L"
+    assert unique_name("L", {"L"}) == "L (2)"
+    assert unique_name("L", {"L", "L (2)", "L (4)"}) == "L (3)"
+    assert unique_name("L", {"L (2)"}) == "L"  # the bare label is tried first: a number is never carried over
+    assert unique_name("L", ["L", "L (2)", "L (3)"]) == "L (4)"

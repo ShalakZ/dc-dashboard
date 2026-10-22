@@ -3,9 +3,11 @@
 `address_key` is the place the matcher compares (host lower-cased, port, path). `display_endpoint` is what a person may read about
 it: built ONLY from the scheme, the host, the port and the path of the stored URL, never from its user info, query or fragment, so
 no answer, audit row or journal text that quotes it can carry a credential. Both are tolerant of junk: a config nobody can read
-gives None / a cut, scrubbed text, never an error.
+gives None / a cut, scrubbed text, never an error. `swap_host_port` is the one writer: it changes the host and port of a stored URL and
+nothing else; `label_for`, `is_default_name` and `unique_name` are the naming rule of a move (R6).
 """
-from collections.abc import Mapping
+import re
+from collections.abc import Collection, Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -59,6 +61,65 @@ def display_endpoint(connector_type: str | None, config: Any) -> str:
             path = parts.path if connector_type == "opcua" else ""
             return f"{parts.scheme.lower()}://{host}:{where[1]}{path}"
     return _junk(value, config if isinstance(config, Mapping) else {})
+
+
+class CannotRewrite(ValueError):
+    """The stored address cannot be rewritten safely. The text is for a person and never quotes the address (it may hold a password)."""
+
+
+def swap_host_port(url: str, host: str, port: int) -> str:
+    """`url` with ONLY the host and port of its authority replaced (w33 P8, F-M4).
+
+    The user info (everything before the LAST "@" of the authority) is kept verbatim, and so are the scheme, the path, the query and
+    the fragment: the text outside the authority is not parsed and written again, so an empty "?" survives. An IPv6 host is put in
+    brackets when the NEW host is IPv6 (it has a ":" in it), whatever the old one was. Raises `CannotRewrite` for a URL without a
+    host, for one whose "@" is not all inside the authority (an unencoded "/" in a password ends the authority early: the host cannot
+    be told from the password), and for a port or host that cannot be written."""
+    host = host.strip().strip("[]")
+    if not host or any(char in host for char in "/?#@ \t\r\n") or not 1 <= port <= 65535:
+        raise CannotRewrite("the new address cannot be written into this source")
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        raise CannotRewrite("the address of this source cannot be read; edit it by hand") from None
+    start = url.find("://") + 3
+    if start < 3 or not parts.netloc or not parts.hostname or url[start:start + len(parts.netloc)] != parts.netloc:
+        raise CannotRewrite("the address of this source cannot be read; edit it by hand")
+    if url.count("@") != parts.netloc.count("@"):
+        raise CannotRewrite("the address of this source has a login part that cannot be told from its host; edit it by hand")
+    userinfo, at, _old = parts.netloc.rpartition("@")
+    shown = f"[{host}]" if ":" in host else host
+    return f"{url[:start]}{userinfo}{at}{shown}:{port}{url[start + len(parts.netloc):]}"
+
+
+# The name a scan gives a source it creates (`Connector.probe`'s label), by connector type. A name equal to one of these is a default
+# name; any other was typed by a person and is never changed by a move.
+LABELS = {"opcua": "OPC UA server at {host}:{port}", "simulator": "DCDash simulator at {host}:{port}"}
+
+
+def label_for(connector_type: str | None, host: str, port: int) -> str | None:
+    """The default name of a source of this type at this address, None for a type that has none. `host` as written (no brackets)."""
+    template = LABELS.get(connector_type or "")
+    return None if template is None else template.format(host=host, port=port)
+
+
+def is_default_name(name: str, connector_type: str | None, host: str, port: int) -> bool:
+    """True when `name` is exactly `label_for(...)` for this address, with or without the " (n)" a clash adds (`collector/scan.py
+    _insert_source`). Host letters are compared without regard to case (the stored host is lower-cased, a scan's may not be)."""
+    label = label_for(connector_type, host, port)
+    if label is None:
+        return False
+    return re.fullmatch(re.escape(label) + r"(?: \(\d+\))?", name, flags=re.IGNORECASE) is not None
+
+
+def unique_name(base: str, taken: Collection[str]) -> str:
+    """`base`, or `base (2)`, `base (3)` ... the first that is not in `taken`: the rule `_insert_source` uses for a scan's names."""
+    if base not in taken:
+        return base
+    attempt = 2
+    while f"{base} ({attempt})" in taken:
+        attempt += 1
+    return f"{base} ({attempt})"
 
 
 def _junk(value: str, config: Mapping[str, Any]) -> str:

@@ -14,8 +14,8 @@ const ALL_ACTIONS = [
   "login.failed", "login.locked", "login.succeeded", "login.unblocked", "mapping.created", "mapping.updated", "mapping.deleted",
   "password.change_failed", "password.changed", "role.created", "role.updated", "role.deleted", "scan.finished", "scan.started",
   "scope.created", "scope.updated", "scope.deleted", "settings.sign_in_changed", "settings.timezone_changed", "setup.completed",
-  "source.browsed", "source.checked", "source.created", "source.deleted", "source.test_all", "source.tested", "source.updated",
-  "storage.changed", "storage.default_set", "tariff.created", "tariff.updated", "tariff.deleted",
+  "source.browsed", "source.checked", "source.created", "source.deleted", "source.move_undone", "source.moved", "source.test_all", "source.tested",
+  "source.updated", "storage.changed", "storage.default_set", "tariff.created", "tariff.updated", "tariff.deleted",
   "user.created", "user.deleted", "user.updated",
   "playlist.created", "playlist.updated", "playlist.deleted",
   "display.created", "display.updated", "display.revoked", "display.deleted", "display.connected", "display.claim_blocked",
@@ -886,7 +886,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(69);
+    expect(ALL_ACTIONS).toHaveLength(71);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }
@@ -1381,6 +1381,18 @@ describe("describeAudit: no sentence shows an id", () => {
       mappings: [[MAPPING, POINT, A, "power", 1, 60, null], [MAPPING + 1, POINT + 1, A2, "energy", 1, 900, "kWh"], [MAPPING + 2, POINT + 2, A2, "voltage", 1, 60, null]],
     },
     "tags.unmapped": { audit_id: CLOSE, source_id: SRC, mappings: 3, assets: 2, points_removed: 2, points_kept: [POINT] },
+    // The ids sit in the removed duplicate and in the finding list on purpose: a sentence may take counts and addresses from them, never ids.
+    "source.moved": {
+      source_id: SRC, name_before: "OPC UA server at 172.20.0.3:4840", name_after: "OPC UA server at 172.20.0.5:4840",
+      host_before: "172.20.0.3", port_before: 4840, host_after: "172.20.0.5", port_after: 4840, address: "as_found",
+      identity_before: null, identity_after: { application_uri: "urn:vendor:meter-7" },
+      match: { kind: "same_server", evidence: "uri", value: "urn:vendor:meter-7", addresses: 12, missing_addresses: 0 }, mappings: 12,
+      removed: { source_id: SRC + 1000, name: "OPC UA server at 172.20.0.5:4840", points: 14 }, finding_ids: [CLOSE, CLOSE + 1],
+    },
+    "source.move_undone": {
+      audit_id: CLOSE, source_id: SRC, name_before: "OPC UA server at 172.20.0.5:4840", name_after: "OPC UA server at 172.20.0.3:4840",
+      host_before: "172.20.0.5", port_before: 4840, host_after: "172.20.0.3", port_after: 4840,
+    },
     "history.fill_requested": { source_id: SRC, name: "PM-1", start: "2026-10-01T00:00:00+00:00", end: "2026-10-05T00:00:00+00:00", before_first_reading: false, job_id: JOB },
     "events.retention_changed": { will_delete: 40, before: { retention_days: 90, max_rows: 100000 }, after: { retention_days: 30, max_rows: 50000 } },
   };
@@ -1746,6 +1758,65 @@ describe("describeAudit: imports, import profiles, tag lists and history fills",
     it("claims nothing from an entry it cannot read", () => {
       expect(say("tags.unmapped", {}).summary).toBe("Undid a tag list");
       expect(say("tags.unmapped", { mappings: "3", assets: -1, points_kept: "x" }).summary).toBe("Undid a tag list");
+    });
+  });
+
+  describe("source.moved and source.move_undone (w33)", () => {
+    const moved = {
+      source_id: 2, name_before: "OPC UA server at 172.20.0.3:4840", name_after: "OPC UA server at 172.20.0.5:4840",
+      host_before: "172.20.0.3", port_before: 4840, host_after: "172.20.0.5", port_after: 4840, address: "as_found",
+      match: { kind: "same_server", evidence: "uri", value: "urn:vendor:meter-7", addresses: 12, missing_addresses: 0 }, mappings: 12,
+      removed: { source_id: 9, name: "OPC UA server at 172.20.0.5:4840", points: 14 }, finding_ids: [4, 5],
+    };
+
+    it("says where the source went, how many mappings it kept and that the duplicate was removed", () => {
+      const view = say("source.moved", moved);
+      expect(view.summary).toBe(
+        "Moved OPC UA server at 172.20.0.5:4840 from 172.20.0.3:4840 to 172.20.0.5:4840 (12 mappings kept, the duplicate removed)",
+      );
+      expect(view.link).toEqual(sourcesLink);
+    });
+
+    it("adds how the server was recognised when it was only a possible match", () => {
+      const possibly = { ...moved, match: { kind: "possibly", evidence: "addresses", value: null, addresses: 12, missing_addresses: 0 } };
+      expect(say("source.moved", possibly).summary).toBe(
+        "Moved OPC UA server at 172.20.0.5:4840 from 172.20.0.3:4840 to 172.20.0.5:4840 (12 mappings kept, the duplicate removed) (matched by its 12 mapped addresses)",
+      );
+      expect(say("source.moved", { ...possibly, mappings: 1, match: { kind: "possibly", addresses: 1 } }).summary).toContain("(1 mapping kept");
+      expect(say("source.moved", { ...possibly, match: { kind: "possibly" } }).summary).toMatch(/\(matched by its mapped addresses\)$/);
+    });
+
+    it("writes a name the move chose for the address, and an IPv6 host in brackets", () => {
+      expect(say("source.moved", { ...moved, host_after: "simulator", name_after: "OPC UA server at simulator:4840" }).summary).toContain(
+        "to simulator:4840",
+      );
+      expect(say("source.moved", { ...moved, host_before: "fe80::1", host_after: "fe80::2", port_before: 4841 }).summary).toContain(
+        "from [fe80::1]:4841 to [fe80::2]:4840",
+      );
+    });
+
+    it("falls back to the name the lookup knows and leaves out what the entry does not say", () => {
+      const bare = { source_id: 2, host_after: "172.20.0.5", port_after: 4840 };
+      expect(say("source.moved", bare, sources).summary).toBe("Moved source Meter 1 to 172.20.0.5:4840");
+      expect(say("source.moved", {}).summary).toBe("Moved a source");
+      expect(say("source.moved", { ...moved, mappings: "12", removed: null, match: null }).summary).toBe(
+        "Moved OPC UA server at 172.20.0.5:4840 from 172.20.0.3:4840 to 172.20.0.5:4840",
+      );
+      expect(say("source.moved", { ...moved, removed: undefined }).summary).toBe(
+        "Moved OPC UA server at 172.20.0.5:4840 from 172.20.0.3:4840 to 172.20.0.5:4840 (12 mappings kept)",
+      );
+    });
+
+    it("says where the Undo put the source back", () => {
+      const undone = {
+        audit_id: 31, source_id: 2, name_before: "OPC UA server at 172.20.0.5:4840", name_after: "OPC UA server at 172.20.0.3:4840",
+        host_before: "172.20.0.5", port_before: 4840, host_after: "172.20.0.3", port_after: 4840,
+      };
+      const view = say("source.move_undone", undone);
+      expect(view.summary).toBe("Undid the move of OPC UA server at 172.20.0.3:4840: back at 172.20.0.3:4840");
+      expect(view.link).toEqual(sourcesLink);
+      expect(say("source.move_undone", {}).summary).toBe("Undid the move of a source");
+      expect(say("source.move_undone", { source_id: 2 }, sources).summary).toBe("Undid the move of source Meter 1");
     });
   });
 

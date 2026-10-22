@@ -314,7 +314,11 @@ async def create_source(body: SourceIn, db: AsyncSession = Depends(get_db), user
 async def update_source(
     source_id: int, body: SourcePatch, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
 ) -> SourceOut:
-    source = await get_source(db, source_id)
+    # Locked from this read to the commit (w33 F-M7): a move of this source that is in flight (api/moves.py) finishes first, and this
+    # request then reads where the move left it, so a PATCH that read the old address before the move cannot write it back.
+    source = await db.scalar(select(Source).where(Source.id == source_id).with_for_update())
+    if source is None:
+        raise HTTPException(404, "source not found")
     before = _values(source)
     raw_config = copy.deepcopy(source.config)
     if body.name is not None:

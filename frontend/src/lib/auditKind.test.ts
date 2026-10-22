@@ -17,7 +17,7 @@ const EXPECTED: Record<string, AuditKind> = {
   "scope.created": "create", "scope.updated": "change", "scope.deleted": "delete",
   "settings.sign_in_changed": "settings", "settings.timezone_changed": "settings", "setup.completed": "signin",
   "source.browsed": "other", "source.checked": "other", "source.created": "create", "source.deleted": "delete",
-  "source.test_all": "other", "source.tested": "other", "source.updated": "change",
+  "source.move_undone": "change", "source.moved": "change", "source.test_all": "other", "source.tested": "other", "source.updated": "change",
   "storage.changed": "settings", "storage.default_set": "settings",
   "tariff.created": "create", "tariff.updated": "change", "tariff.deleted": "delete",
   "user.created": "create", "user.deleted": "delete", "user.updated": "change",
@@ -30,11 +30,11 @@ const EXPECTED: Record<string, AuditKind> = {
 };
 
 describe("auditKind", () => {
-  it("names the kind of every one of the 69 actions in the audit text table", () => {
+  it("names the kind of every one of the 71 actions in the audit text table", () => {
     const source = readFileSync("src/lib/auditText.ts", "utf8"); // vitest runs from the frontend directory
     const table = source.slice(source.indexOf("const RULES"), source.indexOf("function build("));
     const actions = [...table.matchAll(/^ {2}"([a-z_.]+)":/gm)].map((m) => m[1]);
-    expect(actions).toHaveLength(69);
+    expect(actions).toHaveLength(71);
     expect([...actions].sort()).toEqual(Object.keys(EXPECTED).sort());
     for (const action of actions) expect(auditKind(action), action).toBe(EXPECTED[action]);
   });
@@ -73,6 +73,12 @@ describe("auditKind", () => {
     expect(auditKind("x.imported")).toBe("other");
     expect(auditKind("x.unmapped")).toBe("other");
     expect(auditKind("x.saved.more")).toBe("other"); // the end of the string, not a word inside it
+  });
+
+  it("reads a move of a source, and the Undo of it, as a change", () => {
+    expect(auditKind("source.moved")).toBe("change"); // the ".moved" suffix, like an asset move
+    expect(auditKind("source.move_undone")).toBe("change"); // by name: no broad "_undone" suffix
+    expect(auditKind("x.undone")).toBe("other");
   });
 
   it("reads a revoked display link as a delete, a display that connected as a sign-in and a blocked claim as a problem", () => {
