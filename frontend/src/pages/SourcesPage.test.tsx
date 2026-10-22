@@ -188,7 +188,7 @@ describe("SourcesPage", () => {
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       // A rename sends no config: the stored one is not sent back (a form opened before a move would put the old address back). The stored config lacks
       // timeout_seconds, and the field's default filling it is not an edit.
-      expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ name: "renamed", enabled: true });
+      expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ name: "renamed" });
       expect(await screen.findByText("renamed")).toBeInTheDocument();
     });
 
@@ -255,7 +255,7 @@ describe("SourcesPage", () => {
       await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({
-        name: "plc", config: { host: "10.0.0.1", port: 504, tls: true }, enabled: true,
+        config: { host: "10.0.0.1", port: 504, tls: true }, expect_config: { host: "10.0.0.1", port: 503, tls: true },
       });
     });
 

@@ -51,13 +51,18 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
     try {
       if (source) {
         // No `secret` key keeps the stored secret; "" would erase it.
-        // `config` goes only when a config field was edited, or credentials are to be removed (`clear_config_credentials` only takes effect together with
-        // `config`). A save that is a rename, a switch or a secret must not send the config this form was opened with back: after a move of the source
-        // (w33) that config holds the old address, and the save would put the source back there.
+        // Only what was edited goes (w33): a form opened before a move of the source holds the old address and the old default name, and a save that
+        // sent them back with a secret, a switch or a timeout would put the source back at the dead address, or lose the name its Undo needs.
+        // `config` goes when a config field was edited, or credentials are to be removed (`clear_config_credentials` only takes effect together with `config`),
+        // and then it carries `expect_config`, the masked config this form was opened with: the server answers 409 when the stored one differs, since
+        // the whole config replaces the stored one and the unedited fields of a stale form are not the person's choice.
         const cleared = hiddenKeys.filter((key) => clearKeys.includes(key));
         const configEdited = cleared.length > 0 || fields.some((field) => values[field.name] !== opened[field.name]);
-        const body: Partial<Omit<SourceIn, "connector_type">> & { clear_config_credentials?: string[] } = {
-          name, ...(configEdited ? { config: coerceValues(fields, values) } : {}), enabled, ...(removeSecret ? { secret: null } : secret ? { secret } : {}),
+        const body: Partial<Omit<SourceIn, "connector_type">> & { expect_config?: Record<string, unknown>; clear_config_credentials?: string[] } = {
+          ...(name !== source.name ? { name } : {}),
+          ...(configEdited ? { config: coerceValues(fields, values), expect_config: source.config } : {}),
+          ...(enabled !== source.enabled ? { enabled } : {}),
+          ...(removeSecret ? { secret: null } : secret ? { secret } : {}),
           ...(cleared.length ? { clear_config_credentials: cleared } : {}),
         };
         const patched = await api.patch<Source>(`/api/sources/${source.id}`, body);

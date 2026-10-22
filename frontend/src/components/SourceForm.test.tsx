@@ -207,7 +207,7 @@ describe("SourceForm, editing a source", () => {
     expect(toasts.calls).toEqual([]); // an edit closes its dialog: that is its confirmation
     const patch = patchOf(calls)!;
     expect(patch.path).toBe("/api/sources/2");
-    expect(patch.body).toEqual({ name: "renamed", enabled: false }); // no config field was edited: the stored config is not sent back
+    expect(patch.body).toEqual({ name: "renamed", enabled: false }); // no config field was edited: the stored config is not sent back, so no expect_config either
     expect(patch.body).not.toHaveProperty("secret");
     expect(patch.body).not.toHaveProperty("config");
     expect(calls.some((c) => c.method === "POST")).toBe(false);
@@ -222,8 +222,9 @@ describe("SourceForm, editing a source", () => {
     await userEvent.type(name, "renamed");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
-    expect(patchOf(calls)!.body).toEqual({ name: "renamed", enabled: true });
+    expect(patchOf(calls)!.body).toEqual({ name: "renamed" }); // not `enabled` either: it was not edited
     expect(patchOf(calls)!.body).not.toHaveProperty("config");
+    expect(patchOf(calls)!.body).not.toHaveProperty("expect_config");
     expect(patchOf(calls)!.body).not.toHaveProperty("clear_config_credentials");
   });
 
@@ -241,7 +242,17 @@ describe("SourceForm, editing a source", () => {
     expect(patchOf(calls)!.body).not.toHaveProperty("config");
   });
 
-  it("sends the whole config when the endpoint is edited", async () => {
+  it("sends only the Enabled switch when only that is toggled, so a stale form cannot write an old name back", async () => {
+    const calls = mockFetch({ ...auth, "PATCH /api/sources/2": { body: { id: 2 } } });
+    const onDone = vi.fn();
+    renderWithProviders(<SourceForm source={sim} onDone={onDone} />);
+    await userEvent.click(await screen.findByLabelText("Enabled"));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(patchOf(calls)!.body).toEqual({ enabled: false });
+  });
+
+  it("sends the whole config when the endpoint is edited, with the config the form was opened with as expect_config", async () => {
     const calls = mockFetch({ ...auth, "PATCH /api/sources/2": { body: { id: 2 } } });
     const onDone = vi.fn();
     renderWithProviders(<SourceForm source={sim} onDone={onDone} />);
@@ -250,7 +261,34 @@ describe("SourceForm, editing a source", () => {
     await userEvent.type(url, "http://moved:9000");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
-    expect(patchOf(calls)!.body).toEqual({ name: "sim", config: { url: "http://moved:9000", timeout_seconds: 2.5 }, enabled: true });
+    expect(patchOf(calls)!.body).toEqual({ config: { url: "http://moved:9000", timeout_seconds: 2.5 }, expect_config: { url: "http://sim:9000", timeout_seconds: 2.5 } });
+  });
+
+  it("sends the opening config as expect_config even when the edit is to a field other than the endpoint", async () => {
+    const calls = mockFetch({ ...auth, "PATCH /api/sources/2": { body: { id: 2 } } });
+    const onDone = vi.fn();
+    renderWithProviders(<SourceForm source={sim} onDone={onDone} />);
+    const timeout = await screen.findByLabelText("Timeout Seconds");
+    await userEvent.clear(timeout);
+    await userEvent.type(timeout, "9");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(patchOf(calls)!.body).toEqual({ config: { url: "http://sim:9000", timeout_seconds: 9 }, expect_config: sim.config });
+  });
+
+  it("shows the sentence of a 409 (the source was changed since the form was opened) in the error line and keeps the form open with what was typed", async () => {
+    const sentence = "This source was changed since you opened it. Close the form and open it again.";
+    mockFetch({ ...auth, "PATCH /api/sources/2": { status: 409, body: { detail: sentence } } });
+    const onDone = vi.fn();
+    renderWithProviders(<SourceForm source={sim} onDone={onDone} />);
+    const timeout = await screen.findByLabelText("Timeout Seconds");
+    await userEvent.clear(timeout);
+    await userEvent.type(timeout, "9");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(sentence);
+    expect(onDone).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Timeout Seconds")).toHaveValue(9);
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 
   it("sends the secret when one is typed", async () => {
@@ -260,7 +298,7 @@ describe("SourceForm, editing a source", () => {
     await userEvent.type(await screen.findByLabelText("Secret"), "new-key");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
-    expect(patchOf(calls)!.body).toEqual({ name: "sim", enabled: true, secret: "new-key" });
+    expect(patchOf(calls)!.body).toEqual({ secret: "new-key" }); // a secret alone: no name, no enabled, no config
   });
 
   it("removes the stored secret only through the explicit checkbox, which disables the Secret box", async () => {
@@ -272,7 +310,7 @@ describe("SourceForm, editing a source", () => {
     expect(screen.getByLabelText("Secret")).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
-    expect(patchOf(calls)!.body).toEqual({ name: "sim", enabled: true, secret: null });
+    expect(patchOf(calls)!.body).toEqual({ secret: null });
   });
 
   it("keeps the label of the Secret box exactly `Secret`, with the hint outside it, and the box empty", async () => {
@@ -346,7 +384,7 @@ describe("SourceForm, editing a source", () => {
       await userEvent.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() => expect(onDone).toHaveBeenCalled());
       expect(patchOf(calls)!.body).toEqual({
-        name: "sim", config: { url: "http://sim:9000", timeout_seconds: 2.5 }, enabled: true, clear_config_credentials: ["url"],
+        config: { url: "http://sim:9000", timeout_seconds: 2.5 }, expect_config: hiddenSim.config, clear_config_credentials: ["url"],
       });
     });
 
@@ -369,7 +407,7 @@ describe("SourceForm, editing a source", () => {
       renderWithProviders(<SourceForm source={hiddenSim} onDone={onDone} />);
       await userEvent.click(await screen.findByRole("button", { name: "Save" }));
       await waitFor(() => expect(onDone).toHaveBeenCalled());
-      expect(patchOf(calls)!.body).toEqual({ name: "sim", enabled: true });
+      expect(patchOf(calls)!.body).toEqual({});
     });
 
     it("sends the masked address back as it is, so the API can tell it is unchanged, when another field is edited", async () => {
@@ -396,7 +434,7 @@ describe("SourceForm, editing a source", () => {
       await userEvent.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() => expect(onDone).toHaveBeenCalled());
       expect(patchOf(calls)!.body).toEqual({
-        name: "sim", config: { url: "http://user:word@elsewhere:9000", timeout_seconds: 2.5 }, enabled: true, clear_config_credentials: ["url"],
+        config: { url: "http://user:word@elsewhere:9000", timeout_seconds: 2.5 }, expect_config: hiddenSim.config, clear_config_credentials: ["url"],
       });
     });
 
@@ -412,7 +450,8 @@ describe("SourceForm, editing a source", () => {
       await userEvent.type(timeout, "8");
       await userEvent.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() => expect(onDone).toHaveBeenCalled());
-      const { config } = patchOf(calls)!.body as { config: Record<string, unknown> };
+      const { config, expect_config } = patchOf(calls)!.body as { config: Record<string, unknown>; expect_config: Record<string, unknown> };
+      expect(expect_config).toEqual({ url: "http://simulator:9000/", timeout_seconds: 5 }); // the masked config the form was opened with, untouched
       expect(Object.keys(config).sort()).toEqual(["timeout_seconds", "url"]);
       expect(config.url).toBe("http://simulator:9000/");
       expect(config).toEqual({ url: "http://simulator:9000/", timeout_seconds: 8 });
