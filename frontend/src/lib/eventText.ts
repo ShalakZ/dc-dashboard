@@ -5,7 +5,7 @@ import { formatSiteDateTime } from "./siteTime";
 
 /**
  * The one table of words of the System events page (w32): a name for each kind the backend writes, a headline and a plain reason for each code of a
- * source that goes offline, and the sentences built from a row's stored detail. Every kind of `core/journal.py` and `ingest/kinds.py` and every
+ * source that goes offline, and the sentences built from a row's stored detail. Every kind of `core/journal.py`, `ingest/kinds.py` and `collector/identity.py` and every
  * status a connector can raise (`ConnectorError("<status>"`) appears below as a quoted word: `backend/tests/test_events_text_parity.py` reads this
  * file's text and fails when the backend writes one that is missing. A kind or a code that is not here falls back to the stored text and never throws.
  */
@@ -32,6 +32,7 @@ export const KIND_NAMES: Readonly<Record<string, string>> = {
   "history.failed": "History problem",
   "history.closed_month": "Closed month touched",
   "import.finished": "File import",
+  "source.identity_changed": "Server identity",
 };
 
 export const kindName = (kind: string): string => KIND_NAMES[kind] ?? kind;
@@ -93,6 +94,47 @@ const n = (value: number) => value.toLocaleString("en-US");
 const times = (count: number) => `${n(count)} ${count === 1 ? "time" : "times"}`;
 const reads = (count: number) => `${n(count)} failed ${count === 1 ? "read" : "reads"}`;
 const polls = (count: number) => `${n(count)} ${count === 1 ? "poll" : "polls"}`;
+
+/** The thumbprint kept to its first 5 and last 2 characters (`3A:5F:...:91`, the same cut as the Discovery panel's); a short one is shown whole. */
+const shortThumbprint = (value: string): string => (value.length > 12 ? `${value.slice(0, 5)}:...:${value.slice(-2)}` : value);
+
+/** Who a server said it is, in a few words, and its certificate; null for a side the stored detail does not describe. */
+function serverWords(side: unknown): { who: string | null; thumbprint: string | null } | null {
+  if (!isRecord(side)) return null;
+  const uri = text(side.application_uri);
+  const instance = text(side.instance);
+  const name = text(side.application_name);
+  const who = uri ?? (instance ? `the simulator "${instance}"` : name);
+  const thumbprint = text(side.thumbprint);
+  return who === null && thumbprint === null ? null : { who, thumbprint };
+}
+
+const withCertificate = (server: { who: string | null; thumbprint: string | null }): string =>
+  [server.who, server.thumbprint ? `certificate ${shortThumbprint(server.thumbprint)}` : null].filter((part) => part !== null).join(", ");
+
+/**
+ * source.identity_changed (w33) at its two levels, by the level of the row: `warning` = another server answers at the source's address (the old and the new one
+ * are named, the certificates cut short); `info` = the same server renewed its certificate (a notice, not a problem). The stored detail is `{before, after}`, each
+ * side the strings that server announced; any of it can be missing, and the line under the headline then says less.
+ */
+function identityChanged(event: SystemEvent, detail: Detail): { headline: string; reason: string | null } {
+  const before = serverWords(detail.before);
+  const after = serverWords(detail.after);
+  if (event.level === "info") {
+    const who = after?.who ?? before?.who ?? null;
+    const sentences = [
+      who ? `It is still ${who}.` : null,
+      before?.thumbprint && after?.thumbprint ? `Certificate ${shortThumbprint(before.thumbprint)} was replaced by ${shortThumbprint(after.thumbprint)}.`
+        : after?.thumbprint ? `The new certificate is ${shortThumbprint(after.thumbprint)}.` : null,
+    ].filter((part) => part !== null);
+    return { headline: "The server's certificate changed", reason: sentences.length > 0 ? sentences.join(" ") : null };
+  }
+  const sentences = [
+    before ? `It used to be ${withCertificate(before)}.` : null,
+    after ? `Now it is ${withCertificate(after)}.` : null,
+  ].filter((part) => part !== null);
+  return { headline: "A different server answers at this address", reason: sentences.length > 0 ? sentences.join(" ") : null };
+}
 
 /** What a Friendly row says: the headline, a plain reason under it, how many times it happened and how long it lasted (incidents only). */
 export interface EventText { headline: string; reason: string | null; count: string | null; span: string | null }
@@ -168,6 +210,8 @@ function headlineOf(event: SystemEvent, detail: Detail): { headline: string; rea
     }
     case "import.finished":
       return { headline: event.level === "warning" || event.level === "error" ? "A file import stopped half-way" : "A file import finished" };
+    case "source.identity_changed":
+      return identityChanged(event, detail);
     default:
       return { headline: event.message || kind };
   }

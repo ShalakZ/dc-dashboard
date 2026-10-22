@@ -10,6 +10,7 @@ import { copyText } from "../lib/diagnostics";
 import { describeAudit, OUTCOME_ACTIONS, outcomeOf } from "../lib/auditText";
 import { relativeTime } from "../lib/relativeTime";
 import { formatSiteDateTime } from "../lib/siteTime";
+import { MOVE_REFRESHED, undoMove, undoMoveSentence, undoRefusal } from "../lib/moves";
 import { TAG_LIST_REFRESHED, undoSentence } from "../lib/tagListUndo";
 import { upperFirst } from "../lib/upperFirst";
 import { KindTile, UserLabel } from "./AuditCells";
@@ -37,7 +38,7 @@ function EntrySkeleton({ rows }: { rows: number }) {
   );
 }
 
-/** The server takes a tag list back for this long after it was applied (api/tag_lists.py UNDO_HOURS). The server decides; this only keeps a button off an entry that is certainly too old. */
+/** The server takes a tag list, and a move of a source (w33), back for this long after it was applied (api/tag_lists.py UNDO_HOURS and the move's own). The server decides; this only keeps a button off an entry that is certainly too old. */
 const UNDO_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -97,6 +98,52 @@ function UndoThisList({ entryId }: { entryId: number }) {
     <div className="audit-undo">
       <button type="button" aria-disabled={state.phase === "idle" ? undefined : true} onClick={() => void undo()}>Undo this tag list</button>
       <p className="muted">Takes back the mappings, and the assets and points this list created, if none of them has changed since. Possible for 24 hours.</p>
+      <div className="audit-undo-slot">
+        {state.text !== null && (state.refused ? <p role="alert">{state.text}</p> : <p>{state.text}</p>)}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "Undo this move" for a source.moved entry of the last 24 hours, to a person who may edit sources (the permission the move itself needed). It calls the same
+ * route as the Undo of the toast, with the number of this entry. The server decides whether it still can: its refusals ("already undone", "changed since",
+ * "older than 24 hours") are shown in place, in a slot that is always there. An entry that was undone already is not knowable here. As with the tag list, the button
+ * stays after it worked (it only waits) so the focus does not fall to the page; the hooks live in the inner part so that an entry of any other action asks for
+ * neither the account nor the query client.
+ */
+function SourceMoveUndo({ entry, now }: { entry: AuditEntry; now: Date }) {
+  const { can } = useAuth();
+  const recent = Date.parse(entry.ts) > now.getTime() - UNDO_WINDOW_MS;
+  return can("sources.edit") && recent ? <UndoThisMove entryId={entry.id} /> : null;
+}
+
+function UndoThisMove({ entryId }: { entryId: number }) {
+  const toast = useToast();
+  const invalidate = useInvalidate();
+  const running = useRef(false);
+  const [state, setState] = useState<{ phase: "idle" | "busy" | "done"; text: string | null; refused: boolean }>({ phase: "idle", text: null, refused: false });
+
+  async function undo() {
+    if (running.current || state.phase === "done") return;
+    running.current = true;
+    setState({ phase: "busy", text: "Undoing the move...", refused: false });
+    try {
+      const text = undoMoveSentence(await undoMove(entryId));
+      toast.success(text);
+      setState({ phase: "done", text, refused: false });
+    } catch (error) {
+      setState({ phase: "idle", text: undoRefusal(error), refused: true });
+    } finally {
+      try { await invalidate(...MOVE_REFRESHED); } catch { /* the lists fetch themselves again on their next visit */ }
+      running.current = false;
+    }
+  }
+
+  return (
+    <div className="audit-undo">
+      <button type="button" aria-disabled={state.phase === "idle" ? undefined : true} onClick={() => void undo()}>Undo this move</button>
+      <p className="muted">Puts the source back at its old address. The duplicate that was removed is found again by the next scan. Readings taken at the new address stay.</p>
       <div className="audit-undo-slot">
         {state.text !== null && (state.refused ? <p role="alert">{state.text}</p> : <p>{state.text}</p>)}
       </div>
@@ -210,6 +257,7 @@ function EntryView({ entry, timezone, now }: { entry: AuditEntry; timezone: stri
       <textarea ref={area} className="copy-field" readOnly tabIndex={-1} aria-hidden="true" value={number} />
       {/* Keyed by the entry (and apart from RawJson's key: two siblings with one key leave the old one mounted): Previous and Next keep this component, and a finished or refused Undo belongs to the entry it was pressed on. */}
       {entry.action === "tags.mapped" && <TagListUndo key={`undo-${entry.id}`} entry={entry} now={now} />}
+      {entry.action === "source.moved" && <SourceMoveUndo key={`move-undo-${entry.id}`} entry={entry} now={now} />}
       {changes.length > 0 && (
         <>
           <h3 className="section-title">What changed</h3>

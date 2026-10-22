@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { graphCounts, graphSummary, type ActionState } from "../../lib/graphView";
@@ -420,6 +420,157 @@ describe("GraphBar", () => {
     });
   });
 
+  // (w33) Sources the newest scan of their range did not find: two more items at the END of the overflow menu, offered only while some source is marked (the filter to every role, Remove not
+  // seen only with `onRemove`), and one more chip while the filter is on. Nothing is drawn for the bar while it is off, so the measured width tiers pinned above stand.
+  describe("not seen: Turn on Not seen lately and Remove not seen (w33)", () => {
+    const notSeen = (over: Partial<NonNullable<React.ComponentProps<typeof GraphBar>["notSeen"]>> = {}) => ({
+      count: 3, filtered: false, onFilter: vi.fn(), removable: 2, onRemove: vi.fn(), ...over,
+    });
+
+    it("come after Clear unmapped, last in the menu", async () => {
+      bar({ snap: false, notSeen: notSeen() });
+      hideNarrow("Unmapped only", "Tidy layout", "Snap to grid");
+      await userEvent.click(overflow());
+      expect(menuItems().map((i) => i.textContent)).toEqual([
+        "Turn on Unmapped only", "Tidy layout", "Turn on Snap to grid", "Clear unmapped (3)", "Turn on Not seen lately", "Remove not seen (2)...",
+      ]);
+    });
+
+    it("are not there while nothing is marked not seen (so the menu is the one it always was), or without the prop", async () => {
+      bar({ notSeen: notSeen({ count: 0, removable: 0 }) });
+      await userEvent.click(overflow());
+      expect(menuItems().map((i) => i.textContent)).toEqual(["Clear unmapped (3)"]);
+    });
+
+    it("a role that may not clear unmapped sources (and so not remove) still gets the filter: its menu holds that item alone, and the overflow button is drawn at every width", async () => {
+      bar({ clear: undefined, notSeen: notSeen({ removable: undefined, onRemove: undefined }) });
+      expect(overflow()).toHaveClass("gbar-overflow");
+      expect(overflow()).not.toHaveClass("gbar-overflow-narrow");
+      await userEvent.click(overflow());
+      expect(menuItems().map((i) => i.textContent)).toEqual(["Turn on Not seen lately"]);
+    });
+
+    it("without the prop, or with nothing marked and no filter on, that role's menu stays empty and its button stays narrow-only", async () => {
+      bar({ clear: undefined });
+      expect(overflow()).toHaveClass("gbar-overflow", "gbar-overflow-narrow");
+      await userEvent.click(overflow());
+      expect(screen.queryByRole("menu")).toBeNull();
+      cleanup();
+      bar({ clear: undefined, notSeen: notSeen({ count: 0, removable: 0, onRemove: undefined }) });
+      expect(overflow()).toHaveClass("gbar-overflow-narrow");
+    });
+
+    it("Remove not seen is offered only with onRemove, after the filter, to a role that may clear unmapped sources", async () => {
+      bar({ notSeen: notSeen({ onRemove: undefined }) });
+      await userEvent.click(overflow());
+      expect(menuItems().map((i) => i.textContent)).toEqual(["Clear unmapped (3)", "Turn on Not seen lately"]);
+    });
+
+    it("the filter item says the state in its words and flips it, and the menu gives the focus back to the button first", async () => {
+      const seen: Array<Element | null> = [];
+      const onFilter = vi.fn(() => { seen.push(document.activeElement); });
+      const off = bar({ notSeen: notSeen({ onFilter }) });
+      await userEvent.click(overflow());
+      await userEvent.click(screen.getByRole("menuitem", { name: "Turn on Not seen lately" }));
+      expect(onFilter).toHaveBeenCalledWith(true);
+      expect(seen[0]).toBe(overflow());
+      expect(screen.queryByRole("menu")).toBeNull();
+      off.unmount();
+
+      bar({ notSeen: notSeen({ filtered: true, onFilter }) });
+      await userEvent.click(overflow());
+      await userEvent.click(screen.getByRole("menuitem", { name: "Turn off Not seen lately" }));
+      expect(onFilter).toHaveBeenLastCalledWith(false);
+    });
+
+    it("Remove not seen (N)... counts the sources it could remove, which may be fewer than the ones marked, and calls back once the focus is on the overflow button", async () => {
+      const seen: Array<Element | null> = [];
+      const onRemove = vi.fn(() => { seen.push(document.activeElement); });
+      bar({ notSeen: notSeen({ count: 5, removable: 4, onRemove }) });
+      await userEvent.click(overflow());
+      const item = screen.getByRole("menuitem", { name: "Remove not seen (4)..." });
+      expect(item).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(item);
+      expect(onRemove).toHaveBeenCalledTimes(1);
+      expect(seen[0]).toBe(overflow());
+    });
+
+    it("with marked sources that all have something mapped the item keeps its place, is aria-disabled with the reason, and does nothing", async () => {
+      const onRemove = vi.fn();
+      bar({ notSeen: notSeen({ count: 2, removable: 0, onRemove }) });
+      await userEvent.click(overflow());
+      const item = screen.getByRole("menuitem", { name: /Remove not seen \(0\)\.\.\./ });
+      expect(item).toHaveAttribute("aria-disabled", "true");
+      expect(item).toHaveAttribute("title", "Nothing to remove");
+      expect(item).toHaveTextContent("Nothing to remove");
+      await userEvent.click(item);
+      expect(onRemove).not.toHaveBeenCalled();
+      // the filter item is still usable: the marked sources can be looked at
+      expect(screen.getByRole("menuitem", { name: "Turn on Not seen lately" })).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("a filter that is on keeps its item while the count is 0 (the page switches it off by itself, but the item never vanishes under a person who just used it)", async () => {
+      bar({ notSeen: notSeen({ count: 0, removable: 0, filtered: true }) });
+      await userEvent.click(overflow());
+      expect(menuItems().map((i) => i.textContent)).toEqual(["Clear unmapped (3)", "Turn off Not seen lately"]);
+    });
+
+    it("changes nothing the bar draws while the filter is off: the same markup with or without the prop, so no width tier moves", () => {
+      const markup = () => root().innerHTML.replace(/_r_[0-9a-z]+_/g, "_id_"); // React's generated ids differ from one mount to the next
+      const without = bar();
+      const html = markup();
+      without.unmount();
+      bar({ notSeen: notSeen() });
+      expect(markup()).toBe(html);
+    });
+
+    describe("the chip while the filter is on", () => {
+      const chip = () => root().querySelector(".gbar-chip-filter") as HTMLElement | null;
+
+      it("draws `Only not seen lately (2)` as the last chip, in decoration (aria-hidden), with the whole sentence in its title, and the count chips stay as they were", () => {
+        bar({ notSeen: notSeen({ count: 2, filtered: true }) });
+        const shown = chip()!;
+        expect(shown).not.toBeNull();
+        expect(shown).toHaveTextContent("Only not seen lately (2)");
+        expect(shown).toHaveAttribute("title", "Only not seen lately (2)");
+        expect(shown).toHaveAttribute("aria-hidden", "true");
+        expect(shown.classList.contains("gbar-chip")).toBe(true);
+        expect(shown.querySelector("svg.i")).not.toBeNull();
+        const all = [...root().querySelectorAll(".gbar-chip")];
+        expect(all[all.length - 1]).toBe(shown);
+        expect(all.slice(0, 3).map((c) => c.getAttribute("title"))).toEqual(["3 sources", "120 points", "6 mapped"]);
+      });
+
+      it("is one run of text made of parts the stylesheet takes out as the bar narrows: `Only` and `lately` first, then `not seen` and the brackets, and the icon and the number stay", () => {
+        bar({ notSeen: notSeen({ count: 12, filtered: true }) });
+        expect(chip()).toHaveTextContent("Only not seen lately (12)"); // read in order, with no word twice
+        expect(chip()!.querySelector(".gbar-chip-num")).toHaveTextContent("12");
+        expect([...chip()!.querySelectorAll(".gbar-chip-fword")].map((w) => w.textContent)).toEqual(["Only ", " lately"]);
+        expect([...chip()!.querySelectorAll(".gbar-chip-mword")].map((w) => w.textContent)).toEqual(["not seen", " (", ")"]);
+      });
+
+      it("gives the chips row gbar-chips-filtered (the count chips lose their words earlier, so the new chip is not starved) and keeps gbar-chips-wide as it was", () => {
+        bar({ notSeen: notSeen({ filtered: true }), counts: { ...COUNTS, needing: 1 } });
+        const row = root().querySelector(".gbar-chips")!;
+        expect(row).toHaveClass("gbar-chips", "gbar-chips-wide", "gbar-chips-filtered");
+      });
+
+      it("is not drawn while the filter is off, however many sources are marked, and adds no live region: the summary stays the one announcer", () => {
+        bar({ notSeen: notSeen({ count: 5, filtered: false }) });
+        expect(chip()).toBeNull();
+        expect(root().querySelector(".gbar-chips")).not.toHaveClass("gbar-chips-filtered");
+        cleanup();
+        bar({ notSeen: notSeen({ filtered: true }) });
+        expect(root().querySelectorAll("[aria-live], [role='status'], [role='alert']")).toHaveLength(1);
+      });
+
+      it("is drawn for a role that holds no clear, too", () => {
+        bar({ clear: undefined, notSeen: notSeen({ filtered: true, removable: undefined, onRemove: undefined }) });
+        expect(chip()).not.toBeNull();
+      });
+    });
+  });
+
   describe("the Collapse all and Expand all chevrons (the old MoreWays, now BarMenu)", () => {
     it("each is a menu button, collapsed until pressed, beside its button", () => {
       bar();
@@ -524,6 +675,11 @@ describe("the bar's stylesheet (discovery-tidy.css)", () => {
   // the normal chips keep theirs until every control has lost its word, and only then fall to icon and number.
   const WIDE_WORDS = ".gbar-chips-wide .gbar-chip-word";
   const NORMAL_WORDS = ".gbar-chip-word";
+  // w33: while the Not seen lately filter is on (the row has `gbar-chips-filtered`), every count chip is icon and number up to a wider bar, and the filter chip's own words go lower down.
+  const FILTERED_WORDS = ".gbar-chips-filtered .gbar-chip-word";
+  const FILTER_CHIP_WORDS = ".gbar-chip-fword";
+  const FILTER_CHIP_MORE = ".gbar-chip-mword";
+  const WIDE_FILTER_CHIP_MORE = ".gbar-chips-wide .gbar-chip-mword"; // the middle form is for a normal row only
   const at = (selector: string) => {
     const tier = tiers.find((r) => r.selector === selector);
     expect(tier, `a tier rule for ${selector}`).toBeDefined();
@@ -598,13 +754,17 @@ describe("the bar's stylesheet (discovery-tidy.css)", () => {
     }
   });
 
-  it("display: none is used for three things only: chip words in their two tiers (decoration), the three narrow controls (their menu twins carry the names) and the narrow-only overflow button", () => {
+  it("display: none is used for three things only: chip words in their tiers (decoration: the two families, and the filter chip's own words and the others' while it is on), the three narrow controls (their menu twins carry the names) and the narrow-only overflow button", () => {
     const hidden = rules.filter((r) => /display:\s*none/.test(r.body)).map((r) => `${r.at.filter((a) => a.startsWith("@container")).join("")}|${r.selector}`);
     expect(hidden.sort()).toEqual([
       `|.graph-bar .gbar-overflow-narrow`,
       `@container (max-width: ${at(".gbar-narrow")}px)|.gbar-narrow`,
       `@container (max-width: ${at(NORMAL_WORDS)}px)|${NORMAL_WORDS}`,
       `@container (max-width: ${at(WIDE_WORDS)}px)|${WIDE_WORDS}`,
+      `@container (max-width: ${at(FILTERED_WORDS)}px)|${FILTERED_WORDS}`,
+      `@container (max-width: ${at(FILTER_CHIP_WORDS)}px)|${FILTER_CHIP_WORDS}`,
+      `@container (max-width: ${at(FILTER_CHIP_MORE)}px)|${FILTER_CHIP_MORE}`,
+      `@container (max-width: ${at(WIDE_FILTER_CHIP_MORE)}px)|${WIDE_FILTER_CHIP_MORE}`,
     ].sort());
     expect(body(".graph-bar .gbar-overflow-narrow", tiers.find((r) => r.selector === ".gbar-narrow")!.at)).toMatch(/display:\s*grid/); // and the narrowest tier draws it, as the .icon-btn grid it is
   });
@@ -615,6 +775,33 @@ describe("the bar's stylesheet (discovery-tidy.css)", () => {
     expect(chips).toMatch(/min-width:\s*0/);
     expect(chips).toMatch(/overflow:\s*hidden/);
     expect(chips).toMatch(/height:\s*20px/);
+  });
+
+  it("the filter chip (w33): the count chips are icon and number up to a 1700px bar while it is on, `Only` and `lately` go from 1440px down, `not seen` and the brackets from 840px down, where the gap between the chips is 6px; the tiers above are not moved", () => {
+    // measured: 961 + 8 + 539 + 14 + 175 = 1697 (every word of the worst set and the full chip); the worst chips as icon and number beside the full chip need 1425 on paper and 1437 in the sweep
+    expect(at(FILTERED_WORDS), "every word fits only above 1697").toBeGreaterThanOrEqual(1697);
+    expect(at(FILTERED_WORDS)).toBeLessThanOrEqual(1707);
+    expect(at(FILTER_CHIP_WORDS), "the chip's words fit only above 1437").toBeGreaterThanOrEqual(1437);
+    expect(at(FILTER_CHIP_WORDS)).toBeLessThanOrEqual(1447);
+    expect(at(FILTER_CHIP_WORDS)).toBeLessThan(at(FILTERED_WORDS)); // the others' words leave first, then the chip's own
+    expect(at(FILTER_CHIP_MORE), "icon and number from the tier where the normal chips lose their words").toBe(at(NORMAL_WORDS));
+    // the middle form (`not seen (2)`) is too wide just above each control tier for a wide row (measured), so a wide row goes from the full words straight to icon and number, in the same tier
+    expect(at(WIDE_FILTER_CHIP_MORE), "a wide row skips the middle form").toBe(at(FILTER_CHIP_WORDS));
+    const gap = tiers.find((r) => r.selector === ".gbar-chips-filtered" && /column-gap/.test(r.body));
+    expect(gap, "a tighter gap while the filter is on").toBeDefined();
+    expect(gap!.body).toMatch(/column-gap:\s*6px/);
+    expect(widthOf(gap!)).toBe(at(NORMAL_WORDS)); // the tier where every control is an icon and the counts have just lost their words
+    // the existing tiers are where they were
+    expect([at(WIDE_WORDS), at(".gbar-lbl-snap"), at(".gbar-lbl-find"), at(".gbar-lbl-tidy"), at(".gbar-lbl-unmapped"), at(".gbar-lbl-fold"), at(NORMAL_WORDS), at(".gbar-narrow")]).toEqual(
+      [1520, 1360, 1260, 1210, 1120, 1010, 840, 720],
+    );
+  });
+
+  it("the filter chip's icon wears the accent and its words are kept in the markup (the stylesheet hides them, nothing removes them): no rule makes the chip hide or wrap", () => {
+    expect(body(".gbar-chip-filter svg.i")).toMatch(/color:\s*var\(--accent\)/);
+    for (const r of rules.filter((x) => /gbar-chip-filter|gbar-chip-fword/.test(x.selector) && !/display:\s*none/.test(x.body))) {
+      expect(r.body, r.selector).not.toMatch(/visibility|position:\s*absolute|flex-wrap/);
+    }
   });
 
   it("an ON control of the bar (Snap to grid, aria-pressed) differs from the focus ring: a neutral border, the accent tint and ink, and an inset accent line at the foot, beating the base rule by specificity", () => {

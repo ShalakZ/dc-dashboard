@@ -1,6 +1,7 @@
 import type { Edge, FitViewOptions, Node } from "@xyflow/react";
-import type { Asset, GraphModel, GraphPoint, GraphSource, RemoveSourcesResult } from "../api/types";
-import { isLive } from "./graphStatus";
+import type { Asset, GraphModel, GraphPoint, GraphSource, RemoveSourcesResult, SourceMoveCandidateForNew } from "../api/types";
+import { isLive, sourceTitle } from "./graphStatus";
+import { hostPortOfEndpoint, twoServersText } from "./moves";
 import { relativeTime } from "./relativeTime";
 
 /** Key of the pseudo-cluster that holds a source's points that have no cluster of their own. */
@@ -42,6 +43,8 @@ export type NodeActions = {
   onCreateAssets?: (nodeId: string) => void;
   /** Ask to remove a discovered source that has nothing mapped (discovery.edit). */
   onRemove?: (nodeId: string) => void;
+  /** (w33) Open the move dialog for a new source that looks like an old one that stopped answering: given only with sources.edit and only while the source has an offer (`moveOfferFor`). */
+  onMoveSource?: (nodeId: string) => void;
   /** W12a: a mapped point or group, for a role with assets.edit: the small menu button on the node calls this with its own element, and the page opens the node's menu next to it (a menu inside the node would leak its keys into the canvas). */
   onMenu?: (button: HTMLElement) => void;
   /** W12a: the menu items "Unmap…" and "Move to another asset…" (a group: "this group"), given only to a role with assets.edit and only while something on the node is mapped. */
@@ -65,6 +68,8 @@ export type SourceNodeData = NodeActions & {
   source: GraphSource; expanded: boolean;
   /** The muted line saying when a scan last found the source (`seenLine`); the page words it, since the time needs the site's clock. */
   seen?: string;
+  /** (w33) The whole sentence for an offer (`looksLikeSentence` with the time the page formatted in the site's zone): the card's tooltip. Absent = the card words it without a time. */
+  looks?: string;
   /** How many groups "Create assets" would turn into assets: it is in the button's name. */
   groups?: number;
 };
@@ -132,6 +137,11 @@ export function groupsOf(source: GraphSource): Group[] {
 export interface GraphView {
   /** "Unmapped only": mapped points, groups whose points are all mapped and sources with nothing left to map are not drawn, and no mapped edge is. */
   unmappedOnly: boolean;
+  /**
+   * (w33) "Not seen lately": only the discovered sources the newest done scan of their range did not find are drawn (`isNotSeen`). Optional, so every caller
+   * that builds a view by hand keeps working; absent = off. Session only. The page turns it off by itself when no source is marked any more.
+   */
+  notSeenOnly?: boolean;
   /** Group node id -> how many of its (visible) points the page shows. Absent = `pageSize`. Session only; `pruneShown` drops the entries of closed groups. */
   shown: ReadonlyMap<string, number>;
   /** Asset ids whose sub-assets are hidden. */
@@ -157,8 +167,12 @@ export function groupVisible(group: Group, view: GraphView): boolean {
   return !view.unmappedOnly || group.points.length === 0 || group.points.some((p) => p.asset_id === null);
 }
 
-/** A source is hidden by the filter when it has at least one point and every point is mapped. A source with no points stays (it may need credentials). */
+/**
+ * A source is hidden by "Unmapped only" when it has at least one point and every point is mapped. A source with no points stays (it may need credentials).
+ * (w33) "Not seen lately" hides every source that is not marked not seen; the two filters add up.
+ */
 export function sourceVisible(source: GraphSource, view: GraphView): boolean {
+  if (view.notSeenOnly && !isNotSeen(source)) return false;
   if (!view.unmappedOnly) return true;
   const groups = groupsOf(source);
   const total = groups.reduce((n, g) => n + g.points.length, 0);
@@ -592,9 +606,154 @@ export function isRemovable(source: GraphSource): boolean {
   return source.origin === "discovered" && !pointsOf(source).some((p) => p.mapping_id !== null || p.asset_id !== null);
 }
 
-/** The muted line of a source node and its panel: when a scan last found it. `now` and the site's time zone are passed in (the "ago" part counts on the site's clock). */
+/**
+ * (w33) Whether the server marked this source "not seen": the newest done scan of the same range (the same targets and ports) did not find it. Only a discovered
+ * source can be marked (a source added by hand is never), so a stray field on a hand-added one is ignored here too.
+ */
+export function isNotSeen(source: GraphSource): boolean {
+  return source.origin === "discovered" && source.not_seen != null;
+}
+
+/** (w33) The sources "Remove not seen" may offer: not seen AND nothing mapped (the rule of Remove and Clear unmapped). The server decides again on its own data. */
+export function removableNotSeen(sources: readonly GraphSource[]): GraphSource[] {
+  return sources.filter((s) => isNotSeen(s) && isRemovable(s));
+}
+
+/** (w33) How many sources are marked not seen, mapped or not (the filter "Not seen lately" shows exactly these). */
+export function notSeenCount(sources: readonly GraphSource[]): number {
+  return sources.filter(isNotSeen).length;
+}
+
+/** (w33) What a not-seen source with a mapped point that has stopped answering says in place of its seen line: it cannot be removed here; its mappings are moved or the source deleted on Sources. */
+export const MAPPED_NOT_SEEN = "Mapped: move it or delete it on Sources";
+
+/**
+ * (w33) True when `MAPPED_NOT_SEEN` applies: the source is not seen AND has something mapped (so Remove not seen cannot take it) AND its status is `offline`. A mapped source that
+ * still polls fine (online, or one the sweep missed once) has nothing to move or delete, so it keeps its seen line.
+ */
+export const isMappedNotSeen = (source: GraphSource): boolean => isNotSeen(source) && !isRemovable(source) && source.status === "offline";
+
+/** (w33) What a card and a panel say when another server than the one the source remembers answers at its address (`identity.different`, any source). */
+export const DIFFERENT_SERVER = "A different server answers at this address";
+
+/** (w33) True when the server says another server answers at this source's address. Any source can carry it, one added by hand too. */
+export const isDifferentServer = (source: GraphSource): boolean => source.identity?.different === true;
+
+/** (w33) The old source a new, unmapped source looks like (the one the Move... button moves), or null: no candidate, `two`, or an API that does not send the field. */
+export const moveOfferFor = (source: GraphSource): SourceMoveCandidateForNew | null =>
+  source.move_candidate?.kind === "offer" ? source.move_candidate : null;
+
+/** (w33) True when several old sources could be this one: nothing is offered, the address is edited by hand (`twoServersText`). */
+export const twoServers = (source: GraphSource): boolean => source.move_candidate?.kind === "two";
+
+const countNumber = (n: number) => n.toLocaleString("en-US");
+
+const mappingsWord = (n: number) => `${countNumber(n)} ${n === 1 ? "mapping" : "mappings"}`;
+
+/** The default names the scans give (`OPC UA server at 172.20.0.2:4840`, `DCDash simulator at ...`, `Modbus device at ...`), with or without the address: the type, not the device. */
+const GENERIC_TITLE = /^(?:OPC UA server|DCDash simulator|Modbus device|OPC UA|Modbus|Simulator)(?: at \S+)?$/i;
+
+/**
+ * (w33) The card's line for an offer: `Looks like Meter room 2 (12 mappings)`. It leads with the part that tells the old source apart (its title without the address its name ends
+ * with: the helper of the card's own title, given the endpoint the offer carries) and the stylesheet's ellipsis cuts after it; the whole sentence is the tooltip (`looksLikeSentence`).
+ * A title that identifies nothing, because it is the same text as the card's own (`cardTitle`) or only the type label of a scan's default name, gives way to where the old source was:
+ * `Was at 172.20.0.3:4840 (12 mappings)` (host and port of its endpoint, an IPv6 host in brackets). Without an endpoint the title stays.
+ */
+export function looksLikeLine(offer: SourceMoveCandidateForNew, cardTitle?: string): string {
+  const title = sourceTitle({ name: offer.from_name, config: { endpoint: offer.from_endpoint } });
+  const address = hostPortOfEndpoint(offer.from_endpoint);
+  const says = title !== cardTitle && !GENERIC_TITLE.test(title);
+  return `${says || address === "" ? `Looks like ${title}` : `Was at ${address}`} (${mappingsWord(offer.mappings)})`;
+}
+
+/**
+ * (w33) The whole sentence of an offer, for the card's tooltip and the panel: `This looks like <old name> (12 mappings on 3 assets), which has not answered since 18 Oct 07:52`.
+ * `since` is that time, already written in the site's zone by the caller (it needs the zone: `formatOfflineSince(offer.from_since, timezone)`); null when unknown. Without it
+ * the sentence says where the old source stopped answering (the host and port of its endpoint, which carries no user name or password), unless its name already holds the
+ * address (the scan's names end with it), when it says nothing more. No assets, no "on 0 assets".
+ */
+export function looksLikeSentence(offer: SourceMoveCandidateForNew, since: string | null = null): string {
+  const assets = offer.assets > 0 ? ` on ${countNumber(offer.assets)} ${offer.assets === 1 ? "asset" : "assets"}` : "";
+  const address = hostPortOfEndpoint(offer.from_endpoint);
+  const stopped = since ? `, which has not answered since ${since}` : address !== "" && !offer.from_name.includes(address) ? `, which stopped answering at ${address}` : "";
+  return `This looks like ${offer.from_name} (${mappingsWord(offer.mappings)}${assets})${stopped}`;
+}
+
+/**
+ * (w33) The last line of the source card and its tooltip. The card has no room for a seventh line (SOURCE_H), so the one seen line trades places with what matters more,
+ * in this order, and the tooltip keeps every sentence:
+ * - another server answers at the address: `A different server answers at this address` (tone "warn": the card draws it in the warning ink);
+ * - the source looks like an old one that stopped answering: `Looks like <old title> (12 mappings)`, or `Was at <host:port> (12 mappings)` when that title says nothing (`looksLikeLine`);
+ *   the Move... button is on the card's button row;
+ * - several old sources could be it: `Two servers could be this one; edit the address by hand` (`Several` for more than two);
+ * - not seen, something mapped and offline: what to do about it.
+ * Every other source shows its seen line as it is. `looks` is the page's whole sentence for an offer (`looksLikeSentence` with the time it formatted in the site's zone); without it
+ * the card builds the sentence without a time.
+ */
+export function seenCard(source: GraphSource, seen: string, looks?: string): { line: string; title: string; tone?: "warn" } {
+  const offer = moveOfferFor(source);
+  const sentence = offer && (looks ?? looksLikeSentence(offer));
+  const joined = (...sentences: (string | false | null)[]) => sentences.filter((s): s is string => !!s).join(". ");
+  if (isDifferentServer(source)) return { line: DIFFERENT_SERVER, title: joined(DIFFERENT_SERVER, sentence, seen), tone: "warn" };
+  if (offer) return { line: looksLikeLine(offer, sourceTitle(source)), title: joined(sentence, seen) };
+  const two = twoServersLine(source);
+  if (two) return { line: two, title: joined(two, seen) };
+  if (isMappedNotSeen(source)) return { line: MAPPED_NOT_SEEN, title: `${seen}. ${MAPPED_NOT_SEEN}` };
+  return { line: seen, title: seen };
+}
+
+/** (w33) The sentence for several old sources that could be this one, from the count in the candidate (`Two` for 2, `Several` for more); null for any other source. */
+export const twoServersLine = (source: GraphSource): string | null =>
+  source.move_candidate?.kind === "two" ? twoServersText(source.move_candidate.count) : null;
+
+/** (w33) The panel's sentence for the seen line: a not-seen source gets the reason after the line itself. */
+export function notSeenSentence(source: GraphSource, seen: string): string {
+  return isNotSeen(source) ? `${seen}. A later scan of the same range did not find it.` : seen;
+}
+
+/**
+ * (w33) Who the server said it is: `Server: urn:dcdash:simulator:dev` (its application URI), else `Simulator instance dev` (the simulator's instance id), else `Server: <its name>`; null
+ * when nothing is known. Read-only.
+ */
+export function serverLine(identity: GraphSource["identity"]): string | null {
+  if (identity?.application_uri) return `Server: ${identity.application_uri}`;
+  if (identity?.instance) return `Simulator instance ${identity.instance}`;
+  return identity?.application_name ? `Server: ${identity.application_name}` : null;
+}
+
+/** The thumbprint kept to its first 5 and last 2 characters (`3A:5F:...:91`); a short one is shown whole. */
+const shortThumbprint = (value: string): string => (value.length > 12 ? `${value.slice(0, 5)}:...:${value.slice(-2)}` : value);
+
+/** (w33) `certificate 3A:5F:...:91` with the whole thumbprint for the tooltip; null without a thumbprint. */
+export function certificateLine(identity: GraphSource["identity"]): { text: string; title: string } | null {
+  const value = identity?.thumbprint;
+  return value ? { text: `certificate ${shortThumbprint(value)}`, title: value } : null;
+}
+
+/** (w33) The source a node belongs to: a source node, a group node or a point node; null for an asset, an unidentified service or an unknown point. */
+export function sourceIdOfNode(model: GraphModel, id: string): number | null {
+  if (id.startsWith("src:") || id.startsWith("cluster:")) {
+    const sourceId = Number(id.split(":")[1]);
+    return Number.isInteger(sourceId) ? sourceId : null;
+  }
+  if (id.startsWith("point:")) {
+    const pointId = Number(id.slice("point:".length));
+    return model.sources.find((s) => pointsOf(s).some((p) => p.id === pointId))?.id ?? null;
+  }
+  return null;
+}
+
+/**
+ * The muted line of a source node and its panel: when a scan last found it. `now` and the site's time zone are passed in (the "ago" part counts on the site's clock).
+ * (w33) A discovered source the server marked not seen says so first: `Not seen in scan #7 (last seen in #5, 4 days ago)`, the ago part counted from the last time it was seen.
+ */
 export function seenLine(source: GraphSource, now: Date, timezone: string): string {
   if (source.origin === "manual") return "Added by hand"; // a scan that meets it only reports "existing source": there is no time worth showing
+  const missed = source.not_seen;
+  if (missed) {
+    const since = relativeTime(missed.last_seen_at, now, timezone);
+    return `Not seen in scan #${missed.scan_id} (last seen in #${missed.last_seen_scan_id}${since ? `, ${since}` : ""})`;
+  }
   const scan = source.last_scan;
   if (!scan) return "Not seen in a scan yet";
   const ago = relativeTime(scan.at, now, timezone);
@@ -649,8 +808,22 @@ function nameList(names: readonly string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-/** The title and the sentence of the delete dialog for Remove (one source) and Clear unmapped (several). The list is the one the person was shown. */
-export function removalDialogText(names: readonly string[]): { title: string; message: string } {
+/**
+ * The title and the sentence of the delete dialog for Remove (one source) and Clear unmapped (several). The list is the one the person was shown.
+ * (w33) `"notSeen"` is Remove not seen: the same dialog with the reason (the latest scan of the same range did not find them) and the promise that mapped and
+ * hand-added sources are never removed. Without a kind the words are the old ones.
+ */
+export function removalDialogText(names: readonly string[], kind?: "notSeen"): { title: string; message: string } {
+  if (kind === "notSeen") {
+    const never = "Mapped sources and sources added by hand are never removed.";
+    if (names.length === 1) {
+      return { title: `Remove "${names[0]}", which the latest scan did not find?`, message: `The latest scan of the same range did not find it. ${never} A scan can find it again.` };
+    }
+    return {
+      title: `Remove ${names.length} sources the latest scan did not find?`,
+      message: `${nameList(names)}. The latest scan of the same range did not find them. ${never} A scan can find these again.`,
+    };
+  }
   if (names.length === 1) {
     return {
       title: `Remove "${names[0]}" from Discovery?`,

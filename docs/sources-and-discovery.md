@@ -191,8 +191,9 @@ data-retrieval requests the connectors already use, nothing else.
 
    **Page controls.** **Refresh** (a button with the circular arrow) reads the graph again; it was in the page header before. The keyboard
    button, named `Keyboard shortcuts and controls`, opens the list of keys (below). **More Discovery actions** (three dots) holds **Clear
-   unmapped (N)** (see **Removing leftovers**) for a role that has `discovery.edit`; it is greyed out and says `Nothing to clear` when no
-   source can go.
+   unmapped (N)** (see **Removing leftovers**) for a role that has `discovery.edit` (greyed out, `Nothing to clear`, when no source
+   can go), and, while a source is marked not seen, **Turn on Not seen lately** (everyone who can open Discovery) and **Remove not seen
+   (N)...** (`discovery.edit`; [Devices that move or disappear](devices-that-move.md#not-seen-and-remove-not-seen)).
 
    **A narrower window.** The bar keeps to one row. When the window is narrower the controls lose their words one at a time and keep
    their icons (**Snap to grid** first, then **Find**, **Tidy layout**, **Unmapped only**, and last **Collapse all** and **Expand all**), while the
@@ -201,8 +202,8 @@ data-retrieval requests the connectors already use, nothing else.
    count is ever dropped for the sake of a word. Every button keeps its name for a screen reader and for the tooltip. A count that still
    does not fit is left out whole rather than cut in half (the sentence a screen reader hears is unaffected). On a still narrower window **Unmapped only**, **Tidy layout** and **Snap to grid** leave the bar
    and appear in the **More Discovery actions** menu instead, as `Turn on Unmapped only` (or `Turn off ...`), `Tidy layout` and `Turn on Snap
-   to grid` (or `Turn off ...`), so each is in exactly one place. A role that may not clear unmapped sources has nothing else in that menu, so
-   it gets the More button only on a window that narrow.
+   to grid` (or `Turn off ...`), so each is in exactly one place. A role that may not clear unmapped sources gets the More button only on a window that narrow
+   or while sources are marked not seen.
 
    **Unmapped only.** The switch in the bar's View controls hides every point that is mapped, every group whose points are all mapped and
    every source with at least one point and all of them mapped (a source with no points stays), and draws no line from a point to an
@@ -277,7 +278,8 @@ data-retrieval requests the connectors already use, nothing else.
    4. `60 of 60 mapped` (`No points yet` for a source with none) with a thin bar under it, as long as the share of its points that are
       mapped. The bar is only a picture; the words say the same.
    5. **Details**, which opens the source's side panel.
-   6. When a scan last found it (`Seen in scan #6, 10 min ago`, `Added by hand` or `Not seen in a scan yet`).
+   6. When a scan last found it (`Seen in scan #6, 10 min ago`, `Added by hand` or `Not seen in a scan yet`); [Devices that move or
+      disappear](devices-that-move.md) lists its other texts.
 
    The dashed border of a discovered source is kept. The protocol reads `OPC UA`, `Modbus` or `Simulator`, or the connector's own name when
    the app has no label for it. **Create assets for N groups…** and **Remove from Discovery…** are not buttons on the card: they are in
@@ -407,7 +409,8 @@ data-retrieval requests the connectors already use, nothing else.
 
    Each source node says when a scan last found it (`Seen in scan #6, 10 min ago`), or `Added by hand` for a source you made
    yourself, or `Not seen in a scan yet`. A scan only adds sources and refreshes their points; it never removes one, so a source
-   whose device is gone, or that you deleted on Sources, stays or comes back until you remove it here.
+   whose device is gone or moved, or that you deleted on Sources, stays or comes back until you remove it here
+   ([Devices that move or disappear](devices-that-move.md)).
 
    **Removing leftovers** (needs `discovery.edit`). A discovered source with nothing mapped has **Remove from Discovery…** in its `⋯` menu
    (`Source actions for <name>`, or a right-click on the source; it is no longer a button on the card), and **Clear unmapped (N)** in
@@ -532,7 +535,8 @@ data-retrieval requests the connectors already use, nothing else.
    subject carries `origin`, and, for a save that needed confirmation, `confirmed_loss`; remembering a site
    default is `storage.default_set`), assets (create, edit, delete, and moving in the tree: one `asset.moved` entry per moved
    asset, with its old and new parent, all sharing one request id), mappings,
-   sources (create, edit, delete, test, test all, browse), removing unmapped discovered sources (`source.deleted`, `unmapped_only`), tariffs, dashboards, asset kinds (a delete that moves assets records how many and
+   sources (create, edit, delete, test, test all, browse; an edit that changes the host or port of an OPC UA or simulator source that remembers its server also
+   records `identity_cleared`; a move and its Undo are `source.moved` and `source.move_undone`), removing unmapped discovered sources (`source.deleted`, `unmapped_only`), tariffs, dashboards, asset kinds (a delete that moves assets records how many and
    where to; adding the starter kinds records which), scopes, scans (start and
    finish), accepted discoveries, a tag list and its Undo (`tags.mapped`, `tags.unmapped`), a file import (`readings.imported`: counts,
    never a value), import profiles (`import_profile.saved`, `.deleted`) and a requested fill (`history.fill_requested`). Never recorded: passwords and password hashes, source secrets and

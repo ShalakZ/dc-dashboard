@@ -1,6 +1,7 @@
 import copy
 import json
 import re
+from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Self
 
@@ -21,11 +22,17 @@ from dcdash.core.crypto import encrypt
 from dcdash.core.models import Mapping, Point, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
 from dcdash.events import read as events_read
+from dcdash.moves.load import load_offers
+from dcdash.moves.match import MOVABLE_TYPES, Offer, Two, another_server_answers
+from dcdash.moves.urls import address_key, display_endpoint
 
 router = APIRouter(prefix="/api", tags=["sources"])
 
 CHECK_LOCK = 7_308_001  # advisory-lock namespace (first int); the source id is the second: one check start per source at a time
 CHECK_COOLDOWN_SECONDS = 5
+STALE_FORM = (
+    "This source was changed since you opened it (for example it was moved to a new address). Close the form and open it again."
+)
 
 
 class SourceIn(BaseModel):
@@ -44,6 +51,10 @@ class SourcePatch(BaseModel):
     # Keys of `config` the admin wants stored without their hidden part (URL credentials) although the form sent the
     # masked value back; see reconcile_config.
     clear_config_credentials: list[str] = Field(default=[], max_length=20)
+    # The masked config the edit form was opened with (what GET /api/sources showed as `config`). When both this and `config` are sent
+    # and the stored config no longer shows the same, the form is stale (for example the source was moved to a new address since)
+    # and saving it would write the old values back: refused with a 409, nothing changed. Absent for an older client: no check.
+    expect_config: dict[str, Any] | None = None
 
 
 class SourceOut(BaseModel):
@@ -93,6 +104,12 @@ class SourceListOut(SourceOut):
     history: SourceHistoryLine | None = None  # never null in an answer: list_sources fills it for every row (the default only lets `of` validate)
     offline_since: datetime | None = None  # while offline: the earlier of the open incident's start and last_seen; else null (P7)
     failed_reads: int | None = None  # while offline: the open incident's count of failed reads; else null
+    # w33 R8: while offline and a scan found its server again at another address, the new source it could move to
+    # (`{kind: "offer", to_source_id, to_name, to_endpoint, match}`), or `{kind: "two", count}`; else null. No user info anywhere in it.
+    move_candidate: dict[str, Any] | None = None
+    # w33 whole-wave review I3: a scan, Test or check met ANOTHER server at this address than the one the source used to talk to
+    # (`identity.different`; polling goes on). Only the fact: never what the other server said. False for no identity.
+    identity_different: bool = False
 
 
 class SourceHistoryOut(BaseModel):
@@ -195,6 +212,13 @@ def _values(source: Source) -> dict[str, Any]:
     }
 
 
+def _host_and_port(source: Source) -> tuple[str, int] | None:
+    """Where the source's server is, as the matcher reads it (`moves.urls.address_key`: host lower-cased, the effective port, so a
+    default port written out is the same port); the path and the scheme do not count. None for a type with no such address."""
+    key = address_key(source.connector_type, source.config)
+    return None if key is None else key[:2]
+
+
 def _history_line(source: Source, row: Any, types: dict[str, Any]) -> SourceHistoryLine:
     """The list's `history` of one source: its `history_status` row, or "never_run" when it has none yet (as the `/history` route
     answers). `last_error` is scrubbed with the source's own hidden values, exactly as that route does it."""
@@ -263,16 +287,52 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
     # One more query for all the OFFLINE listed sources: their open `source.offline` incident (w32). Plain SQL, as above. A source
     # that is not offline is not looked up (this list refreshes every 10 s for every user): with none offline, no query at all.
     incidents = await events_read.open_incidents(db, [s.id for s in sources if s.status == "offline"])
+    # w33 R8: the sources a scan may have found again at another address, decided in ONE pass for the whole list. Only an offline source
+    # with something mapped, of a type a scan can recognise, can have one: with none of those, the loader is not called at all.
+    askable = [
+        s.id for s in sources if s.status == "offline" and s.connector_type in MOVABLE_TYPES and int(counts.get(s.id, 0)) > 0
+    ]
+    candidates = await _move_candidates(db, askable)
     types = connector_types()
     return [
         SourceListOut.of(
             s, last_reading_age_seconds=ages.get(s.id), mapped_points=int(counts.get(s.id, 0)),
             polls=getattr(types.get(s.connector_type), "polls", True),  # a type this build does not know counts as polling
             history=_history_line(s, history.get(s.id), types),
+            move_candidate=candidates.get(s.id),
+            identity_different=another_server_answers(s.identity),  # the column is on the row already: no statement
             **_offline_fields(s, incidents.get(s.id)),
         )
         for s in sources
     ]
+
+
+async def _move_candidates(db: AsyncSession, old_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """`move_candidate` of each listed source in `old_ids` that has one: the new source it could move to (named without user info:
+    scheme, host, port and path only), or that several servers could be it. At most the offer loader's constant number of statements
+    plus one that names the offered sources; none when `old_ids` is empty."""
+    if not old_ids:
+        return {}
+    said = (await load_offers(db, old_ids=old_ids)).by_old
+    targets = {}
+    wanted = sorted({answer.new_id for answer in said.values() if isinstance(answer, Offer)})
+    if wanted:  # columns named: a source's encrypted secret is not read
+        rows = await db.execute(select(Source.id, Source.name, Source.connector_type, Source.config).where(Source.id.in_(wanted)))
+        targets = {row.id: row for row in rows}
+    found: dict[int, dict[str, Any]] = {}
+    for old_id, answer in said.items():
+        if isinstance(answer, Two):
+            found[old_id] = {"kind": "two", "count": answer.count}
+        elif isinstance(answer, Offer) and answer.new_id in targets:  # a source a removal took away in between has no offer
+            target = targets[answer.new_id]
+            value = answer.match.value
+            found[old_id] = {
+                "kind": "offer", "to_source_id": target.id, "to_name": target.name,
+                "to_endpoint": display_endpoint(target.connector_type, target.config),
+                # the application URI or instance id came off the network: as the Discovery graph shows it, any user info scrubbed
+                "match": {**asdict(answer.match), "value": scrub_url_credentials(value) if isinstance(value, str) and value else None},
+            }
+    return found
 
 
 def _offline_fields(source: Source, incident: dict[str, Any] | None) -> dict[str, Any]:
@@ -314,9 +374,16 @@ async def create_source(body: SourceIn, db: AsyncSession = Depends(get_db), user
 async def update_source(
     source_id: int, body: SourcePatch, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
 ) -> SourceOut:
-    source = await get_source(db, source_id)
+    # Locked from this read to the commit (w33 F-M7): a move of this source that is in flight (api/moves.py) finishes first, and this
+    # request then reads where the move left it, so a PATCH that read the old address before the move cannot write it back.
+    source = await db.scalar(select(Source).where(Source.id == source_id).with_for_update())
+    if source is None:
+        raise HTTPException(404, "source not found")
+    if body.config is not None and body.expect_config is not None and safe_config(source.config) != body.expect_config:
+        raise HTTPException(409, STALE_FORM)  # read under the row lock above, so a move that was in flight is already in it (w33 T5b-I1)
     before = _values(source)
     raw_config = copy.deepcopy(source.config)
+    place_before = _host_and_port(source)
     if body.name is not None:
         source.name = body.name
     if body.config is not None:
@@ -325,6 +392,11 @@ async def update_source(
         submitted = reconcile_config(source.config, body.config, body.clear_config_credentials)
         reject_hidden_marker(submitted, source.config)
         source.config = validated_config(source.connector_type, submitted)
+    # A source that now points at another host or port is not talking to the server it remembers (w33 whole-wave review I1): forget it,
+    # so a stale identity cannot read "a different server answers here" for good or carry a move offer. A Test learns it again.
+    identity_cleared = source.identity is not None and body.config is not None and _host_and_port(source) != place_before
+    if identity_cleared:
+        source.identity = None
     if "secret" in body.model_fields_set:
         source.secret = encrypt(body.secret) if body.secret else None
     if body.enabled is not None:
@@ -337,6 +409,8 @@ async def update_source(
         # What safe_config hides (URL credentials, a masked key) changed, whatever else changed with it: record that,
         # never the values (hidden_parts is only compared here).
         before["config_credentials"], after["config_credentials"] = "unchanged", "changed"
+    if identity_cleared:
+        before["identity_cleared"], after["identity_cleared"] = False, True  # only the fact, never the identity that was dropped
     await audit_change(db, user.id, "source.updated", {"source_id": source.id, "name": source.name}, before, after)
     await _publish(db)
     return SourceOut.of(source)

@@ -4,7 +4,7 @@ What each release (a merged wave) changed, newest first. Each section is headed 
 
 A release that needs an upgrade note carries it as a `###` entry: the schema revision it leads to when there is a migration, what
 changes and what you will notice, the pre-checks to run before it, how to verify it, whether its downgrade is lossless (which decides
-whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 12 releases on this page
+whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 13 releases on this page
 have such an entry (4 of them have no migration) and the archive has 10 more. The other releases need nothing beyond the usual steps of
 [Upgrading and going back](docs/upgrading.md); they have one or two lines here. The releases up to W7j (2026-10-13) are in the
 [changelog archive](docs/changelog-archive.md), with migrations 0004 to 0008; Phase 1A, Phase 1C and Phase 2 brought migrations 0001
@@ -15,6 +15,19 @@ this page; for a version older than W9a, first in the [changelog archive](docs/c
 heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
+
+## w33 (2026-10-22, MERGEHASH)
+
+Devices that move or disappear (migration `0017`, no new permission). A source now remembers who its server is (OPC UA application URI and certificate thumbprint, the simulator's `SIM_INSTANCE_ID`). When a mapped source stops answering and a scan finds the same server at a new address, **Sources** (**Move to new address...**) and **Discovery** (**Move...** on the new source's card) OFFER to move the old source there: a preview, a tick when the evidence is weak, an Undo for 24 hours; its mappings and readings stay and the scan's duplicate goes. Nothing moves by itself, and never for Modbus. Discovery also marks what the latest scan of the same range did not find (**Not seen lately**) and removes the unmapped ones in one go (**Remove not seen**). Because `core/` changed, the stored figures are recomputed once after the update, so the first pages may be slower for a few minutes. See [Devices that move or disappear](docs/devices-that-move.md).
+
+### Upgrading to w33 (migration 0017)
+
+Schema `0016` to `0017`. Downgrade: **lossless**, except that it drops the stored server identities (the new column `sources.identity`; the next scan, Test or check learns them again). The code to go back to is `f7462e8` (the main before w33). The upgrade adds one empty column (instant) and waits at most 30 seconds for a lock on `sources`, then stops with a plain sentence and changes nothing.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4: `docker compose up -d --build`.
+3. **Verify.** `docker compose exec api alembic current` prints `0017 (head)`.
+4. **Going back.** Follow [Upgrading and going back](docs/upgrading.md) with `<previous>` = `0016` and `<old commit>` = `f7462e8`.
 
 ## w32 (2026-10-22, 8741aab)
 

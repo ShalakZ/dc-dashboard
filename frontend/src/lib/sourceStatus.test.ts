@@ -1,4 +1,5 @@
-import { formatOfflineSince, longOffline, OFFLINE_BANNER_SECONDS, offlineBannerText, sourceStatusText } from "./sourceStatus";
+import { URI_MATCH } from "../test/moveFixtures";
+import { formatOfflineSince, longOffline, OFFLINE_BANNER_SECONDS, offlineBannerParts, offlineBannerText, sourceStatusText } from "./sourceStatus";
 
 describe("sourceStatusText", () => {
   it("says a disabled source is not polled", () => {
@@ -151,5 +152,67 @@ describe("offlineBannerText", () => {
   it("says in the list of several that one never answered", () => {
     const never = { ...entry("fresh", 600, { last_seen: null }), neverAnswered: true };
     expect(offlineBannerText([entry("a", 7200), never], "UTC")).toBe("2 sources are offline: a (for 2 h) and fresh (has not answered since it was added).");
+  });
+});
+
+describe("offlineBannerText and offlineBannerParts with a move candidate (w33)", () => {
+  const NOW = Date.parse("2026-10-22T07:00:00Z");
+  const offer = { kind: "offer" as const, to_source_id: 7, to_name: "OPC UA server at 172.20.0.5:4840", to_endpoint: "opc.tcp://172.20.0.5:4840/dcdash/", match: URI_MATCH };
+  const entry = (name: string, secondsOffline: number, over: Record<string, unknown> = {}, id = 1) => {
+    const since = new Date(NOW - secondsOffline * 1000).toISOString();
+    return {
+      source: { id, name, connector_type: "opcua", config: {}, origin: "manual" as const, enabled: true, status: "offline", last_seen: "2026-10-18T04:52:51Z", last_error: null, has_secret: false, offline_since: since, ...over },
+      since, seconds: secondsOffline, neverAnswered: false,
+    };
+  };
+  const OLD = "OPC UA server at 172.20.0.3:4840";
+  const BASE = `1 source is offline: ${OLD}, for 4 d 2 h (since 18 Oct 07:52): Connect call failed.`;
+  const FOUR_DAYS = 4 * 86400 + 2 * 3600 + 8 * 60;
+  const withOffer = () => entry(OLD, FOUR_DAYS, { last_error: "Connect call failed", move_candidate: offer });
+
+  it("changes nothing for a source without a candidate, or whose candidate is null or missing", () => {
+    for (const over of [{}, { move_candidate: null }]) {
+      const list = [entry(OLD, FOUR_DAYS, { last_error: "Connect call failed", ...over })];
+      expect(offlineBannerText(list, "Asia/Qatar")).toBe(BASE);
+      expect(offlineBannerText(list, "Asia/Qatar", true)).toBe(BASE);
+      expect(offlineBannerParts(list, "Asia/Qatar", true)).toEqual({ text: BASE, move: null });
+    }
+  });
+
+  it("ends a single offline source's sentence with where a scan found it and the words of the link, for a person who can move it", () => {
+    expect(offlineBannerText([withOffer()], "Asia/Qatar", true)).toBe(`${BASE} A scan found it at 172.20.0.5:4840: Move to new address...`);
+  });
+
+  it("gives the parts: the sentence up to the colon, and the source the link opens", () => {
+    expect(offlineBannerParts([withOffer()], "Asia/Qatar", true)).toEqual({
+      text: `${BASE} A scan found it at 172.20.0.5:4840:`,
+      move: { sourceId: 1, name: OLD, hostPort: "172.20.0.5:4840" },
+    });
+  });
+
+  it("still says where it was found, but offers no link, to a person who cannot edit sources", () => {
+    expect(offlineBannerText([withOffer()], "Asia/Qatar")).toBe(`${BASE} A scan found it at 172.20.0.5:4840.`);
+    expect(offlineBannerParts([withOffer()], "Asia/Qatar", false)).toEqual({ text: `${BASE} A scan found it at 172.20.0.5:4840.`, move: null });
+  });
+
+  it("says two servers could be this one, and edits by hand", () => {
+    const list = [entry(OLD, FOUR_DAYS, { last_error: "Connect call failed", move_candidate: { kind: "two", count: 2 } })];
+    const text = `${BASE} Two servers could be this one; edit the address by hand.`;
+    expect(offlineBannerText(list, "Asia/Qatar", true)).toBe(text);
+    expect(offlineBannerParts(list, "Asia/Qatar", true)).toEqual({ text, move: null });
+  });
+
+  it("with several sources offline counts the ones a scan found a new address for, and sends the person to the row menus", () => {
+    const list = [entry("a", 7200, { move_candidate: offer }, 1), entry("b", 300, {}, 2), entry("c", 200, { move_candidate: offer }, 3)];
+    expect(offlineBannerText(list, "UTC", true)).toBe(
+      "3 sources are offline: a (for 2 h), b (for 5 min) and c (for 3 min). A scan found a new address for 2 of them: use Move to new address... in the row menu of each.",
+    );
+    expect(offlineBannerParts(list, "UTC", true).move).toBeNull();
+    expect(offlineBannerText(list, "UTC")).toBe("3 sources are offline: a (for 2 h), b (for 5 min) and c (for 3 min). A scan found a new address for 2 of them.");
+  });
+
+  it("with several sources and one candidate says the same", () => {
+    const list = [entry("a", 7200, { move_candidate: offer }, 1), entry("b", 300, {}, 2)];
+    expect(offlineBannerText(list, "UTC", true)).toBe("2 sources are offline: a (for 2 h) and b (for 5 min). A scan found a new address for 1 of them: use Move to new address... in its row menu.");
   });
 });

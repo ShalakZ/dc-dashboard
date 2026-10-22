@@ -1,10 +1,13 @@
 import asyncio
 import json
 
+import pytest
+
 from dcdash.connectors.base import BAD, GOOD
 from dcdash.core.crypto import decrypt
 from dcdash.core.pg import CONFIG_CHANNEL
 from helpers import listening, login_as, make_asset, make_mapping, make_point, make_source
+from test_collector_jobs_identity import run as run_jobs
 
 SIM = {
     "name": "sim",
@@ -657,3 +660,155 @@ async def test_clearing_a_source_secret_with_an_empty_string_is_audited(client, 
     (_, row) = await source_rows(db)
     assert row["action"] == "source.updated"
     assert row["detail"]["before"] == {"secret": "set"} and row["detail"]["after"] == {"secret": "none"}
+
+
+# ---- re-pointing a source forgets who its server was (w33 whole-wave review I1) ---------------------------------------------------
+#
+# A source remembers the server that answered at its address (`sources.identity`). When a person edits the address to another
+# device, that memory is about a machine the source no longer talks to: it would read "a different server answers here" for good,
+# and a later move offer could be built on it. So an edit that changes the host or the port forgets it (a Test learns it again).
+
+SERVER_X = {"instance": "plant-x", "application_name": "Plant X"}
+OPC_X = {"application_uri": "urn:vendor:plant:x", "thumbprint": "AA:BB:CC:DD"}
+
+
+async def identified(db, name="sim", connector_type="simulator", config=None, identity=SERVER_X) -> int:
+    source = await make_source(db, name, connector_type, config or {"url": "http://simulator:9000", "timeout_seconds": 5.0})
+    await db.execute("UPDATE sources SET identity = $2 WHERE id = $1", source, identity)
+    return source
+
+
+async def stored_identity(db, source: int):
+    return await db.fetchval("SELECT identity FROM sources WHERE id = $1", source)
+
+
+@pytest.mark.parametrize(
+    "connector_type, before, after, identity",
+    [
+        ("simulator", {"url": "http://simulator:9000"}, {"url": "http://other-host:9000"}, SERVER_X),  # another host
+        ("simulator", {"url": "http://simulator:9000"}, {"url": "http://simulator:9001"}, SERVER_X),  # another port
+        ("simulator", {"url": "http://simulator/"}, {"url": "http://simulator:8080/"}, SERVER_X),  # the default port 80 against 8080
+        ("opcua", {"endpoint": "opc.tcp://172.20.0.3:4840/"}, {"endpoint": "opc.tcp://172.20.0.5:4840/"}, OPC_X),
+        ("opcua", {"endpoint": "opc.tcp://172.20.0.3:4840/"}, {"endpoint": "opc.tcp://172.20.0.3:4841/"}, OPC_X),
+        ("opcua", {"endpoint": "opc.tcp://meter-7:4840/"}, {"endpoint": "opc.tcp://meter-8:4840/"}, OPC_X),
+    ],
+)
+async def test_an_edit_that_changes_the_host_or_the_port_forgets_the_identity_and_says_so(client, db, connector_type, before, after, identity):
+    await login_as(client, db)
+    source = await identified(db, "pointed", connector_type, before, identity)
+    response = await client.patch(f"/api/sources/{source}", json={"config": after})
+    assert response.status_code == 200, response.text
+    assert await stored_identity(db, source) is None  # SQL NULL, not a JSON null
+    assert await db.fetchval("SELECT identity IS NULL FROM sources WHERE id = $1", source) is True
+    [row] = await source_rows(db)
+    assert row["action"] == "source.updated"
+    assert row["detail"]["before"]["identity_cleared"] is False and row["detail"]["after"]["identity_cleared"] is True
+    assert "identity" not in json.dumps(row["detail"]).replace("identity_cleared", "")  # the stored identity itself is never in the row
+
+
+@pytest.mark.parametrize(
+    "connector_type, before, patch",
+    [
+        ("simulator", {"url": "http://simulator:9000", "timeout_seconds": 5.0}, {"url": "http://simulator:9000", "timeout_seconds": 9.0}),
+        ("simulator", {"url": "http://simulator:9000"}, {"url": "http://SIMULATOR:9000"}),  # a host is the same host in any case
+        ("simulator", {"url": "http://simulator/"}, {"url": "http://simulator:80/"}),  # the default port written out is the same port
+        ("simulator", {"url": "http://simulator:9000"}, {"url": "https://simulator:9000"}),  # (the scheme alone is not the host or the port)
+        ("opcua", {"endpoint": "opc.tcp://172.20.0.3:4840/a"}, {"endpoint": "opc.tcp://172.20.0.3:4840/b"}),  # another path, same server
+        ("opcua", {"endpoint": "opc.tcp://172.20.0.3/"}, {"endpoint": "opc.tcp://172.20.0.3:4840/"}),
+        ("opcua", {"endpoint": "opc.tcp://172.20.0.3:4840/"}, {"endpoint": "opc.tcp://172.20.0.3:4840/", "root_node": "i=86"}),
+    ],
+)
+async def test_an_edit_that_keeps_the_host_and_the_port_keeps_the_identity(client, db, connector_type, before, patch):
+    await login_as(client, db)
+    identity = OPC_X if connector_type == "opcua" else SERVER_X
+    source = await identified(db, "kept", connector_type, before, identity)
+    response = await client.patch(f"/api/sources/{source}", json={"config": patch})
+    assert response.status_code == 200, response.text
+    assert await stored_identity(db, source) == identity
+    for row in await source_rows(db):
+        assert "identity_cleared" not in json.dumps(row["detail"])
+
+
+async def test_an_edit_that_sends_no_config_keeps_the_identity(client, db):
+    await login_as(client, db)
+    source = await identified(db)
+    response = await client.patch(f"/api/sources/{source}", json={"name": "renamed", "enabled": False, "secret": "new-key"})
+    assert response.status_code == 200, response.text
+    assert await stored_identity(db, source) == SERVER_X
+
+
+async def test_a_source_that_never_learned_an_identity_says_nothing_about_one(client, db):
+    await login_as(client, db)
+    source = await make_source(db, "unknown yet", "simulator", {"url": "http://simulator:9000"})
+    response = await client.patch(f"/api/sources/{source}", json={"config": {"url": "http://other-host:9000"}})
+    assert response.status_code == 200, response.text
+    [row] = await source_rows(db)
+    assert "identity_cleared" not in row["detail"]["before"] and "identity_cleared" not in row["detail"]["after"]
+    assert await stored_identity(db, source) is None
+
+
+async def test_a_refused_edit_keeps_the_identity(client, db):
+    await login_as(client, db)
+    source = await identified(db)
+    assert (await client.patch(f"/api/sources/{source}", json={"config": {"url": "not a url"}})).status_code == 422
+    assert await stored_identity(db, source) == SERVER_X
+
+
+async def test_an_edit_forgets_a_different_note_as_well(client, db):
+    await login_as(client, db)
+    source = await identified(db, identity={**SERVER_X, "different": {"instance": "plant-y", "at": "2026-10-22T10:00:00+00:00"}})
+    assert (await client.patch(f"/api/sources/{source}", json={"config": {"url": "http://other-host:9000"}})).status_code == 200
+    assert await stored_identity(db, source) is None
+
+
+async def test_a_source_pointed_at_another_device_and_tested_learns_that_device_and_notes_no_other_server(client, db):
+    # The review's scenario: the source learns server X, a person edits it to point at another device, and Test runs again.
+    await login_as(client, db)
+    source = await make_source(db, "meter", "simulator", {"url": "http://simulator:9000", "timeout_seconds": 5.0})
+    await run_jobs(db, "test_source", source, answer=SERVER_X)
+    assert await stored_identity(db, source) == SERVER_X
+    assert (await client.patch(f"/api/sources/{source}", json={"config": {"url": "http://replacement:9000"}})).status_code == 200
+    assert await stored_identity(db, source) is None
+    await run_jobs(db, "test_source", source, answer={"instance": "plant-z"})
+    assert await stored_identity(db, source) == {"instance": "plant-z"}  # a fresh identity, and no "different"
+    assert await db.fetchval("SELECT count(*) FROM diag_events WHERE kind = 'source.identity_changed'") == 0
+    row = next(r for r in (await client.get("/api/sources")).json() if r["id"] == source)
+    assert row["identity_different"] is False
+
+
+async def test_a_test_that_began_before_the_edit_cannot_write_the_old_servers_identity_afterwards(client, db):
+    await login_as(client, db)
+    source = await make_source(db, "meter", "simulator", {"url": "http://simulator:9000", "timeout_seconds": 5.0})
+
+    edits = []
+
+    async def edited(_connector):  # (the stub keeps it as a method, so it is called with the connector)
+        edits.append((await client.patch(f"/api/sources/{source}", json={"config": {"url": "http://replacement:9000"}})).status_code)
+
+    await run_jobs(db, "test_source", source, answer=SERVER_X, on_identity=edited)
+    assert edits == [200]  # the edit really happened between the Test's connection and its answer
+    assert await stored_identity(db, source) is None  # the server it asked is not the one the source points at any more
+
+
+# ---- GET /api/sources says when a different server answers (w33 whole-wave review I3) -------------------------------------------
+
+
+async def test_the_list_says_when_the_stored_identity_notes_a_different_server(client, db):
+    await login_as(client, db)
+    same = await identified(db, "same")
+    unknown = await make_source(db, "unknown", "simulator", {"url": "http://unknown:9000"})
+    other = await identified(db, "other", identity={**SERVER_X, "different": {"instance": "plant-y", "at": "2026-10-22T10:00:00+00:00"}})
+    empty_note = await identified(db, "empty note", identity={**SERVER_X, "different": {}})
+    rows = {row["id"]: row for row in (await client.get("/api/sources")).json()}
+    assert {rows[i]["identity_different"] for i in (same, unknown, empty_note)} == {False}
+    assert rows[other]["identity_different"] is True
+    assert all(isinstance(row["identity_different"], bool) for row in rows.values())  # always there, never null
+    assert "plant-y" not in json.dumps(list(rows.values()))  # only the fact, not what the other server said
+
+
+async def test_the_other_routes_do_not_grow_the_field(client, db):
+    await login_as(client, db)
+    source = await identified(db)
+    created = await client.post("/api/sources", json=SIM)
+    assert "identity_different" not in created.json()
+    assert "identity_different" not in (await client.patch(f"/api/sources/{source}", json={"enabled": False})).json()

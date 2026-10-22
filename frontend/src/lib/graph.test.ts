@@ -1,8 +1,10 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { GraphModel, RemoveSourcesResult } from "../api/types";
 import {
-  BLOCK_GAP, FAN_DASH_LIMIT, LIVE_EDGE_LIMIT, MAX_LAYOUT_ID, NO_VIEW, PAGE_SIZE, SOURCE_H, UNGROUPED, buildGraph, childNodeIds, descendantNodeIds, initialView, isRemovable, layoutBatches,
-  moreNodeIds, nodeId, ownPlaces, removalDialogText, removalOutcome, seenLine, shiftedPlaces, type GraphView, type OpenState, type XY,
+  BLOCK_GAP, DIFFERENT_SERVER, FAN_DASH_LIMIT, LIVE_EDGE_LIMIT, MAPPED_NOT_SEEN, MAX_LAYOUT_ID, NO_VIEW, PAGE_SIZE, SOURCE_H, UNGROUPED, buildGraph, certificateLine, childNodeIds, descendantNodeIds,
+  initialView, isDifferentServer, isMappedNotSeen, isNotSeen, isRemovable, layoutBatches, looksLikeLine, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, notSeenSentence, ownPlaces,
+  removableNotSeen, removalDialogText, removalOutcome, seenCard, seenLine,
+  serverLine, shiftedPlaces, sourceIdOfNode, sourceVisible, twoServers, type GraphView, type OpenState, type XY,
 } from "./graph";
 import { model, point, source } from "../test/graphFixtures";
 
@@ -796,6 +798,174 @@ describe("seenLine", () => {
   });
 });
 
+// (w33) Not seen: a discovered source the newest done scan of the SAME range did not find (the server decides; the page only words it and offers to remove the unmapped ones).
+describe("seenLine of a source that is not seen (w33)", () => {
+  const now = new Date("2026-10-15T12:00:00Z");
+  const gone = (over: object = {}) => source(1, {
+    last_scan: { scan_id: 5, at: "2026-10-11T09:00:00Z" },
+    not_seen: { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" },
+    ...over,
+  });
+
+  it("names the scan that did not find it, the one that last did, and how long ago that was (counted from the last time it was seen)", () => {
+    expect(seenLine(gone(), now, "UTC")).toBe("Not seen in scan #7 (last seen in #5, 4 days ago)");
+    expect(seenLine(gone({ not_seen: { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 6, last_seen_at: "2026-10-14T09:00:00Z" } }), now, "UTC"))
+      .toBe("Not seen in scan #7 (last seen in #6, yesterday)");
+    expect(seenLine(gone({ not_seen: { scan_id: 8, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 7, last_seen_at: "2026-10-15T11:50:00Z" } }), now, "UTC"))
+      .toBe("Not seen in scan #8 (last seen in #7, 10 min ago)");
+  });
+
+  it("drops the ago part for a time over two weeks old or one that cannot be read, as the Seen line does", () => {
+    expect(seenLine(gone({ not_seen: { scan_id: 7, at: "x", last_seen_scan_id: 5, last_seen_at: "2026-09-01T09:00:00Z" } }), now, "UTC")).toBe("Not seen in scan #7 (last seen in #5)");
+    expect(seenLine(gone({ not_seen: { scan_id: 7, at: "x", last_seen_scan_id: 5, last_seen_at: "not a time" } }), now, "UTC")).toBe("Not seen in scan #7 (last seen in #5)");
+  });
+
+  it("comes before the Seen line, and a source added by hand still says Added by hand (the server never marks one)", () => {
+    expect(seenLine(gone(), now, "UTC")).not.toMatch(/^Seen/);
+    expect(seenLine(gone({ origin: "manual" }), now, "UTC")).toBe("Added by hand");
+  });
+
+  it("a null not_seen (the server's answer for a source it did see, or an older server) keeps every old sentence", () => {
+    expect(seenLine(gone({ not_seen: null }), now, "UTC")).toBe("Seen in scan #5, 4 days ago");
+    expect(seenLine(source(1, { last_scan: { scan_id: 6, at: "2026-10-15T11:50:00Z" } }), now, "UTC")).toBe("Seen in scan #6, 10 min ago");
+  });
+});
+
+describe("not seen: isNotSeen, removableNotSeen, notSeenCount (w33)", () => {
+  const miss = { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" };
+  const mapped = point(9, "M kW", { asset_id: 10, mapping_id: 3, mapped_metric: "active_power_kw" });
+  const unmappedMissing = source(1, { not_seen: miss, clusters: [{ key: "A", points: [point(1, "a")] }] });
+  const mappedMissing = source(2, { not_seen: miss, clusters: [{ key: "A", points: [point(2, "a"), mapped] }] });
+  const handMissing = source(3, { origin: "manual", not_seen: miss }); // the server never sends this; the page still never lists one
+  const seenAgain = source(4, { not_seen: null });
+  const oldServer = source(5);
+
+  it("isNotSeen: discovered and marked by the server, nothing else", () => {
+    expect(isNotSeen(unmappedMissing)).toBe(true);
+    expect(isNotSeen(mappedMissing)).toBe(true);
+    expect(isNotSeen(handMissing)).toBe(false);
+    expect(isNotSeen(seenAgain)).toBe(false);
+    expect(isNotSeen(oldServer)).toBe(false);
+  });
+
+  it("removableNotSeen: not seen AND nothing mapped (the same rule as Remove and Clear unmapped); a mapped or hand-added source is never in it", () => {
+    const all = [unmappedMissing, mappedMissing, handMissing, seenAgain, oldServer, source(6, { not_seen: miss })];
+    expect(removableNotSeen(all).map((s) => s.id)).toEqual([1, 6]);
+    expect(removableNotSeen([mappedMissing, handMissing, seenAgain])).toEqual([]);
+    expect(removableNotSeen([])).toEqual([]);
+  });
+
+  it("an asset without a mapping id still counts as mapped", () => {
+    expect(removableNotSeen([source(7, { not_seen: miss, ungrouped: [point(9, "b", { asset_id: 10 })] })])).toEqual([]);
+  });
+
+  it("notSeenCount counts every marked source, mapped or not", () => {
+    expect(notSeenCount([unmappedMissing, mappedMissing, handMissing, seenAgain, oldServer])).toBe(2);
+    expect(notSeenCount([])).toBe(0);
+  });
+});
+
+describe("what the card and the panel say about a source that is not seen (w33)", () => {
+  const miss = { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" };
+  const LINE = "Not seen in scan #7 (last seen in #5, 4 days ago)";
+  const mapped = point(9, "M kW", { asset_id: 10, mapping_id: 3, mapped_metric: "active_power_kw" });
+
+  it("notSeenSentence: the whole sentence of the panel", () => {
+    expect(notSeenSentence(source(1, { not_seen: miss }), LINE)).toBe(`${LINE}. A later scan of the same range did not find it.`);
+    expect(notSeenSentence(source(1), "Seen in scan #6, 10 min ago")).toBe("Seen in scan #6, 10 min ago");
+  });
+
+  it("seenCard: an unmapped one keeps its line and tooltip; a mapped one says what to do instead, with both sentences in the tooltip", () => {
+    expect(seenCard(source(1, { not_seen: miss }), LINE)).toEqual({ line: LINE, title: LINE });
+    expect(seenCard(source(1, { not_seen: miss, ungrouped: [mapped], status: "offline" }), LINE)).toEqual({ line: MAPPED_NOT_SEEN, title: `${LINE}. ${MAPPED_NOT_SEEN}` });
+    expect(MAPPED_NOT_SEEN).toBe("Mapped: move it or delete it on Sources");
+    expect(seenCard(source(1, { ungrouped: [mapped] }), "Seen in scan #6")).toEqual({ line: "Seen in scan #6", title: "Seen in scan #6" }); // seen sources are left alone
+  });
+
+  it("a mapped source that is not seen but polls fine (online, or never polled) keeps its seen line: nothing is wrong that moving or deleting would fix", () => {
+    for (const status of ["online", "unknown", "error"]) {
+      expect(seenCard(source(1, { not_seen: miss, ungrouped: [mapped], status }), LINE)).toEqual({ line: LINE, title: LINE });
+    }
+    expect(isMappedNotSeen(source(1, { not_seen: miss, ungrouped: [mapped], status: "offline" }))).toBe(true);
+    expect(isMappedNotSeen(source(1, { not_seen: miss, ungrouped: [mapped], status: "online" }))).toBe(false);
+    expect(isMappedNotSeen(source(1, { not_seen: miss, status: "offline" }))).toBe(false); // nothing mapped: Remove not seen takes it
+    expect(isMappedNotSeen(source(1, { ungrouped: [mapped], status: "offline" }))).toBe(false); // seen
+  });
+
+  it("serverLine: the application URI, else the simulator's instance id, else the application name; nothing for no identity", () => {
+    const id = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: false };
+    expect(serverLine({ ...id, application_uri: "urn:dcdash:simulator:dev", instance: "dev", application_name: "Sim" })).toBe("Server: urn:dcdash:simulator:dev");
+    expect(serverLine({ ...id, instance: "dev", application_name: "Sim" })).toBe("Simulator instance dev");
+    expect(serverLine({ ...id, application_name: "Sim" })).toBe("Server: Sim");
+    expect(serverLine(id)).toBeNull();
+    expect(serverLine(null)).toBeNull();
+    expect(serverLine(undefined)).toBeNull();
+  });
+
+  it("certificateLine: the first 5 and the last 2 characters of the thumbprint, the whole value for the tooltip", () => {
+    const id = { application_uri: null, application_name: null, product_uri: null, thumbprint: "3A:5F:C1:0D:22:98:7B:44:E0:AB:12:34:56:78:9A:BC:DE:F0:11:91", instance: null, usable: true, different: false };
+    expect(certificateLine(id)).toEqual({ text: "certificate 3A:5F:...:91", title: "3A:5F:C1:0D:22:98:7B:44:E0:AB:12:34:56:78:9A:BC:DE:F0:11:91" });
+    expect(certificateLine({ ...id, thumbprint: "3A:5F" })).toEqual({ text: "certificate 3A:5F", title: "3A:5F" }); // too short to cut
+    expect(certificateLine({ ...id, thumbprint: null })).toBeNull();
+    expect(certificateLine(null)).toBeNull();
+  });
+
+  it("removalDialogText for not seen: says the latest scan did not find them and that mapped and hand-added sources are never removed", () => {
+    expect(removalDialogText(["Plant OPC"], "notSeen")).toEqual({
+      title: 'Remove "Plant OPC", which the latest scan did not find?',
+      message: "The latest scan of the same range did not find it. Mapped sources and sources added by hand are never removed. A scan can find it again.",
+    });
+    const several = removalDialogText(["A", "B", "C", "D", "E", "F", "G"], "notSeen");
+    expect(several.title).toBe("Remove 7 sources the latest scan did not find?");
+    expect(several.message).toBe("A, B, C, D, E and 2 more. The latest scan of the same range did not find them. Mapped sources and sources added by hand are never removed. A scan can find these again.");
+    // the old callers (no kind) get today's words
+    expect(removalDialogText(["A", "B"]).title).toBe("Remove 2 unmapped sources?");
+  });
+});
+
+describe("the Not seen lately filter (w33)", () => {
+  const miss = { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" };
+  const withMissing = () => model({
+    sources: [
+      source(1, { not_seen: miss, clusters: [{ key: "A", points: [point(1, "a")] }] }),
+      source(2, { clusters: [{ key: "B", points: [point(2, "b")] }] }),
+      source(3, { origin: "manual", clusters: [{ key: "C", points: [point(3, "c")] }] }),
+    ],
+  });
+  const view = (over: Partial<GraphView> = {}): GraphView => ({ ...NO_VIEW, ...over });
+
+  it("is off by default: NO_VIEW and a view without the field draw every source", () => {
+    expect(NO_VIEW.notSeenOnly ?? false).toBe(false);
+    expect(withMissing().sources.every((s) => sourceVisible(s, NO_VIEW))).toBe(true);
+    expect(ids(buildGraph(withMissing(), none).nodes.filter((n) => n.type === "source"))).toEqual(["src:1", "src:2", "src:3"]);
+  });
+
+  it("on: only the sources marked not seen are on the canvas, with their edges, and the others take no room", () => {
+    const { nodes, edges } = buildGraph(withMissing(), { sources: new Set([1, 2]), clusters: new Set() }, { view: view({ notSeenOnly: true }) });
+    expect(ids(nodes.filter((n) => n.type === "source"))).toEqual(["src:1"]);
+    expect(ids(nodes.filter((n) => n.type === "cluster"))).toEqual([nodeId.cluster(1, "A")]);
+    expect(edges.every((e) => e.source !== "src:2" && e.source !== "src:3")).toBe(true);
+    expect(nodes.find((n) => n.id === "src:1")?.position.y).toBe(0); // the first row: a hidden source before it left no gap
+  });
+
+  it("combines with Unmapped only: a not-seen source whose points are all mapped is hidden by that filter", () => {
+    const m = model({ sources: [source(1, { not_seen: miss, clusters: [{ key: "A", points: [point(1, "a", { asset_id: 10, mapping_id: 1, mapped_metric: "voltage_v" })] }] })] });
+    expect(sourceVisible(m.sources[0], view({ notSeenOnly: true }))).toBe(true);
+    expect(sourceVisible(m.sources[0], view({ notSeenOnly: true, unmappedOnly: true }))).toBe(false);
+  });
+
+  it("sourceIdOfNode: the source behind a source, group or point node; none for an asset or an unidentified service", () => {
+    const m = model();
+    expect(sourceIdOfNode(m, "src:2")).toBe(2);
+    expect(sourceIdOfNode(m, nodeId.cluster(1, "LVP01"))).toBe(1);
+    expect(sourceIdOfNode(m, "point:8")).toBe(2); // a point of the manual source
+    expect(sourceIdOfNode(m, "point:7")).toBe(1); // an ungrouped point
+    expect(sourceIdOfNode(m, "point:999")).toBeNull();
+    expect(sourceIdOfNode(m, "asset:10")).toBeNull();
+    expect(sourceIdOfNode(m, "unid:10.0.0.9:8080")).toBeNull();
+  });
+});
+
 describe("removalOutcome", () => {
   const result = (removed: number[], skipped: RemoveSourcesResult["skipped"] = []): RemoveSourcesResult => ({
     removed: removed.map((id) => ({ id, name: `s${id}` })), skipped,
@@ -1366,5 +1536,123 @@ describe("buildGraph with a view (W12b)", () => {
         }
       }
     });
+  });
+});
+
+// ---- w33: a new source that looks like an old one that stopped answering, and a different server at an address ----
+describe("what the card and the panel say about a move offer, two candidates and a different server (w33)", () => {
+  const match = { kind: "same_server" as const, evidence: "uri" as const, value: "urn:dcdash:simulator:dev", addresses: 12, missing_addresses: 0, needs_tick: false };
+  const offer = {
+    kind: "offer" as const, from_source_id: 2, from_name: "OPC UA server at 172.20.0.3:4840", from_endpoint: "opc.tcp://172.20.0.3:4840/dcdash/", from_since: "2026-10-18T04:52:51Z",
+    mappings: 12, assets: 3, match,
+  };
+  const identity = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: false };
+  const SEEN = "Seen in scan #8, 2 min ago";
+  const SENTENCE = "This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets), which has not answered since 18 Oct 07:52";
+  const LINE = "Was at 172.20.0.3:4840 (12 mappings)";
+
+  it("moveOfferFor: the offer of a source, and nothing for two candidates, a null or an absent candidate", () => {
+    expect(moveOfferFor(source(1, { move_candidate: offer }))).toBe(offer);
+    expect(moveOfferFor(source(1, { move_candidate: { kind: "two", count: 2 } }))).toBeNull();
+    expect(moveOfferFor(source(1, { move_candidate: null }))).toBeNull();
+    expect(moveOfferFor(source(1))).toBeNull();
+  });
+
+  it("twoServers and isDifferentServer read the two flags and nothing else", () => {
+    expect(twoServers(source(1, { move_candidate: { kind: "two", count: 3 } }))).toBe(true);
+    expect(twoServers(source(1, { move_candidate: offer }))).toBe(false);
+    expect(twoServers(source(1))).toBe(false);
+    expect(isDifferentServer(source(1, { identity: { ...identity, different: true } }))).toBe(true);
+    expect(isDifferentServer(source(1, { identity: { ...identity, different: false } }))).toBe(false);
+    expect(isDifferentServer(source(1, { identity: null }))).toBe(false);
+    expect(isDifferentServer(source(1))).toBe(false);
+    expect(DIFFERENT_SERVER).toBe("A different server answers at this address");
+  });
+
+  it("looksLikeLine: an old source with a name that tells it apart leads with that title, then the mappings; the ellipsis cuts after it", () => {
+    const named = { ...offer, from_name: "Meter room 2" };
+    expect(looksLikeLine(named)).toBe("Looks like Meter room 2 (12 mappings)");
+    expect(looksLikeLine({ ...named, mappings: 1 })).toBe("Looks like Meter room 2 (1 mapping)");
+    expect(looksLikeLine({ ...named, mappings: 1200 })).toBe("Looks like Meter room 2 (1,200 mappings)");
+    // the card's own title is a different text: nothing changes
+    expect(looksLikeLine(named, "OPC UA server")).toBe("Looks like Meter room 2 (12 mappings)");
+    // a name with a model in it is not a default name
+    expect(looksLikeLine({ ...offer, from_name: "Modbus Schneider PM5560 at 10.0.0.5:502", from_endpoint: "" })).toBe("Looks like Modbus Schneider PM5560 at 10.0.0.5:502 (12 mappings)");
+  });
+
+  it("looksLikeLine: when the old title is the card's own title, or only the generic type label of a scan's default name, it says where the old source was (host:port of its endpoint)", () => {
+    expect(looksLikeLine(offer)).toBe(LINE); // OPC UA server at 172.20.0.3:4840 -> the title OPC UA server says nothing
+    expect(looksLikeLine(offer, "OPC UA server")).toBe(LINE);
+    expect(looksLikeLine({ ...offer, mappings: 1 })).toBe("Was at 172.20.0.3:4840 (1 mapping)");
+    expect(looksLikeLine({ ...offer, mappings: 1200 })).toBe("Was at 172.20.0.3:4840 (1,200 mappings)");
+    // the other default names of the scans, in any case
+    expect(looksLikeLine({ ...offer, from_name: "DCDash simulator at simulator:9000", from_endpoint: "http://simulator:9000/" })).toBe("Was at simulator:9000 (12 mappings)");
+    expect(looksLikeLine({ ...offer, from_name: "Modbus device at 10.0.0.5:502", from_endpoint: "tcp://10.0.0.5:502" })).toBe("Was at 10.0.0.5:502 (12 mappings)");
+    expect(looksLikeLine({ ...offer, from_name: "opc ua server" })).toBe("Was at 172.20.0.3:4840 (12 mappings)");
+    // a default name whose address the title helper could not strip (a default port the URL parser drops, an IPv6 host without brackets in the name) is still generic
+    expect(looksLikeLine({ ...offer, from_name: "DCDash simulator at simulator:80", from_endpoint: "http://simulator:80/" })).toBe("Was at simulator:80 (12 mappings)");
+    expect(looksLikeLine({ ...offer, from_name: "OPC UA server at fe80::1:4840", from_endpoint: "opc.tcp://[fe80::1]:4840/x" })).toBe("Was at [fe80::1]:4840 (12 mappings)"); // an IPv6 host stays in brackets
+    // the same text as the card's own title identifies nothing either, a typed name too
+    expect(looksLikeLine({ ...offer, from_name: "Meter room 2" }, "Meter room 2")).toBe("Was at 172.20.0.3:4840 (12 mappings)");
+    // no endpoint to say: the old title leads, as before
+    expect(looksLikeLine({ ...offer, from_endpoint: "" })).toBe("Looks like OPC UA server at 172.20.0.3:4840 (12 mappings)");
+    expect(looksLikeLine({ ...offer, from_name: "Meter room 2", from_endpoint: "" }, "Meter room 2")).toBe("Looks like Meter room 2 (12 mappings)");
+  });
+
+  it("looksLikeSentence is the whole sentence: the full name, the mappings in words, and since when it has not answered (the time the page formats from from_since)", () => {
+    expect(looksLikeSentence(offer, "18 Oct 07:52")).toBe(SENTENCE);
+    expect(looksLikeSentence({ ...offer, mappings: 1, assets: 1 }, "18 Oct 07:52")).toBe(
+      "This looks like OPC UA server at 172.20.0.3:4840 (1 mapping on 1 asset), which has not answered since 18 Oct 07:52");
+    expect(looksLikeSentence({ ...offer, mappings: 1200, assets: 0 }, "18 Oct 07:52")).toBe(
+      "This looks like OPC UA server at 172.20.0.3:4840 (1,200 mappings), which has not answered since 18 Oct 07:52"); // en-US thousands; no assets, no "on 0 assets"
+  });
+
+  it("looksLikeSentence without a time: the address is said only when the name does not hold it already, and never twice", () => {
+    // from_since null (or a time that cannot be read): the name holds the address, so the sentence just stops after the counts
+    expect(looksLikeSentence({ ...offer, from_since: null })).toBe("This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets)");
+    expect(looksLikeSentence(offer, null)).toBe("This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets)");
+    // a name that is not the address (a name somebody typed): the old fallback
+    expect(looksLikeSentence({ ...offer, from_name: "Meter room 2" })).toBe("This looks like Meter room 2 (12 mappings on 3 assets), which stopped answering at 172.20.0.3:4840");
+    expect(looksLikeSentence({ ...offer, from_name: "Meter room 2", from_endpoint: "opc.tcp://[::1]:4840" })).toContain("which stopped answering at [::1]:4840");
+    // no endpoint at all (a connector without a URL): no empty "at"
+    expect(looksLikeSentence({ ...offer, from_name: "Meter room 2", from_endpoint: "" })).toBe("This looks like Meter room 2 (12 mappings on 3 assets)");
+  });
+
+  it("seenCard, an offer: the short line (it hands the card's own title over), and the tooltip carries the whole sentence and then the seen line", () => {
+    expect(seenCard(source(1, { move_candidate: offer }), SEEN, SENTENCE)).toEqual({ line: LINE, title: `${SENTENCE}. ${SEEN}` });
+    // without the page's sentence (a caller that has no site clock) the card builds one without the time
+    expect(seenCard(source(1, { move_candidate: offer }), SEEN)).toEqual({
+      line: LINE, title: `This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets). ${SEEN}`,
+    });
+  });
+
+  it("seenCard, an offer: an old source that is named differently from the card says Looks like <its title>; the same title says where it was", () => {
+    const named = { ...offer, from_name: "Meter room 2" };
+    expect(seenCard(source(1, { name: "OPC UA server at 172.20.0.5:4840", config: { endpoint: "opc.tcp://172.20.0.5:4840/dcdash/" }, move_candidate: named }), SEEN, SENTENCE).line).toBe("Looks like Meter room 2 (12 mappings)");
+    expect(seenCard(source(1, { name: "Meter room 2", move_candidate: named }), SEEN, SENTENCE).line).toBe("Was at 172.20.0.3:4840 (12 mappings)");
+  });
+
+  it("seenCard, two candidates: the sentence, no button's worth of anything else", () => {
+    expect(seenCard(source(1, { move_candidate: { kind: "two", count: 2 } }), SEEN)).toEqual({
+      line: "Two servers could be this one; edit the address by hand", title: `Two servers could be this one; edit the address by hand. ${SEEN}`,
+    });
+    expect(seenCard(source(1, { move_candidate: { kind: "two", count: 3 } }), SEEN)).toEqual({
+      line: "Several servers could be this one; edit the address by hand", title: `Several servers could be this one; edit the address by hand. ${SEEN}`,
+    });
+  });
+
+  it("seenCard, a different server: the warning line first (any source, added by hand too), with the tone, and the tooltip keeps the offer and the seen line", () => {
+    const different = { ...identity, different: true };
+    expect(seenCard(source(1, { identity: different }), SEEN)).toEqual({ line: DIFFERENT_SERVER, title: `${DIFFERENT_SERVER}. ${SEEN}`, tone: "warn" });
+    expect(seenCard(source(1, { origin: "manual", identity: different }), "Added by hand")).toEqual({ line: DIFFERENT_SERVER, title: `${DIFFERENT_SERVER}. Added by hand`, tone: "warn" });
+    expect(seenCard(source(1, { identity: different, move_candidate: offer }), SEEN, SENTENCE)).toEqual({ line: DIFFERENT_SERVER, title: `${DIFFERENT_SERVER}. ${SENTENCE}. ${SEEN}`, tone: "warn" });
+  });
+
+  it("seenCard leaves every other source as it was: the seen line, and the mapped not-seen sentence", () => {
+    expect(seenCard(source(1, { move_candidate: null, identity }), SEEN)).toEqual({ line: SEEN, title: SEEN });
+    expect(seenCard(source(1), SEEN)).toEqual({ line: SEEN, title: SEEN });
+    const miss = { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" };
+    const mapped = point(9, "M kW", { asset_id: 10, mapping_id: 3, mapped_metric: "active_power_kw" });
+    expect(seenCard(source(1, { not_seen: miss, ungrouped: [mapped], status: "offline" }), "Not seen in scan #7")).toEqual({ line: MAPPED_NOT_SEEN, title: `Not seen in scan #7. ${MAPPED_NOT_SEEN}` });
   });
 });

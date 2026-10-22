@@ -12,7 +12,7 @@ class Fault(BaseModel):
     reject_auth: bool = False
 
 
-def create_sim_app(sim: Simulator | None = None, api_key: str | None = None) -> FastAPI:
+def create_sim_app(sim: Simulator | None = None, api_key: str | None = None, instance: str = "dev") -> FastAPI:
     sim = sim or Simulator()
     key = api_key or os.environ.get("SIM_API_KEY", "sim-key")
     app = FastAPI(title="DC Dashboard simulator")
@@ -26,7 +26,8 @@ def create_sim_app(sim: Simulator | None = None, api_key: str | None = None) -> 
 
     @app.get("/")
     def identify() -> dict:
-        return {"service": "dcdash-simulator"}
+        # `instance` (SIM_INSTANCE_ID) is who this simulator is: the platform remembers it to tell one simulator from another
+        return {"service": "dcdash-simulator", "instance": instance}
 
     @app.get("/points", dependencies=[Depends(guard)])
     def points() -> dict:

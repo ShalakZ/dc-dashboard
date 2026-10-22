@@ -2,7 +2,8 @@
 
 The table of words is TypeScript, so this test reads its TEXT (no import): a kind or a code the backend can write that the table
 does not name as a quoted word would reach the page as raw text. It collects what the backend writes from the code itself:
-the kind constants of `dcdash/core/journal.py` and `dcdash/ingest/kinds.py`, and every `ConnectorError("<status>"` literal under
+the kind constants of `dcdash/core/journal.py`, `dcdash/ingest/kinds.py` and `dcdash/collector/identity.py` (w33: the server at a source's
+address is not the one it used to talk to), and every `ConnectorError("<status>"` literal under
 `dcdash/connectors/`.
 """
 
@@ -23,7 +24,7 @@ SCHEDULER_CODES = ("exception", "config_invalid", "secret_undecryptable")
 
 def kinds() -> set[str]:
     found: set[str] = set()
-    for path in (BACKEND / "core" / "journal.py", BACKEND / "ingest" / "kinds.py"):
+    for path in (BACKEND / "core" / "journal.py", BACKEND / "ingest" / "kinds.py", BACKEND / "collector" / "identity.py"):
         found |= set(KIND.findall(path.read_text(encoding="utf-8")))
     return found
 
@@ -42,7 +43,9 @@ def named(word: str) -> bool:
 
 def test_the_collection_sees_what_the_backend_writes():
     # a guard for the guard: a regex that matched nothing would make the checks below pass for the wrong reason
-    assert {"source.offline", "source.online", "points.bad", "check.finished", "job.finished", "readings.conflict", "import.finished"} <= kinds()
+    assert {
+        "source.offline", "source.online", "points.bad", "check.finished", "job.finished", "readings.conflict", "import.finished", "source.identity_changed",
+    } <= kinds()
     assert len(kinds()) >= 15
     assert {"unreachable", "auth_failed", "timeout", "protocol_error", "needs_profile", "not_supported"} <= statuses()
 

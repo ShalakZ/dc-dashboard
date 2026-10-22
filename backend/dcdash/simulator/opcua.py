@@ -35,8 +35,9 @@ class _Users:
 
 class OpcUaSim:
     def __init__(self, sim: Simulator, port: int, username: str = "sim", password: str | None = None, *,
-                 faults: Faults | None = None) -> None:
+                 faults: Faults | None = None, instance: str = "dev") -> None:
         self.faults = faults or Faults()
+        self.instance = instance  # SIM_INSTANCE_ID: the server announces urn:dcdash:simulator:<instance> as its application URI
         if self.faults.auth_required and not password:
             raise FaultConfigError("SIM_FAULT_AUTH=required needs SIM_OPCUA_PASSWORD (the password of the user 'sim').")
         self.sim = sim
@@ -50,6 +51,9 @@ class OpcUaSim:
     async def start(self) -> None:
         server = _FaultServer(self.faults, user_manager=self._users)
         await server.init()
+        # Before the certificate is made (_apply_security_faults), so its URI is the one the server announces. asyncua also writes
+        # this URI to namespace index 1; this simulator's own namespace is registered after it, so ns=2 stays ns=2.
+        await server.set_application_uri(f"urn:dcdash:simulator:{self.instance}")
         server.set_endpoint(self.endpoint)
         await self._apply_security_faults(server)
         idx = await server.register_namespace(OPCUA_NAMESPACE)

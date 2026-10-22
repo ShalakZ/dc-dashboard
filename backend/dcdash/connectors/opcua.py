@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from asyncua import Client, Node, ua
 from asyncua.client.ua_client import UaClient, UASocketProtocol
@@ -29,6 +29,7 @@ from dcdash.connectors.base import (
     register,
     url_host_port,
 )
+from dcdash.connectors.identity import from_endpoints
 
 if TYPE_CHECKING:
     from dcdash.diagnostics.check import CheckResult, Publish
@@ -60,6 +61,13 @@ def _reported_path(endpoint_url: object) -> str:
         return urlparse(endpoint_url).path
     except ValueError:
         return ""
+
+
+def _without_user_info(url: str) -> str:
+    """`url` without the `user:password@` part of its address. GetEndpoints is anonymous, and asyncua's Client takes a user and a
+    password from the URL, so they must not reach it from here (the credentials are applied once, by `_new_client`)."""
+    parts = urlsplit(url)
+    return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
 
 
 def _translate(exc: BaseException) -> ConnectorError:
@@ -217,7 +225,7 @@ class OpcUaConnector(Connector):
             return None
         path = _reported_path(getattr(endpoints[0], "EndpointUrl", None))
         config = OpcUaConfig(endpoint=f"opc.tcp://{host}:{port}{path}").model_dump(mode="json")
-        return Claim("opcua", config, f"OPC UA server at {host}:{port}")
+        return Claim("opcua", config, f"OPC UA server at {host}:{port}", from_endpoints(endpoints) or None)
 
     @classmethod
     def endpoint_key(cls, config: dict[str, Any]) -> tuple[str, int, str] | None:
@@ -285,6 +293,19 @@ class OpcUaConnector(Connector):
         except ConnectorError as exc:
             return ConnectionCheck(ok=False, status=exc.status, message=exc.message)
         return ConnectionCheck(ok=True, status="ok", latency_ms=(time.perf_counter() - started) * 1000)
+
+    async def identity(self) -> dict[str, Any] | None:
+        """Who the server says it is (application URI, name, product URI, certificate thumbprint) from its GetEndpoints answer, or None.
+
+        A plain client, no login and no security: GetEndpoints is anonymous, so this works for a server that wants credentials too.
+        """
+        timeout = self.config.timeout_seconds
+        try:
+            client = Client(_without_user_info(self.config.endpoint), timeout=timeout)
+            endpoints = await asyncio.wait_for(client.connect_and_get_server_endpoints(), timeout)
+            return from_endpoints(endpoints) or None
+        except Exception:  # noqa: BLE001 - unreachable, not OPC UA, a junk answer: the caller only wants to know whether it was told
+            return None
 
     async def check(self, points: list[str], publish: Publish | None = None) -> CheckResult:
         from dcdash.connectors.opcua_check import run_check  # imported here: that module imports this one

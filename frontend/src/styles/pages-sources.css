@@ -8,6 +8,9 @@
   /* w31: the second line under a source's name (its history line, Sources only). A block of its own, as wide as the name cell allows and at most three lines: a
      long reason ("History: waiting, ...") must not widen the Name column; the full text is the title attribute. */
   .cell-history { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; max-width: 220px; margin-top: 2px; overflow: hidden; overflow-wrap: anywhere; font-size: var(--fs-xs); font-weight: 400; }
+  /* w33: the warning under a status chip that another server answers at the source's address (identity_different). A block of its own under the chip, at most three short lines (the sentence is
+     "Another server / answers at this / address" at 120px), in the warning ink (the .warning class); the full reason is its title. Only a row that has the warning draws it, so a row without one is as tall as before. */
+  .cell-different { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; max-width: 120px; margin-top: 2px; overflow: hidden; overflow-wrap: anywhere; font-size: var(--fs-xs); font-weight: 400; }
   .cell-trunc { max-width: 360px; }
   .wrap-any { overflow-wrap: anywhere; }
   .nowrap, .table-wrap.dense td.num { white-space: nowrap; }
@@ -76,4 +79,41 @@
 
   /* The review dialog: the point rows are denser than a page table (a dozen of them share 45vh) */
   .dialog-rows td { padding-top: 6px; padding-bottom: 6px; }
+
+  /* w33: the Move to new address... dialog (components/MoveSourceDialog.tsx). Tokens only; every rule is scoped by a class this piece owns (move-*). The dialog carries
+     .dialog (app.css's) beside its own class and never names it: other page files write .dialog bare and app.css.test.ts refuses a second file that names it. */
+  .move-source { width: min(44rem, 100%); gap: 12px; }
+  .move-source h2 { overflow-wrap: anywhere; }
+  .move-source > p { font-size: var(--fs-sm); }
+  /* The message line and the buttons stick to the bottom edge of the dialog's own scroll box (the preview is taller than a short window), as the buttons of the Map tag
+     list dialog do, so that a refusal is never hidden under the buttons at 800x600: the negative margin undoes the dialog's 22 px / 24 px padding so the footer runs edge to
+     edge, its own padding puts the content where it was, and the page colour keeps scrolled content from showing through. Its sticky offset is -22 px, the dialog's
+     bottom padding: a browser keeps a sticky box inside the scroll box's CONTENT edge, so an offset of 0 would lift the footer 22 px over the last line of the preview
+     even when nothing scrolls. The scroll padding is the footer's height
+     (10 + the three-line message + 10 + one button + 22 + the hairline) and a gap, so a control that Tab scrolls into view lands above it. */
+  .move-source { scroll-padding-bottom: calc(3lh + var(--ctl-h) + 10px + 10px + 22px + 1px + 12px); }
+  .move-source > .move-foot { display: grid; gap: 10px; position: sticky; bottom: -22px; z-index: 1; margin: 0 -24px -22px; padding: 10px 24px 22px; border-top: 1px solid var(--border); background: var(--bg); box-shadow: 0 22px 0 var(--bg); }
+  .move-foot > .row { justify-content: flex-end; }
+
+  /* The preview. Its room is there from the first frame (A2): the preview arriving, or another one replacing it, does not move the message line or the buttons under it
+     (a preview with a warning, a choice and a tick is taller than this and grows the dialog once). */
+  .move-body { display: grid; gap: 12px; align-content: start; min-height: 12lh; }
+  .move-body > p, .move-list { margin: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+  .move-fromto { font-weight: 600; }
+  .move-list { display: grid; gap: 4px; padding-left: 1.25em; }
+  .move-choice { display: grid; gap: 6px; }
+  /* Both labels also carry .inline (app.css: a flex row, normal weight, and out of the grid rules for labels that hold a box). The box sits on the first line of a text that wraps. */
+  .move-source .move-body label.move-radio, .move-source .move-body label.move-tick { align-items: flex-start; gap: 8px; font-size: var(--fs-sm); }
+  .move-source .move-body label.move-radio > input, .move-source .move-body label.move-tick > input { flex: none; margin-top: 0.2em; }
+  .move-body > p.move-warn { display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border: 1px solid var(--warn-line); border-radius: var(--radius); background: var(--warn-bg); color: var(--warn-ink); }
+  .move-warn svg.i { flex: none; margin-top: 1px; color: var(--warn-icon); }
+
+  /* The one live line (A2, A9): checking, moving, a refusal in words, or that a scan is running. A FIXED three lines, so a long sentence never moves the buttons. */
+  .move-status { height: 3lh; overflow: auto; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+  .move-status[data-tone="error"] { color: var(--crit); font-weight: 600; }
+
+  /* The buttons that wait do so with aria-disabled, not disabled (the person is on one of them when a call starts): they look the way a disabled button does and do nothing. */
+  .move-go { min-width: 10rem; }
+  .move-go[aria-disabled="true"], .move-go[aria-disabled="true"]:hover { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); cursor: not-allowed; }
+  .move-cancel[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
 }

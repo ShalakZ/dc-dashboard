@@ -6,14 +6,17 @@ from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
+from asyncua import Server
 
 from dcdash.connectors import opcua as opcua_module
 from dcdash.connectors.base import Claim, Connector, connector_types, create_connector
+from dcdash.connectors.identity import usable_key
 from dcdash.connectors.modbus import ModbusConnector
-from dcdash.connectors.opcua import OpcUaConnector
+from dcdash.connectors.opcua import OpcUaConfig, OpcUaConnector
 from dcdash.connectors.simulator import SimulatorConnector
 from dcdash.simulator.app import create_sim_app
 from dcdash.simulator.model import Simulator
+from dcdash.simulator.opcua import OpcUaSim
 from helpers import free_port, http_server, modbus_server, opcua_server, silent_server
 
 
@@ -256,3 +259,211 @@ async def test_opcua_probe_keeps_the_path_of_a_well_formed_reported_url(monkeypa
     monkeypatch.setattr(opcua_module.Client, "connect_and_get_server_endpoints", reports)
     claim = await OpcUaConnector.probe("127.0.0.1", 4840, timeout=1)
     assert claim is not None and claim.config["endpoint"] == "opc.tcp://127.0.0.1:4840/plant/"
+
+
+# --- who the server says it is (w33): Claim.identity and Connector.identity() ---------------------------------------------------
+
+
+@contextlib.asynccontextmanager
+async def plain_asyncua_server(uri: str | None = None):
+    """A stock asyncua server (not the simulator) on a free port; `uri` sets its application URI, None keeps asyncua's default."""
+    server = Server()
+    await server.init()
+    port = free_port()
+    server.set_endpoint(f"opc.tcp://127.0.0.1:{port}/plain/")
+    if uri is not None:
+        await server.set_application_uri(uri)
+    await server.start()
+    try:
+        yield port
+    finally:
+        await server.stop()
+
+
+@contextlib.asynccontextmanager
+async def instance_opcua_server(instance: str):
+    srv = OpcUaSim(Simulator(), free_port(), instance=instance)
+    await srv.start()
+    await srv.refresh()
+    try:
+        yield srv
+    finally:
+        await srv.stop()
+
+
+def opcua_at(port: int, **config) -> OpcUaConnector:
+    return OpcUaConnector(OpcUaConfig(endpoint=f"opc.tcp://127.0.0.1:{port}/plain/", **config))
+
+
+def simulator_at(port: int, **config) -> SimulatorConnector:
+    return create_connector("simulator", {"url": f"http://127.0.0.1:{port}", **config}, "k")
+
+
+def test_a_claim_has_no_identity_unless_the_probe_found_one_and_the_default_connector_has_none():
+    assert Claim("opcua", {}, "label").identity is None
+    assert Claim("opcua", {}, "label", {"application_uri": "urn:a"}).identity == {"application_uri": "urn:a"}
+
+
+async def test_a_connector_that_cannot_say_who_its_server_is_answers_none():
+    class Bare(Connector):
+        type = "bare"
+        config_schema = object
+
+        async def test(self): ...
+        async def browse(self): ...
+        async def read(self, addresses): ...
+
+    assert await Bare(object()).identity() is None
+    assert await create_connector("modbus", {"host": "127.0.0.1"}).identity() is None
+
+
+async def test_the_simulator_probe_reads_the_instance_id():
+    async with http_server(create_sim_app(Simulator(), api_key="k")) as port:
+        claim = await SimulatorConnector.probe("127.0.0.1", port, timeout=2)
+    assert claim is not None and claim.identity == {"instance": "dev"}
+    async with http_server(create_sim_app(Simulator(), api_key="k", instance="lab-2")) as port:
+        claim = await SimulatorConnector.probe("127.0.0.1", port, timeout=2)
+    assert claim is not None and claim.identity == {"instance": "lab-2"}
+    assert usable_key("simulator", claim.identity) == ("instance", "lab-2")
+
+
+@pytest.mark.parametrize("answer, identity", [
+    ({"service": "dcdash-simulator"}, None),  # a simulator from before w33
+    ({"service": "dcdash-simulator", "instance": ""}, None),
+    ({"service": "dcdash-simulator", "instance": 5}, None),
+    ({"service": "dcdash-simulator", "instance": "x" * 300}, {"instance": "x" * 256}),  # cut, not refused
+    ({"service": "dcdash-simulator", "instance": "  padded  "}, {"instance": "padded"}),
+])
+async def test_the_simulator_probe_claims_a_server_with_no_or_odd_instance_and_clips_it(answer, identity):
+    from fastapi import FastAPI
+
+    app = FastAPI()
+
+    @app.get("/")
+    def root():
+        return answer
+
+    async with http_server(app) as port:
+        claim = await SimulatorConnector.probe("127.0.0.1", port, timeout=2)
+    assert claim is not None and claim.identity == identity
+
+
+async def test_the_opcua_probe_returns_the_application_uri_a_server_set():
+    async with plain_asyncua_server("urn:acme:plc:7") as port:
+        claim = await OpcUaConnector.probe("127.0.0.1", port, timeout=3)
+    assert claim is not None and claim.identity is not None
+    assert claim.identity["application_uri"] == "urn:acme:plc:7"
+    assert claim.identity["application_name"] and claim.identity["product_uri"]  # asyncua names its application and product
+    assert "thumbprint" not in claim.identity  # a None-only server carries no certificate
+    assert usable_key("opcua", claim.identity) == ("uri", "urn:acme:plc:7")
+
+
+async def test_the_opcua_probe_stores_a_default_application_uri_as_said_but_it_is_no_key():
+    async with plain_asyncua_server() as port:
+        claim = await OpcUaConnector.probe("127.0.0.1", port, timeout=3)
+    assert claim is not None and claim.identity is not None
+    assert claim.identity["application_uri"] == "urn:freeopcua:python:server"
+    assert usable_key("opcua", claim.identity) is None
+
+
+async def test_the_opcua_probe_reads_the_simulators_application_uri_from_its_instance_id():
+    async with opcua_server() as srv:
+        claim = await OpcUaConnector.probe("127.0.0.1", urlparse(srv.endpoint).port, timeout=3)
+    assert claim is not None and claim.identity is not None
+    assert claim.identity["application_uri"] == "urn:dcdash:simulator:dev"
+    assert usable_key("opcua", claim.identity) == ("uri", "urn:dcdash:simulator:dev")
+    async with instance_opcua_server("lab-2") as srv:
+        claim = await OpcUaConnector.probe("127.0.0.1", urlparse(srv.endpoint).port, timeout=3)
+    assert claim is not None and claim.identity is not None and claim.identity["application_uri"] == "urn:dcdash:simulator:lab-2"
+
+
+async def test_the_opcua_probe_of_a_server_that_says_nothing_has_no_identity(monkeypatch):
+    async def reports(self):
+        return [SimpleNamespace(EndpointUrl="opc.tcp://h:4840/")]
+
+    monkeypatch.setattr(opcua_module.Client, "connect_and_get_server_endpoints", reports)
+    claim = await OpcUaConnector.probe("127.0.0.1", 4840, timeout=1)
+    assert claim is not None and claim.identity is None
+
+
+async def test_opcua_identity_asks_the_server_and_matches_what_the_probe_saw():
+    async with plain_asyncua_server("urn:acme:plc:7") as port:
+        claim = await OpcUaConnector.probe("127.0.0.1", port, timeout=3)
+        said = await opcua_at(port).identity()
+    assert said is not None and said == claim.identity and said["application_uri"] == "urn:acme:plc:7"
+
+
+async def test_opcua_identity_of_the_simulator_is_its_instance_uri_and_needs_no_login():
+    async with opcua_server(password="s3cret") as srv:  # a login is required to read, not to ask who the server is
+        port = urlparse(srv.endpoint).port
+        said = await OpcUaConnector(OpcUaConfig(endpoint=f"opc.tcp://127.0.0.1:{port}/dcdash/", username="sim")).identity()
+    assert said is not None and said["application_uri"] == "urn:dcdash:simulator:dev"
+
+
+async def test_opcua_identity_never_hands_the_user_info_of_the_endpoint_to_asyncua(monkeypatch):
+    seen: list[str] = []
+
+    class Recording(opcua_module.Client):
+        def __init__(self, url, *args, **kwargs):
+            seen.append(url)
+            super().__init__(url, *args, **kwargs)
+
+    monkeypatch.setattr(opcua_module, "Client", Recording)
+    async with plain_asyncua_server("urn:acme:plc:7") as port:
+        connector = OpcUaConnector(OpcUaConfig(endpoint=f"opc.tcp://sim:p%40ss@127.0.0.1:{port}/plain/", username="sim"), "p@ss")
+        said = await connector.identity()
+    assert said is not None and said["application_uri"] == "urn:acme:plc:7"
+    assert seen == [f"opc.tcp://127.0.0.1:{port}/plain/"] and "sim" not in seen[0] and "p%40ss" not in seen[0]
+
+
+async def test_opcua_identity_is_none_for_a_closed_port_a_silent_service_and_the_http_simulator_and_never_raises():
+    assert await opcua_at(free_port(), timeout_seconds=1).identity() is None
+    async with silent_server() as port:
+        started = time.perf_counter()
+        assert await opcua_at(port, timeout_seconds=0.5).identity() is None
+        assert time.perf_counter() - started < 3.0
+    async with http_server(create_sim_app(Simulator(), api_key="k")) as port:
+        assert await opcua_at(port, timeout_seconds=1).identity() is None
+    assert await OpcUaConnector(OpcUaConfig(endpoint="opc.tcp://no-such-host.invalid:4840/", timeout_seconds=1)).identity() is None
+
+
+async def test_simulator_identity_reads_the_instance_id_without_a_key():
+    async with http_server(create_sim_app(Simulator(), api_key="k", instance="lab-2")) as port:
+        connector = create_connector("simulator", {"url": f"http://127.0.0.1:{port}"}, "wrong-key")  # `/` needs no key
+        assert await connector.identity() == {"instance": "lab-2"}
+        await connector.close()
+
+
+async def test_simulator_identity_is_none_for_a_closed_port_another_service_and_an_old_simulator_and_never_raises():
+    from fastapi import FastAPI
+
+    other = FastAPI()
+
+    @other.get("/")
+    def root():
+        return {"hello": "world", "instance": "looks-like-one"}
+
+    old = FastAPI()
+
+    @old.get("/")
+    def old_root():
+        return {"service": "dcdash-simulator"}
+
+    broken = FastAPI()
+
+    @broken.get("/")
+    def broken_root():
+        return [1, 2, 3]
+
+    connector = simulator_at(free_port(), timeout_seconds=1)
+    assert await connector.identity() is None
+    await connector.close()
+    for app in (other, old, broken):
+        async with http_server(app) as port:
+            connector = simulator_at(port, timeout_seconds=2)
+            assert await connector.identity() is None
+            await connector.close()
+    async with silent_server() as port:
+        connector = simulator_at(port, timeout_seconds=0.5)
+        assert await connector.identity() is None
+        await connector.close()

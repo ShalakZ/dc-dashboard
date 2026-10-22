@@ -669,6 +669,50 @@ function tagListUndone(d: Detail): string {
   ].join("");
 }
 
+/** "172.20.0.5:4840" (an IPv6 host in brackets), the host alone without a usable port, null without a host. */
+function hostPort(host: unknown, port: unknown): string | null {
+  const name = text(host);
+  if (name === null) return null;
+  const shown = name.includes(":") && !name.startsWith("[") ? `[${name}]` : name;
+  return typeof port === "number" && Number.isSafeInteger(port) && port > 0 ? `${shown}:${port}` : shown;
+}
+
+/** The source a move or its Undo is about: the name stored with the entry (the one the source had after the step), else the lookup's ("source Meter 1"), else "a source". */
+function movedSource(c: Context): string {
+  const stored = text(c.d.name_after) ?? text(c.d.name_before);
+  return stored ? shortName(stored) : aSource(c);
+}
+
+/** "Moved OPC UA server at 172.20.0.5:4840 from 172.20.0.3:4840 to 172.20.0.5:4840 (12 mappings kept, the duplicate removed)"; a possible match adds how it was recognised. */
+function sourceMoved(c: Context): string {
+  const d = c.d;
+  const from = hostPort(d.host_before, d.port_before);
+  const to = hostPort(d.host_after, d.port_after);
+  const notes: string[] = [];
+  if (typeof d.mappings === "number" && Number.isSafeInteger(d.mappings) && d.mappings > 0) notes.push(`${amount(d.mappings, "mapping")} kept`);
+  if (isObject(d.removed)) notes.push("the duplicate removed");
+  const addresses = isObject(d.match) ? idOf(d.match.addresses) : null;
+  return [
+    `Moved ${movedSource(c)}`,
+    from && to ? ` from ${from} to ${to}` : to ? ` to ${to}` : "",
+    notes.length > 0 ? ` (${notes.join(", ")})` : "",
+    isObject(d.match) && d.match.kind === "possibly"
+      ? ` (matched by its ${addresses !== null ? `${grouped(addresses)} mapped address${addresses === 1 ? "" : "es"}` : "mapped addresses"})`
+      : "",
+  ].join("");
+}
+
+/**
+ * "Undid the move of OPC UA server at 172.20.0.3:4840: back at 172.20.0.3:4840 (668 readings taken at the new address stay)" (the `_after` side of an Undo entry is the state it restored).
+ * The readings are the ones taken at the new address since the move, which an Undo leaves where they are; left out when the entry does not say, or says none.
+ */
+function sourceMoveUndone(c: Context): string {
+  const back = hostPort(c.d.host_after, c.d.port_after);
+  const n = c.d.readings_since_move;
+  const stay = typeof n === "number" && Number.isSafeInteger(n) && n > 0 ? ` (${n === 1 ? "1 reading taken at the new address stays" : `${grouped(n)} readings taken at the new address stay`})` : "";
+  return `Undid the move of ${movedSource(c)}${back ? `: back at ${back}` : ""}${stay}`;
+}
+
 /** "2026-10-01 00:00 UTC" from the ISO time a fill stored; any other text as it is (cut), nothing for a value that is not text. */
 function fillTime(value: unknown): string | null {
   const raw = text(value);
@@ -920,6 +964,8 @@ const RULES: Record<string, Rule> = {
   },
   "source.created": made("source", "source_id", sourcesPage),
   "source.deleted": removed("source", "source_id"),
+  "source.move_undone": { summary: (c) => sourceMoveUndone(c), link: sourcesPage },
+  "source.moved": { summary: (c) => sourceMoved(c), link: sourcesPage },
   "source.test_all": {
     summary: ({ d }) =>
       typeof d.sources === "number" ? `Started a connection test of ${count(d.sources, "source")}` : "Started a connection test of all sources",

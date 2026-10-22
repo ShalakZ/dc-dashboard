@@ -9,6 +9,8 @@ const SETTINGS_PREFIXES = ["settings.", "storage.", "billing."];
 const CREATE_ACTIONS = new Set(["kind.starter_pack_added", "readings.imported", "tags.mapped"]);
 // Undoing a tag list takes its mappings and assets away again.
 const DELETE_ACTIONS = new Set(["tags.unmapped"]);
+// Undoing the move of a source puts its address back, an update like the move itself (which the ".moved" suffix below already reads as a change).
+const CHANGE_ACTIONS = new Set(["source.move_undone"]);
 // A saved import profile is a create or an update in one (a PUT), so it is a change.
 const CHANGE_SUFFIXES = [".updated", ".changed", "_changed", ".unblocked", ".default_set", ".renamed", ".moved", ".saved"];
 
@@ -24,6 +26,6 @@ export function auditKind(action: string): AuditKind {
   // A revoked display link ends for good, like a removal (no other action ends in ".revoked").
   if (action.endsWith(".deleted") || action.endsWith(".revoked") || DELETE_ACTIONS.has(action)) return "delete";
   if (action.endsWith(".created") || CREATE_ACTIONS.has(action)) return "create";
-  if (CHANGE_SUFFIXES.some((suffix) => action.endsWith(suffix))) return "change";
+  if (CHANGE_ACTIONS.has(action) || CHANGE_SUFFIXES.some((suffix) => action.endsWith(suffix))) return "change";
   return "other";
 }

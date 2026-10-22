@@ -63,6 +63,13 @@ same host counts): the sign-in cookie alone does not keep that out, and a file s
 rule another web page could make a signed-in administrator import readings. `curl` and the import command send no such mark and are
 not affected.
 
+`sources.edit` also covers moving a source to the address where its device turned up (**Move to new address...** on Sources and **Move...** on
+Discovery) and the Undo of that move, which the toast and the audit entry offer; there is no separate permission, because it only changes the
+address of a source the person may already edit or delete. The move refuses (403) a request marked as coming from another site, as the import
+does. `discovery.edit` also covers **Remove not seen** (only a role with it is offered the item, and the server refuses the removal
+without it); the **Not seen lately** filter only hides sources on the canvas, so everyone who can open Discovery has it, while a source
+is marked. **Move...** on Discovery is drawn only for a role with `sources.edit`. See [Devices that move or disappear](devices-that-move.md).
+
 `billing.close` is held by the built-in Admin only, until an administrator ticks it on a role of their own (unlike `roles.manage` it can
 be ticked on a custom role, as `billing.export` can). Migration `0012` gave it to no role, so after an upgrade nobody but the Admin can
 close or reopen a month. It needs See billing: the buttons live on the Billing page, so the Roles editor offers to tick **See billing**

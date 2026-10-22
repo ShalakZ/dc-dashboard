@@ -11,6 +11,7 @@ import { ImpactDeleteDialog } from "../components/ImpactDeleteDialog";
 import { ImportDialog } from "../components/ImportDialog";
 import { JobStatus } from "../components/JobStatus";
 import { Modal } from "../components/Modal";
+import { MoveSourceDialog } from "../components/MoveSourceDialog";
 import { PAGE_NEED } from "../components/navItems";
 import { PageHeader } from "../components/PageHeader";
 import { RowActions, type RowAction } from "../components/RowActions";
@@ -20,12 +21,14 @@ import { TagListDialog } from "../components/TagListDialog";
 import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
+import { useMovedToast } from "../hooks/useMovedToast";
 import { useNow } from "../hooks/useNow";
 import { ageNow, formatAge, formatSpan, secondsSince } from "../lib/age";
 import { historyLine } from "../lib/historyLine";
 import { sourceDeletePath, sourceImpact, sourceLoss, sourceNote } from "../lib/impact";
+import { DIFFERENT_SERVER_ROW, differentServerWhy, offerOf, twoServersText } from "../lib/moves";
 import { formatSiteDateTime } from "../lib/siteTime";
-import { formatOfflineSince, longOffline, offlineBannerText, sourceStatusText } from "../lib/sourceStatus";
+import { formatOfflineSince, longOffline, MOVE_LINK_TEXT, offlineBannerParts, sourceStatusText } from "../lib/sourceStatus";
 
 /** The collector status counts as unreadable when its last answer is older than this. It is the backend's STALE_AFTER_SECONDS (backend/dcdash/core/heartbeat.py), the age at which a heartbeat reads as silent. */
 const COLLECTOR_STATUS_STALE_SECONDS = 30;
@@ -59,6 +62,7 @@ export function SourcesPage() {
   const site = useSite();
   const invalidate = useInvalidate();
   const toast = useToast();
+  const movedToast = useMovedToast(); // (w33) "Moved ... 12 mappings kept." with an Undo for 10 seconds
   const [jobs, setJobs] = useState<Record<number, number>>({});
   const [showAdd, setShowAdd] = useState(false);
   // The source as it was when Edit was pressed, not a lookup into the list: the list is fetched every 10 s with new objects, which would reset the open form.
@@ -71,15 +75,21 @@ export function SourcesPage() {
   const [importing, setImporting] = useState<{ id: number; name: string } | null>(null);
   const [mapping, setMapping] = useState<{ id: number; name: string; connector_type: string } | null>(null);
   const [filling, setFilling] = useState<{ id: number; name: string } | null>(null);
+  // (w33) The Move to new address... dialog, with the two sources as they were when it was asked for: the old one (id and name) and the new one a scan found.
+  const [moving, setMoving] = useState<{ oldId: number; oldName: string; newId: number } | null>(null);
   const { run, busy, error: actionError } = useAction();
-  // While a test runs or a delete confirmation, a check or one of the w31 dialogs is open, no form may open next to it (two dialogs would share Escape and the focus trap).
-  const locked = busy || deleting !== null || checking !== null || importing !== null || mapping !== null || filling !== null;
+  // While a test runs or a delete confirmation, a check or one of the w31 or w33 dialogs is open, no form may open next to it (two dialogs would share Escape and the focus trap).
+  const locked = busy || deleting !== null || checking !== null || importing !== null || mapping !== null || filling !== null || moving !== null;
   const openAdd = () => { if (!locked) setShowAdd(true); };
   const openEdit = (s: Source) => { if (!locked) setEditing(s); };
   const openCheck = (s: Source) => { if (!locked) setChecking({ id: s.id, name: s.name }); };
   const openImport = (s: Source) => { if (!locked) setImporting({ id: s.id, name: s.name }); };
   const openMapping = (s: Source) => { if (!locked) setMapping({ id: s.id, name: s.name, connector_type: s.connector_type }); };
   const openFill = (s: Source) => { if (!locked) setFilling({ id: s.id, name: s.name }); };
+  const openMove = (s: Source) => {
+    const offer = offerOf(s);
+    if (!locked && offer) setMoving({ oldId: s.id, oldName: s.name, newId: offer.to_source_id });
+  };
 
   // A dialog gives the focus back to what had it when it opened, the row's menu button, as long as that is still in the page. When the list moved on
   // under the dialog and the row is gone (the source was deleted, or the list was empty), the focus would drop to the body: it goes to the heading instead.
@@ -127,7 +137,9 @@ export function SourcesPage() {
   const canSeeEvents = meets(PAGE_NEED.events, can); // the System events page has its own need (w32): the journal's permission, and the sources it names
   // The w31 items come after the old ones, which keep their order and their words, and the w32 Events item comes last. Test and Check connection are for a source that is polled: a
   // source filled by importing files has nothing to reach. Fill older range needs a connector that keeps history (the list row says so).
+  // (w33) Move to new address... comes first: it is the reason the row is worth a look. It is offered for an offline source that a scan found again at a new address.
   const actionsOf = (s: Source): RowAction[] => [
+    ...(canEdit && offerOf(s) !== null ? [{ label: MOVE_LINK_TEXT, onSelect: () => openMove(s), disabled: locked }] : []),
     ...(canTest && polls(s) ? [{ label: "Test", onSelect: () => testOne(s.id), disabled: locked }] : []),
     ...(canCheck && polls(s) ? [{ label: "Check connection", onSelect: () => openCheck(s), disabled: locked }] : []),
     ...(canEdit ? [{ label: "Edit", onSelect: () => openEdit(s), disabled: locked }] : []),
@@ -141,6 +153,10 @@ export function SourcesPage() {
   // crosses the line without waiting for a refetch, and it is built from the answer the page already holds: a refetch that brings the same facts changes nothing.
   const timezone = site.data?.timezone;
   const longDown = longOffline(sources, now);
+  // (w33) A source a scan found again at a new address says where; the person who can edit sources gets the button that opens the dialog (one source only: with several
+  // the sentence sends them to the row menus).
+  const banner = offlineBannerParts(longDown, timezone, canEdit);
+  const bannerSource = banner.move === null ? null : longDown.find((item) => item.source.id === banner.move?.sourceId)?.source ?? null;
 
   if (isLoading) {
     // The 10 s poll sets a list that failed before pending again for a second, with no error: the skeleton would take turns with the error at every poll.
@@ -196,8 +212,9 @@ export function SourcesPage() {
         // Not an alert and not a live region (the page has two alert banners already and the list is fetched every 10 s): it is read where it stands.
         <div className="banner banner-warn offline-banner">
           <WarnIcon />
-          <span>{offlineBannerText(longDown, timezone)}</span>
-          {canSeeEvents && <Link className="b-link" to={longDown.length === 1 ? `/events?source=${longDown[0].source.id}` : "/events"}>See its events</Link>}
+          <span>{banner.text}</span>
+          {bannerSource !== null && <button type="button" className="b-act" aria-disabled={locked ? true : undefined} onClick={() => openMove(bannerSource)}>{MOVE_LINK_TEXT}</button>}
+          {canSeeEvents &&<Link className="b-link" to={longDown.length === 1 ? `/events?source=${longDown[0].source.id}` : "/events"}>See its events</Link>}
         </div>
       )}
       {showAdd && (
@@ -219,6 +236,16 @@ export function SourcesPage() {
       {importing && <ImportDialog source={importing} onClose={() => closeDialog(() => setImporting(null), importing.id)} />}
       {mapping && <TagListDialog source={mapping} onClose={() => closeDialog(() => setMapping(null), mapping.id)} />}
       {filling && <HistoryFillDialog source={filling} onClose={() => closeDialog(() => setFilling(null), filling.id)} />}
+      {moving && (
+        <MoveSourceDialog
+          oldId={moving.oldId} oldName={moving.oldName} newId={moving.newId}
+          onClose={() => closeDialog(() => setMoving(null), moving.oldId)}
+          onDone={(done, preview) => {
+            closeDialog(() => setMoving(null), moving.oldId);
+            movedToast(done, preview.mappings);
+          }}
+        />
+      )}
       {deleting && (
         <ImpactDeleteDialog<SourceImpact>
           title={`Delete source "${deleting.name}"?`}
@@ -246,6 +273,10 @@ export function SourcesPage() {
                 const history = historyLine(s, now);
                 // The chip's tooltip dates an outage in the site zone; with no zone to read it in, it says nothing rather than a time in the browser's zone.
                 const offlineAt = s.status === "offline" && s.offline_since && timezone ? formatOfflineSince(s.offline_since, timezone) : null;
+                // (w33) Two new servers look like this one: the tooltip says why no move is offered, after the date when there is one.
+                const chipTitle = s.status === "offline" && s.move_candidate?.kind === "two"
+                  ? `${offlineAt ? `offline since ${offlineAt}. ` : ""}${twoServersText(s.move_candidate.count)}.`
+                  : offlineAt ? `offline since ${offlineAt}` : undefined;
                 return (
                   <tr key={s.id} data-source={s.id}>
                     <td>
@@ -254,7 +285,11 @@ export function SourcesPage() {
                       {history !== null && <span className="cell-history muted" title={history}>{history}</span>}
                     </td>
                     <td>{s.connector_type}</td><td>{s.enabled ? "yes" : "no"}</td>
-                    <td>{status.polled ? <span className={`chip ${STATUS_CHIP[status.text] ?? "chip-stale"}`} title={offlineAt ? `offline since ${offlineAt}` : undefined}>{status.text}</span> : <span className="muted st st-off note">{status.text}</span>}</td>
+                    <td>
+                      {status.polled ? <span className={`chip ${STATUS_CHIP[status.text] ?? "chip-stale"}`} title={chipTitle}>{status.text}</span> : <span className="muted st st-off note">{status.text}</span>}
+                      {/* (w33) A scan, test or check met another server at this address; polling goes on for an enabled source, so the row must not look healthy without saying it. A block under the chip. */}
+                      {s.identity_different === true && <span className="cell-different warning" title={differentServerWhy(s.enabled)}>{DIFFERENT_SERVER_ROW}</span>}
+                    </td>
                     <td className="nowrap">{s.last_seen && site.data ? formatSiteDateTime(s.last_seen, site.data.timezone) : "—"}</td>
                     <td className="num">{formatAge(ageNow(s.last_reading_age_seconds, sourcesAnsweredAt, now))}</td>
                     <td className="error">{s.last_error ?? ""}</td>

@@ -19,7 +19,8 @@ Create `backend/dcdash/connectors/<name>.py` with a subclass of `Connector` (`ba
 | `browse()` | yes | the points the source offers, as `PointDescriptor`s (address, name, data type, unit hint) |
 | `read(addresses)` | yes | one `PointValue` per address (time, value or `None`, quality `GOOD` or `BAD`, an optional status) |
 | `default_ports` | no | the ports a network scan tries for this connector |
-| `probe(host, port, timeout)` | no | a `Claim` (a ready source configuration) when the service at that address is this protocol, else `None`; never raises |
+| `probe(host, port, timeout)` | no | a `Claim` (a ready source configuration, and in `Claim.identity` what the server says about itself, if it does) when the service at that address is this protocol, else `None`; never raises |
+| `identity()` | no | what the server says about itself, as a dict, or `None`; asked by **Test** and the connection check after the server has answered; never raises (see [Server identity](#server-identity)) |
 | `endpoint_key(config)` | no | host, port and qualifier of the endpoint a configuration points at, so a scan recognises a source that exists already |
 | `check(points, publish)` | no | the step-by-step connection check; the default is one step that runs `test()` (OPC UA has its own) |
 | `supports_history` | no | `True` when the connector can read a source's history; the default is `False` (see [Reading history](#reading-history)) |
@@ -44,6 +45,31 @@ validated configuration and the source's secret.
 - **The diagnostics report.** Add the connector to `REPORT_CONFIG_FIELDS` (the fields a report may show) and, for fields it must
   never show, to `EXCLUDED_CONFIG_FIELDS`, both in `backend/dcdash/diagnostics/report.py`; `backend/tests/test_diagnostics_report.py`
   fails until every config field is in one of the two lists.
+
+## Server identity
+
+A source remembers who its server is (`sources.identity`), so that a scan, **Test** or the check can notice another server at the same
+address, and so that the platform can offer to move an old source to the address where the same server turned up
+([Devices that move or disappear](devices-that-move.md)). A connector takes part in two places, both optional:
+
+- `probe` puts the identity in `Claim.identity` (the fourth field of the `Claim`, `None` by default, so a connector that does not
+  know it is unchanged). A new source made from the claim stores it, and a scan that meets an existing source compares it.
+- `identity()` is asked after `test()` or the check has succeeded, with the connector still open, and the answer is compared and
+  stored the same way. The default returns `None`. The poll loop never calls it.
+
+**What to return.** A dict of text values with these keys, and only these (anything else is dropped): `application_uri`,
+`application_name`, `product_uri`, `thumbprint` (the SHA-1 of the server certificate as upper-case hexadecimal pairs joined by colons;
+`thumbprint_of` in `backend/dcdash/connectors/identity.py` makes it from the DER bytes) and `instance`. Leave out what the server does
+not say; each text is cut at 256 characters. **Never raise**: a server that cannot be asked, or that answers something odd, gives
+`None`. **No secrets**: the identity goes to the database, the Discovery panel and the journal, so never put in a password, a token or
+the certificate itself.
+
+**What it buys.** Returning an identity stores and shows it. The warning `A different server answers at this address` and the move
+offer also need the type to have a rule for what counts as the same server: `usable_key` in `backend/dcdash/connectors/identity.py`
+(OPC UA compares the application URI, the simulator its instance id, and a default URI such as `urn:freeopcua:python:server` counts
+as nothing), the type in `MOVABLE_TYPES` (`backend/dcdash/moves/match.py`) and a place to rewrite in `URL_KEYS` and `LABELS`
+(`backend/dcdash/moves/urls.py`). Add those only if two different servers of the new type can never give the same answer, and add
+the test that they never match to `backend/tests/test_source_identity.py`. Modbus has no identity at all and is never offered a move.
 
 ## How the collector uses it
 

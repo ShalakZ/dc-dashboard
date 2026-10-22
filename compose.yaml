@@ -134,6 +134,9 @@ services:
     command: python -m dcdash.simulator.main
     environment:
       SIM_API_KEY: sim-key
+      # Who this simulator is (w33): the HTTP instance id and the OPC UA application URI urn:dcdash:simulator:<id>. A second stack on
+      # the same network needs another value, or the platform takes the two simulators for one server that moved.
+      SIM_INSTANCE_ID: ${SIM_INSTANCE_ID:-dev}
       SIM_OPCUA_PASSWORD: ${SIM_OPCUA_PASSWORD:-}
       # Fault injection for rehearsing the field-debugging loop (docs/field-debugging.md): OPC UA only, off unless set for ONE
       # command (`SIM_FAULT_SLOW=1.5 docker compose --profile dev up -d simulator`), never in .env. Only this dev-profile service

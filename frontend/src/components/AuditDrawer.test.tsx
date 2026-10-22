@@ -7,6 +7,7 @@ import type { AuditEntry, AuditOutcome } from "../api/types";
 import { AuthProvider } from "../auth/AuthProvider";
 import type { PermissionId } from "../lib/permissions";
 import { mockFetch, type Routes } from "../test/fetchMock";
+import { moveUndone } from "../test/moveFixtures";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
@@ -388,6 +389,141 @@ describe("AuditDrawer: Undo this tag list", () => {
     const { dialog } = await showAs(["discovery.accept"], mapped({ detail: big }));
     expect(dialog.querySelector("pre")).toBeNull();
     expect(stringify.mock.calls.some(([value]) => value === big)).toBe(false);
+  });
+});
+
+describe("AuditDrawer: Undo this move (w33)", () => {
+  const MOVED_AT = "2026-10-07T10:00:00Z"; // 2 hours before NOW
+  const moved = (extra: Partial<AuditEntry> = {}) =>
+    stored({
+      id: 90, action: "source.moved", ts: MOVED_AT, refs: {},
+      detail: {
+        source_id: 2, name_before: "OPC UA server at 172.20.0.3:4840", name_after: "OPC UA server at 172.20.0.5:4840", host_before: "172.20.0.3", port_before: 4840,
+        host_after: "172.20.0.5", port_after: 4840, address: "as_found", mappings: 12, removed: { source_id: 7, name: "OPC UA server at 172.20.0.5:4840", points: 40 },
+      },
+      ...extra,
+    });
+  const BACK = 'Moved "OPC UA server at 172.20.0.3:4840" back to 172.20.0.3:4840.';
+  const EXPLANATION =
+    "Puts the source back at its old address. The duplicate that was removed is found again by the next scan. Readings taken at the new address stay.";
+  const UNDO_URL = "/api/sources/moves/90/undo";
+
+  async function showAs(permissions: PermissionId[], entry: AuditEntry, routes: Routes = {}) {
+    const toasts = spyToasts();
+    mockFetch({ "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("custom", { permissions }) }, ...routes });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const refreshed = vi.spyOn(client, "invalidateQueries");
+    const view = render(
+      <QueryClientProvider client={client}>
+        <AuthProvider>
+          <MemoryRouter>{toasts.wrap(<><SignedIn />{drawer({ entry })}</>)}</MemoryRouter>
+        </AuthProvider>
+      </QueryClientProvider>,
+    );
+    await accountKnown();
+    const dialog = screen.getByRole("dialog", { name: "Audit entry" });
+    const refreshedKeys = () => refreshed.mock.calls.map(([filter]) => (filter as { queryKey: readonly unknown[] }).queryKey[0]);
+    const posts = () => vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url) === UNDO_URL && (init as RequestInit).method === "POST");
+    return { ...view, dialog, toasts, refreshed, refreshedKeys, posts, undo: () => within(dialog).queryByRole("button", { name: "Undo this move" }) };
+  }
+
+  it("is offered to an account with sources.edit, for a move of the last 24 hours, with a line that says what it does", async () => {
+    const { undo, dialog } = await showAs(["sources.edit", "audit.view"], moved());
+    expect(undo()).toBeInTheDocument();
+    expect(undo()).toHaveAttribute("type", "button");
+    expect(dialog.querySelector(".audit-undo")).toHaveTextContent(EXPLANATION);
+    expect(dialog.querySelector(".audit-undo p.muted")).toHaveTextContent(EXPLANATION);
+  });
+
+  it("is not offered to an account that can see the audit log but not edit sources, whatever else it may accept", async () => {
+    const { undo, dialog } = await showAs(["audit.view", "discovery.accept", "sources.view", "sources.test"], moved());
+    expect(undo()).toBeNull();
+    expect(dialog.querySelector(".audit-undo")).toBeNull();
+  });
+
+  it("is offered for a move 23 hours old and not for one 25 hours old (NOW is 2026-10-07 12:00 UTC)", async () => {
+    expect((await showAs(["sources.edit"], moved({ ts: "2026-10-06T13:00:00Z" }))).undo()).toBeInTheDocument();
+    cleanup();
+    expect((await showAs(["sources.edit"], moved({ ts: "2026-10-06T11:00:00Z" }))).undo()).toBeNull();
+  });
+
+  it("is offered only for a source.moved entry, not for its Undo, a tag list or any other action", async () => {
+    const entry = (action: string) => stored({ id: 91, action, detail: { audit_id: 90, source_id: 2 }, refs: {}, ts: MOVED_AT });
+    for (const action of ["source.move_undone", "tags.mapped", "source.updated", "tariff.created"]) {
+      expect((await showAs(["sources.edit", "discovery.accept"], entry(action))).undo(), action).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("does not show the tag list's Undo for a move, and the move's for a tag list", async () => {
+    const both: PermissionId[] = ["sources.edit", "discovery.accept"];
+    const forMove = await showAs(both, moved());
+    expect(within(forMove.dialog).queryByRole("button", { name: "Undo this tag list" })).toBeNull();
+    cleanup();
+    const forList = await showAs(both, stored({ id: 80, action: "tags.mapped", detail: { source_id: 5, points: [1], assets: [], mappings: [] }, refs: {}, ts: MOVED_AT }));
+    expect(forList.undo()).toBeNull();
+    expect(within(forList.dialog).getByRole("button", { name: "Undo this tag list" })).toBeInTheDocument();
+  });
+
+  it("posts the Undo of this entry, tells the server's sentence in place and in a toast, keeps the button (waiting) and the focus on it, and reads the lists again", async () => {
+    const { undo, dialog, toasts, posts, refreshedKeys } = await showAs(["sources.edit"], moved(), {
+      [`POST ${UNDO_URL}`]: { body: moveUndone({ text: BACK, readings_since_move: 0 }) },
+    });
+    await userEvent.click(undo()!);
+    await waitFor(() => expect(dialog.querySelector(".audit-undo-slot")).toHaveTextContent(BACK));
+    expect(toasts.calls).toEqual([{ kind: "success", text: BACK }]);
+    expect(posts()).toHaveLength(1);
+    expect(undo()).toHaveAttribute("aria-disabled", "true");
+    expect(undo()).toHaveFocus();
+    // the sources (and so their points), the graph, the scans, the audit log and the System events
+    await waitFor(() => expect(refreshedKeys()).toEqual(expect.arrayContaining(["sources", "graph", "scans", "audit", "events"])));
+    // a second press does nothing
+    await userEvent.click(undo()!);
+    expect(posts()).toHaveLength(1);
+  });
+
+  it("adds the readings that stay to the sentence when some were taken at the new address", async () => {
+    const { undo, dialog, toasts } = await showAs(["sources.edit"], moved(), { [`POST ${UNDO_URL}`]: { body: moveUndone({ text: BACK, readings_since_move: 120 }) } });
+    await userEvent.click(undo()!);
+    const said = `${BACK} 120 readings taken at the new address stay.`;
+    await waitFor(() => expect(dialog.querySelector(".audit-undo-slot")).toHaveTextContent(said));
+    expect(toasts.calls).toEqual([{ kind: "success", text: said }]);
+  });
+
+  it.each([
+    [409, "this move was already undone", "This move was already undone."],
+    [409, "the source was changed after the move: its address is not 172.20.0.5:4840 any more", "The source was changed after the move: its address is not 172.20.0.5:4840 any more."],
+    [410, "this move is older than 24 hours and can no longer be undone", "This move is older than 24 hours and can no longer be undone."],
+  ])("shows the server's %s refusal in place, as an alert, with no toast, lets the person try again and reads the lists again (%s)", async (status, detail, shown) => {
+    const { undo, dialog, toasts, refreshed } = await showAs(["sources.edit"], moved(), { [`POST ${UNDO_URL}`]: { status, body: { detail } } });
+    expect(dialog.querySelector(".audit-undo-slot")).toBeEmptyDOMElement(); // a slot is held for the message
+    await userEvent.click(undo()!);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(shown);
+    expect(toasts.calls).toEqual([]);
+    expect(undo()).not.toHaveAttribute("aria-disabled");
+    await waitFor(() => expect(refreshed).toHaveBeenCalled()); // the lists are out of date after a refusal too
+  });
+
+  it("forgets a refusal when the drawer steps to another entry, and keeps one block", async () => {
+    const { undo, dialog, rerender, toasts } = await showAs(["sources.edit"], moved(), { [`POST ${UNDO_URL}`]: { status: 409, body: { detail: "already undone" } } });
+    await userEvent.click(undo()!);
+    expect(await within(dialog).findByRole("alert")).toBeInTheDocument();
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <AuthProvider>
+          <MemoryRouter>{toasts.wrap(<><SignedIn />{drawer({ entry: moved({ id: 89 }) })}</>)}</MemoryRouter>
+        </AuthProvider>
+      </QueryClientProvider>,
+    );
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+    expect(dialog.querySelectorAll(".audit-undo")).toHaveLength(1);
+  });
+
+  it("keeps the stored JSON behind its toggle", async () => {
+    const { dialog } = await showAs(["sources.edit"], moved());
+    expect(dialog.querySelector("pre")).toBeNull();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Show the stored JSON" }));
+    expect(dialog.querySelector("pre")).toHaveTextContent('"host_before": "172.20.0.3"');
   });
 });
 

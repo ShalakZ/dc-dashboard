@@ -36,7 +36,9 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
   const takesSecret = connector?.polls !== false;
   useEffect(() => { if (!source && connector && type !== connector.type) setType(connector.type); }, [source, connector, type]);
   // `source` must be a stable object (the page keeps the one it was opened with): a new one would reset what is typed.
-  useEffect(() => { setValues(source ? valuesFromConfig(fields, source.config) : initialValues(fields)); setClearKeys([]); }, [fields, source]);
+  // The values the form was opened with (an edit only): what the fields are compared with to tell whether the config was edited at all.
+  const opened = useMemo<RawValues>(() => (source ? valuesFromConfig(fields, source.config) : {}), [fields, source]);
+  useEffect(() => { setValues(source ? opened : initialValues(fields)); setClearKeys([]); }, [fields, source, opened]);
   // Config keys whose stored user name and password the API hides (an edit only; the field shows the masked value).
   const hiddenKeys = source?.hidden_config_keys ?? [];
   const fieldTitle = (key: string) => fields.find((f) => f.name === key)?.label ?? key;
@@ -49,10 +51,18 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
     try {
       if (source) {
         // No `secret` key keeps the stored secret; "" would erase it.
-        // `clear_config_credentials` only takes effect together with `config`, which an edit always sends.
+        // Only what was edited goes (w33): a form opened before a move of the source holds the old address and the old default name, and a save that
+        // sent them back with a secret, a switch or a timeout would put the source back at the dead address, or lose the name its Undo needs.
+        // `config` goes when a config field was edited, or credentials are to be removed (`clear_config_credentials` only takes effect together with `config`),
+        // and then it carries `expect_config`, the masked config this form was opened with: the server answers 409 when the stored one differs, since
+        // the whole config replaces the stored one and the unedited fields of a stale form are not the person's choice.
         const cleared = hiddenKeys.filter((key) => clearKeys.includes(key));
-        const body: Partial<Omit<SourceIn, "connector_type">> & { clear_config_credentials?: string[] } = {
-          name, config: coerceValues(fields, values), enabled, ...(removeSecret ? { secret: null } : secret ? { secret } : {}),
+        const configEdited = cleared.length > 0 || fields.some((field) => values[field.name] !== opened[field.name]);
+        const body: Partial<Omit<SourceIn, "connector_type">> & { expect_config?: Record<string, unknown>; clear_config_credentials?: string[] } = {
+          ...(name !== source.name ? { name } : {}),
+          ...(configEdited ? { config: coerceValues(fields, values), expect_config: source.config } : {}),
+          ...(enabled !== source.enabled ? { enabled } : {}),
+          ...(removeSecret ? { secret: null } : secret ? { secret } : {}),
           ...(cleared.length ? { clear_config_credentials: cleared } : {}),
         };
         const patched = await api.patch<Source>(`/api/sources/${source.id}`, body);

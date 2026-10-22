@@ -6,6 +6,8 @@ import { AddConnectionLine } from "../components/graph/nodes";
 import { resetUndoForTests, type MappedInfo } from "../hooks/useMappingActions";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
+import { moveDone, movePreview, moveUndone } from "../test/moveFixtures";
+import { useScans, useSources } from "../api/queries";
 import { renderWithProviders } from "../test/render";
 import { spyToasts } from "../test/toasts";
 import { accountKnown, SignedIn } from "../test/signedIn";
@@ -4597,5 +4599,576 @@ describe("DiscoveryPage last value card (W12c)", () => {
     expect(new Set(seen.map((h) => h.enter)).size).toBe(1);
     expect(new Set(seen.map((h) => h.leave)).size).toBe(1);
     expect(new Set(seen.map((h) => h.moveStart)).size).toBe(1);
+  });
+});
+
+// ---- w33: sources the newest scan of their range did not find ----
+describe("DiscoveryPage not seen (w33)", () => {
+  const FOUR_DAYS = new Date(Date.now() - 4 * 86_400_000).toISOString();
+  const miss = { scan_id: 7, at: minutesAgo(60), last_seen_scan_id: 5, last_seen_at: FOUR_DAYS };
+  const LINE = "Not seen in scan #7 (last seen in #5, 4 days ago)";
+  /** A discovered source scan #7 did not find: unmapped, or with `mapped` its one point mapped. */
+  const gone = (id: number, name: string, over: Partial<GraphSource> = {}): GraphSource =>
+    srcOf(id, name, { last_scan: { scan_id: 5, at: FOUR_DAYS }, not_seen: miss, ...over });
+  // a mapped source that stopped answering: the scan did not find it AND its poll fails, so moving or deleting it is the way out
+  const goneMapped = (id: number, name: string) => ({ ...mappedSource(id, name), last_scan: { scan_id: 5, at: FOUR_DAYS }, not_seen: miss, status: "offline" });
+  const seenNow = (id: number, name: string) => srcOf(id, name, { last_scan: { scan_id: 7, at: minutesAgo(5) }, not_seen: null });
+  const mix = () => [gone(1, "Old A"), goneMapped(2, "Old Mapped"), seenNow(3, "Fresh"), srcOf(4, "Bench", { origin: "manual" }), gone(5, "Old B")];
+  const menuTexts = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((i) => i.textContent);
+  const summaryText = () => (document.querySelector(".graph-summary") as HTMLElement).textContent;
+  const sourceNodes = () => [...document.querySelectorAll('[data-id^="src:"]')].map((el) => el.getAttribute("data-id"));
+
+  it("draws a source the scan did not find quieter, with its sentence on the card's one line and the whole sentence in its title", async () => {
+    serverWith("operator", mix());
+    openToasts();
+    await screen.findByText("Old A");
+    expect(node("src:1")).toBeInTheDocument();
+    expect(node("src:1").querySelector(".gnode")).toHaveClass("gsrc-not-seen");
+    const line = within(node("src:1")).getByText(LINE);
+    expect(line).toHaveClass("gsrc-seen");
+    expect(line).toHaveAttribute("title", LINE);
+    for (const id of ["src:3", "src:4"]) expect(node(id).querySelector(".gnode")).not.toHaveClass("gsrc-not-seen"); // seen, and added by hand
+    expect(within(node("src:3")).getByText(/^Seen in scan #7, /)).toBeInTheDocument();
+  });
+
+  it("a mapped one says what to do, and keeps both sentences in its title", async () => {
+    serverWith("operator", mix());
+    openToasts();
+    await screen.findByText("Old A");
+    const line = within(node("src:2")).getByText("Mapped: move it or delete it on Sources");
+    expect(line).toHaveAttribute("title", `${LINE}. Mapped: move it or delete it on Sources`);
+    expect(node("src:2").querySelector(".gnode")).toHaveClass("gsrc-not-seen");
+  });
+
+  it("a mapped one that still polls fine keeps its seen line and has no instruction: there is nothing to move or delete", async () => {
+    serverWith("operator", [{ ...goneMapped(2, "Old Mapped"), status: "online" }, seenNow(3, "Fresh")]);
+    openToasts();
+    await screen.findByText("Old Mapped");
+    expect(within(node("src:2")).queryByText("Mapped: move it or delete it on Sources")).not.toBeInTheDocument();
+    expect(within(node("src:2")).getByText(LINE)).toHaveClass("gsrc-seen");
+    expect(node("src:2").querySelector(".gnode")).toHaveClass("gsrc-not-seen");
+    await userEvent.click(screen.getByRole("button", { name: "Details for Old Mapped" }));
+    const panel = await screen.findByRole("complementary", { name: "Source details" });
+    expect(within(panel).queryByText(/Mapped: move it/)).not.toBeInTheDocument();
+  });
+
+  it("the panel says the whole sentence, and for a mapped source what to do; the server and its certificate only when the source has an identity", async () => {
+    const identity = {
+      application_uri: "urn:dcdash:simulator:dev", application_name: null, product_uri: null, instance: null, usable: true, different: false,
+      thumbprint: "3A:5F:C1:0D:22:98:7B:44:E0:AB:12:34:56:78:9A:BC:DE:F0:11:91",
+    };
+    serverWith("operator", [gone(1, "Old A", { identity }), goneMapped(2, "Old Mapped")]);
+    openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Details for Old A" }));
+    let panel = await screen.findByRole("complementary", { name: "Source details" });
+    expect(within(panel).getByText(`${LINE}. A later scan of the same range did not find it.`)).toBeInTheDocument();
+    expect(within(panel).getByText("Server: urn:dcdash:simulator:dev")).toBeInTheDocument();
+    expect(within(panel).getByText("certificate 3A:5F:...:91")).toHaveAttribute("title", identity.thumbprint);
+    expect(within(panel).queryByText(/Mapped: move it/)).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: "Close" }));
+    await userEvent.click(screen.getByRole("button", { name: "Details for Old Mapped" }));
+    panel = await screen.findByRole("complementary", { name: "Source details" });
+    expect(within(panel).getByText("Mapped: move it or delete it on Sources")).toBeInTheDocument();
+    expect(within(panel).queryByText(/^Server:/)).not.toBeInTheDocument();
+  });
+
+  describe("the overflow menu", () => {
+    it("adds the filter and Remove not seen (N)... after Clear unmapped, counting what could go (not the mapped one, not the hand-added one)", async () => {
+      serverWith("admin", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      const menu = await openOverflow();
+      // Clear unmapped (3): Old A, Fresh, Old B (nothing mapped, discovered); Remove not seen (2): Old A, Old B. Three sources are marked, one of them mapped.
+      expect(menuTexts(menu)).toEqual(["Clear unmapped (3)", "Turn on Not seen lately", "Remove not seen (2)..."]);
+    });
+
+    it("offers neither while no source is marked, so the menu is the one it always was", async () => {
+      serverWith("admin", [srcOf(1, "Plant OPC"), seenNow(2, "Fresh")]);
+      openToasts();
+      await screen.findByText("Plant OPC");
+      expect(menuTexts(await openOverflow())).toEqual(["Clear unmapped (2)"]);
+    });
+
+    it("a role that may not remove gets the filter and not Remove not seen (the filter only changes the view), and its card is drawn quieter", async () => {
+      serverWith("operator", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      expect(overflowButton()).not.toHaveClass("gbar-overflow-narrow"); // it has something in its menu, so the button is drawn at every width
+      expect(menuTexts(await openOverflow())).toEqual(["Turn on Not seen lately"]);
+      expect(node("src:1").querySelector(".gnode")).toHaveClass("gsrc-not-seen");
+    });
+
+    it("a role that may not remove and sees no marked source keeps the narrow-only button and an empty menu, as it always had", async () => {
+      serverWith("operator", [srcOf(1, "Plant OPC"), seenNow(2, "Fresh")]);
+      openToasts();
+      await screen.findByText("Plant OPC");
+      expect(overflowButton()).toHaveClass("gbar-overflow-narrow");
+      await userEvent.click(overflowButton());
+      expect(screen.queryByRole("menu", { name: "Discovery actions" })).not.toBeInTheDocument();
+    });
+
+    it("when every marked source has something mapped, Remove not seen (0)... keeps its place and says why it does nothing", async () => {
+      serverWith("admin", [goneMapped(2, "Old Mapped"), seenNow(3, "Fresh")]);
+      openToasts();
+      await screen.findByText("Old Mapped");
+      const item = within(await openOverflow()).getByRole("menuitem", { name: /^Remove not seen \(0\)\.\.\./ });
+      expect(item).toHaveAttribute("aria-disabled", "true");
+      expect(item).toHaveTextContent("Nothing to remove");
+      await userEvent.click(item);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Not seen lately (the filter)", () => {
+    const turn = async (word: "on" | "off") => {
+      const menu = await openOverflow();
+      await userEvent.click(within(menu).getByRole("menuitem", { name: `Turn ${word} Not seen lately` }));
+    };
+
+    it("shows only the sources the scan did not find, says so in the announced sentence, and turns off again", async () => {
+      serverWith("admin", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      expect(sourceNodes()).toEqual(["src:1", "src:2", "src:3", "src:4", "src:5"]);
+      expect(summaryText()).toBe("5 sources, 5 points, 1 mapped");
+      await turn("on");
+      expect(sourceNodes()).toEqual(["src:1", "src:2", "src:5"]);
+      expect(summaryText()).toBe("5 sources, 5 points, 1 mapped, showing only sources not seen lately (3)");
+      expect(overflowButton()).toHaveFocus();
+      expect(within(await openOverflow()).getByRole("menuitem", { name: "Turn off Not seen lately" })).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      await turn("off");
+      expect(sourceNodes()).toEqual(["src:1", "src:2", "src:3", "src:4", "src:5"]);
+      expect(summaryText()).toBe("5 sources, 5 points, 1 mapped");
+    });
+
+    it("shows a visible chip in the bar while it is on, with the count of the marked sources, and takes it away when it is turned off", async () => {
+      serverWith("admin", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      const chip = () => document.querySelector(".gbar-chip-filter") as HTMLElement | null;
+      expect(chip()).toBeNull();
+      await turn("on");
+      expect(chip()).toHaveTextContent("Only not seen lately (3)");
+      expect(chip()).toHaveAttribute("title", "Only not seen lately (3)");
+      expect(document.querySelector(".gbar-chips")).toHaveClass("gbar-chips-filtered");
+      await turn("off");
+      expect(chip()).toBeNull();
+    });
+
+    it("is there for a role that may not remove sources too: it turns the filter on, shows the chip, and the menu offers no Remove not seen", async () => {
+      serverWith("operator", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      await turn("on");
+      expect(sourceNodes()).toEqual(["src:1", "src:2", "src:5"]);
+      expect(document.querySelector(".gbar-chip-filter")).toHaveTextContent("Only not seen lately (3)");
+      expect(menuTexts(await openOverflow())).toEqual(["Turn off Not seen lately"]);
+    });
+
+    it("is not remembered: a page opened again starts with every source", async () => {
+      serverWith("admin", mix());
+      const first = openToasts();
+      await screen.findByText("Old A");
+      await turn("on");
+      first.unmount();
+      serverWith("admin", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      expect(sourceNodes()).toHaveLength(5);
+    });
+
+    it("goes off by itself when the last marked source is gone (a rescan found it, or it was removed), instead of leaving an empty canvas", async () => {
+      const { state } = serverWith("admin", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      await turn("on");
+      expect(sourceNodes()).toEqual(["src:1", "src:2", "src:5"]);
+      state.sources = [seenNow(1, "Old A"), seenNow(2, "Old Mapped"), seenNow(3, "Fresh")]; // a rescan found all three
+      await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await waitFor(() => expect(sourceNodes()).toEqual(["src:1", "src:2", "src:3"]));
+      expect(summaryText()).toBe("3 sources, 3 points, 0 mapped");
+      // ...and it stays off: a later scan that marks a source again does not bring the filter back
+      state.sources = [seenNow(1, "Old A"), gone(2, "Old Mapped"), seenNow(3, "Fresh")];
+      await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await waitFor(() => expect(within(node("src:2")).getByText(LINE)).toBeInTheDocument());
+      expect(sourceNodes()).toEqual(["src:1", "src:2", "src:3"]);
+      expect(within(await openOverflow()).getByRole("menuitem", { name: "Turn on Not seen lately" })).toBeInTheDocument();
+    });
+
+    it("Find on a source the filter hides turns it off first and says so", async () => {
+      serverWith("admin", mix());
+      const { toasts } = openToasts();
+      await screen.findByText("Old A");
+      await turn("on");
+      await userEvent.click(screen.getByRole("button", { name: "Find" }));
+      await userEvent.type(await screen.findByRole("combobox"), "Fresh");
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(sourceNodes()).toContain("src:3"));
+      expect(toasts.calls).toContainEqual({ kind: "info", text: "Not seen lately is off so Fresh can be shown." });
+      expect(within(await openOverflow()).getByRole("menuitem", { name: "Turn on Not seen lately" })).toBeInTheDocument();
+    });
+  });
+
+  describe("Remove not seen (N)...", () => {
+    const pressRemoveNotSeen = async (n: number) => {
+      const menu = await openOverflow();
+      await userEvent.click(within(menu).getByRole("menuitem", { name: `Remove not seen (${n})...` }));
+    };
+
+    it("opens the same confirmation as Clear unmapped, worded for this: the reason, the names, and that mapped and hand-added sources are never removed", async () => {
+      serverWith("admin", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(2);
+      const dialog = await confirmDialog("Remove 2 sources the latest scan did not find?");
+      expect(dialog).toHaveTextContent("Old A and Old B. The latest scan of the same range did not find them.");
+      expect(dialog).toHaveTextContent("Mapped sources and sources added by hand are never removed. A scan can find these again.");
+      expect(dialog).not.toHaveTextContent("Old Mapped");
+      expect(dialog).not.toHaveTextContent("Bench");
+      expect(within(dialog).getByRole("button", { name: "Remove" })).toBeInTheDocument();
+    });
+
+    it("lists the first five names and the rest as a count", async () => {
+      serverWith("admin", Array.from({ length: 7 }, (_, i) => gone(i + 1, `Unit ${i + 1}`)));
+      openToasts();
+      await screen.findByText("Unit 1");
+      await pressRemoveNotSeen(7);
+      const dialog = await confirmDialog("Remove 7 sources the latest scan did not find?");
+      expect(dialog).toHaveTextContent("Unit 1, Unit 2, Unit 3, Unit 4, Unit 5 and 2 more.");
+      expect(dialog).not.toHaveTextContent("Unit 6");
+    });
+
+    it("one source is named in the title", async () => {
+      serverWith("admin", [gone(1, "Old A"), seenNow(3, "Fresh")]);
+      openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(1);
+      expect(await confirmDialog('Remove "Old A", which the latest scan did not find?')).toHaveTextContent("The latest scan of the same range did not find it.");
+    });
+
+    it("sends exactly the ids it listed to the existing remove route (a source marked afterwards is never in the request), removes them, says how many, and gives the focus back to the overflow button", async () => {
+      const { state, calls } = serverWith("admin", mix());
+      const { toasts } = openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(2);
+      const dialog = await confirmDialog("Remove 2 sources the latest scan did not find?");
+      state.sources = [...state.sources, gone(9, "Marked later")];
+      await userEvent.click(screen.getByRole("button", { name: "Refresh" })); // the graph is read again behind the dialog
+      await screen.findByText("Marked later");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(removeCalls(calls)).toHaveLength(1);
+      expect(removeCalls(calls)[0].body).toEqual({ source_ids: [1, 5] });
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Removed 2 sources" }]);
+      expect(screen.queryByText("Old A")).not.toBeInTheDocument();
+      for (const name of ["Old Mapped", "Fresh", "Bench", "Marked later"]) expect(screen.getByText(name)).toBeInTheDocument();
+      expect(overflowButton()).toHaveFocus();
+    });
+
+    it("never sends a mapped or hand-added source, even one the server marks", async () => {
+      const handMarked = srcOf(6, "Bench 2", { origin: "manual", not_seen: miss });
+      const { calls } = serverWith("admin", [gone(1, "Old A"), goneMapped(2, "Old Mapped"), handMarked]);
+      openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(1);
+      await userEvent.click(within(await confirmDialog('Remove "Old A", which the latest scan did not find?')).getByRole("button", { name: "Remove" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(removeCalls(calls)[0].body).toEqual({ source_ids: [1] });
+    });
+
+    it("when one gained a mapping meanwhile, the server keeps it and an error toast says why", async () => {
+      const { state } = serverWith("admin", [gone(1, "Old A"), gone(2, "Old B")]);
+      const { toasts } = openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(2);
+      const dialog = await confirmDialog("Remove 2 sources the latest scan did not find?");
+      state.sources = [goneMapped(1, "Old A"), gone(2, "Old B")];
+      await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(toasts.calls).toEqual([{ kind: "error", text: "Removed 1 source. 1 was kept: it has a mapped point now." }]);
+      expect(screen.getByText("Old A")).toBeInTheDocument();
+      expect(screen.queryByText("Old B")).not.toBeInTheDocument();
+    });
+
+    it("a running scan (409) is the dialog's error line (the server's sentence), and nothing is removed", async () => {
+      const { state } = serverWith("admin", mix(), {}, {
+        "POST /api/discovery/sources/remove": { status: 409, body: { detail: "A scan is running. Remove discovered sources when it has finished." } },
+      });
+      const { toasts } = openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(2);
+      const dialog = await confirmDialog("Remove 2 sources the latest scan did not find?");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent("A scan is running. Remove discovered sources when it has finished.");
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(toasts.calls).toEqual([]);
+      expect(state.sources).toHaveLength(5);
+    });
+
+    it("Escape and Cancel remove nothing", async () => {
+      const { calls } = serverWith("admin", mix());
+      openToasts();
+      await screen.findByText("Old A");
+      await pressRemoveNotSeen(2);
+      await confirmDialog("Remove 2 sources the latest scan did not find?");
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(removeCalls(calls)).toHaveLength(0);
+      expect(overflowButton()).toHaveFocus();
+    });
+
+    it("refreshes the graph, the sources and the scans after the answer, and after a refusal too (a probe beside the page keeps each of the last two queries alive)", async () => {
+      const Probes = () => { useScans(); useSources(); return null; };
+      const reads = (calls: { method: string; path: string }[], path: string) => calls.filter((c) => c.method === "GET" && c.path === path).length;
+      const refreshedAfter = async (extra: Record<string, unknown>) => {
+        const { calls } = serverWith("admin", mix(), {}, { "GET /api/scans": { body: [] }, "GET /api/sources": { body: [] }, ...extra });
+        const toasts = spyToasts();
+        const view = renderWithProviders(<><main id="main" tabIndex={-1} /><DiscoveryPage /><SignedIn /><Probes /></>, { route: "/discovery", path: "/discovery", toasts: toasts.api });
+        await screen.findByText("Old A");
+        await waitFor(() => expect([reads(calls, "/api/scans"), reads(calls, "/api/sources")]).toEqual([1, 1]));
+        const graphBefore = reads(calls, "/api/discovery/graph");
+        await pressRemoveNotSeen(2);
+        await userEvent.click(within(await confirmDialog("Remove 2 sources the latest scan did not find?")).getByRole("button", { name: "Remove" }));
+        await waitFor(() => expect([reads(calls, "/api/scans"), reads(calls, "/api/sources")]).toEqual([2, 2])); // each read once more, not twice
+        expect(reads(calls, "/api/discovery/graph")).toBeGreaterThan(graphBefore);
+        view.unmount();
+      };
+      await refreshedAfter({});
+      await refreshedAfter({ "POST /api/discovery/sources/remove": { status: 409, body: { detail: "A scan is running." } } });
+    });
+  });
+});
+
+// ---- w33: a new source that looks like an old one that stopped answering: the card says so, and Move... opens the move dialog ----
+describe("DiscoveryPage the move offer, two candidates and a different server (w33)", () => {
+  const OLD = "OPC UA server at 172.20.0.3:4840";
+  const NEW = "OPC UA server at 172.20.0.5:4840";
+  const SEEN = "Seen in scan #8, ";
+  const offer = {
+    kind: "offer" as const, from_source_id: 2, from_name: OLD, from_endpoint: "opc.tcp://172.20.0.3:4840/dcdash/", from_since: "2026-10-18T04:52:51Z", mappings: 12, assets: 3,
+    match: { kind: "same_server" as const, evidence: "uri" as const, value: "urn:dcdash:simulator:dev", addresses: 12, missing_addresses: 0, needs_tick: false },
+  };
+  // the time is the offer's from_since in the site's zone (UTC in these tests); the name holds the address, so it is not said twice
+  const SENTENCE = `This looks like ${OLD} (12 mappings on 3 assets), which has not answered since 18 Oct 04:52`;
+  const LINE = "Was at 172.20.0.3:4840 (12 mappings)";
+  const BUTTON = `Move ${OLD} to ${NEW}...`;
+  const identity = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: false };
+  const fresh = { last_scan: { scan_id: 8, at: minutesAgo(2) }, not_seen: null };
+  /** The old source (mapped, scan #5 was the last to find it) and the new one the scan found at the new address, which looks like it. */
+  const oldSource = () => ({ ...mappedSource(2, OLD), last_scan: { scan_id: 5, at: minutesAgo(5760) }, status: "offline" });
+  const newSource = (over: Partial<GraphSource> = {}) => srcOf(3, NEW, { ...fresh, move_candidate: offer, ...over });
+  const dryRuns: { url: string; body: unknown }[] = [];
+  const realRuns: { url: string; body: unknown }[] = [];
+  const undoRuns: string[] = [];
+  beforeEach(() => { dryRuns.length = 0; realRuns.length = 0; undoRuns.length = 0; });
+
+  /** The page with the move routes: the real run removes the new source from the graph, as the server does. */
+  function show(role: string, sources: GraphSource[]) {
+    const ctx = {} as { state: { sources: GraphSource[] } };
+    const world = serverWith(role, sources, {}, {
+      "POST /api/sources/2/move": ({ url, body }: { url: string; body: unknown }) => {
+        if (url.includes("dry_run=1")) { dryRuns.push({ url, body }); return { body: movePreview({ target: { id: 3, name: NEW, points: 40 } }) }; }
+        realRuns.push({ url, body });
+        ctx.state.sources = ctx.state.sources.filter((s) => s.id !== 3);
+        return { body: moveDone() };
+      },
+      "POST /api/sources/moves/31/undo": ({ url }: { url: string }) => { undoRuns.push(url); return { body: moveUndone() }; },
+    });
+    ctx.state = world.state;
+    return { ...world, ...openToasts() };
+  }
+  const moveDialog = () => screen.getByRole("dialog", { name: `Move to new address: ${OLD}` });
+  const cardMove = () => within(node("src:3")).queryByRole("button", { name: BUTTON });
+
+  describe("the card", () => {
+    it("says Was at <the old address> (12 mappings) on its last line (its title says nothing: the same default name), the whole sentence in the title, and has a Move... button beside Details (one 20px row, six lines)", async () => {
+      show("admin", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      const line = within(node("src:3")).getByText(LINE);
+      expect(line).toHaveClass("gsrc-seen", "muted");
+      await waitFor(() => expect(line.getAttribute("title")).toMatch(new RegExp(`^${SENTENCE.replace(/[.()]/g, "\\$&")}\\. ${SEEN}`)));
+      const row = within(node("src:3")).getByRole("button", { name: `Details for ${NEW}` }).parentElement!;
+      expect(row).toHaveClass("gsrc-actions");
+      expect(within(row).getByRole("button", { name: BUTTON })).toHaveTextContent("Move...");
+      expect(Array.from(node("src:3").querySelectorAll(".gsrc-body > *")).map((el) => el.className.split(" ")[0])).toEqual(
+        ["gsrc-head", "gsrc-sub", "gsrc-status", "gsrc-mapped", "gsrc-actions", "gsrc-seen"],
+      );
+    });
+
+    it("keeps the sentence but draws no Move... button for a person without sources.edit", async () => {
+      show("operator", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      expect(within(node("src:3")).getByText(LINE)).toBeInTheDocument();
+      expect(cardMove()).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+    });
+
+    it("the old source's own card is untouched: no sentence about a move, no button", async () => {
+      show("admin", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      expect(within(node("src:2")).queryByText(/Looks like/)).not.toBeInTheDocument();
+      expect(within(node("src:2")).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+      expect(within(node("src:2")).getByText(/^Seen in scan #5, /)).toBeInTheDocument();
+    });
+
+    it("two candidates: the sentence on the card, no button for anyone", async () => {
+      show("admin", [oldSource(), newSource({ move_candidate: { kind: "two", count: 2 } })]);
+      await screen.findByText(NEW);
+      expect(within(node("src:3")).getByText("Two servers could be this one; edit the address by hand")).toHaveClass("gsrc-seen");
+      expect(screen.queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+    });
+
+    it("a different server: the warning on the card in the warning ink, for a source added by hand too", async () => {
+      show("admin", [newSource({ move_candidate: null, identity: { ...identity, different: true } }), srcOf(4, "Bench", { origin: "manual", identity: { ...identity, different: true } })]);
+      await screen.findByText(NEW);
+      for (const id of ["src:3", "src:4"]) {
+        const line = within(node(id)).getByText("A different server answers at this address");
+        expect(line).toHaveClass("gsrc-seen", "gsrc-warn", "warning");
+        expect(line).not.toHaveClass("muted");
+      }
+    });
+
+    it("a mapped source the scan did not find still says what to do on Sources, and has no Move... button here (the offer is on the new source)", async () => {
+      const miss = { scan_id: 8, at: minutesAgo(2), last_seen_scan_id: 5, last_seen_at: minutesAgo(5760) };
+      show("admin", [{ ...oldSource(), not_seen: miss }, newSource()]);
+      await screen.findByText(NEW);
+      expect(within(node("src:2")).getByText("Mapped: move it or delete it on Sources")).toBeInTheDocument();
+      expect(within(node("src:2")).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+      expect(screen.getAllByText("Mapped: move it or delete it on Sources")).toHaveLength(1); // not said twice
+    });
+  });
+
+  describe("the panel", () => {
+    it("says the whole sentence and has a Move... button of its own for a person with sources.edit", async () => {
+      show("admin", [oldSource(), newSource()]);
+      await userEvent.click(await screen.findByRole("button", { name: `Details for ${NEW}` }));
+      const panel = await screen.findByRole("complementary", { name: "Source details" });
+      expect(await within(panel).findByText(SENTENCE)).toBeInTheDocument();
+      expect(within(panel).getByRole("button", { name: `Move ${OLD} to this address...` })).toBeInTheDocument();
+    });
+
+    it("keeps the sentence and draws no button without sources.edit; two candidates and a different server are said in full", async () => {
+      show("operator", [oldSource(), newSource()]);
+      await userEvent.click(await screen.findByRole("button", { name: `Details for ${NEW}` }));
+      const panel = await screen.findByRole("complementary", { name: "Source details" });
+      expect(await within(panel).findByText(SENTENCE)).toBeInTheDocument();
+      expect(within(panel).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+    });
+
+    it("two candidates and a different server are said in the panel (Several for more than two)", async () => {
+      show("admin", [newSource({ move_candidate: { kind: "two", count: 3 }, identity: { ...identity, different: true } })]);
+      await userEvent.click(await screen.findByRole("button", { name: `Details for ${NEW}` }));
+      const panel = await screen.findByRole("complementary", { name: "Source details" });
+      expect(within(panel).getByText("Several servers could be this one; edit the address by hand")).toBeInTheDocument();
+      expect(within(panel).getByText("A different server answers at this address")).toHaveClass("warning");
+      expect(within(panel).queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("moving", () => {
+    it("opens the dialog for the old source and this one, asks for the preview, and gives the focus back to the card's button on Cancel", async () => {
+      show("admin", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      const button = within(node("src:3")).getByRole("button", { name: BUTTON });
+      await userEvent.click(button);
+      expect(await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/)).toBeInTheDocument();
+      expect(moveDialog()).toBeInTheDocument();
+      expect(dryRuns).toEqual([{ url: "/api/sources/2/move?dry_run=1", body: { to: 3, address: "as_found" } }]);
+      await userEvent.click(within(moveDialog()).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(button).toHaveFocus();
+      expect(realRuns).toHaveLength(0);
+    });
+
+    it("Escape closes it and nothing is moved", async () => {
+      const { toasts } = show("admin", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      await userEvent.click(within(node("src:3")).getByRole("button", { name: BUTTON }));
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      await userEvent.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(realRuns).toHaveLength(0);
+      expect(toasts.calls).toEqual([]);
+    });
+
+    it("the panel's Move... opens the same dialog, and Cancel puts the focus back on that button", async () => {
+      show("admin", [oldSource(), newSource()]);
+      await userEvent.click(await screen.findByRole("button", { name: `Details for ${NEW}` }));
+      const panel = await screen.findByRole("complementary", { name: "Source details" });
+      const button = within(panel).getByRole("button", { name: `Move ${OLD} to this address...` });
+      await userEvent.click(button);
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      expect(dryRuns).toEqual([{ url: "/api/sources/2/move?dry_run=1", body: { to: 3, address: "as_found" } }]);
+      await userEvent.click(within(moveDialog()).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(button).toHaveFocus();
+    });
+
+    it("the real run: one toast with an Undo for 10 seconds, the graph is read again and the new source is gone, and the focus lands on the old source's card", async () => {
+      const { calls, toasts } = show("admin", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      await userEvent.click(within(node("src:3")).getByRole("button", { name: BUTTON }));
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      const reads = () => calls.filter((c) => c.method === "GET" && c.path === "/api/discovery/graph").length;
+      const before = reads();
+      await userEvent.click(within(moveDialog()).getByRole("button", { name: "Move 12 mappings" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(realRuns).toHaveLength(1);
+      expect(realRuns[0].url).toBe("/api/sources/2/move?dry_run=0");
+      expect(toasts.calls).toHaveLength(1); // one toast, not two
+      expect(toasts.calls[0]).toMatchObject({
+        kind: "success", text: `Moved "${NEW}" to 172.20.0.5:4840. 12 mappings kept.`,
+        options: { durationMs: 10_000, action: { label: "Undo" } },
+      });
+      expect(reads()).toBeGreaterThan(before);
+      await waitFor(() => expect(node("src:3")).toBeNull()); // the new source is gone
+      expect(node("src:2")).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole("button", { name: `Details for ${OLD}` })).toHaveFocus());
+    });
+
+    it("the toast's Undo posts to the Undo of that audit entry, and nothing is undone by itself", async () => {
+      const { toasts } = show("admin", [oldSource(), newSource()]);
+      await screen.findByText(NEW);
+      await userEvent.click(within(node("src:3")).getByRole("button", { name: BUTTON }));
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      await userEvent.click(within(moveDialog()).getByRole("button", { name: "Move 12 mappings" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      expect(undoRuns).toEqual([]);
+      toasts.calls[0].options!.action!.onAction();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+      expect(undoRuns).toEqual(["/api/sources/moves/31/undo"]);
+      expect(toasts.calls[1]).toMatchObject({ kind: "success" });
+    });
+
+    it("a move done from the panel closes the panel with the new source, and the focus is not lost", async () => {
+      show("admin", [oldSource(), newSource()]);
+      await userEvent.click(await screen.findByRole("button", { name: `Details for ${NEW}` }));
+      const panel = await screen.findByRole("complementary", { name: "Source details" });
+      await userEvent.click(within(panel).getByRole("button", { name: `Move ${OLD} to this address...` }));
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      await userEvent.click(within(moveDialog()).getByRole("button", { name: "Move 12 mappings" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.queryByRole("complementary", { name: "Source details" })).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole("button", { name: `Details for ${OLD}` })).toHaveFocus());
+    });
+
+    it("a refusal (409) keeps the dialog open with the server's sentence, the graph is read again and no toast is shown", async () => {
+      const { calls } = serverWith("admin", [oldSource(), newSource()], {}, {
+        "POST /api/sources/2/move": ({ url }: { url: string }) => (url.includes("dry_run=1")
+          ? { body: movePreview({ target: { id: 3, name: NEW, points: 40 } }) }
+          : { status: 409, body: { detail: "a scan is running; try again when it has finished" } }),
+      });
+      const { toasts } = openToasts();
+      await screen.findByText(NEW);
+      await userEvent.click(within(node("src:3")).getByRole("button", { name: BUTTON }));
+      await screen.findByText(/^From opc\.tcp:\/\/172\.20\.0\.3/);
+      const reads = () => calls.filter((c) => c.method === "GET" && c.path === "/api/discovery/graph").length;
+      const before = reads();
+      await userEvent.click(within(moveDialog()).getByRole("button", { name: "Move 12 mappings" }));
+      expect(await within(moveDialog()).findByText(/A scan is running; try again when it has finished/)).toBeInTheDocument();
+      expect(reads()).toBeGreaterThan(before);
+      expect(toasts.calls).toEqual([]);
+    });
   });
 });
