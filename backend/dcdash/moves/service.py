@@ -13,7 +13,9 @@ The real run, in this order, and why:
 1. `pg_advisory_xact_lock(SCAN_START_LOCK)` and the scan refusal, as the remove route does it: no scan starts or finishes under us.
 2. `_lock_source` of the lower id, then of the higher id (the same order as every other route that locks two sources).
 3. Both rows are read AFTER the locks, and the offer is decided again on what the server holds now. The client's numbers only decide
-   whether to go on (`expect`); what is written is always the server's own computation.
+   whether to go on (`expect`: the numbers and addresses, and why it was offered, `match_kind` and `needs_tick`); what is written is
+   always the server's own computation. A match that asks for a tick is moved only when the body says `ticked`, whatever the client
+   believed it showed; a new source where ANOTHER server answers now (`identity.different`) is refused, for the preview and the click.
 4. Findings re-pointed, graph positions removed, C deleted and the delete flushed, THEN O's name is computed and O is changed (the
    unit of work would otherwise write O's new name before C's row is gone and hit the unique name).
 The preview takes no lock at all (a big server has thousands of points) and, while a scan is queued or running, says so instead of
@@ -42,9 +44,10 @@ from dcdash.api.sources import _lock_source, _mapped_counts, validated_config
 from dcdash.core.models import GraphLayout, Point, Scan, ScanFinding, Source
 from dcdash.core.pg import CONFIG_CHANNEL
 from dcdash.moves.load import load_offers_detailed
-from dcdash.moves.match import MOVABLE_TYPES, Offer, Two
+from dcdash.moves.match import MOVABLE_TYPES, Offer, Two, another_server_answers
 from dcdash.moves.urls import (
-    URL_KEYS, CannotRewrite, address_key, display_endpoint, is_default_name, label_for, swap_host_port, unique_name,
+    URL_KEYS, CannotRewrite, address_key, authority_of, display_endpoint, is_default_name, label_for, put_authority, swap_host_port,
+    unique_name,
 )
 
 INT32_MAX = 2_147_483_647  # ids are 32-bit integers: a larger one in a query would come back from the driver as a 500, not a 422
@@ -55,6 +58,8 @@ SCAN_RUNNING = "A scan is running. Move the source when it has finished."
 ALREADY_MOVED = "this source was already moved"
 NOT_OFFLINE = "This source is not offline any more, so there is nothing to move. Nothing was changed."
 NO_LONGER_UNIQUE = "The new source is no longer the one match for this source. Nothing was changed; look at Sources again."
+DIFFERENT_SERVER = "A different server answers at the new address now; scan again before moving"
+NEEDS_TICK = "The match needs your confirmation: tick that you checked it is the same device"
 TWO_SERVERS = "Two servers could be this one; edit the address by hand"
 GOT_A_MAPPING = "The new source got a mapping since you looked. Nothing was moved."
 HOLDS_READINGS = "The new source holds readings, so it is not the scan's copy that nothing uses. Nothing was moved."
@@ -74,21 +79,27 @@ NAME_CHANGED = "the source's name was changed after the move; edit it by hand"
 NOT_UNDOABLE = "this audit row does not hold what an undo needs"
 CANNOT_PUT_BACK = "the old address could not be written back into this source; edit its address by hand"
 
+_KIND_WORDS = {"same_server": "the same server", "possibly": "possibly the same device"}
 _HOST_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?")
 
 
 class MoveExpect(BaseModel):
-    """What the person was shown by the preview. `name_after` is required but may be null (the name stays)."""
+    """What the person was shown by the preview. `name_after` is required but may be null (the name stays). `match_kind` and
+    `needs_tick` (why the move was offered, and whether it asked for a tick) are optional so that an older client still works; when
+    they are sent they are compared like the rest."""
     mappings: int = Field(ge=0, le=INT32_MAX)
     address_before: str = Field(max_length=300)  # "host:port", unbracketed, as the preview showed it
     address_after: str = Field(max_length=300)
     name_after: str | None = Field(max_length=300)
+    match_kind: Literal["same_server", "possibly"] | None = None
+    needs_tick: bool | None = None
 
 
 class SourceMoveIn(BaseModel):
     to: int = Field(ge=1, le=INT32_MAX)
     address: Literal["as_found", "name"]
     expect: MoveExpect | None = None
+    ticked: bool = False  # the person ticked "I checked it is the same device"; the real run needs it whenever the match asks for it
 
 
 # ---- small pure helpers ----------------------------------------------------------------------------------------------------------
@@ -108,10 +119,12 @@ def hint_name(identity: Any, host: str) -> str | None:
 
 
 def moved_identity(identity: Any, host: str) -> dict[str, Any] | None:
-    """The identity O takes: a copy of C's, with its `name_hint` kept only while the hint is for the host O will point at."""
+    """The identity O takes: a copy of C's without its `different` note, with its `name_hint` kept only while the hint is for the host
+    O will point at."""
     if not isinstance(identity, Mapping):
         return None
     kept = copy.deepcopy(dict(identity))
+    kept.pop("different", None)  # who answered at C's address is no part of what O is; O has no stranger to carry
     hint = kept.get("name_hint")
     if hint is not None and not (isinstance(hint, Mapping) and str(hint.get("host", "")).strip().lower() == host.lower()):
         kept.pop("name_hint")
@@ -243,6 +256,8 @@ async def move_source(
         raise HTTPException(409, HOLDS_READINGS)
     if old.status != "offline":
         raise HTTPException(409, NOT_OFFLINE)
+    if another_server_answers(new.identity):  # the matcher skips it too; said in words here, for the preview and the click alike
+        raise HTTPException(409, DIFFERENT_SERVER)
 
     # 6. the offer, decided again on what the server holds now
     loaded = await load_offers_detailed(db, old_ids=[old.id])
@@ -266,6 +281,7 @@ async def move_source(
     if (old_where[0], old_where[1]) == (to_host, port):
         raise HTTPException(409, "This source already points at that address. Nothing was changed.")
     key = URL_KEYS[old.connector_type]
+    authority_before = authority_of(old.config.get(key))  # host[:port] exactly as stored, for the Undo (no user info in it)
     try:
         swapped = swap_host_port(old.config[key], to_host, port)
     except CannotRewrite as error:
@@ -302,14 +318,28 @@ async def move_source(
 
     # 9. the person's numbers against ours (the first difference is named)
     assert expect is not None  # checked at the top
-    for template, shown, now in (
-        ("it has {now} mappings now, not {shown}", expect.mappings, mappings),
-        ("it points at {now} now, not {shown}", expect.address_before, address_before),
-        ("the new server is at {now} now, not {shown}", expect.address_after, address_after),
-        ("its new name would be {now} now, not {shown}", expect.name_after, name_after),
-    ):
+    differences = [
+        (expect.mappings, mappings, f"it has {mappings} mappings now, not {expect.mappings}"),
+        (expect.address_before, address_before, f"it points at {address_before} now, not {expect.address_before}"),
+        (expect.address_after, address_after, f"the new server is at {address_after} now, not {expect.address_after}"),
+        (expect.name_after, name_after, f"its new name would be {_said(name_after)} now, not {_said(expect.name_after)}"),
+    ]
+    if expect.match_kind is not None:  # why it was offered: a change here is a different move from the one the person looked at
+        differences.append((
+            expect.match_kind, match.kind, f"it is offered as {_KIND_WORDS[match.kind]} now, not {_KIND_WORDS[expect.match_kind]}",
+        ))
+    if expect.needs_tick is not None:
+        differences.append((
+            expect.needs_tick, match.needs_tick,
+            "it needs your confirmation now" if match.needs_tick else "it no longer needs your confirmation",
+        ))
+    for shown, now, sentence in differences:
         if shown != now:
-            raise HTTPException(409, f"changed since the preview: {template.format(now=_said(now), shown=_said(shown))}; look at it again")
+            raise HTTPException(409, f"changed since the preview: {sentence}; look at it again")
+    # The tick is enforced here, on the server's own decision, whatever the client believed it showed (and for a client that sent no
+    # `needs_tick` at all): an uncertain match is moved only for a person who said they checked it.
+    if match.needs_tick and not body.ticked:
+        raise HTTPException(409, NEEDS_TICK)
 
     # 10. writes. Findings first (they would be set to nothing by the delete), then the graph positions, then C, flushed.
     finding_ids = sorted(
@@ -353,6 +383,8 @@ async def move_source(
     detail = {
         "source_id": old.id, "name_before": name_before, "name_after": old.name,
         "host_before": old_where[0], "port_before": old_where[1], "host_after": to_host, "port_after": port,
+        # the host[:port] text exactly as stored (no user info in it): the Undo writes `authority_before` back byte for byte
+        "authority_before": authority_before, "authority_after": authority_of(new_config[key]),
         "address": body.address, "identity_before": identity_before, "identity_after": copy.deepcopy(new_identity),
         "match": _match_for_audit(match), "mappings": mappings, "removed": removed,
         "finding_ids": finding_ids[-MAX_FINDING_IDS:],
@@ -399,6 +431,7 @@ class Recorded:
     port_after: int
     identity_before: dict[str, Any] | None
     finding_ids: tuple[int, ...]
+    authority_before: str | None = None  # the host[:port] text as it was stored; a row written before the move recorded it has none
 
 
 def _whole(value: Any) -> bool:
@@ -413,14 +446,16 @@ def recorded_move(detail: Any) -> Recorded:
             source_id=detail["source_id"], name_before=detail["name_before"], name_after=detail["name_after"],
             host_before=detail["host_before"], port_before=detail["port_before"], host_after=detail["host_after"],
             port_after=detail["port_after"], identity_before=detail["identity_before"], finding_ids=tuple(detail["finding_ids"]),
+            authority_before=detail.get("authority_before"),
         )
-    except (KeyError, TypeError):
+    except (AttributeError, KeyError, TypeError):
         raise HTTPException(409, NOT_UNDOABLE) from None
     valid = (
         _whole(found.source_id) and _whole(found.port_before) and found.port_before <= 65535
         and _whole(found.port_after) and found.port_after <= 65535
         and all(isinstance(value, str) and value for value in (found.name_before, found.name_after, found.host_before, found.host_after))
         and (found.identity_before is None or isinstance(found.identity_before, dict))
+        and (found.authority_before is None or (isinstance(found.authority_before, str) and found.authority_before != ""))
         and isinstance(detail["finding_ids"], list) and all(_whole(i) for i in found.finding_ids)
     )
     if not valid:
@@ -481,7 +516,10 @@ async def undo_move(db: AsyncSession, audit_id: int, detail: Any, moved_at: date
     if key is None:
         raise HTTPException(409, ADDRESS_CHANGED)
     try:
-        swapped = swap_host_port(old.config[key], rec.host_before, rec.port_before)
+        if rec.authority_before is not None:  # the text exactly as it was stored (case, a missing port): byte for byte
+            swapped = put_authority(old.config[key], rec.authority_before)
+        else:
+            swapped = swap_host_port(old.config[key], rec.host_before, rec.port_before)
     except (CannotRewrite, KeyError, TypeError):
         raise HTTPException(409, CANNOT_PUT_BACK) from None
     candidate = copy.deepcopy(old.config)

@@ -45,21 +45,28 @@ async def preview(client, old: int, new: int, address: str = "as_found"):
     return await client.post(MOVE.format(old) + "?dry_run=1", json={"to": new, "address": address})
 
 
+REQUIRED_EXPECT = ("mappings", "address_before", "address_after", "name_after")
+
+
 def expect_of(shown: dict) -> dict:
-    """The numbers and addresses a front end sends back: what the preview showed, as `host:port` strings."""
+    """What a front end sends back: the numbers and addresses the preview showed (as `host:port` strings) and why it was offered."""
     return {
         "mappings": shown["mappings"],
         "address_before": f"{shown['from']['host']}:{shown['from']['port']}",
         "address_after": f"{shown['to']['host']}:{shown['to']['port']}",
         "name_after": shown["rename"]["to"] if shown["rename"] else None,
+        "match_kind": shown["match"]["kind"],
+        "needs_tick": shown["needs_tick"],
     }
 
 
-async def move(client, old: int, new: int, address: str = "as_found", **changes):
-    """Preview, then move with what the preview showed (`changes` replaces keys of `expect`)."""
+async def move(client, old: int, new: int, address: str = "as_found", *, ticked: bool = True, **changes):
+    """Preview, then move with what the preview showed (`changes` replaces keys of `expect`) and the box ticked (`ticked`)."""
     shown = await preview(client, old, new, address)
     assert shown.status_code == 200, shown.text
-    return await client.post(MOVE.format(old), json={"to": new, "address": address, "expect": {**expect_of(shown.json()), **changes}})
+    return await client.post(
+        MOVE.format(old), json={"to": new, "address": address, "expect": {**expect_of(shown.json()), **changes}, "ticked": ticked},
+    )
 
 
 async def audit_rows(db, action: str = "source.moved") -> list[dict]:
@@ -234,6 +241,7 @@ async def test_the_move_of_the_owners_case_changes_the_address_and_the_name_and_
     assert detail == {
         "source_id": old, "name_before": OWNERS_OLD_NAME, "name_after": OWNERS_NEW_NAME,
         "host_before": "172.20.0.3", "port_before": 4840, "host_after": "172.20.0.5", "port_after": 4840, "address": "as_found",
+        "authority_before": "172.20.0.3:4840", "authority_after": "172.20.0.5:4840",
         "identity_before": None, "identity_after": None,
         "match": {"kind": "possibly", "evidence": "addresses", "value": None, "addresses": 3, "missing_addresses": 0},
         "mappings": 3, "removed": {"source_id": new, "name": OWNERS_NEW_NAME, "points": 4}, "finding_ids": [new_finding],
@@ -351,7 +359,7 @@ async def test_a_name_taken_after_the_preview_is_a_change_since_the_preview(clie
     await db.execute("UPDATE sources SET name = 'renamed copy' WHERE id = $1", new)
     await add_source(db, OWNERS_NEW_NAME, "172.20.0.98", origin="manual")  # someone took the label the preview promised
     before = await counts(db)
-    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown)})
+    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": True})
     assert response.status_code == 409 and response.json()["detail"].startswith("changed since the preview: ")
     assert OWNERS_NEW_NAME + " (2)" in response.json()["detail"]
     assert await counts(db) == before and (await row_of(db, old))["name"] == OWNERS_OLD_NAME
@@ -429,9 +437,9 @@ async def test_a_real_move_needs_the_numbers_the_preview_showed(client, db):
     missing = await client.post(MOVE.format(old), json={"to": new, "address": "as_found"})
     assert missing.status_code == 422 and "expect" in missing.json()["detail"]
     shown = expect_of((await preview(client, old, new)).json())
-    for key in shown:
+    for key in REQUIRED_EXPECT:
         partial = {k: v for k, v in shown.items() if k != key}
-        assert (await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": partial})).status_code == 422, key
+        assert (await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": partial, "ticked": True})).status_code == 422, key
     assert await counts(db) == before
 
 
@@ -468,7 +476,7 @@ async def test_a_mapping_added_since_the_preview_is_a_change(client, db):
     shown = (await preview(client, old, new)).json()
     extra = await add_points(db, old, [EXTRA_PAIR])  # one more mapped pair, which the new source has too: still a match, one more mapping
     await map_points(db, extra)
-    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown)})
+    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": True})
     assert response.status_code == 409 and "4 mappings" in response.json()["detail"]
     assert await db.fetchval("SELECT count(*) FROM sources WHERE id = $1", new) == 1
 
@@ -480,7 +488,7 @@ async def test_a_scan_in_progress_refuses_the_real_run_and_nothing_is_written(cl
     shown = (await preview(client, old, new)).json()
     await db.execute("INSERT INTO scans (scope_snapshot, status) VALUES ('{}', $1)", status)
     before = (await counts(db), await row_of(db, old))
-    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown)})
+    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": True})
     assert response.status_code == 409 and response.json()["detail"] == "A scan is running. Move the source when it has finished."
     assert (await counts(db), await row_of(db, old)) == before
 
@@ -500,7 +508,7 @@ async def test_the_old_source_that_answers_again_is_not_moved(client, db):
     await db.execute("UPDATE sources SET status = 'online' WHERE id = $1", old)
     before = await counts(db)
     for url in (MOVE.format(old), MOVE.format(old) + "?dry_run=1"):
-        response = await client.post(url, json={"to": new, "address": "as_found", "expect": expect_of(shown)})
+        response = await client.post(url, json={"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": True})
         assert response.status_code == 409 and "not offline any more" in response.json()["detail"], url
     assert await counts(db) == before
 
@@ -511,7 +519,7 @@ async def test_a_new_source_that_got_a_mapping_since_is_not_deleted(client, db):
     shown = (await preview(client, old, new)).json()
     await map_points(db, [await db.fetchval("SELECT id FROM points WHERE source_id = $1 ORDER BY id LIMIT 1", new)])
     before = await counts(db)
-    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown)})
+    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": True})
     assert response.status_code == 409 and "got a mapping" in response.json()["detail"]
     assert await counts(db) == before and (await row_of(db, old))["name"] == OWNERS_OLD_NAME
 
@@ -528,7 +536,7 @@ async def test_a_new_source_that_holds_a_reading_is_not_deleted(client, db, wher
         await db.execute("INSERT INTO point_latest (point_id, ts, value) VALUES ($1, now(), 1)", point)
     before = await counts(db)
     for url in (MOVE.format(old), MOVE.format(old) + "?dry_run=1"):
-        response = await client.post(url, json={"to": new, "address": "as_found", "expect": expect_of(shown)})
+        response = await client.post(url, json={"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": True})
         assert response.status_code == 409 and "holds readings" in response.json()["detail"], url
     assert await counts(db) == before and await db.fetchval("SELECT count(*) FROM sources WHERE id = $1", new) == 1
 
@@ -550,7 +558,7 @@ async def test_a_new_source_that_is_no_longer_the_match_is_refused(client, db):
     shown = (await preview(client, old, new)).json()
     await db.execute("DELETE FROM points WHERE source_id = $1 AND name = 'LVP01 kW'", new)  # it lost a mapped pair: no longer a match
     before = await counts(db)
-    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown)})
+    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": True})
     assert response.status_code == 409 and "no longer the one match" in response.json()["detail"]
     assert await counts(db) == before
 
@@ -596,7 +604,7 @@ async def test_a_second_send_for_a_pair_that_already_moved_says_so(client, db):
     await login_as(client, db)
     old, new = await owners_case(db)
     shown = (await preview(client, old, new)).json()
-    body = {"to": new, "address": "as_found", "expect": expect_of(shown)}
+    body = {"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": True}
     assert (await client.post(MOVE.format(old), json=body)).status_code == 200
     after = (await counts(db), await row_of(db, old))
     for url in (MOVE.format(old), MOVE.format(old) + "?dry_run=1"):
@@ -610,11 +618,166 @@ async def test_a_source_that_is_gone_is_not_called_already_moved(client, db):
     await login_as(client, db)
     old, new = await owners_case(db)
     shown = (await preview(client, old, new)).json()
-    assert (await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown)})).status_code == 200
+    assert (await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": True})).status_code == 200
     await db.execute("UPDATE sources SET config = $2 WHERE id = $1", old, {"endpoint": "opc.tcp://172.20.0.77:4840/"})  # edited since
     assert (await preview(client, old, new)).status_code == 404
     await db.execute("DELETE FROM sources WHERE id = $1", old)
     assert (await preview(client, old, new)).status_code == 404
+
+
+# ---- another server answers at the new address now (fix 5a C1) ---------------------------------------------------------------------
+
+DIFFERENT_SERVER = "A different server answers at the new address now; scan again before moving"
+OTHER_SERVER = {"application_uri": "urn:other:T", "thumbprint": "CC:DD", "at": "2026-10-21T00:00:00+00:00"}
+
+
+async def another_server_now_answers(db, source: int) -> None:
+    """What the collector's `remember()` leaves on a source when ANOTHER server answers at its address: the first server's identity
+    stays (and so do its points), the other one is noted in `different`."""
+    await db.execute("UPDATE sources SET identity = COALESCE(identity, '{}'::jsonb) || $2 WHERE id = $1", source, {"different": OTHER_SERVER})
+
+
+async def test_a_new_source_where_another_server_answers_now_is_not_moved_onto_though_everything_else_matches(client, db):
+    await login_as(client, db)
+    old, new = await same_server_case(db)
+    shown = (await preview(client, old, new)).json()
+    assert shown["match"]["kind"] == "same_server" and shown["needs_tick"] is False  # the best evidence there is, and no tick asked
+    await another_server_now_answers(db, new)  # a scan ran between the preview and the click
+    before = (await counts(db), await row_of(db, old), await row_of(db, new))
+    for url in (MOVE.format(old) + "?dry_run=1", MOVE.format(old)):
+        response = await client.post(url, json={"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": True})
+        assert response.status_code == 409 and response.json()["detail"] == DIFFERENT_SERVER, (url, response.text)
+    assert (await counts(db), await row_of(db, old), await row_of(db, new)) == before  # nothing written, nothing deleted
+    assert await audit_rows(db) == []
+
+
+async def test_a_new_source_that_already_had_another_server_when_the_page_was_opened_is_refused_in_the_same_words(client, db):
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    await another_server_now_answers(db, new)
+    rows = {row["name"]: row for row in (await client.get("/api/sources")).json()}
+    assert rows[OWNERS_OLD_NAME]["move_candidate"] is None  # no offer is made for it
+    for address in ("as_found", "name"):  # also when somebody asks anyway
+        response = await preview(client, old, new, address)
+        assert response.status_code == 409 and response.json()["detail"] == DIFFERENT_SERVER, address
+
+
+async def test_the_server_that_answered_first_is_back_and_the_move_is_offered_again(client, db):
+    await login_as(client, db)
+    old, new = await same_server_case(db)
+    await another_server_now_answers(db, new)
+    assert (await preview(client, old, new)).status_code == 409
+    await db.execute("UPDATE sources SET identity = identity - 'different' WHERE id = $1", new)  # remember() drops it when S answers again
+    assert (await preview(client, old, new)).status_code == 200
+
+
+async def test_the_identity_the_old_source_takes_never_carries_a_different_note(client, db):
+    from dcdash.moves.service import moved_identity
+
+    identity = {"application_uri": URI, "thumbprint": THUMBPRINT, "different": OTHER_SERVER}
+    assert moved_identity(identity, "172.20.0.5") == {"application_uri": URI, "thumbprint": THUMBPRINT}
+    assert moved_identity({"different": OTHER_SERVER}, "172.20.0.5") is None
+    assert "different" in identity  # the argument was not changed
+
+
+# ---- the tick and the match are part of what the person confirmed (fix 5a M1) ---------------------------------------------------
+
+NEEDS_TICK = "The match needs your confirmation: tick that you checked it is the same device"
+
+
+async def test_a_match_that_asks_for_a_tick_is_not_moved_without_one_and_nothing_is_written(client, db):
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    shown = (await preview(client, old, new)).json()
+    assert shown["needs_tick"] is True and shown["match"]["kind"] == "possibly"
+    before = (await counts(db), await row_of(db, old), await row_of(db, new))
+    bodies = {
+        "ticked absent": {"to": new, "address": "as_found", "expect": expect_of(shown)},
+        "ticked false": {"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": False},
+        "an old client that sends no needs_tick": {
+            "to": new, "address": "as_found", "expect": {key: expect_of(shown)[key] for key in REQUIRED_EXPECT},
+        },
+    }
+    for label, body in bodies.items():
+        response = await client.post(MOVE.format(old), json=body)
+        assert response.status_code == 409 and response.json()["detail"] == NEEDS_TICK, (label, response.text)
+    assert (await counts(db), await row_of(db, old), await row_of(db, new)) == before
+    assert await audit_rows(db) == []
+
+
+async def test_a_ticked_box_moves_it_and_the_dry_run_never_asks_for_one(client, db):
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    assert (await preview(client, old, new)).status_code == 200  # no `ticked` at all
+    response = await move(client, old, new, ticked=True)
+    assert response.status_code == 200, response.text
+    assert (await row_of(db, old))["config"] == {"endpoint": "opc.tcp://172.20.0.5:4840/"}
+
+
+async def test_an_old_client_without_the_new_expect_fields_still_moves_when_it_ticked(client, db):
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    shown = (await preview(client, old, new)).json()
+    required = {key: expect_of(shown)[key] for key in REQUIRED_EXPECT}
+    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": required, "ticked": True})
+    assert response.status_code == 200, response.text
+
+
+async def test_a_match_that_needs_no_tick_moves_without_one(client, db):
+    await login_as(client, db)
+    old, new = await same_server_case(db)
+    shown = (await preview(client, old, new)).json()
+    assert shown["needs_tick"] is False
+    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown)})
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize(
+    "change, mentions",
+    [
+        ({"match_kind": "same_server"}, "offered as possibly the same device now, not the same server"),
+        ({"needs_tick": False}, "it needs your confirmation now"),
+    ],
+)
+async def test_a_different_match_than_the_one_shown_is_a_409_naming_it(client, db, change, mentions):
+    await login_as(client, db)
+    old, new = await owners_case(db)  # offered as "possibly", and it asks for a tick
+    before = (await counts(db), await row_of(db, old))
+    response = await move(client, old, new, **change)
+    assert response.status_code == 409 and response.json()["detail"].startswith("changed since the preview: "), response.text
+    assert mentions in response.json()["detail"]
+    assert (await counts(db), await row_of(db, old)) == before
+
+
+async def test_a_certificate_that_went_missing_since_the_preview_turns_a_no_tick_move_into_a_changed_one(client, db):
+    await login_as(client, db)
+    old, new = await same_server_case(db)
+    shown = (await preview(client, old, new)).json()
+    assert shown["needs_tick"] is False
+    await db.execute("UPDATE sources SET identity = identity - 'thumbprint' WHERE id = $1", new)  # C no longer reports a certificate
+    before = (await counts(db), await row_of(db, old))
+    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": True})
+    assert response.status_code == 409 and "it needs your confirmation now" in response.json()["detail"], response.text
+    assert (await counts(db), await row_of(db, old)) == before
+
+
+async def test_a_tick_that_was_not_needed_at_the_preview_is_still_enforced_when_it_is_needed_at_the_click(client, db):
+    await login_as(client, db)
+    old, new = await same_server_case(db)
+    shown = (await preview(client, old, new)).json()
+    await db.execute("UPDATE sources SET identity = identity - 'thumbprint' WHERE id = $1", new)
+    required = {key: expect_of(shown)[key] for key in REQUIRED_EXPECT}  # a client that does not say what it showed
+    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": required})
+    assert response.status_code == 409 and response.json()["detail"] == NEEDS_TICK, response.text
+
+
+@pytest.mark.parametrize("change", [{"match_kind": "certainly"}, {"needs_tick": "maybe"}])
+async def test_a_match_the_server_cannot_have_said_is_a_422(client, db, change):
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    shown = (await preview(client, old, new)).json()
+    response = await client.post(MOVE.format(old), json={"to": new, "address": "as_found", "expect": {**expect_of(shown), **change}, "ticked": True})
+    assert response.status_code == 422
 
 
 # ---- who may ask ---------------------------------------------------------------------------------------------------------------
@@ -641,6 +804,6 @@ async def test_a_page_of_another_site_cannot_move_a_source(client, db, headers):
     shown = (await preview(client, old, new)).json()
     before = await counts(db)
     for url in (MOVE.format(old) + "?dry_run=1", MOVE.format(old)):
-        response = await client.post(url, json={"to": new, "address": "as_found", "expect": expect_of(shown)}, headers=headers)
+        response = await client.post(url, json={"to": new, "address": "as_found", "expect": expect_of(shown), "ticked": True}, headers=headers)
         assert response.status_code == 403, url
     assert await counts(db) == before

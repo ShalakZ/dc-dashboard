@@ -8,7 +8,7 @@ import pytest
 
 from dcdash.moves.load import _endpoint
 from dcdash.moves.urls import (
-    CannotRewrite, address_key, display_endpoint, is_default_name, label_for, swap_host_port, unique_name,
+    CannotRewrite, address_key, authority_of, display_endpoint, is_default_name, label_for, put_authority, swap_host_port, unique_name,
 )
 
 # ---- address_key -----------------------------------------------------------------------------------------------------------------
@@ -165,6 +165,46 @@ def test_a_rewritten_address_is_read_back_as_the_requested_host_and_port():
     for host in ("172.20.0.5", "Meter-7.Lab", "fe80::1"):
         new = swap_host_port("opc.tcp://u:p@172.20.0.3:4840/dcdash/", host, 4842)
         assert address_key("opcua", {"endpoint": new}) == (host.lower(), 4842, "/dcdash/")
+
+
+# ---- authority_of / put_authority (fix 5a M3): the address text byte for byte ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("opc.tcp://172.20.0.3:4840/dcdash/", "172.20.0.3:4840"),
+        ("opc.tcp://PLC7.Plant/dcdash/", "PLC7.Plant"),  # letter case and a missing port are kept as stored
+        ("opc.tcp://user:pass@Host.Lab:4841/x", "Host.Lab:4841"),  # never the user info
+        ("opc.tcp://a@b:c@172.20.0.3:4840/", "172.20.0.3:4840"),  # after the LAST "@"
+        ("opc.tcp://[FE80::1]:4840/x", "[FE80::1]:4840"),
+        ("http://simulator:9000", "simulator:9000"),
+    ],
+)
+def test_authority_of_is_the_host_and_port_text_as_stored_and_never_the_user_info(url, expected):
+    assert authority_of(url) == expected
+
+
+@pytest.mark.parametrize(
+    "url", [None, 5, "not a url", "opc.tcp://", "opc.tcp://user:pa/ss@host:4840/x", "opc.tcp://[::1/x", "host:4840", "opc.tcp://h:4840/a@b"],
+)
+def test_authority_of_is_none_for_anything_that_cannot_be_written_back(url):
+    assert authority_of(url) is None
+
+
+@pytest.mark.parametrize("url", ["opc.tcp://PLC7.Plant/dcdash/", "opc.tcp://u:p@Host:4841/x?a=1#f", "http://[FE80::1]:9000/", "opc.tcp://h:1"])
+def test_put_authority_with_the_authority_read_from_the_same_url_changes_nothing(url):
+    assert put_authority(url, authority_of(url)) == url
+
+
+def test_put_authority_replaces_only_the_host_and_port_text_and_keeps_the_user_info_and_the_rest():
+    assert put_authority("opc.tcp://user:pass@172.20.0.5:4840/dcdash/?a=1#f", "PLC7.Plant") == "opc.tcp://user:pass@PLC7.Plant/dcdash/?a=1#f"
+
+
+@pytest.mark.parametrize("authority", ["", "a b", "a/b", "a@b", "h?x", "h#x", "h\n"])
+def test_put_authority_refuses_text_that_is_not_a_host_and_port(authority):
+    with pytest.raises(CannotRewrite):
+        put_authority("opc.tcp://172.20.0.3:4840/", authority)
 
 
 # ---- the naming rule (R6, P8) ---------------------------------------------------------------------------------------------------

@@ -116,7 +116,7 @@ async def test_the_offer_is_gone_when_the_move_has_been_made(client, db):
     shown = (await client.post(f"/api/sources/{old}/move?dry_run=1", json={"to": new, "address": "as_found"})).json()
     body = {"to": new, "address": "as_found", "expect": {
         "mappings": shown["mappings"], "address_before": "172.20.0.3:4840", "address_after": "172.20.0.5:4840", "name_after": shown["rename"]["to"],
-    }}
+    }, "ticked": True}  # the owner's case is a "possibly" match: the real run needs the box ticked
     assert (await client.post(f"/api/sources/{old}/move", json=body)).status_code == 200
     assert (await listed(client))["OPC UA server at 172.20.0.5:4840"]["move_candidate"] is None
 

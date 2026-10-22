@@ -363,6 +363,38 @@ def test_the_old_source_at_the_same_address_is_not_special_the_loader_decides_wh
     assert isinstance(decide([o], [c], {}).by_old[1], Offer)
 
 
+# Fix 5a C1: `remember()` keeps C's stored identity S when ANOTHER server T answers at C's address and notes T only in
+# `identity["different"]`. The matcher still keys C as S, so without this rule O would be moved onto T with no tick.
+DIFFERENT = {"application_uri": "urn:other:T", "thumbprint": "CC:DD", "at": "2026-10-21T00:00:00+00:00"}
+
+
+@pytest.mark.parametrize("thumbprint", [None, THUMB_1], ids=["no certificate", "with certificates"])
+def test_a_c_where_another_server_answers_now_is_never_a_candidate_even_when_its_stored_identity_matches(thumbprint):
+    o = old(identity=ident_opcua(URI_A, thumbprint))
+    stale = {**ident_opcua(URI_A, thumbprint), "different": DIFFERENT}
+    nothing(decide([o], [new(o, identity=stale)], {}))
+
+
+def test_a_c_where_another_server_answers_now_is_no_possibly_candidate_either():
+    o = old(identity=None)
+    nothing(decide([o], [new(o, identity={"different": DIFFERENT})], {}))
+
+
+def test_a_different_that_is_not_set_does_not_change_the_offer():
+    o = old(identity=ident_opcua(URI_A, THUMB_1))
+    for empty in (None, {}, False):
+        offer = only_offer(decide([o], [new(o, identity={**ident_opcua(URI_A, THUMB_1), "different": empty})], {}))
+        assert (offer.match.kind, offer.match.needs_tick) == ("same_server", False), empty
+
+
+def test_a_c_with_a_different_server_does_not_count_as_a_second_candidate():
+    # The other C is a clean match: with the first one out of the running, the pairing is unique and an Offer remains.
+    o = old(identity=ident_opcua(URI_A, THUMB_1))
+    stale = new(o, id=2, identity={**ident_opcua(URI_A, THUMB_1), "different": DIFFERENT})
+    clean = new(o, id=3, host="172.20.0.6", identity=ident_opcua(URI_A, THUMB_1))
+    only_offer(decide([o], [stale, clean], {}), new_id=3)
+
+
 # ------------------------------------------------------------------------------------------------------ needs_tick etc
 
 def test_same_server_with_equal_thumbprints_on_both_sides_needs_no_tick():

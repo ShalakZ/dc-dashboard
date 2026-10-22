@@ -3,8 +3,9 @@
 `address_key` is the place the matcher compares (host lower-cased, port, path). `display_endpoint` is what a person may read about
 it: built ONLY from the scheme, the host, the port and the path of the stored URL, never from its user info, query or fragment, so
 no answer, audit row or journal text that quotes it can carry a credential. Both are tolerant of junk: a config nobody can read
-gives None / a cut, scrubbed text, never an error. `swap_host_port` is the one writer: it changes the host and port of a stored URL and
-nothing else; `label_for`, `is_default_name` and `unique_name` are the naming rule of a move (R6).
+gives None / a cut, scrubbed text, never an error. `swap_host_port` (built on `put_authority`) is the one writer: it changes the host
+and port of a stored URL and nothing else; `authority_of` reads the host[:port] text exactly as stored, so an Undo can write it back
+byte for byte; `label_for`, `is_default_name` and `unique_name` are the naming rule of a move (R6).
 """
 import re
 from collections.abc import Collection, Mapping
@@ -78,6 +79,13 @@ def swap_host_port(url: str, host: str, port: int) -> str:
     host = host.strip().strip("[]")
     if not host or any(char in host for char in "/?#@ \t\r\n") or not 1 <= port <= 65535:
         raise CannotRewrite("the new address cannot be written into this source")
+    shown = f"[{host}]" if ":" in host else host
+    return put_authority(url, f"{shown}:{port}")
+
+
+def _authority_start(url: str) -> tuple[int, str]:
+    """(where the authority starts in `url`, the authority as written) of a URL whose authority can be told from its path. Raises
+    `CannotRewrite` for a URL without a host and for one whose "@" is not all inside the authority."""
     try:
         parts = urlsplit(url)
     except ValueError:
@@ -87,9 +95,35 @@ def swap_host_port(url: str, host: str, port: int) -> str:
         raise CannotRewrite("the address of this source cannot be read; edit it by hand")
     if url.count("@") != parts.netloc.count("@"):
         raise CannotRewrite("the address of this source has a login part that cannot be told from its host; edit it by hand")
-    userinfo, at, _old = parts.netloc.rpartition("@")
-    shown = f"[{host}]" if ":" in host else host
-    return f"{url[:start]}{userinfo}{at}{shown}:{port}{url[start + len(parts.netloc):]}"
+    return start, parts.netloc
+
+
+def _writable(authority: str) -> bool:
+    return bool(authority) and not any(char in authority for char in "/?#@ \t\r\n")
+
+
+def authority_of(url: Any) -> str | None:
+    """The host[:port] of a stored URL exactly as it is written (everything after the LAST "@" of the authority): its letter case,
+    its brackets, a port that is not there. It never holds user info. None for anything `put_authority` could not write back."""
+    if not isinstance(url, str):
+        return None
+    try:
+        _start, netloc = _authority_start(url)
+    except CannotRewrite:
+        return None
+    found = netloc.rpartition("@")[2]
+    return found if _writable(found) else None
+
+
+def put_authority(url: str, authority: str) -> str:
+    """`url` with ONLY the host[:port] after the last "@" of its authority replaced by `authority`, written as given (the Undo's way of
+    restoring an address byte for byte). The user info, the scheme, the path, the query and the fragment are kept verbatim. Raises
+    `CannotRewrite` as `swap_host_port` does (which is built on this)."""
+    if not _writable(authority):
+        raise CannotRewrite("the new address cannot be written into this source")
+    start, netloc = _authority_start(url)
+    userinfo, at, _old = netloc.rpartition("@")
+    return f"{url[:start]}{userinfo}{at}{authority}{url[start + len(netloc):]}"
 
 
 # The name a scan gives a source it creates (`Connector.probe`'s label), by connector type. A name equal to one of these is a default

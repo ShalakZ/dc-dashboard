@@ -1,7 +1,8 @@
 """Move a source that stopped answering to the address where its server turned up (w33 R5, R8).
 
 POST /api/sources/{id}/move?dry_run=0|1   `sources.edit`. `dry_run=1` answers the preview and changes nothing (no lock, no write, no
-                                          audit row); the real run needs `expect`, the numbers and addresses the preview showed.
+                                          audit row); the real run needs `expect` (the numbers, addresses and match the preview showed) and,
+                                          when the match asks for it, `ticked: true`.
 POST /api/sources/moves/{audit_id}/undo   `sources.edit`. Takes back what a `source.moved` audit row of the last 24 hours recorded
                                           (the address inside the source's current config, its identity, its name, the re-pointed scan
                                           findings), or refuses in words and writes nothing. The removed duplicate is not recreated.

@@ -12,6 +12,7 @@ import logging
 import pytest
 
 from dcdash.api.scans import SCAN_START_LOCK
+from dcdash.core.crypto import encrypt
 from dcdash.core.pg import CONFIG_CHANNEL
 from dcdash.moves.service import undo_sentence
 from helpers import listening, login_as, make_role
@@ -214,6 +215,91 @@ async def test_credentials_and_the_secret_survive_the_move_and_the_undo_byte_for
     assert "user:" not in caplog.text and ":pass@" not in caplog.text and "s3cret" not in caplog.text
     [detail] = await audit_rows(db, "source.move_undone")
     assert "pass" not in str(detail) and "user" not in str(detail)
+
+
+async def test_a_credentialed_simulator_address_survives_the_move_and_the_undo_byte_for_byte(client, db, caplog):
+    caplog.set_level(logging.DEBUG)
+    await login_as(client, db)
+    old, new = await simulator_case(db)
+    config = {"url": "http://user:pass@172.20.0.3:9000/", "timeout_seconds": 7.5}
+    await db.execute("UPDATE sources SET config = $2, secret = $3 WHERE id = $1", old, config, encrypt("s3cret-value"))
+    before = await row_of(db, old)
+    assert before["secret"] is not None
+    shown = await client.post(f"/api/sources/{old}/move?dry_run=1", json={"to": new, "address": "as_found"})
+    assert shown.status_code == 200, shown.text
+    assert shown.json()["from"]["endpoint"] == "http://172.20.0.3:9000"  # no user info in what is shown
+    moved_ = await move(client, old, new)
+    assert moved_.status_code == 200, moved_.text
+    during = await row_of(db, old)
+    assert during["config"] == {"url": "http://user:pass@172.20.0.5:9000/", "timeout_seconds": 7.5}  # one text changed
+    assert during["secret"] == before["secret"]
+    response = await undo(client, moved_.json()["audit_id"])
+    assert response.status_code == 200, response.text
+    assert await row_of(db, old) == before  # the whole row: the credentialed address, the secret, the name, the identity
+    for text in (shown.text, moved_.text, response.text, await everything_said(db)):
+        assert "pass" not in text and "user:" not in text and "s3cret" not in text
+    assert "user:" not in caplog.text and ":pass@" not in caplog.text and "s3cret" not in caplog.text
+
+
+async def mixed_case_case(db) -> tuple[int, int]:
+    """The old source's address is written the way a person typed it: capitals in the host name and no port. The scan's copy is at an IP."""
+    first = await make_scan(db, day=0)
+    old = await add_source(
+        db, "Plant PLC 7", "plc7.plant", origin="discovered", status="offline", last_seen=finished_at(0),
+        config={"endpoint": "opc.tcp://PLC7.Plant/dcdash/"},
+    )
+    await map_points(db, await add_points(db, old, PAIRS))
+    await open_incident(db, old, "unreachable")
+    await make_finding(db, first, "plc7.plant", 4840, old)
+    second = await make_scan(db, day=3)
+    new = await new_source(db, OWNERS_NEW_NAME, "172.20.0.5", second, pairs=PAIRS + [("ns=2;s=LVP03.kW", "LVP03 kW")], path="/dcdash/")
+    return old, new
+
+
+async def test_an_address_written_in_capitals_and_without_a_port_comes_back_byte_for_byte(client, db):
+    await login_as(client, db)
+    old, new = await mixed_case_case(db)
+    before = await row_of(db, old)
+    moved_ = await move(client, old, new)
+    assert moved_.status_code == 200, moved_.text
+    assert (await row_of(db, old))["config"] == {"endpoint": "opc.tcp://172.20.0.5:4840/dcdash/"}
+    [recorded] = await audit_rows(db)
+    assert (recorded["authority_before"], recorded["authority_after"]) == ("PLC7.Plant", "172.20.0.5:4840")  # as stored, no user info
+    assert (recorded["host_before"], recorded["port_before"]) == ("plc7.plant", 4840)  # as the matcher reads it
+    response = await undo(client, moved_.json()["audit_id"])
+    assert response.status_code == 200, response.text
+    assert response.json()["restored"] == {"host": "plc7.plant", "port": 4840, "name": "Plant PLC 7"}
+    assert await row_of(db, old) == before
+    assert (await row_of(db, old))["config"]["endpoint"] == "opc.tcp://PLC7.Plant/dcdash/"  # not opc.tcp://plc7.plant:4840/dcdash/
+
+
+async def test_a_move_recorded_before_the_authority_was_kept_is_taken_back_by_host_and_port(client, db):
+    await login_as(client, db)
+    old, new = await mixed_case_case(db)
+    moved_ = await move(client, old, new)
+    audit_id = moved_.json()["audit_id"]
+    await db.execute("UPDATE audit_log SET detail = detail - 'authority_before' - 'authority_after' WHERE id = $1", audit_id)
+    response = await undo(client, audit_id)
+    assert response.status_code == 200, response.text
+    assert (await row_of(db, old))["config"] == {"endpoint": "opc.tcp://plc7.plant:4840/dcdash/"}  # the same place, written out in full
+
+
+@pytest.mark.parametrize(
+    "authority, status, sentence",
+    [
+        ('"evil.example:4840"', 409, "the old address could not be written back into this source; edit its address by hand"),  # not host_before
+        ('"plc7.plant:4841"', 409, "the old address could not be written back into this source; edit its address by hand"),  # not port_before
+        ('"bad/host"', 409, "the old address could not be written back into this source; edit its address by hand"),
+        ('5', 409, NOT_UNDOABLE),
+        ('""', 409, NOT_UNDOABLE),
+    ],
+)
+async def test_a_recorded_authority_that_is_not_the_recorded_host_and_port_is_refused_and_nothing_is_written(client, db, authority, status, sentence):
+    await login_as(client, db)
+    old, new = await mixed_case_case(db)
+    audit_id = (await move(client, old, new)).json()["audit_id"]
+    await db.execute(f"UPDATE audit_log SET detail = jsonb_set(detail, '{{authority_before}}', '{authority}') WHERE id = $1", audit_id)
+    await refused(client, db, old, audit_id, status, sentence)
 
 
 async def test_a_simulator_source_is_taken_back_too(client, db):

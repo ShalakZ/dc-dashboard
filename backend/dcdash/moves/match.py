@@ -6,6 +6,7 @@ A wrong match sends a meter's readings (and the bills built on them) to the wron
 * a name is never evidence: nothing here reads `name`;
 * two different identities, or two different certificates, never match; a default application URI is no identity at all;
 * a URI that sources at OTHER endpoints also report is no identity either;
+* a candidate where ANOTHER server answers now (`identity["different"]`) is no candidate, whatever else is equal;
 * a candidate must have appeared after O went silent (its earliest sighting, `found_at`), and a same-server claim without a
   certificate on both sides needs every pair O has mapped on a candidate that was browsed;
 * a pairing must be unique in both directions, otherwise the person is told that several servers could be it.
@@ -118,10 +119,19 @@ def _eligible(old: OldSource) -> bool:
     return old.connector_type in MOVABLE_TYPES and old.unreachable and old.mappings >= 1
 
 
+def another_server_answers(identity: Mapping[str, Any] | None) -> bool:
+    """True when the stored identity says a DIFFERENT server answers at this source's address now (`identity["different"]`, set by the
+    collector's `remember()`, which keeps the first server's identity and notes the other one only there). Such a source still looks like
+    the first server (its stored URI and points), but what answers there is not it: moving onto it would send a meter's readings to a
+    stranger. It stays set until the stored server answers again."""
+    return isinstance(identity, Mapping) and bool(identity.get("different"))
+
+
 def _fits(old: OldSource, new: NewSource) -> bool:
     """The shape of a candidate, before any identity evidence."""
     return (
-        new.connector_type == old.connector_type
+        not another_server_answers(new.identity)
+        and new.connector_type == old.connector_type
         and new.port == old.port
         and new.path == old.path
         and new.id != old.id

@@ -35,7 +35,7 @@ SCAN_RUNNING = "A scan is running. Move the source when it has finished."
 
 async def body_for(client, old: int, new: int, address: str = "as_found") -> dict:
     shown = (await preview(client, old, new, address)).json()
-    return {"to": new, "address": address, "expect": expect_of(shown)}
+    return {"to": new, "address": address, "expect": expect_of(shown), "ticked": True}
 
 
 # ---- the pure helpers ----------------------------------------------------------------------------------------------------------
@@ -79,7 +79,7 @@ async def test_the_preview_and_the_real_run_compute_the_same_move(client, db, ad
     old, new = await owners_case(db)
     await with_hint(db, new)
     shown = (await preview(client, old, new, address)).json()
-    request = SourceMoveIn(to=new, address=address, expect=MoveExpect(**expect_of(shown)))
+    request = SourceMoveIn(to=new, address=address, expect=MoveExpect(**expect_of(shown)), ticked=True)
     async with get_sessionmaker()() as session:
         seen, nothing = await move_source(session, old, request, real=False)
         assert nothing is None and seen == shown
@@ -194,6 +194,29 @@ async def test_a_move_that_queued_behind_a_remove_of_the_new_source_is_a_clean_4
     assert removed.status_code == 200 and [r["id"] for r in removed.json()["removed"]] == [new]
     assert moved.status_code == 404 and "new source was not found" in moved.json()["detail"], moved.text
     assert (await row_of(db, old))["name"] == OWNERS_OLD_NAME and await audit_rows(db) == []
+
+
+async def test_two_real_runs_in_flight_at_once_move_it_once_and_the_other_is_told_so(client, db):
+    """A double click, or two people: both requests are past the preview and both reach the scan lock. One takes it and moves; the other,
+    let in after the commit, finds the duplicate gone and the source at the address the audit row says it moved to."""
+    await login_as(client, db)
+    old, new = await owners_case(db)
+    request = await body_for(client, old, new)
+    async with holder(db) as (conn, tx):
+        await conn.execute("SELECT pg_advisory_xact_lock($1)", SCAN_START_LOCK)
+        first = await pending(db, 1, client.post(MOVE.format(old), json=request))
+        second = await pending(db, 2, client.post(MOVE.format(old), json=request))  # both are queued behind the same lock
+        await tx.rollback()
+        answers = await finished(first, second)  # bounded: a deadlock would fail here, not hang
+    assert sorted(response.status_code for response in answers) == [200, 409], [response.text for response in answers]
+    [lost] = [response for response in answers if response.status_code == 409]
+    assert lost.json()["detail"] == "this source was already moved", lost.text
+    [won] = [response for response in answers if response.status_code == 200]
+    assert won.json()["rename"] == {"from": OWNERS_OLD_NAME, "to": OWNERS_NEW_NAME}
+    assert len(await audit_rows(db)) == 1  # one move, one audit row
+    assert await db.fetchval("SELECT count(*) FROM sources WHERE id = $1", new) == 0
+    row = await row_of(db, old)
+    assert row["config"] == {"endpoint": "opc.tcp://172.20.0.5:4840/"} and row["name"] == OWNERS_NEW_NAME
 
 
 async def test_a_mapping_committed_on_the_new_source_while_the_move_waited_is_counted_not_deleted(client, db):
