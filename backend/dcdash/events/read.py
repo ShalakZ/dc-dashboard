@@ -22,8 +22,8 @@ from sqlalchemy import ColumnElement, Integer, Text, and_, any_, func, literal, 
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.core.audit import scrub_strings
-from dcdash.core.models import DiagEvent, Source
+from dcdash.core.audit import clip_error, scrub_strings
+from dcdash.core.models import DiagEvent, Job, Source
 from dcdash.core.timeutil import local_midnight
 from dcdash.events import settings as events_settings
 
@@ -321,3 +321,230 @@ def csv_rows(rows: Iterable[Any], names: Mapping[int, str], zone: ZoneInfo, now:
             local(inc["last_at"]) if inc else "", local(inc["closed_at"]) if inc else "", inc["duration_seconds"] if inc else "",
             json.dumps(event["detail"], ensure_ascii=False),
         ]
+
+
+def _obj(value: Any) -> Any:
+    """A JSONB value as Python data: a `text()` query may hand it back as undecoded text (a Core `select` decodes it itself)."""
+    if isinstance(value, (str, bytes)):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return None
+    return value
+
+
+# The newest open `source.offline` row of each source asked about: one statement for all of them, never one per source.
+_OPEN_OFFLINE = text(
+    """
+    SELECT DISTINCT ON (source_id) source_id, ts, detail
+    FROM diag_events
+    WHERE kind = 'source.offline' AND detail->>'state' = 'open' AND source_id = ANY(:ids)
+    ORDER BY source_id, id DESC
+    """
+)
+
+
+async def open_incidents(db: AsyncSession, source_ids: Iterable[int]) -> dict[int, dict[str, Any]]:
+    """The open `source.offline` incident of each source that has one: `{source_id: {"first_at": datetime, "count": int}}`.
+
+    `first_at` is the true start (`detail.since`, else the row's time), `count` the failed reads counted so far. One query for
+    all the sources, none for an empty list. A source with no open incident is not in the answer."""
+    ids = sorted(set(source_ids))
+    if not ids:
+        return {}
+    now = datetime.now(timezone.utc)
+    found: dict[int, dict[str, Any]] = {}
+    for row in (await db.execute(_OPEN_OFFLINE, {"ids": ids})).all():
+        view = incident(row.ts, _obj(row.detail), now)
+        if view is not None:
+            found[row.source_id] = {"first_at": view["first_at"], "count": view["count"]}
+    return found
+
+
+# ---- how a started check or test ended (the Audit page's `outcome`) -----------------------------------------------------
+
+OUTCOME_ACTIONS = ("source.tested", "source.checked", "source.test_all")
+_ENDING_EVENTS = ("check.finished", "job.finished")  # the journal rows that end a job a person started (see `job_of`)
+_JOB_OF_ACTION = {"source.tested": "test", "source.checked": "check", "source.test_all": "test"}
+_STEP_WORDS = {
+    "dns": "name lookup", "tcp": "network connection", "endpoints": "server endpoints", "certificates": "certificates",
+    "session": "secure channel", "server_time": "server time", "namespaces": "namespaces", "read_points": "reading the points",
+    "timing": "read timing", "test": "connection test",
+}
+_REASON_CHARS = 200
+NO_SOURCE_TESTED = "No source was tested."
+
+
+@dataclass(frozen=True)
+class _Ended:
+    """How one job ended, from the facts a journal row or a jobs row holds."""
+
+    state: str  # passed | failed | running | gone
+    what: str = "test"  # check (a connection check) | test (a source test)
+    event_id: int | None = None
+    steps: int | None = None
+    first_failed: str | None = None
+    reason: str | None = None  # unscrubbed here; `_reason` cleans it when the sentence is built
+
+
+_GONE = _Ended("gone")
+
+
+def _valid_id(value: Any) -> bool:
+    return type(value) is int and 0 < value <= MAX_ID
+
+
+def job_ids_of(action: str, detail: Any) -> list[int]:
+    """The ids of the jobs an audit entry started: `detail.job_id` (a check or a test) or `detail.job_ids` (a test of all).
+    Anything that is not a whole number in range is ignored; a job is listed once."""
+    if not isinstance(detail, dict):
+        return []
+    if action == "source.test_all":
+        listed = detail.get("job_ids")
+        return list(dict.fromkeys(item for item in listed if _valid_id(item))) if isinstance(listed, list) else []
+    return [detail["job_id"]] if _valid_id(detail.get("job_id")) else []
+
+
+def _reason(value: Any) -> str | None:
+    """A reason as one short plain line for a sentence: scrubbed (a URL's credentials), on one line, cut, no closing full stop."""
+    if not isinstance(value, str):
+        return None
+    line = clip_error(" ".join(value.split()), _REASON_CHARS).rstrip(" .")
+    return line or None
+
+
+def _step_words(step: str) -> str:
+    words = _STEP_WORDS.get(step) or re.sub(r"[_\s]+", " ", step).strip()
+    return clip_error(words, 40).replace('"', "'")
+
+
+def _from_event(row: Any) -> tuple[int, _Ended] | None:
+    """The job a journal row ended and how, or None for a row that does not end a started job."""
+    detail = _obj(row.detail)
+    job_id = job_of(row.kind, detail)
+    if job_id is None:
+        return None
+    what = "check" if row.kind == "check.finished" or detail.get("kind") == "check_connection" else "test"
+    steps = detail.get("steps")
+    first = detail.get("first_failed")
+    ok = detail.get("ok") is True
+    return job_id, _Ended(
+        "passed" if ok else "failed", what, row.id, steps if type(steps) is int and steps >= 0 else None,
+        first if isinstance(first, str) and first else None, None if ok else detail.get("error"),
+    )
+
+
+def _from_job(row: Any) -> _Ended:
+    """A finished job's outcome when the journal has no row for it (a restart failed it, or its row was dropped or pruned)."""
+    what = "check" if row.kind == "check_connection" else "test"
+    if row.status not in ("done", "failed"):
+        return _Ended("running", what)
+    body = _obj(row.result)
+    body = body if isinstance(body, dict) else {}
+    # The same rule as the journal's: a check passed when it says so; a test passed unless its result says it did not.
+    ok = row.status == "done" and (body.get("ok") is True if what == "check" else body.get("ok") is not False)
+    steps = body.get("steps")
+    first = body.get("first_failed")
+    reason = next((body[key] for key in ("error", "message") if isinstance(body.get(key), str) and body[key]), None)
+    return _Ended(
+        "passed" if ok else "failed", what, None, len(steps) if isinstance(steps, list) else None,
+        first if isinstance(first, str) and first else None, None if ok else reason,
+    )
+
+
+def _sentence(ended: _Ended, retention_days: int) -> str:
+    """The plain sentence for one job."""
+    if ended.state == "running":
+        return "Still running."
+    if ended.state == "gone":
+        return f"The outcome is no longer kept (system events are kept {retention_days} days)."
+    if ended.what == "check":
+        if ended.state == "passed":
+            if ended.steps is None:
+                return "The connection check passed."
+            return f"The connection check passed ({ended.steps} step{'' if ended.steps == 1 else 's'})."
+        if ended.first_failed:
+            return f'The connection check failed at "{_step_words(ended.first_failed)}".'
+        reason = _reason(ended.reason)
+        return f"The connection check failed: {reason}." if reason else "The connection check failed."
+    if ended.state == "passed":
+        return "The test passed."
+    reason = _reason(ended.reason)
+    return f"The test failed: {reason}." if reason else "The test failed."
+
+
+def _all_of(ended: Sequence[_Ended]) -> dict[str, Any]:
+    """`{state, text, counts}` for the jobs of a test of all sources."""
+    counts = {name: sum(1 for one in ended if one.state == name) for name in ("passed", "failed", "running", "gone")}
+    words = {"passed": "passed", "failed": "failed", "running": "running", "gone": "no longer kept"}
+    if not ended:
+        return {"state": "gone", "text": NO_SOURCE_TESTED, "counts": counts}
+    if counts["failed"]:
+        state = "failed"
+    elif counts["running"]:
+        state = "running"
+    elif counts["passed"] == len(ended):
+        state = "passed"
+    else:
+        state = "gone"
+    return {"state": state, "text": ", ".join(f"{counts[name]} {words[name]}" for name in words if counts[name]), "counts": counts}
+
+
+async def _ended_jobs(db: AsyncSession, job_ids: list[int], since: datetime) -> dict[int, _Ended]:
+    """How each job ended: from its journal row (ONE query for all, rows no older than `since`, the earliest audit entry asked
+    about: an entry is written before its job runs), else from its jobs row (at most ONE more query, for the jobs with no row)."""
+    texts = literal([str(job_id) for job_id in job_ids], ARRAY(Text))
+    events = await db.execute(
+        select(DiagEvent.id, DiagEvent.kind, DiagEvent.detail)
+        .where(DiagEvent.kind.in_(_ENDING_EVENTS), DiagEvent.ts >= since, DiagEvent.detail["job_id"].astext == any_(texts))
+        .order_by(DiagEvent.id.desc())
+    )
+    ended: dict[int, _Ended] = {}
+    for row in events:
+        found = _from_event(row)
+        if found is not None:
+            ended.setdefault(found[0], found[1])  # the newest row of a job wins
+    missing = [job_id for job_id in job_ids if job_id not in ended]
+    if missing:
+        jobs = await db.execute(
+            select(Job.id, Job.kind, Job.status, Job.result).where(
+                Job.id == any_(literal(missing, ARRAY(Integer))), Job.kind.in_(STARTED_JOB_KINDS)
+            )
+        )
+        for row in jobs:
+            ended[row.id] = _from_job(row)
+    return ended
+
+
+async def outcomes(db: AsyncSession, entries: Sequence[Any]) -> dict[int, dict[str, Any]]:
+    """How the checks and tests that audit `entries` started ended: `{entry id: {state, text, event_id, counts}}` for the entries
+    of `source.tested`, `source.checked` and `source.test_all` (an entry of any other action is not in the answer).
+
+    The words are built here, from `ok` and the scrubbed reason, never from the journal's own message. One journal query and at
+    most one jobs query for all the entries, whatever their number. Nothing is written."""
+    wanted = {entry.id: (entry.action, job_ids_of(entry.action, entry.detail)) for entry in entries if entry.action in OUTCOME_ACTIONS}
+    if not wanted:
+        return {}
+    every = sorted({job_id for _, ids in wanted.values() for job_id in ids})
+    ended: dict[int, _Ended] = {}
+    if every:
+        since = min(entry.ts for entry in entries if wanted.get(entry.id, ("", []))[1])
+        ended = await _ended_jobs(db, every, since)
+    plans: dict[int, tuple[str, list[_Ended]]] = {}
+    for entry_id, (action, ids) in wanted.items():
+        mine = [ended.get(job_id) for job_id in ids]
+        # a job of the other kind than the action started (a hand-written audit detail) is not this entry's outcome
+        verdicts = [one if one is not None and one.what == _JOB_OF_ACTION[action] else _GONE for one in mine]
+        plans[entry_id] = (action, verdicts or ([] if action == "source.test_all" else [_GONE]))
+    needs_days = any(one.state == "gone" for _, verdicts in plans.values() for one in verdicts)
+    days = (await events_settings.load(db)).retention_days if needs_days else 0
+    answer: dict[int, dict[str, Any]] = {}
+    for entry_id, (action, verdicts) in plans.items():
+        if action == "source.test_all":
+            body = _all_of(verdicts)
+            event_id = verdicts[0].event_id if len(verdicts) == 1 else None
+        else:
+            body = {"state": verdicts[0].state, "text": _sentence(verdicts[0], days), "counts": None}
+            event_id = verdicts[0].event_id
+        answer[entry_id] = {"state": body["state"], "text": body["text"], "event_id": event_id, "counts": body["counts"]}
+    return answer
