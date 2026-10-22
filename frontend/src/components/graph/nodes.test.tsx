@@ -422,20 +422,28 @@ describe("graph nodes", () => {
     };
     // the page words the sentence (the time of from_since in the site's zone) and hands it to the node as `looks`; the name holds the address, so it is not said twice
     const SENTENCE = `This looks like ${OLD} (12 mappings on 3 assets), which has not answered since 18 Oct 07:52`;
-    const LOOKS_LINE = "Looks like OPC UA server (12 mappings)";
+    const LOOKS_LINE = "Was at 172.20.0.3:4840 (12 mappings)";
     const SEEN = "Seen in scan #8, 2 min ago";
     const identity = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: false };
     const candidate: GraphSource = { ...source, name: "OPC UA server at 172.20.0.5:4840", move_candidate: offer };
     const BUTTON = `Move ${OLD} to OPC UA server at 172.20.0.5:4840...`;
     const lines = () => Array.from(document.querySelectorAll(".gsrc-body > *")).map((line) => line.className.split(" ")[0]);
 
-    it("an offer: the last line says Looks like <old title> (12 mappings) on one muted line, with the whole sentence and then the seen line in its title", () => {
+    it("an offer: the last line says Was at <old address> (12 mappings) on one muted line (the old title is the card's own default name), with the whole sentence and then the seen line in its title", () => {
       renderNode("source", "src:1", { source: candidate, expanded: false, onSelect: vi.fn(), onMoveSource: vi.fn(), seen: SEEN, looks: SENTENCE });
       const line = screen.getByText(LOOKS_LINE);
       expect(line).toHaveClass("muted", "gsrc-seen");
       expect(line).not.toHaveClass("gsrc-warn");
       expect(line).toHaveAttribute("title", `${SENTENCE}. ${SEEN}`);
       expect(screen.queryByText(SEEN)).not.toBeInTheDocument();
+    });
+
+    it("an offer from an old source with a name of its own says Looks like <that name> (12 mappings), on the same one muted line", () => {
+      const named = { ...candidate, move_candidate: { ...offer, from_name: "Meter room 2" } };
+      renderNode("source", "src:1", { source: named, expanded: false, onSelect: vi.fn(), onMoveSource: vi.fn(), seen: SEEN });
+      const line = screen.getByText("Looks like Meter room 2 (12 mappings)");
+      expect(line).toHaveClass("muted", "gsrc-seen");
+      expect(lines()).toEqual(["gsrc-head", "gsrc-sub", "gsrc-status", "gsrc-mapped", "gsrc-actions", "gsrc-seen"]);
     });
 
     it("the card keeps its six lines: the same classes in the same order as a source with no offer, and Move... stands in the button row beside Details", () => {

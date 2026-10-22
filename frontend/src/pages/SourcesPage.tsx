@@ -26,7 +26,7 @@ import { useNow } from "../hooks/useNow";
 import { ageNow, formatAge, formatSpan, secondsSince } from "../lib/age";
 import { historyLine } from "../lib/historyLine";
 import { sourceDeletePath, sourceImpact, sourceLoss, sourceNote } from "../lib/impact";
-import { DIFFERENT_SERVER_ROW, DIFFERENT_SERVER_WHY, offerOf, twoServersText } from "../lib/moves";
+import { DIFFERENT_SERVER_ROW, differentServerWhy, offerOf, twoServersText } from "../lib/moves";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { formatOfflineSince, longOffline, MOVE_LINK_TEXT, offlineBannerParts, sourceStatusText } from "../lib/sourceStatus";
 
@@ -287,8 +287,8 @@ export function SourcesPage() {
                     <td>{s.connector_type}</td><td>{s.enabled ? "yes" : "no"}</td>
                     <td>
                       {status.polled ? <span className={`chip ${STATUS_CHIP[status.text] ?? "chip-stale"}`} title={chipTitle}>{status.text}</span> : <span className="muted st st-off note">{status.text}</span>}
-                      {/* (w33) A scan, test or check met another server at this address; polling goes on, so the row must not look healthy without saying it. A block under the chip. */}
-                      {s.identity_different === true && <span className="cell-different warning" title={DIFFERENT_SERVER_WHY}>{DIFFERENT_SERVER_ROW}</span>}
+                      {/* (w33) A scan, test or check met another server at this address; polling goes on for an enabled source, so the row must not look healthy without saying it. A block under the chip. */}
+                      {s.identity_different === true && <span className="cell-different warning" title={differentServerWhy(s.enabled)}>{DIFFERENT_SERVER_ROW}</span>}
                     </td>
                     <td className="nowrap">{s.last_seen && site.data ? formatSiteDateTime(s.last_seen, site.data.timezone) : "—"}</td>
                     <td className="num">{formatAge(ageNow(s.last_reading_age_seconds, sourcesAnsweredAt, now))}</td>

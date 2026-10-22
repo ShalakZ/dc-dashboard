@@ -4,10 +4,19 @@ import type { Source } from "../api/types";
 import { INSTANCE_MATCH, moveBody, movePreview, moveDone, moveUndone, NEW_NAME, OLD_NAME, POSSIBLY_MATCH, URI_MATCH } from "../test/moveFixtures";
 import { mockFetch } from "../test/fetchMock";
 import {
-  addressOptions, effectLines, fromToLine, hostNameLine, hostPort, hostPortOfEndpoint, isChangedSincePreview, isIpAddress, MOVE_REFRESHED, moveButtonLabel,
+  addressOptions, differentServerWhy, effectLines, fromToLine, hostNameLine, hostPort, hostPortOfEndpoint, isChangedSincePreview, isIpAddress, MOVE_REFRESHED, moveButtonLabel,
   movedSentence, moveRequest, needsConfirmation, offerOf, previewMove, runMove, SCAN_RUNNING_TEXT, tickLabel, twoServersText, undoMove, undoMoveSentence, undoRefusal, warningLines,
   whyLines,
 } from "./moves";
+
+describe("differentServerWhy (the Sources row cue's tooltip)", () => {
+  it("says that polling continues only for an enabled source", () => {
+    expect(differentServerWhy(true)).toBe(
+      "A scan, test or check met a different server at this address than the one this source used to talk to. Polling continues. See System events.");
+    expect(differentServerWhy(false)).toBe(
+      "A scan, test or check met a different server at this address than the one this source used to talk to. See System events.");
+  });
+});
 
 describe("hostPort and hostPortOfEndpoint", () => {
   it("writes host:port as the preview shows it", () => {

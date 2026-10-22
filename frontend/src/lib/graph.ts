@@ -650,12 +650,21 @@ const countNumber = (n: number) => n.toLocaleString("en-US");
 
 const mappingsWord = (n: number) => `${countNumber(n)} ${n === 1 ? "mapping" : "mappings"}`;
 
+/** The default names the scans give (`OPC UA server at 172.20.0.2:4840`, `DCDash simulator at ...`, `Modbus device at ...`), with or without the address: the type, not the device. */
+const GENERIC_TITLE = /^(?:OPC UA server|DCDash simulator|Modbus device|OPC UA|Modbus|Simulator)(?: at \S+)?$/i;
+
 /**
- * (w33) The card's line for an offer: `Looks like OPC UA server (12 mappings)`. It leads with the part that tells the old source apart (its title without the address its name ends
+ * (w33) The card's line for an offer: `Looks like Meter room 2 (12 mappings)`. It leads with the part that tells the old source apart (its title without the address its name ends
  * with: the helper of the card's own title, given the endpoint the offer carries) and the stylesheet's ellipsis cuts after it; the whole sentence is the tooltip (`looksLikeSentence`).
+ * A title that identifies nothing, because it is the same text as the card's own (`cardTitle`) or only the type label of a scan's default name, gives way to where the old source was:
+ * `Was at 172.20.0.3:4840 (12 mappings)` (host and port of its endpoint, an IPv6 host in brackets). Without an endpoint the title stays.
  */
-export const looksLikeLine = (offer: SourceMoveCandidateForNew): string =>
-  `Looks like ${sourceTitle({ name: offer.from_name, config: { endpoint: offer.from_endpoint } })} (${mappingsWord(offer.mappings)})`;
+export function looksLikeLine(offer: SourceMoveCandidateForNew, cardTitle?: string): string {
+  const title = sourceTitle({ name: offer.from_name, config: { endpoint: offer.from_endpoint } });
+  const address = hostPortOfEndpoint(offer.from_endpoint);
+  const says = title !== cardTitle && !GENERIC_TITLE.test(title);
+  return `${says || address === "" ? `Looks like ${title}` : `Was at ${address}`} (${mappingsWord(offer.mappings)})`;
+}
 
 /**
  * (w33) The whole sentence of an offer, for the card's tooltip and the panel: `This looks like <old name> (12 mappings on 3 assets), which has not answered since 18 Oct 07:52`.
@@ -674,7 +683,8 @@ export function looksLikeSentence(offer: SourceMoveCandidateForNew, since: strin
  * (w33) The last line of the source card and its tooltip. The card has no room for a seventh line (SOURCE_H), so the one seen line trades places with what matters more,
  * in this order, and the tooltip keeps every sentence:
  * - another server answers at the address: `A different server answers at this address` (tone "warn": the card draws it in the warning ink);
- * - the source looks like an old one that stopped answering: `Looks like <old title> (12 mappings)` (the Move... button is on the card's button row);
+ * - the source looks like an old one that stopped answering: `Looks like <old title> (12 mappings)`, or `Was at <host:port> (12 mappings)` when that title says nothing (`looksLikeLine`);
+ *   the Move... button is on the card's button row;
  * - several old sources could be it: `Two servers could be this one; edit the address by hand` (`Several` for more than two);
  * - not seen, something mapped and offline: what to do about it.
  * Every other source shows its seen line as it is. `looks` is the page's whole sentence for an offer (`looksLikeSentence` with the time it formatted in the site's zone); without it
@@ -685,7 +695,7 @@ export function seenCard(source: GraphSource, seen: string, looks?: string): { l
   const sentence = offer && (looks ?? looksLikeSentence(offer));
   const joined = (...sentences: (string | false | null)[]) => sentences.filter((s): s is string => !!s).join(". ");
   if (isDifferentServer(source)) return { line: DIFFERENT_SERVER, title: joined(DIFFERENT_SERVER, sentence, seen), tone: "warn" };
-  if (offer) return { line: looksLikeLine(offer), title: joined(sentence, seen) };
+  if (offer) return { line: looksLikeLine(offer, sourceTitle(source)), title: joined(sentence, seen) };
   const two = twoServersLine(source);
   if (two) return { line: two, title: joined(two, seen) };
   if (isMappedNotSeen(source)) return { line: MAPPED_NOT_SEEN, title: `${seen}. ${MAPPED_NOT_SEEN}` };

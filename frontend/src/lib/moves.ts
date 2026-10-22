@@ -20,10 +20,11 @@ export const SCAN_RUNNING_TEXT = "A scan is running; you can move when it has fi
 /** On the row, the banner and the card of a source that several new servers look like (`count` of them: `Two` for 2, `Several` for more): no move is offered. */
 export const twoServersText = (count: number) => `${count === 2 ? "Two" : "Several"} servers could be this one; edit the address by hand`;
 
-/** The small warning line under a Sources row's status chip while another server answers at the source's address (`identity_different`), and what its tooltip says. */
+/** The small warning line under a Sources row's status chip while another server answers at the source's address (`identity_different`), and what its tooltip says (`differentServerWhy`). */
 export const DIFFERENT_SERVER_ROW = "Another server answers at this address";
-export const DIFFERENT_SERVER_WHY =
-  "A scan, test or check met a different server at this address than the one this source used to talk to. Polling continues. See System events.";
+/** The tooltip of that line: polling goes on only for an enabled source, so a disabled one is not told that it does. */
+export const differentServerWhy = (enabled: boolean): string =>
+  `A scan, test or check met a different server at this address than the one this source used to talk to.${enabled ? " Polling continues." : ""} See System events.`;
 
 const num = (n: number) => n.toLocaleString("en-US");
 

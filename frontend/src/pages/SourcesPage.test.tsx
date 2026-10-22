@@ -1648,6 +1648,7 @@ describe("SourcesPage, moving a source to the address where its device turned up
   describe("a different server answers at the address (identity_different)", () => {
     const SAYS = "Another server answers at this address";
     const WHY = "A scan, test or check met a different server at this address than the one this source used to talk to. Polling continues. See System events.";
+    const WHY_DISABLED = "A scan, test or check met a different server at this address than the one this source used to talk to. See System events.";
     const up = { ...down, status: "online", offline_since: null, last_error: null, move_candidate: null };
     const row = () => document.querySelector("tr[data-source=\"2\"]") as HTMLElement;
 
@@ -1657,6 +1658,16 @@ describe("SourcesPage, moving a source to the address where its device turned up
       expect(line).toHaveClass("cell-different", "warning");
       expect(line).toHaveAttribute("title", WHY);
       expect(line.closest("td")).toContainElement(screen.getByText("online", { selector: ".chip" }));
+    });
+
+    it("a disabled source's cue does not claim that polling continues (nothing polls it)", async () => {
+      await show([{ ...up, enabled: false, status: "unknown", identity_different: true }]);
+      const line = within(row()).getByText(SAYS);
+      expect(line).toHaveAttribute("title", WHY_DISABLED);
+      expect(line.getAttribute("title")).not.toMatch(/polling/i);
+      cleanup();
+      await show([{ ...up, identity_different: true }]); // enabled: the sentence stays
+      expect(within(row()).getByText(SAYS)).toHaveAttribute("title", WHY);
     });
 
     it("is shown for an offline source and for one that is not polled, and the row menu is the one it was", async () => {

@@ -1549,7 +1549,7 @@ describe("what the card and the panel say about a move offer, two candidates and
   const identity = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: false };
   const SEEN = "Seen in scan #8, 2 min ago";
   const SENTENCE = "This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets), which has not answered since 18 Oct 07:52";
-  const LINE = "Looks like OPC UA server (12 mappings)";
+  const LINE = "Was at 172.20.0.3:4840 (12 mappings)";
 
   it("moveOfferFor: the offer of a source, and nothing for two candidates, a null or an absent candidate", () => {
     expect(moveOfferFor(source(1, { move_candidate: offer }))).toBe(offer);
@@ -1569,14 +1569,34 @@ describe("what the card and the panel say about a move offer, two candidates and
     expect(DIFFERENT_SERVER).toBe("A different server answers at this address");
   });
 
-  it("looksLikeLine leads with the identifying part: the old source's title without the address its name ends with, then the mappings; the ellipsis cuts after it", () => {
-    expect(looksLikeLine(offer)).toBe(LINE);
-    expect(looksLikeLine({ ...offer, mappings: 1 })).toBe("Looks like OPC UA server (1 mapping)");
-    expect(looksLikeLine({ ...offer, mappings: 1200 })).toBe("Looks like OPC UA server (1,200 mappings)");
-    // a name somebody typed, or an address that is not the source's own, stays whole (the helper of the card's title)
-    expect(looksLikeLine({ ...offer, from_name: "Meter room 2" })).toBe("Looks like Meter room 2 (12 mappings)");
-    expect(looksLikeLine({ ...offer, from_name: "OPC UA server at 10.9.9.9:4840" })).toBe("Looks like OPC UA server at 10.9.9.9:4840 (12 mappings)");
+  it("looksLikeLine: an old source with a name that tells it apart leads with that title, then the mappings; the ellipsis cuts after it", () => {
+    const named = { ...offer, from_name: "Meter room 2" };
+    expect(looksLikeLine(named)).toBe("Looks like Meter room 2 (12 mappings)");
+    expect(looksLikeLine({ ...named, mappings: 1 })).toBe("Looks like Meter room 2 (1 mapping)");
+    expect(looksLikeLine({ ...named, mappings: 1200 })).toBe("Looks like Meter room 2 (1,200 mappings)");
+    // the card's own title is a different text: nothing changes
+    expect(looksLikeLine(named, "OPC UA server")).toBe("Looks like Meter room 2 (12 mappings)");
+    // a name with a model in it is not a default name
+    expect(looksLikeLine({ ...offer, from_name: "Modbus Schneider PM5560 at 10.0.0.5:502", from_endpoint: "" })).toBe("Looks like Modbus Schneider PM5560 at 10.0.0.5:502 (12 mappings)");
+  });
+
+  it("looksLikeLine: when the old title is the card's own title, or only the generic type label of a scan's default name, it says where the old source was (host:port of its endpoint)", () => {
+    expect(looksLikeLine(offer)).toBe(LINE); // OPC UA server at 172.20.0.3:4840 -> the title OPC UA server says nothing
+    expect(looksLikeLine(offer, "OPC UA server")).toBe(LINE);
+    expect(looksLikeLine({ ...offer, mappings: 1 })).toBe("Was at 172.20.0.3:4840 (1 mapping)");
+    expect(looksLikeLine({ ...offer, mappings: 1200 })).toBe("Was at 172.20.0.3:4840 (1,200 mappings)");
+    // the other default names of the scans, in any case
+    expect(looksLikeLine({ ...offer, from_name: "DCDash simulator at simulator:9000", from_endpoint: "http://simulator:9000/" })).toBe("Was at simulator:9000 (12 mappings)");
+    expect(looksLikeLine({ ...offer, from_name: "Modbus device at 10.0.0.5:502", from_endpoint: "tcp://10.0.0.5:502" })).toBe("Was at 10.0.0.5:502 (12 mappings)");
+    expect(looksLikeLine({ ...offer, from_name: "opc ua server" })).toBe("Was at 172.20.0.3:4840 (12 mappings)");
+    // a default name whose address the title helper could not strip (a default port the URL parser drops, an IPv6 host without brackets in the name) is still generic
+    expect(looksLikeLine({ ...offer, from_name: "DCDash simulator at simulator:80", from_endpoint: "http://simulator:80/" })).toBe("Was at simulator:80 (12 mappings)");
+    expect(looksLikeLine({ ...offer, from_name: "OPC UA server at fe80::1:4840", from_endpoint: "opc.tcp://[fe80::1]:4840/x" })).toBe("Was at [fe80::1]:4840 (12 mappings)"); // an IPv6 host stays in brackets
+    // the same text as the card's own title identifies nothing either, a typed name too
+    expect(looksLikeLine({ ...offer, from_name: "Meter room 2" }, "Meter room 2")).toBe("Was at 172.20.0.3:4840 (12 mappings)");
+    // no endpoint to say: the old title leads, as before
     expect(looksLikeLine({ ...offer, from_endpoint: "" })).toBe("Looks like OPC UA server at 172.20.0.3:4840 (12 mappings)");
+    expect(looksLikeLine({ ...offer, from_name: "Meter room 2", from_endpoint: "" }, "Meter room 2")).toBe("Looks like Meter room 2 (12 mappings)");
   });
 
   it("looksLikeSentence is the whole sentence: the full name, the mappings in words, and since when it has not answered (the time the page formats from from_since)", () => {
@@ -1598,12 +1618,18 @@ describe("what the card and the panel say about a move offer, two candidates and
     expect(looksLikeSentence({ ...offer, from_name: "Meter room 2", from_endpoint: "" })).toBe("This looks like Meter room 2 (12 mappings on 3 assets)");
   });
 
-  it("seenCard, an offer: the short line, and the tooltip carries the whole sentence and then the seen line", () => {
+  it("seenCard, an offer: the short line (it hands the card's own title over), and the tooltip carries the whole sentence and then the seen line", () => {
     expect(seenCard(source(1, { move_candidate: offer }), SEEN, SENTENCE)).toEqual({ line: LINE, title: `${SENTENCE}. ${SEEN}` });
     // without the page's sentence (a caller that has no site clock) the card builds one without the time
     expect(seenCard(source(1, { move_candidate: offer }), SEEN)).toEqual({
       line: LINE, title: `This looks like OPC UA server at 172.20.0.3:4840 (12 mappings on 3 assets). ${SEEN}`,
     });
+  });
+
+  it("seenCard, an offer: an old source that is named differently from the card says Looks like <its title>; the same title says where it was", () => {
+    const named = { ...offer, from_name: "Meter room 2" };
+    expect(seenCard(source(1, { name: "OPC UA server at 172.20.0.5:4840", config: { endpoint: "opc.tcp://172.20.0.5:4840/dcdash/" }, move_candidate: named }), SEEN, SENTENCE).line).toBe("Looks like Meter room 2 (12 mappings)");
+    expect(seenCard(source(1, { name: "Meter room 2", move_candidate: named }), SEEN, SENTENCE).line).toBe("Was at 172.20.0.3:4840 (12 mappings)");
   });
 
   it("seenCard, two candidates: the sentence, no button's worth of anything else", () => {

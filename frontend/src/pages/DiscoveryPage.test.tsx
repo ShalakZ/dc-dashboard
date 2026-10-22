@@ -4951,7 +4951,7 @@ describe("DiscoveryPage the move offer, two candidates and a different server (w
   };
   // the time is the offer's from_since in the site's zone (UTC in these tests); the name holds the address, so it is not said twice
   const SENTENCE = `This looks like ${OLD} (12 mappings on 3 assets), which has not answered since 18 Oct 04:52`;
-  const LINE = "Looks like OPC UA server (12 mappings)";
+  const LINE = "Was at 172.20.0.3:4840 (12 mappings)";
   const BUTTON = `Move ${OLD} to ${NEW}...`;
   const identity = { application_uri: null, application_name: null, product_uri: null, thumbprint: null, instance: null, usable: true, different: false };
   const fresh = { last_scan: { scan_id: 8, at: minutesAgo(2) }, not_seen: null };
@@ -4982,7 +4982,7 @@ describe("DiscoveryPage the move offer, two candidates and a different server (w
   const cardMove = () => within(node("src:3")).queryByRole("button", { name: BUTTON });
 
   describe("the card", () => {
-    it("says Looks like <the old source's title> (12 mappings) on its last line, the whole sentence in the title, and has a Move... button beside Details (one 20px row, six lines)", async () => {
+    it("says Was at <the old address> (12 mappings) on its last line (its title says nothing: the same default name), the whole sentence in the title, and has a Move... button beside Details (one 20px row, six lines)", async () => {
       show("admin", [oldSource(), newSource()]);
       await screen.findByText(NEW);
       const line = within(node("src:3")).getByText(LINE);
