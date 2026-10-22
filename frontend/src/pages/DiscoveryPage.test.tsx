@@ -6,7 +6,7 @@ import { AddConnectionLine } from "../components/graph/nodes";
 import { resetUndoForTests, type MappedInfo } from "../hooks/useMappingActions";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
-import { useScans } from "../api/queries";
+import { useScans, useSources } from "../api/queries";
 import { renderWithProviders } from "../test/render";
 import { spyToasts } from "../test/toasts";
 import { accountKnown, SignedIn } from "../test/signedIn";
@@ -4872,22 +4872,20 @@ describe("DiscoveryPage not seen (w33)", () => {
       expect(overflowButton()).toHaveFocus();
     });
 
-    it("refreshes the graph, the sources and the scans after the answer, and after a refusal too", async () => {
-      const ScansProbe = () => { useScans(); return null; };
-      const scansReads = (calls: { method: string; path: string }[]) => calls.filter((c) => c.method === "GET" && c.path === "/api/scans").length;
+    it("refreshes the graph, the sources and the scans after the answer, and after a refusal too (a probe beside the page keeps each of the last two queries alive)", async () => {
+      const Probes = () => { useScans(); useSources(); return null; };
+      const reads = (calls: { method: string; path: string }[], path: string) => calls.filter((c) => c.method === "GET" && c.path === path).length;
       const refreshedAfter = async (extra: Record<string, unknown>) => {
         const { calls } = serverWith("admin", mix(), {}, { "GET /api/scans": { body: [] }, "GET /api/sources": { body: [] }, ...extra });
         const toasts = spyToasts();
-        const view = renderWithProviders(<><main id="main" tabIndex={-1} /><DiscoveryPage /><SignedIn /><ScansProbe /></>, { route: "/discovery", path: "/discovery", toasts: toasts.api });
+        const view = renderWithProviders(<><main id="main" tabIndex={-1} /><DiscoveryPage /><SignedIn /><Probes /></>, { route: "/discovery", path: "/discovery", toasts: toasts.api });
         await screen.findByText("Old A");
-        await waitFor(() => expect(scansReads(calls)).toBe(1));
-        const graphReads = () => calls.filter((c) => c.method === "GET" && c.path === "/api/discovery/graph").length;
-        const [graphBefore, sourcesBefore] = [graphReads(), calls.filter((c) => c.path === "/api/sources").length];
+        await waitFor(() => expect([reads(calls, "/api/scans"), reads(calls, "/api/sources")]).toEqual([1, 1]));
+        const graphBefore = reads(calls, "/api/discovery/graph");
         await pressRemoveNotSeen(2);
         await userEvent.click(within(await confirmDialog("Remove 2 sources the latest scan did not find?")).getByRole("button", { name: "Remove" }));
-        await waitFor(() => expect(scansReads(calls)).toBe(2));
-        expect(graphReads()).toBeGreaterThan(graphBefore);
-        expect(calls.filter((c) => c.path === "/api/sources").length).toBeGreaterThanOrEqual(sourcesBefore);
+        await waitFor(() => expect([reads(calls, "/api/scans"), reads(calls, "/api/sources")]).toEqual([2, 2])); // each read once more, not twice
+        expect(reads(calls, "/api/discovery/graph")).toBeGreaterThan(graphBefore);
         view.unmount();
       };
       await refreshedAfter({});
