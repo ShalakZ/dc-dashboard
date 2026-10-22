@@ -44,6 +44,7 @@ import "./styles/displays.css";
 import "./styles/storage-events.css";
 import "./styles/tags-events.css";
 import "./styles/audit-outcome.css";
+import "./styles/pages-events.css";
 import { App } from "./App";
 import { AppearanceProvider } from "./auth/AppearanceProvider";
 import { AuthProvider } from "./auth/AuthProvider";
