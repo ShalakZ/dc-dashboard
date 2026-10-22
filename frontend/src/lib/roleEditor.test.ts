@@ -207,6 +207,12 @@ describe("summarizeRole", () => {
     }
   });
 
+  it("counts the System events page (Events) with Diagnostics: both need diagnostics.view and sources.view, and neither opens with diagnostics.view alone (w32)", () => {
+    expect(summarizeRole(list, new Set(["diagnostics.view", "sources.view"])).pages).toEqual(["Sources", "Events", "Diagnostics"]);
+    expect(summarizeRole(list, new Set(["diagnostics.view"])).pages).toEqual([]);
+    expect(summarizeRole(list, new Set(["sources.view"])).pages).toEqual(["Sources"]);
+  });
+
   it("lists the ticked Change entries and the ticked sensitive ones by their labels, in catalogue order", () => {
     const operator = summarizeRole(list, new Set(BUILTIN_PERMISSIONS.operator));
     expect(operator.changes).toEqual(["Change dashboards", "Test source connections", "Run the connection check"]);

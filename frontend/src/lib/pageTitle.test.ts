@@ -14,6 +14,8 @@ describe("pageTitle", () => {
     ["/storage", "Storage"],
     ["/displays", "Displays"],
     ["/audit", "Audit log"],
+    ["/events", "System events"],
+    ["/events/42", "System events"], // the drawer of one event is the same page
     ["/diagnostics", "Diagnostics"],
     ["/password", "Change password"],
   ])("names %s %s, in front of the application's name", (path, page) => {

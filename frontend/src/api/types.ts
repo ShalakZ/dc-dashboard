@@ -94,6 +94,13 @@ export interface Source {
   polls?: boolean;
   /** The list endpoint only (w31): how far the history backfill got with this source. Left out by older fixtures; a missing or null value shows no history line. */
   history?: HistorySummary | null;
+  /**
+   * The list endpoint only (w32): while `status` is `offline`, the ISO time it began to be out of reach (the open incident's start, else the last answer); null
+   * when the source is not offline or there is nothing to date it by. Left out by older fixtures: a missing value counts as null.
+   */
+  offline_since?: string | null;
+  /** The list endpoint only (w32): how many readings of this source failed since it went offline (the open incident's count); null without an open incident. */
+  failed_reads?: number | null;
 }
 /**
  * The `history` object of a source list row (GET /api/sources): the part of the `history_status` row the Sources page shows. `supports_history` is the
@@ -291,10 +298,75 @@ export interface AuditEntry {
   detail: Record<string, unknown>; ts: string;
   /** Optional only so test fixtures stay small: undefined = no lookup was made (not "everything is deleted"). */
   refs?: AuditRefs;
+  /**
+   * w32: how the check or test this entry started ended. Only entries of `source.tested`, `source.checked` and `source.test_all` carry one; every other entry
+   * has none (null or missing, and older fixtures leave it out).
+   */
+  outcome?: AuditOutcome | null;
+}
+/**
+ * `state`: `passed`, `failed`, `running` (the job has not ended) or `gone` (neither the job nor its journal row is kept any more). `text` is a sentence for a person
+ * ("The connection check passed (7 steps)."; for several jobs "3 passed, 1 failed"). `event_id`: the System events row that holds the end, or null. `counts`:
+ * only for a started test of several sources.
+ */
+export type AuditOutcomeState = "passed" | "failed" | "running" | "gone";
+export interface AuditOutcome {
+  state: AuditOutcomeState; text: string; event_id: number | null;
+  counts: { passed: number; failed: number; running: number; gone: number } | null;
 }
 export interface AuditList { total: number; offset: number; limit: number; items: AuditEntry[] }
 export interface AuditOptions { actions: string[]; users: { id: number; name: string }[]; unattributed: boolean }
 export interface AuditPosition { offset: number; total: number; on_day: boolean }
+
+// ---- w32: system events (the journal behind Diagnostics: GET /api/events, needs diagnostics.view) ----
+
+export type EventLevel = "info" | "warning" | "error";
+/**
+ * A source's trouble counted as ONE row (`source.offline`, `points.bad`): only rows that carry `detail.state` have one. `first_at` is when the trouble began (the
+ * stored `since`, else the row's own time), `last_at` the newest failure; `duration_seconds` is stored once closed and measured at read time while open.
+ * `closed_by`: `recovered` (the source answered again) or `polling_stopped` (the source was disabled, deleted or lost its last mapping); null while open.
+ */
+export interface Incident {
+  state: "open" | "closed"; count: number; first_at: string; last_at: string; closed_at: string | null;
+  duration_seconds: number; closed_by: "recovered" | "polling_stopped" | null;
+}
+/**
+ * One row of the system journal. `message` and `detail` are already scrubbed of credentials by the server. `source_name` is null when the name is not known
+ * (an event of no source, or one of a source that is gone: `source_deleted` says the latter; the options call it "deleted source #3"). Rows written before
+ * w32 have no `incident`. Recovery rows keep these detail keys: `source.online` {incident_id, offline_seconds, failed_reads, interval} and `points.recovered`
+ * {incident_id, bad_seconds, polls_with_bad_readings, interval}; the older rows have `source.online` {offline_seconds|null, failures, interval} and
+ * `points.recovered` {bad_seconds, first, total}.
+ */
+export interface SystemEvent {
+  id: number; ts: string; level: EventLevel; component: string; source_id: number | null; source_name: string | null; source_deleted: boolean;
+  kind: string; code: string | null; message: string; detail: Record<string, unknown>; incident: Incident | null;
+}
+/**
+ * GET /api/events, newest first. `next` is the cursor for the page after this one (`before=<next>`), null on the last page. `total` is asked for with `include_total=1`
+ * (null without it) and is capped at 10,000: `total_capped` says there are more.
+ */
+export interface EventPage { items: SystemEvent[]; next: string | null; total: number | null; total_capped: boolean }
+/** Who started the job this event ended (an audit entry), for `source.tested`, `source.checked` and `source.test_all`; `username` is null for a deleted account. */
+export interface EventStartedBy { audit_id: number; username: string | null; ts: string }
+/** GET /api/events/{id}. `started_by` is always there: null without `audit.view`, for other kinds of event, or when no audit entry started it. */
+export interface EventDetail extends SystemEvent { started_by: EventStartedBy | null }
+/** GET /api/events/options: the kinds that occur in the journal and the sources that have events (a gone source is named "deleted source #3"). */
+export interface EventOptions { kinds: string[]; sources: { id: number; name: string }[] }
+/** GET /api/events/summary: the tiles. `kept` is how many rows the journal holds, `oldest` the time of the oldest. */
+export interface EventSummary {
+  open_incidents: number; warnings_24h: number; errors_24h: number; kept: number; oldest: string | null; retention_days: number; max_rows: number;
+}
+/** The filters of the System events page, as the list, the CSV and the options take them: "" and [] mean "not set"; `source` is a source id as text; `from` and `to` are site days. */
+export interface EventFilters { source: string; levels: EventLevel[]; kinds: string[]; from: string; to: string; open: boolean }
+/** What PUT /api/settings/events takes (and GET returns as its first two fields). */
+export interface EventsRetention { retention_days: number; max_rows: number }
+/** GET and PUT /api/settings/events (storage.view / storage.edit). `bounds` are [min, max]; `kept` and `oldest` as in the summary. */
+export interface EventsSettings extends EventsRetention {
+  factory: EventsRetention;
+  bounds: { retention_days: [number, number]; max_rows: [number, number] };
+  kept: number;
+  oldest: string | null;
+}
 
 // ---- Phase 3: site info, tariffs, billing, dashboards ----
 

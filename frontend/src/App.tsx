@@ -16,6 +16,7 @@ import { AuditPage } from "./pages/AuditPage";
 import { BillingPage } from "./pages/BillingPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { DisplaysPage } from "./pages/DisplaysPage";
+import { EventsPage } from "./pages/EventsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { PasswordPage } from "./pages/PasswordPage";
@@ -76,6 +77,8 @@ export function App() {
         <Route path="/storage" element={<RequirePermission need={PAGE_NEED.storage}><StoragePage /></RequirePermission>} />
         <Route path="/displays" element={<RequirePermission need={PAGE_NEED.displays}><DisplaysPage /></RequirePermission>} />
         <Route path="/audit/:id?" element={<RequirePermission need={PAGE_NEED.audit}><AuditPage /></RequirePermission>} />
+        {/* One route for the list and for an event open in its drawer (like /audit/:id?), so opening the drawer does not mount the page again. */}
+        <Route path="/events/:id?" element={<RequirePermission need={PAGE_NEED.events}><EventsPage /></RequirePermission>} />
         <Route path="/diagnostics" element={<RequirePermission need={PAGE_NEED.diagnostics}><DiagnosticsPage /></RequirePermission>} />
         <Route path="/password" element={<PasswordPage />} />
         <Route path="*" element={<NotFoundPage />} />

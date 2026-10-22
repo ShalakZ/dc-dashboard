@@ -25,6 +25,7 @@ export const PAGE_NEED = {
   tariffs: ["tariffs.view", "assets.view"], // read-only without tariffs.edit (W9b); the built-in Operator opens it
   storage: "storage.view",
   audit: "audit.view",
+  events: ["diagnostics.view", "sources.view"], // w32: the system's own journal; each event names its source, so the sources list is read too
   diagnostics: ["diagnostics.view", "sources.view"],
   displays: ["displays.manage", "dashboards.view"], // playlists and display links; the playlist dialog lists dashboards
 } as const satisfies Record<string, Need>;
@@ -63,6 +64,7 @@ export const GROUPS: NavGroup[] = [
       { to: "/storage", label: "Storage", icon: "storage", need: PAGE_NEED.storage },
       { to: "/displays", label: "Displays", icon: "screen", need: PAGE_NEED.displays },
       { to: "/audit", label: "Audit", icon: "audit", need: PAGE_NEED.audit },
+      { to: "/events", label: "Events", icon: "events", need: PAGE_NEED.events }, // like Audit: the NavLink is current on /events/7 (one event in the drawer) too
       { to: "/diagnostics", label: "Diagnostics", icon: "diagnostics", need: PAGE_NEED.diagnostics },
     ],
   },
