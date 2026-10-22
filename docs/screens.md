@@ -74,7 +74,8 @@ lacks says "No access".
   `offline since 18 Oct 07:52`. When a scan found the same server again at a new address, the notice adds `A scan found it at
   172.20.0.5:4840:` and a **Move to new address...** button, and that source's row menu starts with the same item; both need
   `sources.edit` (without it the sentence stays and there is no button), and with several offline sources the notice only counts how many
-  were found again. Two possible servers give `Two servers could be this one; edit the address by hand` and no button. The dialog, its
+  were found again. Two possible servers give `Two servers could be this one; edit the address by hand` (`Several servers could be
+  this one; ...` for more than two) and no button. The dialog, its
   preview, the Undo and when an offer appears are on [Devices that move or disappear](devices-that-move.md). A row whose scan, Test or
   check met a different server at its address shows `Another server answers at this address` in its Status cell (the tooltip says that
   polling continues and points to System events). **Test** and **Test all**
@@ -102,14 +103,16 @@ lacks says "No access".
   admin remove discovered sources that have nothing mapped, one by one (**Remove from Discovery…** in the source's `⋯` menu) or all at
   once (**Clear unmapped** in the bar's **More Discovery actions** menu). A discovered source that the newest scan of the same range
   did not find is drawn quieter (a lighter ground and a lighter dashed edge) and its last line reads `Not seen in scan #7 (last seen in
-  #5, 4 days ago)`; while any source is marked, **More Discovery actions** also holds **Turn on Not seen lately** and **Remove not seen
-  (N)...**, which uses the same dialog as Clear unmapped and never removes a mapped or hand-added source (a marked source with
-  something mapped and offline reads `Mapped: move it or delete it on Sources`; while **Turn on Not seen lately** is on, the bar's
-  summary strip says `Only not seen lately (2)`, and that filter, unlike **Remove not seen**, needs only `discovery.view`). A new source
-  that looks like an old one that stopped answering reads `Looks like <its short name> (12 mappings)` and has **Move...** beside
-  **Details** (needs `sources.edit`); `Two servers could be this one; edit
-  the address by hand` and `A different server answers at this address` take the same line, and the Details panel adds the server's
-  name (`Server: urn:dcdash:simulator:dev`) and its certificate (`certificate 3A:5F:...:91`). What each of these means is on
+  #5, 4 days ago)`; while any source is marked, **More Discovery actions** also holds **Turn on Not seen lately** (for everyone who can
+  open Discovery) and **Remove not seen (N)...** (`discovery.edit`; greyed out when every marked source has something mapped), which
+  uses the same kind of dialog as Clear unmapped and never removes a mapped or hand-added source (a marked source with
+  something mapped and offline reads `Mapped: move it or delete it on Sources`; while **Turn on Not seen lately** is on, the bar's row
+  of counts gains the chip `Only not seen lately (2)`, which shortens to `not seen (2)` and then to an icon and the number on a narrower
+  bar). A new source that looks like an old one that stopped answering reads `Looks like <its short name> (12 mappings)` and has
+  **Move...** beside **Details** (needs `sources.edit`); `Two servers could be this one; edit
+  the address by hand` (`Several servers ...` for more than two) and `A different server answers at this address` take the same line,
+  and the Details panel adds the server's name (`Server: urn:dcdash:simulator:dev`, or `Simulator instance dev` for the HTTP simulator)
+  and its certificate (`certificate 3A:5F:...:91`). What each of these means is on
   [Devices that move or disappear](devices-that-move.md).
   Dragging a node takes its open children along (hold Alt, Option on a Mac, to move it alone). One bar above the canvas holds the page's
   controls: small counts first (sources, points, mapped, and one for sources that need credentials), then the **View controls**
@@ -117,7 +120,7 @@ lacks says "No access".
   only** switch that hides what is already mapped, and **Tidy layout**, which puts every node back in its default column for everyone),
   the **Canvas controls** (**Find**, or Ctrl+K on the canvas, jumps to any source, group, point or asset, and **Snap to grid** lines nodes
   up on an 8 px grid with guides while you drag) and the **Page controls** (**Refresh**, the keyboard button that lists the keys, also
-  opened by `?` on the canvas, and **More Discovery actions**, which holds **Clear unmapped** for an admin, and the two Not seen items while a source is marked).
+  opened by `?` on the canvas, and **More Discovery actions**, which holds **Clear unmapped** for an admin, and, while a source is marked, **Turn on Not seen lately** and (for an admin) **Remove not seen**).
   On a narrower window the
   controls lose their words one at a time while the counts keep theirs for as long as they fit, and on a still narrower one the less used
   controls move into the More menu. An open group of more than 50 points
@@ -177,7 +180,8 @@ lacks says "No access".
   last 24 hours has **Undo this tag list** in its drawer for a person with `discovery.accept`; the server refuses it, in words, when
   anything the list made has changed since. A `source.moved` entry ("Moved OPC UA server at 172.20.0.5:4840 from 172.20.0.3:4840 to
   172.20.0.5:4840 (12 mappings kept, the duplicate removed)") of the last 24 hours has **Undo this move** for a person with
-  `sources.edit`; the server refuses it, in words, when the source or its address has changed since
+  `sources.edit`; the server refuses it, in words, when the source or its address has changed since, and the Undo's own entry reads
+  `Undid the move of ...: back at 172.20.0.3:4840 (668 readings taken at the new address stay)`
   ([Devices that move or disappear](devices-that-move.md#undo)). Excel cuts a CSV cell at 32,767 characters, and a `tags.mapped` row can be longer. What is
   and is not recorded is listed under
   [Discovery](sources-and-discovery.md#discovery). The entry of a started connection check, test or Test all (`source.checked`,

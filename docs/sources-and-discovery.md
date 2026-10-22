@@ -192,7 +192,8 @@ data-retrieval requests the connectors already use, nothing else.
    **Page controls.** **Refresh** (a button with the circular arrow) reads the graph again; it was in the page header before. The keyboard
    button, named `Keyboard shortcuts and controls`, opens the list of keys (below). **More Discovery actions** (three dots) holds **Clear
    unmapped (N)** (see **Removing leftovers**) for a role that has `discovery.edit` (greyed out, `Nothing to clear`, when no source
-   can go), and the Not seen items ([Devices that move or disappear](devices-that-move.md#not-seen-and-remove-not-seen)).
+   can go), and, while a source is marked not seen, **Turn on Not seen lately** (everyone who can open Discovery) and **Remove not seen
+   (N)...** (`discovery.edit`; [Devices that move or disappear](devices-that-move.md#not-seen-and-remove-not-seen)).
 
    **A narrower window.** The bar keeps to one row. When the window is narrower the controls lose their words one at a time and keep
    their icons (**Snap to grid** first, then **Find**, **Tidy layout**, **Unmapped only**, and last **Collapse all** and **Expand all**), while the
@@ -534,7 +535,8 @@ data-retrieval requests the connectors already use, nothing else.
    subject carries `origin`, and, for a save that needed confirmation, `confirmed_loss`; remembering a site
    default is `storage.default_set`), assets (create, edit, delete, and moving in the tree: one `asset.moved` entry per moved
    asset, with its old and new parent, all sharing one request id), mappings,
-   sources (create, edit, delete, test, test all, browse), removing unmapped discovered sources (`source.deleted`, `unmapped_only`), tariffs, dashboards, asset kinds (a delete that moves assets records how many and
+   sources (create, edit, delete, test, test all, browse; an edit that changes the host or port of an OPC UA or simulator source that remembers its server also
+   records `identity_cleared`; a move and its Undo are `source.moved` and `source.move_undone`), removing unmapped discovered sources (`source.deleted`, `unmapped_only`), tariffs, dashboards, asset kinds (a delete that moves assets records how many and
    where to; adding the starter kinds records which), scopes, scans (start and
    finish), accepted discoveries, a tag list and its Undo (`tags.mapped`, `tags.unmapped`), a file import (`readings.imported`: counts,
    never a value), import profiles (`import_profile.saved`, `.deleted`) and a requested fill (`history.fill_requested`). Never recorded: passwords and password hashes, source secrets and
