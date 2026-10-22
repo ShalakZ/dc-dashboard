@@ -100,6 +100,7 @@ class Source(Base):
     last_seen: Mapped[datetime | None] = mapped_column(TZ)
     last_error: Mapped[str | None]
     origin: Mapped[str] = mapped_column(default="manual", server_default="manual")
+    identity: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     @property
     def has_secret(self) -> bool:
