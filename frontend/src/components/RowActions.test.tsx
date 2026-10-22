@@ -157,6 +157,60 @@ describe("RowActions: placement", () => {
   });
 });
 
+describe("RowActions: keeping clear of the toast stack", () => {
+  // jsdom's window is 1024 x 768. The stack stands 16px off the bottom; one toast makes it 48px tall, so its top is at 704.
+  const TRIGGER = (top: number) => ({ top, bottom: top + 28, left: 972, right: 1000, width: 28, height: 28 });
+  const PANEL = { top: 0, bottom: 280, left: 0, right: 180, width: 180, height: 280 }; // the eight-item Sources menu is about this tall
+  const rects = (trigger: object, stackTop = 704) =>
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const box = this.classList.contains("toast-stack")
+        ? { top: stackTop, bottom: 752, left: 664, right: 1008, width: 344, height: 752 - stackTop }
+        : this.getAttribute("role") === "menu" ? PANEL : trigger;
+      return { x: 0, y: 0, toJSON: () => ({}), ...box } as DOMRect;
+    });
+  const stack = (withToast: boolean) => <div className="toast-stack">{withToast && <div className="toast">Source added</div>}</div>;
+  const open = async (extra?: ReactNode) => {
+    render(page([{ name: "Boiler", items: ITEMS }], extra));
+    await userEvent.click(screen.getByRole("button", { name: "Actions for Boiler" }));
+  };
+
+  it("with a toast showing, the menu of a row near the bottom opens upward instead of reaching into the toast", async () => {
+    rects(TRIGGER(440));
+    await open(stack(true));
+    expect(menu()).toHaveStyle({ top: "188px", left: "788px" }); // its bottom edge on the trigger's bottom: 468 - 280. Down it would end at 720, inside the toast (704)
+  });
+
+  it("with no toast stack content nothing changes: the same row opens downward", async () => {
+    rects(TRIGGER(440));
+    await open(stack(false)); // the stack is always in the page; with no toast it is empty
+    expect(menu()).toHaveStyle({ top: "440px", left: "788px" });
+  });
+
+  it("with no stack in the page at all nothing changes either", async () => {
+    rects(TRIGGER(440));
+    await open();
+    expect(menu()).toHaveStyle({ top: "440px", left: "788px" });
+  });
+
+  it("a row high in the window stays downward, its maxHeight stops above the toast", async () => {
+    rects(TRIGGER(100));
+    await open(stack(true));
+    expect(menu()).toHaveStyle({ top: "100px", "max-height": `${768 - 100 - 8 - 72}px` }); // 72 = 768 - 704 + 8
+  });
+
+  it("is measured when the menu opens: a stack standing higher (a drawer's footer lifts it) reserves more", async () => {
+    rects(TRIGGER(400), 704);
+    const first = render(page([{ name: "Boiler", items: ITEMS }], stack(true)));
+    await userEvent.click(screen.getByRole("button", { name: "Actions for Boiler" }));
+    expect(menu()).toHaveStyle({ top: "400px" }); // ends at 680: above the toast
+    first.unmount();
+    vi.restoreAllMocks();
+    rects(TRIGGER(400), 600);
+    await open(stack(true));
+    expect(menu()).toHaveStyle({ top: "148px" }); // ends at 680 down: inside a stack that starts at 600; up: 428 - 280
+  });
+});
+
 describe("RowActions: the keyboard", () => {
   it("Enter opens it and focuses the first enabled item; Space does too", async () => {
     const { trigger } = mount();
