@@ -3,7 +3,9 @@ database key, nothing written) are in test_api_shapes.py."""
 from __future__ import annotations
 
 import ast
+import dataclasses
 import inspect
+from types import SimpleNamespace
 
 import pytest
 
@@ -133,7 +135,7 @@ def test_part1_part2_gives_parent_pdu_meter_and_parts12_joins_with_one_space():
 
 
 def test_the_csv_cells_are_all_quoted_with_quotes_doubled_and_read_back_exactly():
-    odd = ['ns=3;s=a,"b";c', "plain", "tab\there"]
+    odd = ['ns=3;s=a,"b";c', "plain", "it's a \\ back-slash = and a | bar"]  # a tab cannot be read back by the planner: see the address tests
     members = [Member(1 + i, address, f"Z{i + 1}_P", "kW") for i, address in enumerate(odd)]
     result = run(members, [decide("z#_p", interval_seconds=30)], ['Hall "East", row'])
     assert not result.blocking
@@ -146,26 +148,125 @@ def test_the_csv_cells_are_all_quoted_with_quotes_doubled_and_read_back_exactly(
 
 def test_the_scale_is_written_exactly_and_empty_when_it_is_one():
     wh = plain([f"M{n}_E" for n in (1, 2, 3)], "Wh")
-    suggested = run(wh, [decide("m#_e", "energy_kwh")])
+    suggested = run(wh, [decide("m#_e", "energy_kwh")])  # the unit Wh gives its scale
     assert parse_tag_list(suggested.csv.encode()).rows[0].values["scale"] == "0.001" and suggested.samples[0]["scale"] == 0.001
-    exact = run(wh, [decide("m#_e", "energy_kwh", scale=0.123456789)])  # six significant digits would be a wrong bill
+    bare = plain([f"M{n}_E" for n in (1, 2, 3)])  # no unit hint anywhere: the decision's scale is the only word about it
+    exact = run(bare, [decide("m#_e", "energy_kwh", scale=0.123456789)])  # six significant digits would be a wrong bill
     cell = parse_tag_list(exact.csv.encode()).rows[0].values["scale"]
     assert float(cell) == 0.123456789
     for scale in (1e-05, 1e12, 1234567.891):
-        cell = parse_tag_list(run(wh, [decide("m#_e", "energy_kwh", scale=scale)]).csv.encode()).rows[0].values["scale"]
+        cell = parse_tag_list(run(bare, [decide("m#_e", "energy_kwh", scale=scale)]).csv.encode()).rows[0].values["scale"]
         assert float(cell) == scale
-    one = run(wh, [decide("m#_e", "energy_kwh", scale=1)])
+    one = run(bare, [decide("m#_e", "energy_kwh", scale=1)])
     assert parse_tag_list(one.csv.encode()).rows[0].values["scale"] == "" and one.samples[0]["scale"] == 1.0
-    other = run(wh, [decide("m#_e", "voltage_v")])  # not the suggested metric: the suggested scale does not follow it
-    assert parse_tag_list(other.csv.encode()).rows[0].values["scale"] == ""
+    named = plain([f"M{n}_Wh" for n in (1, 2, 3)])  # no hint, but the last word of the name is a unit the guess knows
+    assert parse_tag_list(run(named, [decide("m#_wh", "energy_kwh")]).csv.encode()).rows[0].values["scale"] == "0.001"
+    assert parse_tag_list(run(named, [decide("m#_wh", "reactive_power_kvar")]).csv.encode()).rows[0].values["scale"] == ""  # not the suggested metric
 
 
 def test_the_unit_column_is_empty_for_a_known_metric_and_the_decisions_or_the_single_hint_for_custom():
     celsius = plain([f"T{n}_Temp" for n in (1, 2, 3)], "degC")
     assert parse_tag_list(run(celsius, [decide("t#_temp", "custom")]).csv.encode()).rows[0].values["unit"] == "degC"  # the single hint
     assert parse_tag_list(run(celsius, [decide("t#_temp", "custom", unit="C")]).csv.encode()).rows[0].values["unit"] == "C"  # the decision wins
-    known = parse_tag_list(run(celsius, [decide("t#_temp", "voltage_v", unit="V")]).csv.encode()).rows[0].values
-    assert known["unit"] == ""  # a known metric carries its unit in the metric
+    volts = plain([f"T{n}_Volt" for n in (1, 2, 3)], "V")
+    known = parse_tag_list(run(volts, [decide("t#_volt", "voltage_v", unit="V")]).csv.encode()).rows[0].values
+    assert known["unit"] == "" and known["scale"] == ""  # a known metric carries its unit in the metric
+
+
+# -- the unit hint of a shape reaches the scale of its lines (C1 of the T2 review: a bill 1,000 times too low or too high) -----------
+
+def units_of(*units: str | None, start: int = 1) -> list[Member]:
+    """One member per unit hint (None: the point names none); the names are M1_E, M2_E ... so they are one shape, `m#_e`."""
+    return [Member(start + i, f"addr-{start + i}", f"M{start + i}_E", unit) for i, unit in enumerate(units)]
+
+
+def scales_written(result) -> list[str]:
+    return [row.values["scale"] for row in parse_tag_list(result.csv.encode()).rows]
+
+
+def test_the_unit_on_every_member_gives_the_scale_of_every_line_and_the_planner_reads_it_back():
+    wh = units_of("Wh", "WH", "wh")  # one unit, three spellings
+    result = run(wh, [decide("m#_e", "energy_kwh")])
+    assert not result.blocking and result.checks == [] and scales_written(result) == ["0.001"] * 3
+    assert [s["scale"] for s in result.samples] == [0.001] * 3  # what is written, not the suggestion
+    _, planned_list = planned(result, wh)
+    assert planned_list.problems == () and [m.scale for m in planned_list.mappings] == [0.001] * 3
+    mwh = units_of("MWh", "MWh", "MWh", "mwh")  # a unit the guess has no rule for, a billing counter all the same
+    result = run(mwh, [decide("m#_e", "energy_kwh")])
+    assert not result.blocking and scales_written(result) == ["1000.0"] * 4 and result.samples[0]["scale"] == 1000.0
+    assert [m.scale for m in planned(result, mwh)[1].mappings] == [1000.0] * 4
+    power = units_of("W", "W")
+    assert scales_written(run(power, [decide("m#_e", "active_power_kw")])) == ["0.001"] * 2
+    assert scales_written(run(units_of("kWh", "KWH", "k Wh"), [decide("m#_e", "energy_kwh")])) == [""] * 3  # scale 1 is written empty
+
+
+def test_a_decision_scale_that_contradicts_the_unit_blocks_and_one_that_agrees_passes():
+    mwh = units_of("MWh", "MWh", "MWh")
+    one = run(mwh, [decide("m#_e", "energy_kwh", scale=1)])  # what a page that sends the guess of a custom metric would say
+    assert one.blocking and one.csv == "" and kinds(one) == [("units", "blocking")]
+    assert only(one, "units").shape == "m#_e" and only(one, "units").text == (
+        'The unit "MWh" of the 3 tags of this shape means a scale of 1,000, but the scale chosen is 1; leave the scale out, '
+        "or decide these tags on the Points page"
+    )
+    thousand = run(mwh, [decide("m#_e", "energy_kwh", scale=1000)])
+    assert not thousand.blocking and scales_written(thousand) == ["1000.0"] * 3 and thousand.samples[0]["scale"] == 1000.0
+    wh = units_of("Wh", "Wh")
+    wrong = run(wh, [decide("m#_e", "energy_kwh", scale=1)])
+    assert only(wrong, "units").text.startswith('The unit "Wh" of the 2 tags of this shape means a scale of 0.001, but the scale chosen is 1;')
+    assert not run(wh, [decide("m#_e", "energy_kwh", scale=0.001)]).blocking
+    assert not run(wh, [decide("m#_e", "energy_kwh", scale=0.001 * (1 + 1e-12))]).blocking  # compared as the planner does, to 1e-9
+
+
+def test_a_unit_the_metric_does_not_know_blocks_unless_the_decision_states_the_scale():
+    gwh = units_of("GWh", "GWh")  # scale_for has no GWh
+    blocked = run(gwh, [decide("m#_e", "energy_kwh")])
+    assert blocked.blocking and kinds(blocked) == [("units", "blocking")]
+    assert only(blocked, "units").text == (
+        'The unit "GWh" of the 2 tags of this shape is not one that energy_kwh knows; map it as custom, or decide them on the Points page'
+    )
+    stated = run(gwh, [decide("m#_e", "energy_kwh", scale=1_000_000)])
+    assert not stated.blocking and scales_written(stated) == ["1000000.0"] * 2 and stated.samples[0]["scale"] == 1_000_000.0
+    for members, metric in ((units_of("kW", "kW", "kW"), "energy_kwh"), (units_of("Wh", "Wh", "Wh"), "voltage_v"), (units_of("degC", "degC"), "voltage_v")):
+        result = run(members, [decide("m#_e", metric)])
+        assert result.blocking and result.csv == "" and kinds(result) == [("units", "blocking")], (members[0].unit_hint, metric)
+        assert f"is not one that {metric} knows" in only(result, "units").text
+    one = run(units_of("kW", "kW"), [decide("m#_e", "energy_kwh")])
+    assert "The unit \"kW\" of the 2 tags" in only(one, "units").text
+
+
+def test_tags_of_one_shape_that_name_a_unit_and_tags_that_name_none_block_in_both_directions():
+    two_of_five = run(units_of("Wh", "Wh", None, None, None), [decide("m#_e", "energy_kwh")])  # the Wh ones would be 1,000 times too high
+    assert two_of_five.blocking and two_of_five.csv == "" and kinds(two_of_five) == [("mixed_units", "blocking")]
+    assert only(two_of_five, "mixed_units").text == (
+        "2 tags of this shape name the unit Wh and 3 name none; map it as custom or decide it on the Points page"
+    )
+    four_of_five = run(units_of("Wh", "Wh", "Wh", "Wh", None), [decide("m#_e", "energy_kwh")])  # the one would be written 0.001 or 1: neither is known
+    assert four_of_five.blocking and only(four_of_five, "mixed_units").text == (
+        "4 tags of this shape name the unit Wh and 1 names none; map it as custom or decide it on the Points page"
+    )
+    both = run(units_of("kWh", "kWh", "kWh", "Wh"), [decide("m#_e", "energy_kwh")])
+    assert only(both, "mixed_units").text == (
+        "This shape has the units kWh and Wh (3 name kWh and 1 names Wh); map it as custom or decide it on the Points page"
+    )
+    three = run(units_of("kWh", "Wh", "MWh", None), [decide("m#_e", "energy_kwh")])
+    assert only(three, "mixed_units").text == (
+        "1 tag of this shape names the unit kWh, 1 names Wh, 1 names MWh and 1 names none; map it as custom or decide it on the Points page"
+    )
+    many = run(units_of("a", "b", "c", "d", "d", None), [decide("m#_e", "energy_kwh")])  # three units are named, the rest are counted
+    assert only(many, "mixed_units").text == (
+        "2 tags of this shape name the unit d, 1 names a, 1 names b, 1 names another unit and 1 names none; "
+        "map it as custom or decide it on the Points page"
+    )
+    assert not run(units_of("Wh", "Wh", None, None, None), [decide("m#_e", "custom", unit="Wh")]).blocking  # as custom it is a plain unit
+
+
+def test_a_shape_with_no_unit_hint_anywhere_is_mapped_as_before():
+    bare = units_of(None, None, None)
+    plain_run = run(bare, [decide("m#_e", "energy_kwh")])
+    assert not plain_run.blocking and plain_run.checks == [] and scales_written(plain_run) == [""] * 3
+    stated = run(bare, [decide("m#_e", "energy_kwh", scale=0.5)])
+    assert not stated.blocking and scales_written(stated) == ["0.5"] * 3 and stated.samples[0]["scale"] == 0.5
+    assert all(s["unit_hint"] is None for s in stated.samples)
 
 
 # -- the checks -------------------------------------------------------------------------------------------------------------------
@@ -288,11 +389,39 @@ def test_renumbered_a_tag_already_mapped_under_its_other_spelling_blocks_but_its
     assert "X01_P" not in fine.csv.replace("ns=3;s=1:Site.X01_P", "")  # neither the mapped tag nor its twin is in the list
 
 
-def test_two_unmapped_halves_of_one_stable_tag_under_a_custom_metric_are_left_to_the_planner():
-    members = [Member(1, "ns=3;s=1:Site.X01_P", "X01_P", "kW"), Member(2, "ns=3;s=Site.X01_P", "X01_P", "kW"),
-               Member(3, "ns=3;s=3:Site.X02_P", "X02_P", "kW")]
-    result = run(members, [decide("x#_p", "custom")])
-    assert result.lines == 3 and not result.blocking  # a custom metric does not collide and nothing here knows the stable key
+def test_renumbered_blocks_a_custom_metric_too_one_tag_must_not_be_mapped_twice():
+    # A source whose "Stable tag addresses" is off: two numbered addresses of one tag, both unmapped, and a custom metric.
+    members = [Member(1, "ns=3;s=20403:Site.PDUA01_PM0_X", "PDUA01_PM0_X", "degC"), Member(2, "ns=3;s=20999:Site.PDUA01_PM0_X", "PDUA01_PM0_X", "degC"),
+               Member(3, "ns=3;s=20404:Site.PDUA02_PM0_X", "PDUA02_PM0_X", "degC")]
+    result = run(members, [decide("pdua#_pm#_x", "custom")])
+    assert result.lines == 3 and result.blocking and result.csv == "" and kinds(result) == [("renumbered", "blocking")]
+    assert only(result, "renumbered").shape == "pdua#_pm#_x" and only(result, "renumbered").text.startswith("1 tag of this shape appears twice")
+    # the planner alone says nothing about this list when the source has no stable key (the identity key): that is why the check is here
+    by_hand = HEADER + "\n" + "".join(f'"{m.address}","PDUA01","custom","degC","",""\n' for m in members[:2])
+    assert planned(SimpleNamespace(csv=by_hand), members)[1].problems == ()
+    # the first spelling is already mapped and only the renumbered copy is left: the copy is the same tag
+    one_mapped = [Member(1, members[0].address, members[0].name, "degC", mapped=True), *members[1:]]
+    again = run(one_mapped, [decide("pdua#_pm#_x", "custom")])
+    assert again.blocking and kinds(again) == [("renumbered", "blocking")] and again.by_shape[0]["skipped_mapped"] == 1
+    assert only(again, "renumbered").text.startswith("1 tag of this shape appears twice (the SCADA renumbered it)")
+    # the same tag names in two clusters are two tags: a custom metric takes both (it never collides)
+    two = [Member(1, "ns=3;s=1:ClusterA.PDUA01_PM0_X", "PDUA01_PM0_X", "degC"), Member(2, "ns=3;s=2:ClusterB.PDUA01_PM0_X", "PDUA01_PM0_X", "degC")]
+    assert not run(two, [decide("pdua#_pm#_x", "custom")]).blocking
+
+
+def test_renumbered_needs_equal_stable_addresses_two_clusters_with_the_same_tag_names_are_a_collision_naming_both_addresses():
+    members = [Member(1, "ns=3;s=1:ClusterA.PDUA01_P", "PDUA01_P", "kW"), Member(2, "ns=3;s=2:ClusterB.PDUA01_P", "PDUA01_P", "kW"),
+               Member(3, "ns=3;s=3:ClusterA.PDUA02_P", "PDUA02_P", "kW"), Member(4, "ns=3;s=4:ClusterB.PDUA02_P", "PDUA02_P", "kW")]
+    result = run(members, [decide("pdua#_p")])
+    assert kinds(result) == [("collision", "blocking")]
+    assert only(result, "collision").text == (
+        "2 tags of this shape would land on each of 2 assets (PDUA01 gets ns=3;s=1:ClusterA.PDUA01_P and ns=3;s=2:ClusterB.PDUA01_P); "
+        'choose "parts 1 and 2" or map them as custom'
+    )
+    assert "renumbered" not in result.checks[0].text
+    # one cluster already mapped: the other cluster's tags are other tags, not the renumbered copy of a mapped one (the planner judges the asset)
+    mapped_a = [Member(m.id, m.address, m.name, m.unit_hint, mapped="ClusterA" in m.address) for m in members]
+    assert run(mapped_a, [decide("pdua#_p")]).checks == []
 
 
 def test_mixed_units_block_a_known_metric_but_not_a_custom_one_with_a_unit():
@@ -300,7 +429,9 @@ def test_mixed_units_block_a_known_metric_but_not_a_custom_one_with_a_unit():
     blocked = run(members, [decide("m#_e", "energy_kwh")])
     assert blocked.blocking and blocked.csv == ""
     check = only(blocked, "mixed_units")
-    assert check.shape == "m#_e" and check.text == "This shape has the units kWh and Wh; map it as custom or decide it on the Points page"
+    assert check.shape == "m#_e" and check.text == (
+        "This shape has the units kWh and Wh (3 name kWh and 1 names Wh); map it as custom or decide it on the Points page"
+    )
     assert not run(members, [decide("m#_e", "custom", unit="kWh")]).blocking
     unitless = run(members, [decide("m#_e", "custom")])
     assert only(unitless, "custom_unit").text == (
@@ -481,14 +612,79 @@ def test_planner_refusals_become_checks_with_the_tag_the_derived_asset_and_the_r
     assert checks[5].shape is None and checks[5].text == "2 more lines are refused as well; fix the ones above and check again"
 
 
-def test_a_tag_with_a_line_break_in_its_address_is_refused_and_names_no_shape():
+def test_a_list_that_does_not_line_up_with_the_lines_names_no_shape_in_a_planner_check():
+    members = plain(["Z1_P", "Z2_P", "Z3_P"], "kW")
+    result = run(members, [decide("z#_p")])
+    # as if a tag with a line break had got through (build_lines never offers one: see the address tests): the parser splits the line
+    broken = dataclasses.replace(result, csv=result.csv.replace('"addr-1"', '"addr\n-1"'))
+    parsed, planned_list = planned(broken, members)
+    assert planned_list.problems  # the broken line cannot be read as a line of the list
+    checks = planner_checks(broken, parsed, planned_list.problems)
+    assert checks and all(c.kind == "planner" and c.shape is None for c in checks)
+
+
+def test_a_tag_the_parser_reads_back_trimmed_still_names_its_shape_in_a_planner_check():
+    members = plain(["Z1_P", "Z2_P", "Z3_P"], "kW")
+    result = run(members, [decide("z#_p")])
+    first = dataclasses.replace(result.rows[0], member=dataclasses.replace(result.rows[0].member, address="addr-1 "))
+    trimmed = dataclasses.replace(result, csv=result.csv.replace('"addr-1"', '"addr-1 "'), rows=[first, *result.rows[1:]])
+    parsed, planned_list = planned(trimmed, members, create=False)  # every asset is missing: every line is a planner problem
+    assert parsed.rows[0].values["tag"] == "addr-1"  # the parser strips every cell
+    checks = planner_checks(trimmed, parsed, planned_list.problems)
+    assert checks and checks[0].shape == "z#_p"
+
+
+# -- an address a tag list cannot name exactly is not offered (I2 of the T2 review) ------------------------------------------------
+
+ADDRESS_ADVICE = (
+    "an address a tag list cannot name exactly (a space at the start or end, an unprintable character or more than 500 characters); "
+    "decide them on the Points page"
+)
+
+
+def test_an_address_with_a_space_at_an_end_is_blocked_because_the_list_would_read_it_back_as_another_point():
+    members = [Member(1, "PDUA01_P ", "PDUA01_P", "kW"), Member(2, "PDUA01_P", "Other tag", "kW"),  # point 2 is in no shape
+               Member(3, "a3", "PDUA02_P", "kW"), Member(4, "a4", "PDUA03_P", "kW")]
+    result = run(members, [decide("pdua#_p")])
+    assert result.blocking and result.csv == "" and kinds(result) == [("address", "blocking")]
+    assert only(result, "address").shape == "pdua#_p" and only(result, "address").text == f"1 tag of this shape has {ADDRESS_ADVICE}"
+    assert result.lines == 2 and result.by_shape[0]["lines"] == 2 and [s["address"] for s in result.samples] == ["a3", "a4"]
+    assert "PDUA01_P " not in "".join(row.member.address for row in result.rows)
+
+
+@pytest.mark.parametrize("address", [" a1", "a1 ", "a\n1", "a\r1", "a\x001", "a\t1", "a​1", "a 1", "x" * 501])
+def test_every_unreadable_address_is_blocked_and_counted_per_shape(address):
+    members = [Member(1, address, "Z1_P", "kW"), Member(2, "b2", "Z2_P", "kW"), Member(3, "b3", "Z3_P", "kW"),
+               Member(4, "c1", "Y1_P", "kW"), Member(5, "c2", "Y2_P", "kW")]
+    result = run(members, [decide("z#_p"), decide("y#_p")])
+    assert result.blocking and result.csv == "" and [(c.kind, c.shape) for c in result.checks] == [("address", "z#_p")]
+    assert result.by_shape[0]["lines"] == 2 and result.by_shape[1]["lines"] == 2  # the others are offered as usual
+
+
+def test_an_address_of_exactly_500_characters_and_one_with_inner_spaces_pass():
+    members = [Member(1, "x" * 500, "Z1_P", "kW"), Member(2, "ns=3;s=a b  c", "Z2_P", "kW"), Member(3, "b3", "Z3_P", "kW")]
+    result = run(members, [decide("z#_p")])
+    assert not result.blocking and result.lines == 3
+    assert [row.values["tag"] for row in parse_tag_list(result.csv.encode()).rows] == ["x" * 500, "ns=3;s=a b  c", "b3"]
+
+
+def test_the_address_check_counts_the_tags_of_the_shape_and_leaves_no_nothing_warning_and_no_names_to_look_up():
+    members = [Member(1, "a1 ", "A1_P", "kW"), Member(2, "a2 ", "A2_P", "kW"), Member(3, "a3\n", "A3_P", "kW"), Member(4, "a4", "A4_P", "kW")]
+    result = run(members, [decide("a#_p")])
+    assert only(result, "address").text == f"3 tags of this shape have {ADDRESS_ADVICE}" and result.lines == 1
+    all_bad = run(members[:3], [decide("a#_p")])
+    assert kinds(all_bad) == [("address", "blocking")] and all_bad.lines == 0  # not also "nothing is left to map"
+    shape_set = build_shapes(members)
+    assert parts_needed(shape_set, [decide("a#_p")]) == ["A4"]  # the names of the tags that are offered, no others
+    seen: list[str] = []
+    run(members, [decide("a#_p")], key_of=lambda part: seen.append(part) or key(part), shape_set=shape_set)
+    assert seen == ["A4"]
+
+
+def test_a_tag_with_a_line_break_in_its_address_is_blocked_before_the_parser_sees_it():
     members = [Member(1, "ns=3;s=a\nb", "Z1_P", "kW"), Member(2, "ns=3;s=c", "Z2_P", "kW"), Member(3, "ns=3;s=d", "Z3_P", "kW")]
     result = run(members, [decide("z#_p")])
-    assert result.lines == 3 and not result.blocking
-    parsed, planned_list = planned(result, members)
-    assert planned_list.problems  # the broken line cannot be read as a line of the list
-    checks = planner_checks(result, parsed, planned_list.problems)
-    assert checks and all(c.kind == "planner" and c.shape is None for c in checks)
+    assert result.lines == 2 and result.blocking and result.csv == "" and kinds(result) == [("address", "blocking")]
 
 
 # -- the module names no product --------------------------------------------------------------------------------------------------

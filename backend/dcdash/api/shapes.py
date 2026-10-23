@@ -9,6 +9,9 @@ POST /api/sources/{id}/shapes/lines the decisions about shapes as tag-list CSV l
                                     the source's points itself, builds the CSV, then runs the real tag-list parser and planner on it
                                     (dry, no lock) and reports every refusal as a blocking `planner` check, so a list the planner
                                     would refuse is never offered. The mappings are written only by POST /api/sources/{id}/tag-list.
+                                    The answer also says `plan_assets` (the assets that planner run would create; null when it did
+                                    not run) and `parent_path` (the names the new assets were put under): the parent is chosen by id
+                                    but written by name, so the page maps only while the dry run plans as many assets.
 GET /api/sources/{id}/shape-rules   the decisions a person made about this source's shapes, remembered (discovery.view).
 PUT /api/sources/{id}/shape-rules   replaces the whole set (discovery.accept). A suggestion, never applied by itself, not audited.
 """
@@ -186,7 +189,8 @@ def parent_path_of(assets: list[dict[str, Any]], parent_id: int | None) -> list[
 @router.post("/sources/{source_id}/shapes/lines", dependencies=[Depends(require_permission("discovery.accept"))])
 async def shape_lines(source_id: SourceId, body: LinesBody, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     """Decisions about shapes as tag-list lines and the checks on them. The source's points are read now, here, never taken from the
-    client; names are compared by the database's key; the CSV is run through the real parser and planner (no lock, nothing written)."""
+    client; names are compared by the database's key; the CSV is run through the real parser and planner (no lock, nothing written).
+    `plan_assets` is `len(plan.assets)` of that planner run, None when it did not run (a check blocked before it, or no line)."""
     loaded = await load_source_members(db, source_id)
     assets = await load_assets(db)
     decisions = [LineDecision(d.shape, d.metric, d.name_from, d.unit or None, d.scale, d.interval_seconds) for d in body.decisions]
@@ -203,6 +207,7 @@ async def shape_lines(source_id: SourceId, body: LinesBody, db: AsyncSession = D
             refusals = [Check("planner", BLOCKING, None, f"The tag list check refuses this list: {refused}")]
         else:
             plan = await _plan_for(db, loaded.id, loaded.connector_type, loaded.config, parsed, body.create_assets, lock=False)
+            result.plan_assets = len(plan.assets)  # what the page compares with the tag-list dry run before it maps anything
             refusals = planner_checks(result, parsed, plan.problems)
         if refusals:
             result.checks.extend(refusals)

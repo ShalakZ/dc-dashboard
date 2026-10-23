@@ -252,7 +252,7 @@ async def test_reading_shapes_writes_nothing(client, db):
 # POST /api/sources/{id}/shapes/lines: the decisions as tag-list lines and the checks. The pure rules are tests/test_shapes_lines.py.
 # ======================================================================================================================================
 
-ANSWER_KEYS = ["csv", "lines", "blocking", "by_shape", "checks", "samples"]
+ANSWER_KEYS = ["csv", "lines", "blocking", "by_shape", "checks", "samples", "plan_assets", "parent_path"]
 
 
 def lines_url(source: int) -> str:
@@ -372,6 +372,7 @@ async def test_the_answer_is_the_contract_and_the_asset_path_is_the_parents_name
     answer = response.json()
     assert list(answer) == ANSWER_KEYS
     assert answer["lines"] == 6 and answer["blocking"] is False and answer["checks"] == []
+    assert answer["plan_assets"] == 6 and answer["parent_path"] == ["Site", "Hall A", "Row 1"]  # six PDUs to create below the parent
     assert answer["by_shape"] == [{
         "shape": "pdua#_pm#_penrg", "label": "PDUA#_PM0_PENRG", "lines": 6, "assets": 6, "skipped_mapped": 0, "skipped_twins": 0,
     }]
@@ -487,21 +488,18 @@ async def test_without_create_assets_every_missing_asset_is_refused_by_the_plann
     assert planner[5]["text"] == "1 more lines are refused as well; fix the ones above and check again" and planner[5]["shape"] is None
 
 
-async def test_two_unmapped_points_of_one_stable_tag_are_a_renumbered_check_or_a_planner_check_by_the_metric(client, db):
+async def test_two_unmapped_points_of_one_tag_are_a_renumbered_check_under_every_metric_and_the_planner_is_not_asked(client, db):
     source = await make_source(db, "Stable", "opcua", {"endpoint": "opc.tcp://h:4840/", "stable_addresses": True}, enabled=False)
     await add_points(db, source, [
         ("ns=3;s=20403:Site.X01_P", "X01_P", "kW"), ("ns=3;s=Site.X01_P", "ns=3;s=Site.X01_P", "kW"),  # one tag, two spellings, both unmapped
         ("ns=3;s=20404:Site.X02_P", "X02_P", "kW"), ("ns=3;s=20405:Site.X03_P", "X03_P", "kW"),
     ])
     await login_as(client, db, "admin")
-    known = (await client.post(lines_url(source), json=body_of(decision("x#_p", "active_power_kw")))).json()
-    assert [c["kind"] for c in known["checks"]] == ["renumbered"] and known["csv"] == ""  # shown instead of a collision, the planner is not asked
-    assert known["checks"][0]["text"].startswith('1 tag of this shape appears twice (the SCADA renumbered it)')
-    custom = (await client.post(lines_url(source), json=body_of(decision("x#_p", "custom")))).json()
-    planner = checks_of(custom, "planner")  # both halves of the tag are refused, each in the planner's own words
-    assert custom["blocking"] is True and len(planner) == 2 and custom["lines"] == 4 and custom["csv"] == ""
-    assert "two points of this source have the same stable address" in planner[0]["text"] and "X01" in planner[0]["text"]
-    assert "this tag is already on line 2" in planner[1]["text"] and {c["shape"] for c in planner} == {"x#_p"}
+    for metric in ("active_power_kw", "custom"):  # a custom metric used to get through to the planner; it is the same tag either way
+        answer = (await client.post(lines_url(source), json=body_of(decision("x#_p", metric)))).json()
+        assert [c["kind"] for c in answer["checks"]] == ["renumbered"] and answer["csv"] == "", metric  # shown instead of a collision
+        assert answer["checks"][0]["text"].startswith('1 tag of this shape appears twice (the SCADA renumbered it)'), metric
+        assert answer["lines"] == 4 and answer["blocking"] is True and answer["plan_assets"] is None, metric
 
 
 async def test_the_twin_of_a_mapped_tag_is_left_out_and_counted_on_a_stable_source(client, db):
@@ -519,7 +517,7 @@ async def test_the_twin_of_a_mapped_tag_is_left_out_and_counted_on_a_stable_sour
 
 async def test_a_line_over_1024_bytes_is_refused_by_the_parser_and_arrives_as_a_planner_check(client, db):
     source = await make_source(db, "Long", "opcua", {"endpoint": "opc.tcp://h:4840/"}, enabled=False)
-    await add_points(db, source, [("ns=3;s=" + "a" * 493 + str(n), f"Z{n}_P", "kW") for n in (1, 2, 3)])  # 500-character tags
+    await add_points(db, source, [("ns=3;s=" + "a" * 492 + str(n), f"Z{n}_P", "kW") for n in (1, 2, 3)])  # 500-character tags
     parent = None
     for n in range(5):  # five levels of 100-character names: the asset cell alone is over 500 characters
         parent = await make_asset(db, f"{n}" * 100, parent)
@@ -548,8 +546,23 @@ async def test_a_tag_with_a_line_break_in_its_address_is_blocked_not_misattribut
     await add_points(db, source, [("ns=3;s=a\nb", "Z1_P", "kW"), ("ns=3;s=c", "Z2_P", "kW"), ("ns=3;s=d", "Z3_P", "kW")])
     await login_as(client, db, "admin")
     answer = (await client.post(lines_url(source), json=body_of(decision("z#_p", "active_power_kw")))).json()
-    planner = checks_of(answer, "planner")
-    assert answer["blocking"] is True and answer["csv"] == "" and planner and all(c["shape"] is None for c in planner)
+    [check] = checks_of(answer, "address")  # the tag is not offered at all: the parser would split its line
+    assert answer["blocking"] is True and answer["csv"] == "" and answer["lines"] == 2 and check["shape"] == "z#_p"
+    assert check["text"].startswith("1 tag of this shape has an address a tag list cannot name exactly") and checks_of(answer, "planner") == []
+    assert answer["plan_assets"] is None
+
+
+async def test_an_address_with_a_space_at_its_end_is_not_mapped_onto_the_point_that_has_the_trimmed_address(client, db):
+    source = await make_source(db, "Spaces", "opcua", {"endpoint": "opc.tcp://h:4840/"}, enabled=False)
+    await add_points(db, source, [
+        ("PDUA01_P ", "PDUA01_P", "kW"), ("PDUA01_P", "Other tag", "kW"),  # the list would read the first as the second
+        ("PDUA02_P", "PDUA02_P", "kW"), ("PDUA03_P", "PDUA03_P", "kW"),
+    ])
+    await login_as(client, db, "admin")
+    answer = (await client.post(lines_url(source), json=body_of(decision("pdua#_p", "active_power_kw")))).json()
+    [check] = checks_of(answer, "address")
+    assert answer["blocking"] is True and answer["csv"] == "" and answer["lines"] == 2 and check["severity"] == "blocking"
+    assert checks_of(answer, "planner") == [] and "PDUA01" not in "".join(s["asset"] for s in answer["samples"])
 
 
 async def test_mixed_units_and_custom_units_come_through_the_route(client, db):
@@ -562,6 +575,44 @@ async def test_mixed_units_and_custom_units_come_through_the_route(client, db):
     assert custom["blocking"] is False and '"kWh"' in custom["csv"].splitlines()[1]
     needs = (await client.post(lines_url(source), json=body_of(decision("m#_e", "custom")))).json()
     assert [c["kind"] for c in needs["checks"]] == ["custom_unit"]
+
+
+async def test_the_unit_of_the_tags_reaches_the_scale_through_the_whole_route_and_into_the_mapping(client, db):
+    source = await make_source(db, "Mega", "opcua", {"endpoint": "opc.tcp://h:4840/"}, enabled=False)
+    await add_points(db, source, [(f"m{n}", f"M{n}_E", "MWh") for n in (1, 2, 3)])  # a counter in MWh mapped as kWh counts 1,000 times
+    await login_as(client, db, "admin")
+    answer = (await client.post(lines_url(source), json=body_of(decision("m#_e")))).json()
+    assert answer["blocking"] is False and answer["checks"] == [] and answer["samples"][0]["scale"] == 1000.0
+    assert answer["csv"].splitlines()[1] == '"m1","M1","energy_kwh","","1000.0",""'
+    wrong = (await client.post(lines_url(source), json=body_of(decision("m#_e", scale=1)))).json()  # a scale of 1 for MWh: a bill 1,000 times too low
+    assert [c["kind"] for c in wrong["checks"]] == ["units"] and wrong["blocking"] is True and wrong["csv"] == ""
+    report = (await tag_list(client, source, answer["csv"])).json()
+    assert report["ok"] is True
+    real = await tag_list(client, source, answer["csv"], dry_run=False, expect_points=0, expect_assets=3, expect_mappings=3, expect_plan=report["plan_digest"])
+    assert real.status_code == 200, real.text
+    assert [float(row["scale"]) for row in await db.fetch("SELECT scale FROM mappings ORDER BY id")] == [1000.0] * 3
+
+
+async def test_the_answer_says_how_many_assets_the_planner_would_create_so_a_renamed_parent_is_noticed(client, db):
+    source = await small_source(db)
+    hall = await make_asset(db, "Hall A")
+    await login_as(client, db, "admin")
+    answer = (await client.post(lines_url(source), json=body_of(decision(), parent_id=hall))).json()
+    assert answer["plan_assets"] == 6 and answer["parent_path"] == ["Hall A"]
+    assert (await tag_list(client, source, answer["csv"])).json()["assets_to_create_total"] == answer["plan_assets"]
+    await db.execute("UPDATE assets SET name = 'Hall B' WHERE id = $1", hall)  # renamed after the lines were made
+    later = (await tag_list(client, source, answer["csv"])).json()
+    assert later["assets_to_create_total"] == 7 and later["assets_to_create_total"] != answer["plan_assets"]  # a second "Hall A" tree
+    top = (await client.post(lines_url(source), json=body_of(decision()))).json()
+    assert top["parent_path"] == [] and top["plan_assets"] == 6
+    gone = (await client.post(lines_url(source), json=body_of(decision(), parent_id=424242))).json()
+    assert gone["blocking"] is True and gone["parent_path"] == [] and gone["plan_assets"] is None  # nothing was asked of the planner
+    blocked = (await client.post(lines_url(source), json=body_of(decision(), decision("vanished#_x")))).json()
+    assert blocked["plan_assets"] is None
+    nothing = (await client.post(lines_url(source), json=body_of(decision("vanished#_x")))).json()
+    assert nothing["lines"] == 0 and nothing["plan_assets"] is None
+    refused = (await client.post(lines_url(source), json=body_of(decision(), create_assets=False))).json()
+    assert refused["blocking"] is True and refused["plan_assets"] == 0  # the planner ran, and would create no asset
 
 
 # -- all the way through the tag-list route ---------------------------------------------------------------------------------------

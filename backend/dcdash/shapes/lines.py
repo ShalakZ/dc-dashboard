@@ -11,20 +11,28 @@ ones the contract lists.
 Names are compared only through `key_of`, which the route fills from PostgreSQL (the `_PART_KEYS` statement of api/tag_lists.py:
 the database's own normalisation of an asset name). Python's `casefold` never decides whether two names are one asset.
 
+A shape's unit hint reaches the scale of its lines (a counter in Wh billed as kWh is a bill 1,000 times too high): where every tag
+of the shape names one unit the metric knows, that unit gives the scale and a different scale in the decision blocks; where the
+tags disagree about the unit, or some name none, the shape blocks. An address a tag list cannot name exactly (the parser trims
+every cell) is never written.
+
 Every sentence is plain words with the numbers it is about and an example taken from the data. Nothing here knows a product or a
 site: the equipment part of a tag is whatever its first token is.
 """
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from dcdash.connectors.opcua_ids import stable_address
 from dcdash.core.discovery import _tokens
 from dcdash.core.metrics import Metric
-from dcdash.ingest.tag_list import MAX_NEW_ASSETS, MAX_ROWS, MAX_SEGMENT, ParsedList, Problem
+from dcdash.ingest.normalise import NormaliseError, scale_for
+from dcdash.ingest.tag_list import MAX_NEW_ASSETS, MAX_ROWS, MAX_SEGMENT, MAX_TAG, ParsedList, Problem
 from dcdash.shapes.core import Member, Shape, ShapeSet, member_text
 
 NAME_FROM = ("part1", "parts12", "part1_part2")
@@ -54,7 +62,7 @@ class LineDecision:
 
 @dataclass(frozen=True)
 class Check:
-    kind: str  # gone, too_many, collision, renumbered, mixed_units, name, custom_unit, nothing, outlier, planner
+    kind: str  # gone, too_many, collision, renumbered, mixed_units, units, address, name, custom_unit, nothing, outlier, planner
     severity: str  # "blocking" or "warning"
     shape: str | None  # the key of the shape it is about, None for the whole list
     text: str
@@ -86,11 +94,14 @@ class LinesResult:
     checks: list[Check]
     samples: list[dict[str, Any]]
     rows: list[Line] = field(default_factory=list)  # every data line in file order; not part of the answer
+    parent_path: list[str] = field(default_factory=list)  # the names the new assets were put under ([] = the top level)
+    plan_assets: int | None = None  # the assets the route's own planner run would create; None until (unless) the planner ran
 
     def as_json(self) -> dict[str, Any]:
         return {
             "csv": self.csv, "lines": self.lines, "blocking": self.blocking, "by_shape": self.by_shape,
             "checks": [check.as_json() for check in self.checks], "samples": self.samples,
+            "plan_assets": self.plan_assets, "parent_path": self.parent_path,
         }
 
 
@@ -131,6 +142,90 @@ def hints_of(shape: Shape) -> list[str]:
             counts[folded] += 1
             spelled.setdefault(folded, hint)
     return [spelled[folded] for folded, _ in counts.most_common()]
+
+
+def readable(address: str) -> bool:
+    """True when a tag list names this address exactly: the parser trims every cell, and the planner refuses a tag with an
+    unprintable character (a line break, a tab, NUL, an invisible character) or one over MAX_TAG characters. A trimmed address would
+    map another point, or none."""
+    return address == address.strip() and address.isprintable() and len(address) <= MAX_TAG
+
+
+def _unit_counts(shape: Shape) -> tuple[list[tuple[str, int]], int]:
+    """The distinct unit hints of ALL the shape's members, compared without case and without spaces (as `scale_for` reads them), the
+    most common first (ties in the order first seen) with how many members name each, the first spelling seen being the one shown;
+    and how many members name none."""
+    counts: Counter[str] = Counter()
+    spelled: dict[str, str] = {}
+    for member in shape.members:
+        hint = (member.unit_hint or "").strip()
+        if hint:
+            folded = "".join(hint.lower().split())
+            counts[folded] += 1
+            spelled.setdefault(folded, hint)
+    return [(spelled[folded], n) for folded, n in counts.most_common()], len(shape.members) - sum(counts.values())
+
+
+def _says(count: int, what: str) -> str:
+    return f"{count:,} {'names' if count == 1 else 'name'} {what}"
+
+
+def _mixed_units_text(hints: list[tuple[str, int]], none: int) -> str:
+    """Several units, or a unit on some tags and none on the others: one scale cannot fit all of them."""
+    shown, rest = hints[:TAGS_NAMED], sum(n for _, n in hints[TAGS_NAMED:])
+    parts = [_says(n, _shown(hint)) for hint, n in shown]
+    if rest:
+        parts.append(_says(rest, "another unit" if rest == 1 else "other units"))
+    advice = "map it as custom or decide it on the Points page"
+    if not none:
+        units = _listed([hint for hint, _ in shown], len(hints) - len(shown))
+        return f"This shape has the units {units} ({_joined(parts)}); {advice}"
+    parts.append(_says(none, "none"))
+    first = hints[0][1]
+    lead = f"{first:,} {'tag' if first == 1 else 'tags'} of this shape {'names' if first == 1 else 'name'} the unit {_shown(hints[0][0])}"
+    return f"{_joined([lead, *parts[1:]])}; {advice}"
+
+
+def _joined(parts: Sequence[str]) -> str:
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
+def _figure(value: float) -> str:
+    return format(value, ",.10g")
+
+
+def _non_custom_scale(shape: Shape, decision: LineDecision, metric: Metric) -> tuple[float, Check | None]:
+    """The scale of every line of a decision with a metric that knows its unit, and the check that blocks it, if any. The CSV's unit
+    column stays empty, so the planner never sees the shape's unit: it is read here, with the planner's own `scale_for`.
+    - several units, or a unit on some tags and none on others: blocking `mixed_units`;
+    - one unit on every tag: that unit's scale. A decision scale that is not the same number blocks (`units`). A unit the metric does
+      not know (`scale_for` refuses it) blocks, unless the decision states the scale: then the person's number is used;
+    - no tag names a unit: the decision's scale, else the shape's suggested scale when the metric is the suggested one, else 1."""
+    hints, none = _unit_counts(shape)
+    given = None if decision.scale is None else float(decision.scale)
+    fallback = given if given is not None else float(shape.suggestion.scale) if metric == shape.suggestion.metric else 1.0
+    if len(hints) > 1 or (hints and none):
+        return fallback, Check("mixed_units", BLOCKING, shape.key, _mixed_units_text(hints, none))
+    if not hints:
+        return fallback, None
+    hint = hints[0][0]
+    subject = f'The unit "{_shown(hint)}" of the {len(shape.members):,} tags of this shape'
+    try:
+        from_unit = scale_for(hint, metric.value)
+    except NormaliseError:
+        if given is not None:
+            return given, None
+        return 1.0, Check(
+            "units", BLOCKING, shape.key,
+            f"{subject} is not one that {metric.value} knows; map it as custom, or decide them on the Points page",
+        )
+    if given is not None and not math.isclose(given, from_unit, rel_tol=1e-9):
+        return from_unit, Check(
+            "units", BLOCKING, shape.key,
+            f"{subject} means a scale of {_figure(from_unit)}, but the scale chosen is {_figure(given)}; "
+            "leave the scale out, or decide these tags on the Points page",
+        )
+    return from_unit, None
 
 
 def derive(text: str, name_from: str) -> tuple[tuple[str, ...], str | None]:
@@ -177,7 +272,7 @@ def parts_needed(shape_set: ShapeSet, decisions: Iterable[LineDecision]) -> list
         if shape is None or duplicate:
             continue
         for member in shape.members:
-            if member.mapped or member.twin:
+            if member.mapped or member.twin or not readable(member.address):
                 continue
             names, problem = derive(member_text(member.address, member.name), decision.name_from)
             if problem is None:
@@ -219,6 +314,13 @@ def _collision_text(groups: dict[tuple[str, ...], list[str]], names: dict[tuple[
     return f"{lead} ({gets}); {advice}"
 
 
+def _unreadable_text(count: int) -> str:
+    return (
+        f"{_n(count, 'tag of this shape has', 'tags of this shape have')} an address a tag list cannot name exactly (a space at the start "
+        f"or end, an unprintable character or more than {MAX_TAG} characters); decide them on the Points page"
+    )
+
+
 def _renumbered_text(texts: list[str]) -> str:
     n = len(texts)
     lead = (
@@ -255,8 +357,13 @@ def build_lines(
     `parent_path`: the names from the root down to the asset the new assets go under (empty: the top level); None means that asset
     does not exist (any more), which is a blocking `name` check. `key_of(name)`: the database's key for an asset name; it is called
     only with the names `parts_needed` lists. The lines of one decision are in the natural order of the members' texts, the decisions
-    in the order given. Mapped members and the twins of mapped members are left out and counted, never written. The CSV is "" when
-    any check blocks and when there is no line."""
+    in the order given. Mapped members and the twins of mapped members are left out and counted, never written; so is a member whose
+    address a tag list cannot name exactly (`readable`), which blocks with an `address` check. The CSV is "" when any check blocks and
+    when there is no line.
+
+    `by_shape[].assets` counts the NEW path elements below the parent that the lines of the decision would create; for `part1_part2`
+    the parents and the children together (200 PDUs with one meter each: 400). It is an upper bound: an asset that already exists is
+    counted as new (the planner knows which do)."""
     checks: list[Check] = []
     if parent_path is None:
         checks.append(Check("name", BLOCKING, None, "The asset the new assets should go under no longer exists; choose another one, or none"))
@@ -289,18 +396,21 @@ def build_lines(
             continue
         metric = Metric(decision.metric)
         custom = metric is Metric.CUSTOM
-        skipped_mapped = skipped_twins = 0
-        mapped_texts: set[str] = set()
+        skipped_mapped = skipped_twins = unreadable = 0
+        mapped_forms: dict[str, set[str]] = {}  # text of a mapped member -> the stable forms of the addresses mapped under it
         emitted: list[tuple[Member, str, tuple[str, ...], tuple[str, ...]]] = []  # member, text, names, the keys of the names
         unnamed: dict[str, list[str]] = {}
         for member in shape.members:
             text = member_text(member.address, member.name)
             if member.mapped:
                 skipped_mapped += 1
-                mapped_texts.add(text)
+                mapped_forms.setdefault(text, set()).add(stable_address(member.address))
                 continue
             if member.twin:
                 skipped_twins += 1
+                continue
+            if not readable(member.address):
+                unreadable += 1
                 continue
             names, problem = derive(text, decision.name_from)
             if problem is not None:
@@ -309,6 +419,8 @@ def build_lines(
             emitted.append((member, text, names, tuple(key_of(name) for name in names)))
         for problem, texts in unnamed.items():
             checks.append(Check("name", BLOCKING, shape.key, _unnamed_text(problem, texts, decision.name_from)))
+        if unreadable:
+            checks.append(Check("address", BLOCKING, shape.key, _unreadable_text(unreadable)))
 
         # the unit and the scale columns
         unit = ""
@@ -329,21 +441,18 @@ def build_lines(
                         "custom_unit", BLOCKING, shape.key,
                         "A custom metric needs a unit and the tags of this shape name none; type the unit this custom metric should use",
                     ))
-        elif shape.mixed_units:
-            hints = hints_of(shape)
-            checks.append(Check(
-                "mixed_units", BLOCKING, shape.key,
-                f"This shape has the units {_listed(hints[:TAGS_NAMED], max(0, len(hints) - TAGS_NAMED))}; "
-                "map it as custom or decide it on the Points page",
-            ))
         if decision.scale is not None:
             scale = float(decision.scale)
         else:
             scale = float(shape.suggestion.scale) if metric == shape.suggestion.metric else 1.0
+        if not custom and emitted:  # the unit of the tags decides the scale (see `_non_custom_scale`); nothing to write, nothing to check
+            scale, unit_check = _non_custom_scale(shape, decision, metric)
+            if unit_check is not None:
+                checks.append(unit_check)
         interval = None if decision.interval_seconds is None else int(decision.interval_seconds)
 
         # the lines, the elements below the parent and who lands where
-        groups: dict[tuple[str, ...], list[str]] = {}  # key path -> the texts of the lines on it (a metric that can collide only)
+        groups: dict[tuple[str, ...], list[tuple[str, str]]] = {}  # key path -> (text, address) of the lines on it
         names_of: dict[tuple[str, ...], tuple[str, ...]] = {}
         mine: set[tuple[str, ...]] = set()
         first_line = len(rows)
@@ -351,9 +460,8 @@ def build_lines(
             rows.append(Line(shape.key, member, text, "/".join([*parent, *names]), metric, unit, scale, interval))
             mine.add(keys[:1])
             mine.add(keys)
-            if not custom:
-                groups.setdefault(keys, []).append(text)
-                names_of.setdefault(keys, names)
+            groups.setdefault(keys, []).append((text, member.address))
+            names_of.setdefault(keys, names)
         elements |= mine
         lines_here = len(emitted)
         by_shape.append({
@@ -366,16 +474,28 @@ def build_lines(
                 "unit_hint": line.member.unit_hint, "metric": metric.value, "scale": scale,
             })
 
+        # One TAG spelled twice (the same text and the same stable address: the SCADA renumbered it) is wrong under every metric, a
+        # custom one too: it would be mapped twice onto one asset. Two tags on one asset and metric (`apart`) is a collision only for a
+        # metric that cannot hold two; a custom one holds as many as it is given.
+        twice: list[str] = []  # the text of each tag that two of the lines spell
+        apart: dict[tuple[str, ...], list[str]] = {}  # key path -> what the lines on it are called, where they are different tags
+        for keys, found in groups.items():
+            if len(found) < 2:
+                continue
+            texts = [text for text, _ in found]
+            if len(set(texts)) == 1 and len({stable_address(address) for _, address in found}) == 1:
+                twice.append(texts[0])
+            elif not custom:  # equal texts with different stable addresses are two clusters' tags of one name: told apart by address
+                apart[keys] = [address for _, address in found] if len(set(texts)) == 1 else texts
+        # a tag that is already mapped under its other spelling (a source whose "Stable tag addresses" is off has no twins to leave out);
+        # the same name under another stable address is another tag, and the planner judges whether its asset can take it
+        again = [text for member, text, _, _ in emitted if stable_address(member.address) in mapped_forms.get(text, ())]
+        renumbered = list(dict.fromkeys([*twice, *again]))
+        if apart:
+            checks.append(Check("collision", BLOCKING, shape.key, _collision_text(apart, names_of, decision.name_from)))
+        if renumbered:
+            checks.append(Check("renumbered", BLOCKING, shape.key, _renumbered_text(renumbered)))
         if not custom:
-            collide = {keys: texts for keys, texts in groups.items() if len(texts) > 1}
-            twice = {keys: texts for keys, texts in collide.items() if len(set(texts)) == 1}  # one tag spelled twice, not two tags
-            apart = {keys: texts for keys, texts in collide.items() if keys not in twice}
-            # a tag that is already mapped under its other spelling (a source whose "Stable tag addresses" is off has no twins to leave out)
-            renumbered = list(dict.fromkeys([texts[0] for texts in twice.values()] + [t for _, t, _, _ in emitted if t in mapped_texts]))
-            if apart:
-                checks.append(Check("collision", BLOCKING, shape.key, _collision_text(apart, names_of, decision.name_from)))
-            if renumbered:
-                checks.append(Check("renumbered", BLOCKING, shape.key, _renumbered_text(renumbered)))
             across = {keys: claims[(keys, metric.value)] for keys in groups if (keys, metric.value) in claims}
             if across:
                 keys = next(iter(across))
@@ -384,12 +504,12 @@ def build_lines(
                 checks.append(Check(
                     "collision", BLOCKING, shape.key,
                     f"Tags of this shape and of {label} would both land on the same asset as {metric.value} "
-                    f"({'/'.join(names_of[keys])} would get {_shown(groups[keys][0])} and {_shown(theirs)}){more}; "
+                    f"({'/'.join(names_of[keys])} would get {_shown(groups[keys][0][0])} and {_shown(theirs)}){more}; "
                     "change one of the two decisions",
                 ))
-            for keys, texts in groups.items():
-                claims.setdefault((keys, metric.value), (shape.label, texts[0]))
-        if lines_here == 0 and not unnamed:
+            for keys, found in groups.items():
+                claims.setdefault((keys, metric.value), (shape.label, found[0][0]))
+        if lines_here == 0 and not unnamed and not unreadable:
             checks.append(Check(  # a shape has at least two members, so "all" is always plural
                 "nothing", WARNING, shape.key,
                 f"All {shape.count:,} tags of this shape are already mapped or are the twin of a mapped tag; nothing is left to map",
@@ -416,15 +536,15 @@ def build_lines(
             )) + "\n"
             for line in rows
         )
-    return LinesResult(csv, len(rows), blocking, by_shape, checks, samples, rows)
+    return LinesResult(csv, len(rows), blocking, by_shape, checks, samples, rows, parent)
 
 
 def planner_checks(result: LinesResult, parsed: ParsedList, problems: Sequence[Problem]) -> list[Check]:
     """The planner's refusals of `result.csv` as blocking `planner` checks: the first PLANNER_SHOWN each with the tag, the derived asset
     and the planner's own reason, then one check that counts the rest. `parsed` is the parse of that same CSV."""
     aligned = len(parsed.rows) == len(result.rows) and all(
-        row.values.get("tag") == line.member.address for row, line in zip(parsed.rows, result.rows, strict=True)
-    )  # a tag with a line break in it splits a line and shifts every later number: then no shape is named
+        row.values.get("tag") == line.member.address.strip() for row, line in zip(parsed.rows, result.rows, strict=True)
+    )  # the parser trims every cell; a tag with a line break in it splits a line and shifts every later number: then no shape is named
     place = {row.line: index for index, row in enumerate(parsed.rows)}
     checks: list[Check] = []
     for problem in problems[:PLANNER_SHOWN]:
