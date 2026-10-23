@@ -31,6 +31,18 @@ def _journal_state():
 
 
 @pytest.fixture(autouse=True)
+async def _watchdog_state():
+    """The data freshness verdict is cached per process (5 s) and computed in a shared task that outlives its caller: forget the
+    cache and cancel and await a computation still running, before and after every test (a query still running would hold locks
+    that the `db` fixture's TRUNCATE has to wait for)."""
+    from dcdash.events import watchdog
+
+    await watchdog.aclear()
+    yield
+    await watchdog.aclear()
+
+
+@pytest.fixture(autouse=True)
 async def _figure_cache_state(monkeypatch):
     """The figure cache keeps process-wide state and its computations are tasks that outlive a test on the session-wide event
     loop: cancel and await them, and empty the store, before and after every test (before the `db` fixture's TRUNCATE, whose
