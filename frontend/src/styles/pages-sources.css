@@ -53,6 +53,11 @@
   .st-off.job::before, .st-off.note::before { margin-top: 0.6em; }
   .st.note { min-width: 90px; max-width: 240px; }
   .table-wrap.dense td .st.note { min-width: 150px; } /* Sources: "not polled (no mapped points); last check: online" was five short lines at 90px, now three */
+  /* w34: the Test result cell. A Test message of 130 to 300 characters ("the numbered address no longer works for 10 of 10 tags but the stable one does ...") was
+     97px wide at 1024 (a row 277px tall) and 765px at 1920 (the Name column squeezed); it now wraps in a column of 22 to 44 characters, so the table keeps its widths
+     whatever the message says. The whole message stays on screen (no clamp): it is the text the owner pastes back to the developers. The cell is as wide from "running…"
+     on, so the result arriving does not move the columns. */
+  .table-wrap.dense td > .st.job { min-width: 22ch; max-width: 44ch; overflow-wrap: anywhere; }
   .st.plain { font-size: var(--fs-base); font-weight: 400; } /* a status word that sits in a row of body text */
   .job-line { margin: 0 0 14px; }
 
