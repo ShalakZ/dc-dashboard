@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel
 
-from dcdash.collector.scheduler import PollGroup, Scheduler, load_groups, poll_once
+from dcdash.collector.scheduler import PollGroup, Scheduler, _bad_points, load_groups, poll_once
 from dcdash.collector.writer import Writer
 from dcdash.connectors.base import BAD, GOOD, ConnectionCheck, Connector, PointValue, create_connector
 from dcdash.connectors.opcua_ids import read_plan, stable_address
@@ -139,6 +139,19 @@ async def test_neither_twin_is_read_or_written_good_and_the_third_point_reads_fi
     assert connector.asked == [[]]  # still asked, with nothing to read: a connector that cannot connect says so
     assert [(v.address, v.quality, v.value, v.status) for v in values] == [(A_NEW, BAD, None, TWIN_STATUS)]
     assert [(r[0], r[2], r[3]) for r in rows] == [(a_new, None, BAD)]
+
+
+async def test_the_incident_code_of_a_twin_is_the_sentence_and_never_the_address(db):
+    source = await opcua_source(db)
+    await map_at(db, source, A_OLD, 5)
+    await map_at(db, source, A_NEW, 60)
+    await map_at(db, source, C, 5)
+    fast = group_at(await load_groups(db), source, 5)
+    values, _rows = await poll(fast, Recorder())
+    code, message, detail = _bad_points([v for v in values if v.quality == BAD], len(values))
+    # `_bad_points` cuts a status at " (": the address stays in the parentheses, so the code of this incident is one sentence
+    assert code == "two points have the same stable address" and STABLE_A not in code
+    assert message == f"1 of 2 points have a bad reading: {TWIN_STATUS} x1" and detail["statuses"] == {TWIN_STATUS: 1}
 
 
 async def test_a_group_without_twins_is_read_whole_and_in_order(db):

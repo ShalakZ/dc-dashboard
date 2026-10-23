@@ -365,6 +365,65 @@ async def test_a_limit_below_the_smallest_size_says_so_in_words(monkeypatch):
     assert fake.requests == [10] and c._slice == 10
 
 
+class Refusing(FakeSession):
+    """Turns away the requests with the given numbers (1 is the first request for tags of the session) and takes the others."""
+
+    def __init__(self, numbers, **knobs):
+        super().__init__(**knobs)
+        self.numbers = set(numbers)
+
+    async def read_attributes(self, nodes, attr):
+        if [n.address for n in nodes] != [LIMIT_NODE] and len(self.requests) + 1 in self.numbers:
+            self.requests.append(len(nodes))
+            raise ua.UaStatusCodeError(ua.StatusCodes.BadTooManyOperations)
+        return await super().read_attributes(nodes, attr)
+
+
+async def test_a_small_refused_tail_after_an_answered_slice_does_not_claim_a_limit_below_the_smallest_size(monkeypatch):
+    fake = use(monkeypatch, Refusing({2}))
+    c = create_connector("opcua", {"endpoint": ENDPOINT})
+    c._slice = 20
+    with pytest.raises(ConnectorError) as typed:
+        await c.read(addresses(30))  # 20 is taken, the tail of 10 is turned away
+    assert typed.value.status == "protocol_error"
+    assert typed.value.message == "the server refused a read of 10 tags after answering a read of 20 tags (BadTooManyOperations)"
+    assert "split" not in typed.value.message and fake.requests == [20, 10]
+    assert c._slice == 10
+
+
+async def test_a_small_second_half_after_an_answered_first_half_does_not_claim_a_limit_below_the_smallest_size(monkeypatch):
+    fake = use(monkeypatch, Refusing({1, 3}))
+    c = create_connector("opcua", {"endpoint": ENDPOINT})
+    c._slice = 19
+    with pytest.raises(ConnectorError) as typed:
+        await c.read(addresses(19))  # 19 is turned away, as 10 + 9 the 10 is taken and the 9 is turned away
+    assert typed.value.message == "the server refused a read of 9 tags after answering a read of 10 tags (BadTooManyOperations)"
+    assert fake.requests == [19, 10, 9] and c._slice == 10
+
+
+async def test_a_small_first_half_refused_after_an_answered_slice_names_the_slice_that_was_answered(monkeypatch):
+    fake = use(monkeypatch, Refusing({2, 3}))
+    c = create_connector("opcua", {"endpoint": ENDPOINT})
+    c._slice = 20
+    with pytest.raises(ConnectorError) as typed:
+        await c.read(addresses(40))  # 20 is taken, the next 20 is turned away and so is its first half of 10
+    assert typed.value.message == "the server refused a read of 10 tags after answering a read of 20 tags (BadTooManyOperations)"
+    assert fake.requests == [20, 20, 10] and c._slice == 10
+
+
+async def test_the_limit_sentence_stays_when_no_request_of_the_call_was_answered_before_the_small_one(monkeypatch):
+    fake = use(monkeypatch, Refusing({1, 2}))
+    c = create_connector("opcua", {"endpoint": ENDPOINT})
+    c._slice = 20
+    with pytest.raises(ConnectorError) as typed:
+        await c.read(addresses(20))  # 20 is turned away, and its first half of 10 too: nothing was answered
+    assert typed.value.message == (
+        "the server refuses reads of 10 tags at once (BadTooManyOperations); "
+        "a request is never split below 10 tags, so a server limit below 10 cannot be used"
+    )
+    assert fake.requests == [20, 10]
+
+
 # -- the check and the poll --------------------------------------------------------------------------------------------------
 
 

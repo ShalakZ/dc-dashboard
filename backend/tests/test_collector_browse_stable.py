@@ -9,7 +9,7 @@ import re
 import pytest
 from pydantic import BaseModel
 
-from dcdash.collector.browse import BrowseResult, browse_source, browse_source_detailed, plan_browse
+from dcdash.collector.browse import BrowseResult, BrowseSettingsChanged, browse_source, browse_source_detailed, plan_browse
 from dcdash.collector.jobs import run_pending_jobs
 from dcdash.collector.scheduler import load_groups, poll_once
 from dcdash.collector.writer import Writer
@@ -279,44 +279,76 @@ async def test_a_source_deleted_during_the_browse_is_a_plain_error_not_a_foreign
         await browse_source_detailed(db, source, listing(PointDescriptor("ns=3;s=Site.X", "X"), hook=delete_the_source))
 
 
-# ---- the option is read as late as possible (review M2) --------------------------------------------------------------------------
+# ---- the option cannot change under a browse (review M2, F1-A) ------------------------------------------------------------------
+# The connector is built from the config read at the start, so its listing is in the form that option gives. If the option is not the
+# same when the points are stored, the listing no longer fits the setting: nothing is stored, and the browse says so.
 
-async def test_an_option_turned_on_during_the_walk_decides_the_matching(db):
+CHANGED = "the stable address option was changed while the browse was running; browse again"
+
+
+async def test_an_option_turned_on_during_the_walk_stores_nothing_and_says_so(db):
     source = await make_source(db, "fake", "opcua", {"endpoint": "opc.tcp://x", "stable_addresses": False})
     stored = await make_point(db, source, "ns=3;s=20403:Site.X")
+    before = await points_of(db, source)
 
     async def turn_on():
         await set_option(db, source, True)
 
-    result = await browse_source_detailed(db, source, listing(PointDescriptor("ns=3;s=Site.X", "X new"), hook=turn_on))
-    assert result == BrowseResult(1, matched_stored=1, ambiguous=0)  # the config of the moment of storing, not of the start
-    assert await points_of(db, source) == {stored: ("ns=3;s=20403:Site.X", "X new")}
+    with pytest.raises(BrowseSettingsChanged) as raised:
+        await browse_source_detailed(db, source, listing(PointDescriptor("ns=3;s=20403:Site.X", "X new"), hook=turn_on))
+    assert str(raised.value) == CHANGED
+    assert await points_of(db, source) == before == {stored: ("ns=3;s=20403:Site.X", "ns=3;s=20403:Site.X")}
 
 
-async def test_an_option_turned_off_during_the_walk_decides_the_matching(db):
+async def test_an_option_turned_off_during_the_walk_stores_nothing_and_says_so(db):
     source, (stored,) = await listing_source(db, "ns=3;s=20403:Site.X")
+    before = await points_of(db, source)
 
     async def turn_off():
         await set_option(db, source, False)
 
-    result = await browse_source_detailed(db, source, listing(PointDescriptor("ns=3;s=Site.X", "X new"), hook=turn_off))
-    assert result == BrowseResult(1, matched_stored=0, ambiguous=0)  # the address is the identity again: a point of its own
-    after = await points_of(db, source)
-    assert after[stored] == ("ns=3;s=20403:Site.X", "ns=3;s=20403:Site.X") and sorted(a for a, _ in after.values()) == [
-        "ns=3;s=20403:Site.X", "ns=3;s=Site.X"
-    ]
+    with pytest.raises(BrowseSettingsChanged) as raised:  # the walk was in the stable form: no twin of the stored point is added
+        await browse_source_detailed(db, source, listing(PointDescriptor("ns=3;s=Site.X", "X new"), hook=turn_off))
+    assert str(raised.value) == CHANGED
+    assert await points_of(db, source) == before == {stored: ("ns=3;s=20403:Site.X", "ns=3;s=20403:Site.X")}
 
 
 async def test_an_option_turned_off_while_the_browse_waits_for_the_source_row_is_seen_inside_the_lock(db):
     source, (stored,) = await listing_source(db, "ns=3;s=20403:Site.X")
+    before = await points_of(db, source)
     async with db.acquire() as holder, holder.transaction():
         await holder.fetchval("SELECT 1 FROM sources WHERE id = $1 FOR UPDATE", source)  # what a PATCH holds
         task = asyncio.create_task(browse_source_detailed(db, source, listing(PointDescriptor("ns=3;s=Site.X", "X new"))))
         await asyncio.sleep(0.5)  # the browse has read "on", walked, and waits for the row
         assert not task.done()
         await holder.execute("UPDATE sources SET config = config || $2::jsonb WHERE id = $1", source, {"stable_addresses": False})
-    assert await asyncio.wait_for(task, 10) == BrowseResult(1, 0, 0)
-    assert sorted(a for a, _ in (await points_of(db, source)).values()) == ["ns=3;s=20403:Site.X", "ns=3;s=Site.X"]
+    with pytest.raises(BrowseSettingsChanged, match=re.escape(CHANGED)):
+        await asyncio.wait_for(task, 10)
+    assert await points_of(db, source) == before == {stored: ("ns=3;s=20403:Site.X", "ns=3;s=20403:Site.X")}
+
+
+async def test_an_option_that_stays_as_it_was_is_stored_as_before_for_both_settings(db):
+    on, (stored,) = await listing_source(db, "ns=3;s=20403:Site.X")
+    off = await make_source(db, "plain", "opcua", {"endpoint": "opc.tcp://x", "stable_addresses": False})
+    assert await browse_source_detailed(db, on, listing(PointDescriptor("ns=3;s=Site.X", "X new"))) == BrowseResult(1, 1, 0)
+    assert (await points_of(db, on))[stored] == ("ns=3;s=20403:Site.X", "X new")
+    assert await browse_source_detailed(db, off, listing(PointDescriptor("ns=3;s=20403:Site.X", "X"))) == BrowseResult(1)
+    assert sorted(a for a, _ in (await points_of(db, off)).values()) == ["ns=3;s=20403:Site.X"]
+
+
+async def test_the_browse_job_fails_with_the_sentence_and_the_source_keeps_its_status(db):
+    source, (stored,) = await listing_source(db, "ns=3;s=20403:Site.X")
+    status = await db.fetchrow("SELECT status, last_error FROM sources WHERE id = $1", source)
+
+    async def turn_off():
+        await set_option(db, source, False)
+
+    job = await db.fetchval("INSERT INTO jobs (kind, params) VALUES ('browse_source', $1) RETURNING id", {"source_id": source})
+    await run_pending_jobs(db, listing(PointDescriptor("ns=3;s=Site.X", "X new"), hook=turn_off))
+    row = await db.fetchrow("SELECT status, result FROM jobs WHERE id = $1", job)
+    assert (row["status"], row["result"]) == ("failed", {"error": CHANGED})
+    assert await db.fetchrow("SELECT status, last_error FROM sources WHERE id = $1", source) == status  # a setting is no outage
+    assert list(await points_of(db, source)) == [stored]
 
 
 # ---- the money tests (R4): which stored point a value lands on ---------------------------------------------------------------

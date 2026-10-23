@@ -464,16 +464,17 @@ class OpcUaConnector(Connector):
         await self._learn_slice(client)
         results: list[ua.DataValue] = []
         start = 0
+        answered = 0  # the node count of the largest request of this call that the server answered
         while start < len(nodes):
             # `self._slice` is read again for every slice: a halving below lowers the size of all the slices after it. The cursor
             # moves by what was asked, not by what came back (a wrong answer length ends in the typed error below, not in a loop).
             batch = nodes[start : start + (self._slice or POLL_SLICE_CAP)]
-            answered = await self._read_slice(client, batch, after_success=start > 0)
-            if len(answered) != len(batch):
+            values, answered = await self._read_slice(client, batch, answered)
+            if len(values) != len(batch):
                 # Checked per slice: two wrong lengths can add up to the right total, and every value after the first one would
                 # then be filed under the address before its own.
-                raise ConnectorError("protocol_error", f"the server answered {len(answered)} values for {len(batch)} tags")
-            results.extend(answered)
+                raise ConnectorError("protocol_error", f"the server answered {len(values)} values for {len(batch)} tags")
+            results.extend(values)
             start += len(batch)
         return results
 
@@ -492,24 +493,30 @@ class OpcUaConnector(Connector):
             limit = None
         self._slice = slice_size(limit, POLL_SLICE_CAP)
 
-    async def _read_slice(self, client: Client, nodes: list[Node], after_success: bool = False) -> list[ua.DataValue]:
+    async def _read_slice(
+        self, client: Client, nodes: list[Node], answered: int = 0
+    ) -> tuple[list[ua.DataValue], int]:
         """One request. A server that refuses it as too many operations (whatever it advertised) gets the same nodes as two
         requests, half each, once; the smaller size is kept for every later slice. A second refusal is a typed error.
 
-        The size kept is half of what the refusal shows to be too big: the slice itself, or, when a slice of this call was answered
-        before it (`after_success`, a short tail), half of the size in use: a tail turned away does not show that the size just
-        answered is too big, so it is not cut to the smallest size at once. Never below MIN_SLICE."""
+        `answered` is the node count of the largest request of this call that the server has answered so far (0: none), and the
+        same number comes back with the values, raised by what this slice had answered.
+
+        The size kept is half of what the refusal shows to be too big: the slice itself, or, when a request of this call was answered
+        before it (a short tail), half of the size in use: a tail turned away does not show that the size just answered is too big,
+        so it is not cut to the smallest size at once. Never below MIN_SLICE."""
         try:
-            return await client.read_attributes(nodes, ua.AttributeIds.Value)
+            values = await client.read_attributes(nodes, ua.AttributeIds.Value)
+            return values, max(answered, len(nodes))
         except ua.UaStatusCodeError as exc:
             if getattr(exc, "code", None) != ua.StatusCodes.BadTooManyOperations:  # UaStatusCodeErrors (several codes) has no `code`
                 raise
         half = (len(nodes) + 1) // 2
         current = self._slice or POLL_SLICE_CAP
-        learned = min(current, max(MIN_SLICE, ((current if after_success else len(nodes)) + 1) // 2))
+        learned = min(current, max(MIN_SLICE, ((current if answered else len(nodes)) + 1) // 2))
         if half < MIN_SLICE:  # too small to halve: the server refuses even this
             self._slice = learned
-            raise _too_many_operations(len(nodes))
+            raise _too_many_operations(len(nodes), answered)
         results: list[ua.DataValue] = []
         for part in (nodes[:half], nodes[half:]):
             try:
@@ -518,15 +525,20 @@ class OpcUaConnector(Connector):
                 if getattr(exc, "code", None) != ua.StatusCodes.BadTooManyOperations:
                     raise
                 self._slice = learned  # remembered anyway, so the next poll starts smaller
-                raise _too_many_operations(len(part)) from None
+                raise _too_many_operations(len(part), answered) from None
+            answered = max(answered, len(part))
         self._slice = learned
-        return results
+        return results, answered
 
 
-def _too_many_operations(size: int) -> ConnectorError:
+def _too_many_operations(size: int, answered: int = 0) -> ConnectorError:
+    """`answered`: the largest request of the call the server took before this refusal (0: none)."""
     text = f"the server refuses reads of {size} tags at once (BadTooManyOperations)"
-    if size <= MIN_SLICE:  # the smallest request there is: a limit below it cannot be worked with, and the error says so
-        text += f"; a request is never split below {MIN_SLICE} tags, so a server limit below {MIN_SLICE} cannot be used"
+    if size <= MIN_SLICE:  # the smallest request there is
+        if answered:  # the server took a request already: it has no limit this small, only this one request was turned away
+            text = f"the server refused a read of {size} tags after answering a read of {answered} tags (BadTooManyOperations)"
+        else:  # a limit below it cannot be worked with, and the error says so
+            text += f"; a request is never split below {MIN_SLICE} tags, so a server limit below {MIN_SLICE} cannot be used"
     return ConnectorError("protocol_error", text)
 
 

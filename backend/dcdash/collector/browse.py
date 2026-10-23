@@ -19,7 +19,6 @@ _UPSERT_POINT = """
 _UPDATE_POINT = "UPDATE points SET name = $2, data_type = $3, unit_hint = $4 WHERE id = $1"
 # The lock and the config in one statement: while this transaction holds the row, a PATCH (which takes it FOR UPDATE) cannot change the option.
 _LOCK_SOURCE = "SELECT connector_type, config FROM sources WHERE id = $1 FOR KEY SHARE"
-_SOURCE_KEY = "SELECT connector_type, config FROM sources WHERE id = $1"
 _STORED_POINTS = """
     SELECT p.id, p.address, EXISTS (SELECT 1 FROM mappings m WHERE m.point_id = p.id) AS mapped
     FROM points p WHERE p.source_id = $1
@@ -81,12 +80,26 @@ def plan_browse(
     return plan
 
 
-async def connector_for(pool: asyncpg.Pool, source_id: int, factory: ConnectorFactory) -> Connector:
+class BrowseSettingsChanged(Exception):
+    """The source's address option is not the one its connector was built with: the listing is in the other form, so it is not stored."""
+
+    def __init__(self) -> None:
+        super().__init__("the stable address option was changed while the browse was running; browse again")
+
+
+async def _connector_and_key(
+    pool: asyncpg.Pool, source_id: int, factory: ConnectorFactory
+) -> tuple[Connector, Callable[[str], str]]:
+    """The connector of a source and the key function of the config it was built from (one read of the row, so they agree)."""
     row = await pool.fetchrow("SELECT connector_type, config, secret FROM sources WHERE id = $1", source_id)
     if row is None:
         raise LookupError(f"source {source_id} not found")
     secret = decrypt(row["secret"]) if row["secret"] else None
-    return factory(row["connector_type"], row["config"], secret)
+    return factory(row["connector_type"], row["config"], secret), address_key_for(row["connector_type"], row["config"])
+
+
+async def connector_for(pool: asyncpg.Pool, source_id: int, factory: ConnectorFactory) -> Connector:
+    return (await _connector_and_key(pool, source_id, factory))[0]
 
 
 async def browse_source_detailed(pool: asyncpg.Pool, source_id: int, factory: ConnectorFactory) -> BrowseResult:
@@ -96,32 +109,26 @@ async def browse_source_detailed(pool: asyncpg.Pool, source_id: int, factory: Co
     online and a stale "credentials rejected" error is cleared (a failed browse changes nothing here).
 
     A source that compares addresses by their stable form (OPC UA with "Stable tag addresses") lands each listed tag on the point
-    already stored for it, whatever number the server shows now (`plan_browse`), in one transaction that first takes a share
-    lock on the source row. Every other source keeps the plain upsert by address. Which of the two applies is decided from the
-    source's config as it is AFTER the walk (a walk of a big server takes minutes and the option can be changed meanwhile), and
-    for the stable path once more inside the lock.
+    already stored for it, whatever number the server shows now (`plan_browse`). Every other source keeps the plain upsert by
+    address. Either way one transaction first takes a share lock on the source row, and under it the source's key function must
+    still be the one the connector was built with: a walk of a big server takes minutes and the option can be changed meanwhile,
+    and a listing in the form of the old setting stored under the new one would add a twin of every tag. If it changed, nothing is
+    stored and `BrowseSettingsChanged` is raised.
     """
-    connector = await connector_for(pool, source_id, factory)
+    connector, walk_key = await _connector_and_key(pool, source_id, factory)
     try:
         descriptors = await connector.browse()
     finally:
         await connector.close()
-    row = await pool.fetchrow(_SOURCE_KEY, source_id)
-    if row is None:
-        raise LookupError(f"source {source_id} not found")
-    if address_key_for(row["connector_type"], row["config"]) is identity_key:
-        await pool.executemany(
-            _UPSERT_POINT, [(source_id, d.address, d.name, d.data_type, d.unit_hint) for d in descriptors]
-        )
-        result = BrowseResult(len(descriptors))
-    else:
-        result = await _store_by_key(pool, source_id, descriptors)
+    result = await _store(pool, source_id, descriptors, walk_key)
     if getattr(connector, "polls", True):  # a source that is never polled (`file`) keeps its status
         await mark_source(pool, source_id, True)
     return result
 
 
-async def _store_by_key(pool: asyncpg.Pool, source_id: int, descriptors: Sequence[PointDescriptor]) -> BrowseResult:
+async def _store(
+    pool: asyncpg.Pool, source_id: int, descriptors: Sequence[PointDescriptor], walk_key: Callable[[str], str]
+) -> BrowseResult:
     async with pool.acquire() as conn, conn.transaction():
         # The source row first: a source being deleted holds it (FOR UPDATE) before it waits for its points, so this
         # transaction can never hold a point row that delete is waiting for while it waits for the source.
@@ -129,10 +136,11 @@ async def _store_by_key(pool: asyncpg.Pool, source_id: int, descriptors: Sequenc
         if source is None:
             raise LookupError(f"source {source_id} not found")
         key = address_key_for(source["connector_type"], source["config"])  # read under the lock: it cannot change from here on
-        if key is identity_key:  # the option was turned off after the read that chose this path: the plain upsert, in this transaction
+        if key is not walk_key:
+            raise BrowseSettingsChanged
+        if key is identity_key:
             await conn.executemany(
-                _UPSERT_POINT,
-                [(source_id, d.address, d.name, d.data_type, d.unit_hint) for d in sorted(descriptors, key=lambda d: d.address)],
+                _UPSERT_POINT, [(source_id, d.address, d.name, d.data_type, d.unit_hint) for d in descriptors]
             )
             return BrowseResult(len(descriptors))
         stored = [(row["id"], row["address"], row["mapped"]) for row in await conn.fetch(_STORED_POINTS, source_id)]
