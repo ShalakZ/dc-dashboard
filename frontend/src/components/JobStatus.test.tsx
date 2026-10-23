@@ -29,18 +29,22 @@ describe("JobStatus (w34 browse line)", () => {
     expect(await screen.findByText("found 0 points")).toBeInTheDocument();
   });
 
-  it("adds the ambiguous clause, worded for both of its causes, when tags were left as they are", async () => {
-    await shown(browse({ count: 15180, matched_stored: 15000, ambiguous: 3 }));
-    expect(
-      await screen.findByText("found 15,180 points; 3 tags were left as they are (more than one point or server node has the same stable address)"),
-    ).toBeInTheDocument();
+  it("adds the ambiguous clause, in plain words, when tags were left as they are, and the line takes the warning shape instead of the ok one", async () => {
+    await shown(browse({ count: 15180, matched_stored: 15000, ambiguous: 15023 }));
+    const line = await screen.findByText("found 15,180 points; 15,023 tags were left as they are (the same stable address was found more than once)");
+    expect(line).toHaveClass("job", "st", "st-warn");
+    expect(line).not.toHaveClass("st-ok");
   });
 
-  it("uses the singular for one ambiguous tag", async () => {
+  it("uses the singular for one ambiguous tag, in the warning shape too", async () => {
     await shown(browse({ count: 12, matched_stored: 10, ambiguous: 1 }));
-    expect(
-      await screen.findByText("found 12 points; 1 tag was left as it is (more than one point or server node has the same stable address)"),
-    ).toBeInTheDocument();
+    const line = await screen.findByText("found 12 points; 1 tag was left as it is (the same stable address was found more than once)");
+    expect(line).toHaveClass("st-warn");
+  });
+
+  it("keeps the ok shape for a browse that left nothing alone", async () => {
+    await shown(browse({ count: 60, matched_stored: 0, ambiguous: 0 }));
+    expect(await screen.findByText("found 60 points")).toHaveClass("st-ok");
   });
 
   it("leaves the clause out when nothing is ambiguous or the field is absent", async () => {
