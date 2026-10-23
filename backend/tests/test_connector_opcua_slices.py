@@ -432,7 +432,9 @@ async def test_the_check_reads_the_stable_forms_the_poll_reads_and_keeps_the_sto
     assert polled == [wanted]
     checked = tag_values(ua.AttributeIds.Value)
     assert checked[0] == wanted  # the read_points step: one chunk, the stable forms, the caller's order
-    assert not any(re.search(r"s=[0-9]+:", i) for ids in checked for i in ids)  # the timing step reads stable forms too
+    # The one Read that carries numbered ids is the stable-address comparison of the step (w34 R7: the numbered forms, then the stable
+    # ones, at one instant); the timing step reads stable forms too.
+    assert [ids for ids in checked if any(re.search(r"s=[0-9]+:", i) for i in ids)] == [[*stored[1:11], *wanted]]
     rows = {row["address"]: row for row in {step.id: step for step in result.steps}["read_points"].detail["points"]}
     assert set(rows) == set(stored)  # the stored strings, not the stable forms
     text = f"two points have the same stable address {pair}"
