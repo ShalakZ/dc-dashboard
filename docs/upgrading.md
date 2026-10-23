@@ -146,7 +146,7 @@ message appeared as described), and lost what came after the dump.
 
 ## Migrations in order
 
-The files are in `backend/migrations/versions/`; each revises the one before it, and `0017` is the head. The release-note entry of a
+The files are in `backend/migrations/versions/`; each revises the one before it, and `0018` is the head. The release-note entry of a
 migration says how to apply it, how to verify it and the commit to go back to.
 
 | Revision | What it does | Downgrade | Release note |
@@ -168,6 +168,7 @@ migration says how to apply it, how to verify it and the commit to go back to.
 | `0015` | display screens: three empty tables, `playlists`, `playlist_items` and `displays` | lossless for everything older; the downgrade drops the three tables and loses the playlists and display links | the w28 entry in the [CHANGELOG](../CHANGELOG.md) |
 | `0016` | a unique key on readings (`readings_point_ts_key`, in place of the plain index `readings_point_ts`) and the small table `history_status` (the history fill's progress per source) | lossless: the downgrade builds the plain index again and drops `history_status`, which is derived data | the w30 entry in the [CHANGELOG](../CHANGELOG.md), and [`0016`](#0016-and-the-history-fill-w30) below |
 | `0017` | what a source remembers about its server: one empty column, `sources.identity` | lossless for everything else; the downgrade drops the column and loses the remembered identities, which the next scan, Test or connection check learns again | the w33 entry in the [CHANGELOG](../CHANGELOG.md), and [`0017`](#0017-and-the-source-identity-w33) below |
+| `0018` | what the data watchdog needs: three empty columns on `point_latest` (`good_at`, `good_value`, `changed_at`), filled for the points that read good right now | lossless: nothing is deleted; the downgrade drops the three columns, whose content the next good readings write again | the w35 entry in the [CHANGELOG](../CHANGELOG.md), and [`0018`](#0018-and-the-data-watchdog-w35) below |
 
 Waves without a migration also have entries in the CHANGELOG (for example W7p, no migration): read them too, they can name checks.
 
@@ -234,6 +235,38 @@ bill, no mapping.
 before w33 (`f7462e8`, or the commit you noted in step 1). The downgrade drops the column and touches nothing else. The remembered
 identities are lost, which only means that the next scan, Test or check learns them again. If a source was moved while the new code
 ran, it stays at the address it was moved to: the move changed the source's address, which the downgrade keeps.
+
+### `0018` and the data watchdog (w35)
+
+**What it changes.** Three nullable columns on the small table `point_latest` (one row per point: the newest reading of each): `good_at`
+(when the newest good reading was taken), `good_value` (its value) and `changed_at` (when that value last changed). The data watchdog
+([Watching the data from outside](operating.md#watching-the-data-from-outside)) needs them, because once a bad reading has replaced the
+newest one the time of the last good one would otherwise be lost. Nothing is deleted, and the time, value and quality that every row
+already holds are identical before and after.
+
+**What the upgrade does to the rows.** The migration fills the columns of every point whose newest reading is good: `good_at` and
+`changed_at` get the time of that reading and `good_value` its value. It does not search the history. So:
+- a point whose newest reading is bad starts empty, and a billing meter on it shows as stale until it reports a good reading;
+- a counter that is frozen at the moment of the upgrade is reported as not rising only after the set hours (6 by default), counted from
+  its newest reading, not at once;
+- a mapped point that has never been read is not stale: it is "waiting" until its first reading.
+
+**What an update looks like.** The first start of the new `api` runs the migration, in one transaction. Adding an empty column does not
+rewrite the table, and the back-fill touches one row per point, so the time depends on the number of points, not on the readings. The
+rehearsal on a copy of the pilot hall database (60 points) took 1.1 seconds; a site with thousands of points was not rehearsed. The
+migration waits for a lock on `point_latest` for at most 30 seconds (the collector writes that table at every poll). If it cannot get one
+it stops before it has changed anything, and the message says so: `migration 0018 could not get the lock it needs on point_latest within
+30 seconds (the collector, a long query or an earlier step of this upgrade holds it); nothing has been changed; starting the api again
+retries the upgrade`. Starting the `api` again is usually enough; if it repeats, `docker compose stop collector` for a minute first.
+
+**The figures are recomputed once.** As with `0017`, the new code is under `dcdash/core` and `dcdash/figures`, which the figure ledger's
+hash covers. After the update every stored figure counts as stale and the `figures` service writes them again; the first pages that show
+figures can be slower for a few minutes, and nothing is wrong. No value, bill or mapping changes.
+
+**Going back.** Lossless; use option a of step 6 with `alembic downgrade 0017` and the code from before w35 (`a8de5d1`, or the commit you
+noted in step 1). The downgrade drops the three columns and touches nothing else; in the rehearsal every other table was identical by value
+to its state before the upgrade, and upgrading again filled the same rows. What the columns held is lost, and costs nothing: the next
+good readings write it again. The `data.stale` and `data.recovered` rows already in System events stay there like any other event.
 
 ## Duplicate readings
 

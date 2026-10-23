@@ -75,7 +75,11 @@ show. Every dashboard in playlist Wall A is skipped or the playlist is empty. An
 
 Only its own playlist, and only through three display routes: opening the link, reading the playlist, and reading the figures of one of
 its widgets. That is the playlist's dashboards and their widgets as saved, the figures they show, the names of the focus assets and their
-path, the site's time zone, the version and whether data is arriving. A screen cannot sign in, change anything, export CSV, follow the
+path, the site's time zone, the version and whether data is arriving. (The last is the playlist's `status`: whether the collector is alive,
+whether readings are fresh and the age of the newest one. Since w35 it also carries the data watchdog's counts as optional fields:
+`meters`, `meters_waiting`, `meters_stale`, `meters_not_advancing`, `oldest_stale_age_seconds` and `rollups_late`, numbers only and
+empty when the rule could not be worked out. The wall screen reads only the first three; see
+[Watching the data from outside](operating.md#watching-the-data-from-outside).) A screen cannot sign in, change anything, export CSV, follow the
 live stream or open any other page; every other route that needs an account answers 401 to it, and a signed-in account's cookie means
 nothing to the display routes. It cannot ask for another range or another asset than the ones saved.
 
@@ -178,7 +182,8 @@ dashboard. Only one shows at a time, and it goes away by itself on the first ans
   last reading and never because of the screen's own connection. When the age of the last reading is under a minute or unknown, the
   notice has no time. It says "The data collector stopped." instead only when the collector has said so on two reads a minute apart (a
   collector restarts during an update; one read could catch it). One meter that stops alone does not bring this notice: its own card
-  shows its stale mark. When nothing has ever been read, there is no notice.
+  shows its stale mark. The stale-meter counts the playlist carries do not change that: the notice still means that every reading
+  stopped, and a notice for stale meters is not built. When nothing has ever been read, there is no notice.
 - **"This screen has not been updated since 14:02. Trying again..."** No figure has reached the screen for two minutes, or the
   playlist itself has not been read for five minutes (the playlist carries the data status for the first notice). A restart of the
   server that lasts a few seconds, or one failed request, never shows it. The screen keeps trying and shows its last figures dimmed.

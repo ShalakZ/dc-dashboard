@@ -66,7 +66,11 @@ lacks says "No access".
 ## Operate
 
 - **Sources** (operators and admins): needs `sources.view`. The data sources with their status, last error and the age of their
-  newest reading, and a notice when the collector has gone quiet (see [Health](operating.md#health)). A second notice above the table
+  newest reading, and a notice when the collector has gone quiet (see [Health](operating.md#health)). While billing meters of a source
+  are in trouble, a second line under its age in the **Last reading** column says so: `3 of 8 meters stale` (the words of the top bar's
+  chip; a frozen source's counters are counted in it) or, when only energy counters have stopped rising, `2 meters not rising`. It is
+  not there while all is well, nor for a source without a billing meter. The age counts every reading, bad ones too, and the line only
+  good ones, so a row can show both at once ([When a meter counts as stale](operating.md#when-a-meter-counts-as-stale)). A second notice above the table
   names the sources that have been offline for more than 2 minutes (only enabled sources with a mapped point; at most three names, then
   "and 2 more"): for how long and since when, and the last error, or "has not answered since it was added" for a source that never
   answered, with **See its events** for a person who also has `diagnostics.view`. It needs only `sources.view`; it is a plain notice, not
@@ -163,7 +167,9 @@ lacks says "No access".
   day it should start: a rate applies to whole local days. How cost is worked out from the rates, and what a move in the tree
   does to it, is in [Dashboards and billing](dashboards-and-billing.md).
 - **Storage** (admin): needs `storage.view`; changes need `storage.edit`. See [Storage](storage.md). Its card **System events and the
-  audit log** says how long system events are kept and, with `storage.edit`, changes it (**Change...**).
+  audit log** says how long system events are kept and, with `storage.edit`, changes it (**Change...**). Under it the card **Data
+  watchdog** says after how many minutes a meter counts as stale and after how many hours an energy counter is flagged as not rising,
+  and with `storage.edit` changes both (**Change...**, [The data watchdog](storage.md#the-data-watchdog)).
 - **Displays** (admin): needs `displays.manage` and `dashboards.view`. Playlists (an ordered list of dashboards, each with an optional
   focus asset and 10 to 3600 seconds on screen) and displays, the screens that show one playlist from a secret link, with no sign-in.
   **New display** shows the link once, with **Copy link**. A screen's row menu has **Rename**, **Change playlist** and **Revoke**
@@ -197,11 +203,19 @@ lacks says "No access".
   caused the other (the **Open in System events** of an audit entry, and **Open the audit entry** in an event's drawer, for a person with
   `audit.view`, on the event that ended a check or a test someone started). A source that is down or reading badly is **one row that
   counts**, not a row for every failed read: it stays open ("ongoing") with its count and how long it has lasted, and when the source
-  answers again it is closed and one recovery row says how long it lasted ("back online after 4 d 2 h"). The collector's own
+  answers again it is closed and one recovery row says how long it lasted ("back online after 4 d 2 h"). The same goes for stale
+  meters: **one `data.stale` row per source** (kind shown as "Stale meters") opens when the figures service finds, on two looks a minute
+  apart, that billing meters of the source have no good reading (error) or that its energy counters have stopped rising (warning). It
+  says how many (`3 of 12 meters have no good reading`, never a meter's name), counts and shows how long it has lasted, closes by itself
+  when the meters report again with one "Meters reporting again" row (`data.recovered`), and when the source is switched off or deleted
+  meanwhile it closes as "stopped being read after ..." with no recovery row. A third kind, "Readings dropped" (`readings.dropped`, an
+  error), says the collector had to throw readings away because the database did not take them in time; it is written once the database
+  answers again, at most every 10 minutes. The collector's own
   `scan.finished` entries (a scan ended) stay in the Audit log, where they were always written. On top, four tiles: **Open problems**
   (red above zero), **Warnings, last 24 h**, **Errors, last 24 h** and **Kept** (how many events and the oldest); under them **Happening
   now** lists the open problems, the first ten (**Show all open problems** shows the rest), one line each (`OPC UA server at 172.20.0.3:4840 is offline since 18 Oct 07:52 (4 d 2 h), 1,204 failed
-  reads. Could not connect to the server.`). The toolbar filters by source, kind, level (Info, Warning, Error) and a From to
+  reads. Could not connect to the server.`; a stale-meter problem reads `Plant OPC has stale meters since 18 Oct 07:52 (2 h). 3 of 12
+  meters have no good reading.`). The toolbar filters by source, kind, level (Info, Warning, Error) and a From to
   To range, has **Open only** and **Export CSV** (at most 20,000 events; a longer range is refused with a sentence); the filters are in the
   address. **Friendly** shows a sentence per event with a square level tag, its source, and for an incident its count and duration;
   **Raw** shows the stored kind, code, message and data. A row, its chevron or its time opens the event in a drawer on the right (`/events/ID`) with
@@ -216,6 +230,23 @@ lacks says "No access".
 - **Diagnostics** (admin): needs `diagnostics.view` and `sources.view`; the connection check needs `diagnostics.run`. Builds a
   report to paste when a real source fails, and runs a step-by-step connection check of one source. See
   [Field debugging](field-debugging.md).
+
+## The top bar
+
+- **Status chip** (everyone signed in; it needs no permission): the word in the top bar that says whether the data is flowing, asked
+  again every 10 seconds. It shows the first of these that is true:
+  1. `Collector offline`: the collector has not written its heartbeat for 30 seconds.
+  2. `3 of 48 meters stale`, with `oldest 12 min ago` beside it: that many billing meters have no good reading for their allowed time,
+     or belong to a frozen source ([When a meter counts as stale](operating.md#when-a-meter-counts-as-stale)); the age is how long the
+     longest-silent one has been silent. One meter reads `1 of 1 meter stale`. On a narrow window the chip shortens to `3 meters stale`
+     and drops the age.
+  3. Otherwise the readings' own state, as before w35: `No readings yet`, `Stale` (no mapped point has a recent reading) or `Live`, each
+     with the age of the newest reading (`last reading 4 s ago`).
+  4. `Live` with energy counters that stand still shows `2 meters not rising` in place of the age. That is a warning only.
+
+  When the meter numbers are missing (an older server, or the rule could not be worked out for a moment), the chip shows the third
+  state's words exactly as before. The chip only helps whoever looks at it; to be told when nobody is looking, see [Watching the data from
+  outside](operating.md#watching-the-data-from-outside).
 
 ## The profile panel
 

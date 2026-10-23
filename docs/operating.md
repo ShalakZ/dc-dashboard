@@ -50,6 +50,88 @@ is unmapped). No notice is shown when the status cannot be read, for example whi
 has had no answer for 30 s it says "Collector status cannot be read" instead, and the Last reading ages keep counting
 from the last answer. After a restore the old heartbeat reads as "silent" until the collector starts.
 
+`GET /api/health/data` is a second check, for the freshness of the data, meant for a monitoring tool: [Watching the data from
+outside](#watching-the-data-from-outside). The top bar's chip follows the same rule. It counts billing meters that have stopped giving
+good readings; before w35 it only asked whether any reading at all was recent, so one dead meter among many never showed.
+
+## Watching the data from outside
+
+`GET /api/health/data` answers one question: are the billing meters still reporting? A **billing meter** is what an asset's figures are
+built from: its energy counter (`energy_kwh`), else its power meter (`active_power_kw`), on an enabled source that the collector polls (a
+`file` source is never polled). Like `GET /api/health` the URL needs no sign-in, and it names nothing: no meter, source, address or
+value, only counts.
+
+```bash
+curl -s -o /dev/null -w '%{http_code}' https://<host>/api/health/data
+```
+
+- **200** means the billing meters report. It is also 200 for a site with no billing meter yet (`"status":"no_meters"`), for a meter that
+  has been mapped but not read yet (`waiting`) and for a counter that has not risen for hours (`not_advancing`: a quiet circuit may
+  truly stand still, so that is a warning on the screens and not a failure here).
+- **503** means one of three things: at least one billing meter has had no good reading for its allowed time (`"status":"stale"`); a
+  whole source stands still, all its counters and its other points (`frozen_sources`, see below); or the answer could not be had in
+  time, because the database did not answer within 2 seconds (the body is then only `{"status":"unavailable"}`).
+
+The body of a 200 or of a stale 503 holds these fields:
+
+| Field | Meaning |
+|---|---|
+| `status` | `ok`, `stale`, `no_meters` or `unavailable` |
+| `meters` | how many billing meters there are |
+| `waiting` | of them, mapped and not read yet (never counted as stale) |
+| `stale` | meters with no good reading for too long, plus the counters of a frozen source |
+| `not_advancing` | energy counters that have not risen for the set hours (a warning; not part of `stale`) |
+| `frozen_sources` | sources whose counters and other points all stand still |
+| `oldest_stale_age_seconds` | how long the longest-silent stale meter has been silent; `null` when none, or when it is not known |
+| `collector_alive` | whether the collector's heartbeat is recent; told only, never a 503 by itself (the stale meters say the same soon enough) |
+| `rollups_late` | a refresh of the long-range rollups is late, so charts over long ranges lag; told only, never a 503 |
+
+**How to watch it.** Poll it every 1 to 5 minutes and raise the alarm after 2 failures in a row (a 503, a 401, or no answer). The answer
+is reused for 5 seconds, so a monitor does not load the database. A refused connection or a timeout is the monitor's own alarm: the host
+or the `api` is down, and only a monitor outside the stack can tell. A watchdog inside the thing that dies dies with it. Alone, the
+platform shows the problem to whoever looks (the top bar, [Sources and System events](screens.md#operate)); only an outside monitor tells
+someone who is not looking.
+
+**A token, if you want one.** Put `DCDASH_HEALTH_TOKEN=<a long random string>` in `.env` and run `docker compose up -d`. The URL then
+answers only to the header below; a missing or wrong token is a 401 with an empty body, and a token in the address is never read. A blank
+value means no token.
+
+```bash
+curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer <token>' https://<host>/api/health/data
+```
+
+With HTTPS set up, port 80 redirects to `https://`
+([Optional HTTPS](install-and-run.md#optional-https)); a monitor must follow the redirect or, better, use `https://` from the start. With
+a token set, always point it at `https://`, so that the header never crosses port 80 in the clear. Without HTTPS the token travels as
+plain text, like every other request to the stack.
+
+**Never make it a container healthcheck** (or a `depends_on` condition). One stale meter would make that container unhealthy and hold
+back every service that waits for it, so `docker compose up -d` (and with it `scripts/setup.sh`) could stop on a counter, which a
+restart cannot fix. The stack's own checks stay `GET /api/health`.
+
+### When a meter counts as stale
+
+The numbers are set in Storage, card **Data watchdog** ([Storage](storage.md#the-data-watchdog)); the factory values are 5 minutes and 6 hours.
+
+- **Stale.** A billing meter is stale when it has had no good reading for longer than three of its own polls or the floor, whichever is
+  longer. The floor is 5 minutes (2 to 60). A reading is good when its quality is good and it has a value. A bad reading does not
+  refresh a meter, although it does refresh the **Last reading** age on the Sources page, which counts every reading: a row can show
+  `12 s ago` and `3 of 8 meters stale` together. A meter that has rows but never a good one is stale at once.
+- **Waiting.** A mapped meter with no reading at all yet is waiting, not stale, so a new mapping does not raise an alarm before its first
+  poll. The exception is a source that has been offline (an open `source.offline` problem) for longer than the meter's limit.
+- **Not rising.** An energy counter whose value has not changed for 6 hours (1 to 72) is flagged as not rising. This is a warning. A
+  counter on a circuit that carries no load is left alone: its asset's power meter, if fresh, reads 0.05 kW or less, and a circuit
+  like that may truly stand still. Near very large counter values a small load moves a 32-bit counter only once in many hours, so a
+  6-hour setting can flag and clear such a counter again and again: raise the hours, or accept the warning.
+- **Frozen.** A source is frozen when at least two of its counters (not stale, not waiting, not on a circuit without load) are all
+  not rising, and at least one other mapped point of the source (voltage, current, power) still reads good and none of them has changed
+  for that time either. A server that keeps answering with old values looks like this. A frozen source counts as stale: its counters are
+  added to `stale`. A single counter that stands still, or a source whose other points still move, stays a warning; a source with no
+  other point that reads good is never called frozen.
+
+The incident in System events ([Screens](screens.md#operate)) opens about one to three minutes after a meter turns stale: the figures
+service looks about once a minute and opens it on the second look in a row, so a blip of a minute leaves no trace.
+
 ## Housekeeping
 
 Every hour the collector deletes expired sessions, finished jobs older than 7 days, and diagnostic journal events (the System events
@@ -62,8 +144,8 @@ tests, browses, checks) at once, so "Test all" tests at most 4 sources at a time
 
 `figures` is a small background service beside `api` and `collector`. It keeps the figures of the current and the recent months ready in
 the database table `figure_ledger`, so that Billing and the dashboards do not have to compute them again after an api restart
-([The figure ledger](dashboards-and-billing.md#the-figure-ledger)). It writes that table and nothing else: never a reading, a tariff or
-a setting.
+([The figure ledger](dashboards-and-billing.md#the-figure-ledger)). It writes that table, and since w35 the `data.stale` and
+`data.recovered` entries of the System events journal (below), and nothing else: never a reading, a tariff or a setting.
 
 - **What it does.** Every 30 seconds it looks at the current month (and the previous one during its first week), recomputes what changed
   and stores it. Older months it looks at every 10 minutes, or at once after a configuration change, and it deletes what is no longer
@@ -71,10 +153,19 @@ a setting.
   the diagnostic journal as `figures.mismatch`.
 - **Stopping it is safe.** `docker compose stop figures` makes pages slower after an api restart, never wrong: the api uses a stored
   figure only when it has proof that it is current. `docker compose start figures` brings it back and it refills the table within a minute.
+  Stopping it also stops the `data.stale` incidents of System events: they open and close in this process, so while it is stopped
+  none opens, grows or closes. The top bar, the Sources line and `GET /api/health/data` stay true, because the rule is worked out
+  every time they are read ([Watching the data from outside](#watching-the-data-from-outside)).
+- **The stale-meter check.** About once a minute the service that holds the work lock looks at the billing meters and keeps one `data.stale`
+  incident per source in System events: it opens on the second look in a row that finds trouble, and when the meters report again it
+  closes with one `data.recovered` line. A source that is switched off or deleted while its incident is open closes it as "stopped being
+  read". This check does not depend on the ledger: with `DCDASH_FIGURE_LEDGER=0` the service still runs it (and takes the work lock for
+  it), and only the figures work is skipped.
 - **Settings.** Put them in `.env` (Compose passes them to the api and the service; run `docker compose up -d` after a change).
   `DCDASH_FIGURE_LEDGER`: `0`, `false`, `off` or `no` (any case) switches the ledger off for the api and the service; anything else,
   also empty, leaves it on. `DCDASH_FIGURE_CACHE=0` switches the whole figure cache off, and the ledger with it (the api stops
-  reading the ledger; the `figures` service goes idle only with `DCDASH_FIGURE_LEDGER` off).
+  reading the ledger; the `figures` service skips its figures work only with `DCDASH_FIGURE_LEDGER` off, and still runs the stale-meter
+  check below).
   `DCDASH_FIGURES_INTERVAL`: seconds between two rounds, default 30, never below 5. `DCDASH_FIGURES_MONTHS`: how many months it keeps ready, 1 to 24, default 6.
 - **Where to look.** `docker compose ps` shows `figures` as `healthy`: it touches a heartbeat file after every figure and every round and
   is called unhealthy when that file is older than 3 minutes. `docker compose logs --tail 80 figures` shows what it did; a quiet log is

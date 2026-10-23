@@ -74,6 +74,27 @@ records the values before and after and, for a confirmed save, how many events w
 deleted, by age or by count, however old it is, because it is the one row that says the source is still down. A closed one is kept until
 its *closing* is older than the limit, so a long outage that has just ended is not removed at the next clean-up.
 
+## The data watchdog
+
+The card **Data watchdog** (under the System events card) says when the platform calls a billing meter stale and an energy counter not
+rising: by default "Meters are stale after 5 minutes without a good reading (or 3 polls, whichever is longer); energy counters are
+flagged after 6 hours without rising." What those words mean for the top bar, the Sources page, System events and the
+`GET /api/health/data` URL is on [Operating the stack](operating.md#when-a-meter-counts-as-stale).
+
+**Change...** (needs `storage.edit`; `storage.view` shows the card) opens the dialog **Change when meters count as stale** with the two
+numbers and the range each accepts: **Stale after (minutes)**, 2 to 60, and **Counter not rising after (hours)**, 1 to 72. A value outside
+the range, a fraction or a half-filled form is refused with a sentence. A shorter time finds a dead meter sooner and may flag one that is
+only slow; a longer one is calmer and slower to tell. The meter's own rhythm still counts: a meter polled every 5 minutes is stale
+after 15 whatever the floor says. Saving deletes nothing and asks nothing, so there is no confirmation step.
+
+**When it takes effect.** The top bar, the Sources line and the URL use the new numbers within a few seconds (the verdict is kept for at
+most 5 seconds, and a save drops it). A `data.stale` incident in System events follows at the figures service's next look, which comes
+every minute to a minute and a half. A missing or damaged stored value reads as the factory values, so the watchdog always has a rule.
+
+**The audit entry.** A save is recorded as `watchdog.changed` with the values before and after, and the Audit page words it like this:
+`Changed the data watchdog: stale after 10 minutes (was 5), counters flagged after 12 hours (was 6)`. It lists only the number or
+numbers that changed.
+
 ## Filling older gaps
 
 When a source keeps its own history, the platform can fill the holes an outage leaves

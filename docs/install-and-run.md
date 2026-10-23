@@ -144,6 +144,14 @@ To enforce the policy later: rename `Content-Security-Policy-Report-Only` to `Co
 `docker compose up -d --build web`. `test_the_policy_is_report_only_on_purpose` in `backend/tests/test_caddy_headers.py` pins
 Report-Only and has to be changed in the same commit, and so does the header name that `frontend/e2e/headers.spec.ts` reads.
 
+## Optional: a token for the data health URL
+
+`GET /api/health/data` tells a monitoring tool whether the billing meters still report; it is open like `GET /api/health` and names
+nothing. To make it answer only to a caller that knows a secret, add `DCDASH_HEALTH_TOKEN=<a long random string>` to `.env` and run
+`docker compose up -d`; the caller then sends `Authorization: Bearer <token>` (a missing or wrong one is a 401; leave the line out, or
+blank, for an open URL). What the URL answers, how to poll it and why it must never be a container healthcheck are in [Watching the
+data from outside](operating.md#watching-the-data-from-outside).
+
 ## First sign-in
 
 Open `http://localhost/` (or `https://` with your host name once HTTPS is set up). The first visit asks you to create the admin
