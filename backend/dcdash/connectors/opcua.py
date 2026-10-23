@@ -31,6 +31,7 @@ from dcdash.connectors.base import (
     url_host_port,
 )
 from dcdash.connectors.identity import from_endpoints
+from dcdash.connectors.opcua_browse import browse_tree
 from dcdash.connectors.opcua_ids import read_plan, stable_address
 
 if TYPE_CHECKING:
@@ -338,28 +339,12 @@ class OpcUaConnector(Connector):
         return sorted(found, key=lambda p: p.name)
 
     async def _walk(self, client: Client) -> list[PointDescriptor]:
-        """Every variable under the root node, as the server names it (a raw node id), in discovery order."""
-        found: list[PointDescriptor] = []
-        root = client.get_node(self.config.root_node)
+        """Every variable under the root node, as the server names it (a raw node id), in discovery order. The requests are
+        batched, the order is the old depth-first walk's (see `opcua_browse`)."""
+        root = client.get_node(self.config.root_node).nodeid
         # Under the Objects folder, namespace 0 holds only OPC Foundation infrastructure
         # (Server diagnostics, Aliases, ...), never process data.
-        skip_standard = root.nodeid == _OBJECTS_FOLDER
-        stack: list[Node] = [root]
-        seen: set[str] = set()
-        while stack:
-            node = stack.pop()
-            for child in await node.get_children(refs=ua.ObjectIds.HierarchicalReferences):
-                key = child.nodeid.to_string()
-                if key in seen or (skip_standard and child.nodeid.NamespaceIndex == 0):
-                    continue
-                seen.add(key)
-                node_class = await child.read_node_class()
-                if node_class == ua.NodeClass.Variable:
-                    name = (await child.read_display_name()).Text or key
-                    found.append(PointDescriptor(address=key, name=name, unit_hint=await _unit(child)))
-                elif node_class == ua.NodeClass.Object:
-                    stack.append(child)
-        return found
+        return await browse_tree(client, root, root == _OBJECTS_FOLDER)
 
     async def read(self, addresses: list[str]) -> list[PointValue]:
         ts = datetime.now(timezone.utc)
