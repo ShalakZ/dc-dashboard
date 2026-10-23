@@ -15,6 +15,13 @@ PUBLIC: dict[str, str] = {
     "POST /api/setup": "creates the first account, once; refused (409) as soon as any account exists",
 }
 
+# Public routes added AFTER the frozen matrix (tests/fixtures/auth_matrix_pre_w9a.json is never edited): PUBLIC above is a subset of the
+# fixture's keys, this table is not. The gate and isolation tests treat both as public; the frozen-key comparisons see only PUBLIC.
+PUBLIC_AFTER_FREEZE: dict[str, str] = {
+    "GET /api/health/data": "w35: the data freshness URL for a monitoring tool; counts only, no name or value; a bearer token can be set "
+                            "with DCDASH_HEALTH_TOKEN (then 401 without it). Never a container healthcheck",
+}
+
 # Routes any signed-in account may call.
 SIGNED_IN: dict[str, str] = {
     "GET /api/me": "the caller's own account",
@@ -148,6 +155,10 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     # and isolation tests cover them. The read routes of the events themselves are listed by their own task.
     _all("storage.view", "GET /api/settings/events"),
     _all("storage.edit", "PUT /api/settings/events"),
+    # Added in W35 (the data freshness watchdog's two thresholds: the Storage card): after the freeze, so not in auth_matrix_pre_w9a.json;
+    # the gate and isolation tests cover them.
+    _all("storage.view", "GET /api/settings/watchdog"),
+    _all("storage.edit", "PUT /api/settings/watchdog"),
     # Added in W32 (the System events page: the journal, one event, its filters, its tiles and its CSV): after the freeze, so not in
     # auth_matrix_pre_w9a.json; the gate and isolation tests cover them. diagnostics.view alone opens them (the page also needs sources.view).
     _all("diagnostics.view", "GET /api/events", "GET /api/events/{event_id:int}", "GET /api/events/options", "GET /api/events/summary",

@@ -73,6 +73,17 @@ describe("EventDrawer: one event (w32)", () => {
     expect(rows.Duration).toHaveTextContent("ongoing, 4 d 2 h");
   });
 
+  it("has no Count row for a stale-meters incident, which counts evaluations and shows no number of times", () => {
+    const stale = stored({
+      kind: "data.stale", level: "error", code: null, component: "figures", message: "3 of 12 meters have had no good reading for up to 2 h",
+      detail: { meters: 12, stale: 3, not_advancing: 0, frozen: false }, incident: incident({ count: 7, duration_seconds: 2 * 3600 }),
+    });
+    const { dialog } = show(drawer({ event: stale }));
+    expect(labels(dialog())).toEqual(["What happened", "Source", "Level", "Kind", "Began", "Latest", "Ended", "Duration", "Message", "Event"]);
+    expect(facts(dialog())["What happened"]).toHaveTextContent("3 of 12 meters have no good reading");
+    expect(facts(dialog()).Duration).toHaveTextContent("ongoing, 2 h");
+  });
+
   it("shows a closed incident with when and how it ended", () => {
     const closed = incident({ state: "closed", closed_at: "2026-10-22T09:00:00Z", closed_by: "recovered", count: 30, duration_seconds: 3600 });
     const { dialog, rerender, toasts } = show(drawer({ event: stored({ incident: closed }) }));

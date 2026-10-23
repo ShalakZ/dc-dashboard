@@ -447,5 +447,18 @@ export default defineConfig({
       dependencies: ["w32"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // The data watchdog (w35). It MAKES ITS OWN DATA through the API (`W35 <run> ...`: the asset and a `simulator` source at the live simulator with ONE energy counter mapped at 5 s), puts the stale floor to 2 minutes
+    // (the setting's lowest) for the run and back in afterAll, and removes it all there, also after a failed case; it needs no scratch stack. It is the SLOW project of the chain, on purpose and with real time: it breaks the
+    // source's address and waits for the meter to turn stale (about 2 to 4 minutes), for the figures worker to open the `data.stale` incident (1 to 3 minutes more, it evaluates once a minute and opens on the second look)
+    // and for it to close again after the source is deleted. Cases (serial): the setup (first reading before anything is broken, baselines); `meters_stale` rises; the chip reads `N of M meters stale` with `oldest ... ago`
+    // (and keeps the top bar's height at 1024 x 768, sidebar expanded and minimised); the Sources row's line; GET /api/health/data answers 503 with nine keys and no names; the incident in System events (the Sources banner's
+    // link, the pinned line, one row); the way back (chip, URL, incident closed as `polling_stopped`); the Storage card Data watchdog and its dialog. It reads the stack's own stale count first, so meters that other specs
+    // left behind do not matter, but a spec before it that leaves an ENABLED source with a mapped billing meter at a dead address would turn the chip of every project after it to `stale` (w7a asserts `Live`).
+    {
+      name: "w35",
+      testMatch: "w35.spec.ts",
+      dependencies: ["w33"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

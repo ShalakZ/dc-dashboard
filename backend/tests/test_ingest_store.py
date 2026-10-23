@@ -6,11 +6,12 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from dcdash.connectors.base import BAD, GOOD
 from dcdash.core import journal
 from dcdash.core.pg import LATEST_CHANNEL, create_pool
 from dcdash.ingest import store
 from dcdash.ingest.kinds import READINGS_CONFLICT
-from dcdash.ingest.store import WriteResult, classify_readings, insert_readings, journal_conflicts
+from dcdash.ingest.store import Freshness, WriteResult, classify_readings, good_freshness, insert_readings, journal_conflicts
 from helpers import listening, make_point, make_source, wait_for
 
 T0 = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
@@ -61,6 +62,12 @@ async def _two_are_waiting(db) -> bool:
 async def _latest(db, point) -> tuple:
     row = await db.fetchrow("SELECT ts, value, quality FROM point_latest WHERE point_id = $1", point)
     return None if row is None else (row["ts"], row["value"], row["quality"])
+
+
+async def _fresh(db, point) -> tuple | None:
+    """The three freshness columns of a point: (good_at, good_value, changed_at)."""
+    row = await db.fetchrow("SELECT good_at, good_value, changed_at FROM point_latest WHERE point_id = $1", point)
+    return None if row is None else (row["good_at"], row["good_value"], row["changed_at"])
 
 
 # --- the rules of one call ---
@@ -289,6 +296,234 @@ async def test_overlapping_batches_in_opposite_orders_finish_without_a_deadlock(
         for p in shared:  # whichever batch came second, the newest row wins
             assert await _latest(db, p) == (base + timedelta(seconds=101), 1.0, 0)
         assert await _latest(db, points[0]) == (base + timedelta(seconds=19), 19.0, 0)
+        # The three freshness columns end the same whichever writer took the shared pairs: the newest Good row, its value, and the
+        # start of its run (every value differs from the one before it, so a run is one row long).
+        for p in points:
+            newest = base + timedelta(seconds=101 if p in shared else 19)
+            assert await _fresh(db, p) == (newest, 1.0 if p in shared else 19.0, newest)
+
+
+# --- the freshness of the latest value (w35 R3): the pure helper ---
+
+
+def test_good_freshness_all_good_and_equal_is_one_run_from_the_first_row():
+    rows = [(1, at(0), 5.0, GOOD), (1, at(5), 5.0, GOOD), (1, at(10), 5.0, GOOD)]
+    assert good_freshness(rows) == {1: Freshness(at(10), 5.0, at(0), False)}
+
+
+def test_good_freshness_a_rising_value_starts_its_run_at_the_newest_row():
+    rows = [(1, at(0), 1.0, GOOD), (1, at(5), 2.0, GOOD), (1, at(10), 3.0, GOOD)]
+    assert good_freshness(rows) == {1: Freshness(at(10), 3.0, at(10), True)}
+
+
+def test_good_freshness_a_trailing_equal_run_after_a_change_starts_at_its_first_row():
+    rows = [(1, at(0), 1.0, GOOD), (1, at(5), 2.0, GOOD), (1, at(10), 2.0, GOOD), (1, at(15), 2.0, GOOD)]
+    assert good_freshness(rows) == {1: Freshness(at(15), 2.0, at(5), True)}
+
+
+def test_good_freshness_a_bad_row_inside_an_equal_run_does_not_break_it():
+    rows = [(1, at(0), 5.0, GOOD), (1, at(5), None, BAD), (1, at(10), 7.5, BAD), (1, at(15), 5.0, GOOD)]
+    assert good_freshness(rows) == {1: Freshness(at(15), 5.0, at(0), False)}  # a BAD row, with a value or without, is skipped
+
+
+def test_good_freshness_the_newest_row_may_be_bad_while_an_earlier_one_is_good():
+    rows = [(1, at(0), 4.0, GOOD), (1, at(5), 4.0, GOOD), (1, at(10), None, BAD)]
+    assert good_freshness(rows) == {1: Freshness(at(5), 4.0, at(0), False)}
+
+
+def test_good_freshness_a_point_with_no_good_row_is_left_out():
+    rows = [(1, at(0), None, BAD), (1, at(5), 3.0, BAD), (2, at(0), 1.0, GOOD)]
+    assert good_freshness(rows) == {2: Freshness(at(0), 1.0, at(0), False)}
+    assert good_freshness([]) == {}
+
+
+def test_good_freshness_a_good_row_without_a_value_is_not_good():
+    assert good_freshness([(1, at(0), None, GOOD)]) == {}
+    rows = [(1, at(0), 6.0, GOOD), (1, at(5), None, GOOD)]
+    assert good_freshness(rows) == {1: Freshness(at(0), 6.0, at(0), False)}  # it neither sets good_at nor breaks the run
+
+
+def test_good_freshness_a_fall_is_just_a_different_value():
+    rows = [(1, at(0), 9.0, GOOD), (1, at(5), 3.0, GOOD)]
+    assert good_freshness(rows) == {1: Freshness(at(5), 3.0, at(5), True)}
+
+
+def test_good_freshness_works_per_point_and_reads_zero_and_negative_zero_as_equal():
+    rows = [(1, at(0), 0.0, GOOD), (1, at(5), -0.0, GOOD), (2, at(0), 1.0, GOOD), (2, at(5), 2.0, GOOD), (3, at(1), None, BAD)]
+    assert good_freshness(rows) == {1: Freshness(at(5), -0.0, at(0), False), 2: Freshness(at(5), 2.0, at(5), True)}
+
+
+def test_good_freshness_is_a_tuple_of_the_four_values():
+    good_at, good_value, run_start, inner_change = good_freshness([(1, at(0), 1.0, GOOD)])[1]
+    assert (good_at, good_value, run_start, inner_change) == (at(0), 1.0, at(0), False)
+
+
+# --- the freshness of the latest value: through insert_readings ---
+
+
+async def test_the_first_batch_sets_all_three_columns_with_the_run_start_as_changed_at(db):
+    a, b = await _points(db, 2)
+    await _store(db, [(a, at(0), 1.0, GOOD), (a, at(5), 1.0, GOOD), (a, at(10), 2.0, GOOD), (b, at(0), 3.0, GOOD), (b, at(5), 3.0, GOOD)])
+    assert await _fresh(db, a) == (at(10), 2.0, at(10))
+    assert await _fresh(db, b) == (at(5), 3.0, at(0))
+    assert await _latest(db, a) == (at(10), 2.0, 0)
+
+
+async def test_the_same_value_later_moves_good_at_and_keeps_changed_at(db):
+    (a,) = await _points(db)
+    await _store(db, [(a, at(0), 5.0, GOOD)])
+    await _store(db, [(a, at(10), 5.0, GOOD), (a, at(15), 5.0, GOOD)])
+    assert await _fresh(db, a) == (at(15), 5.0, at(0))
+
+
+async def test_a_different_value_moves_changed_at_to_the_start_of_the_new_run(db):
+    (a,) = await _points(db)
+    await _store(db, [(a, at(0), 5.0, GOOD)])
+    await _store(db, [(a, at(20), 6.0, GOOD), (a, at(25), 6.0, GOOD)])
+    assert await _fresh(db, a) == (at(25), 6.0, at(20))
+    await _store(db, [(a, at(30), 4.0, GOOD)])  # a fall is a change too
+    assert await _fresh(db, a) == (at(30), 4.0, at(30))
+
+
+async def test_a_bad_reading_then_the_same_good_value_keeps_changed_at(db):
+    # The frozen counter that flaps: BAD, then Good with the same value. It must never look like a change.
+    (a,) = await _points(db)
+    await _store(db, [(a, at(0), 5.0, GOOD)])
+    await _store(db, [(a, at(10), None, BAD)])
+    assert await _fresh(db, a) == (at(0), 5.0, at(0))
+    await _store(db, [(a, at(20), 5.0, GOOD)])
+    assert await _fresh(db, a) == (at(20), 5.0, at(0))
+    await _store(db, [(a, at(30), 5.0, BAD), (a, at(40), 5.0, GOOD)])  # a BAD row that carries the value, then Good again
+    assert await _fresh(db, a) == (at(40), 5.0, at(0))
+
+
+async def test_a_batch_of_only_bad_rows_keeps_the_three_columns_and_moves_the_rest(db):
+    (a,) = await _points(db)
+    await _store(db, [(a, at(0), 5.0, GOOD)])
+    await _store(db, [(a, at(10), None, BAD), (a, at(15), 8.0, BAD)])
+    assert await _fresh(db, a) == (at(0), 5.0, at(0))
+    assert await _latest(db, a) == (at(15), 8.0, 1)  # value and quality are the BAD row's, as before this wave
+
+
+async def test_a_point_that_only_ever_had_bad_rows_has_no_freshness_until_a_good_one_comes(db):
+    (a,) = await _points(db)
+    await _store(db, [(a, at(0), None, BAD)])
+    assert await _fresh(db, a) == (None, None, None)
+    assert await _latest(db, a) == (at(0), None, 1)
+    await _store(db, [(a, at(10), 3.0, GOOD)])
+    assert await _fresh(db, a) == (at(10), 3.0, at(10))  # nothing stored: the first Good value starts its run now
+
+
+async def test_a_nan_becomes_bad_and_does_not_touch_the_good_value(db):
+    (a,) = await _points(db)
+    await _store(db, [(a, at(0), 5.0, GOOD)])
+    await _store(db, [(a, at(10), math.nan, GOOD), (a, at(15), math.inf, GOOD)])
+    assert await _fresh(db, a) == (at(0), 5.0, at(0))
+    assert await _latest(db, a) == (at(15), None, 1)
+
+
+async def test_a_good_row_without_a_value_is_not_good_and_changes_nothing(db):
+    (a,) = await _points(db)
+    await _store(db, [(a, at(0), 5.0, GOOD)])
+    await _store(db, [(a, at(10), None, GOOD)])
+    assert await _fresh(db, a) == (at(0), 5.0, at(0))
+    assert await _latest(db, a) == (at(10), None, 0)
+
+
+async def test_an_older_batch_is_skipped_by_the_gate_and_the_three_columns_do_not_move(db):
+    (a,) = await _points(db)
+    await _store(db, [(a, at(10), 5.0, GOOD)])
+    await _store(db, [(a, at(0), 9.0, GOOD), (a, at(5), 9.0, GOOD)])
+    assert await _fresh(db, a) == (at(10), 5.0, at(10))
+    assert await _latest(db, a) == (at(10), 5.0, 0)
+
+
+async def test_a_good_row_older_than_the_stored_good_one_changes_none_of_the_three(db):
+    # The batch's newest row (a BAD one) is newer than the latest, so the row is taken, but its only Good reading is older than
+    # the stored good_at: good_at, good_value and changed_at all keep their values.
+    (a,) = await _points(db)
+    await _store(db, [(a, at(10), 5.0, GOOD)])
+    await _store(db, [(a, at(5), 9.0, GOOD), (a, at(30), None, BAD)])
+    assert await _fresh(db, a) == (at(10), 5.0, at(10))
+    assert await _latest(db, a) == (at(30), None, 1)
+
+
+async def test_a_change_inside_the_batch_that_ends_on_the_stored_value_is_still_a_change(db):
+    # Stored 10; the batch is [11, 10]: the last value equals the stored one, but the counter went to 11 and back, so the last
+    # change is the start of the trailing run of 10 (the batch cannot be told apart from a change by the stored value alone).
+    (a,) = await _points(db)
+    await _store(db, [(a, at(0), 10.0, GOOD)])
+    await _store(db, [(a, at(10), 11.0, GOOD), (a, at(15), 10.0, GOOD)])
+    assert await _fresh(db, a) == (at(15), 10.0, at(15))
+    await _store(db, [(a, at(20), 10.0, GOOD)])  # and now it holds again
+    assert await _fresh(db, a) == (at(20), 10.0, at(15))
+
+
+async def test_a_change_inside_the_batch_moves_changed_at_of_that_point_only(db):
+    # One flush holds many points. A counter that moved inside the flush must not reset the changed_at of the frozen ones next to it
+    # (else "not advancing" could never fire on a real site): inner_change belongs to its own point.
+    a, b = await _points(db, 2)
+    await _store(db, [(a, at(0), 10.0, GOOD), (b, at(0), 5.0, GOOD)])
+    await _store(
+        db,
+        [(a, at(10), 11.0, GOOD), (a, at(15), 10.0, GOOD), (b, at(10), 5.0, GOOD), (b, at(15), 5.0, GOOD)],
+    )
+    assert await _fresh(db, a) == (at(15), 10.0, at(15))  # went to 11 and back: the trailing run starts at its second row
+    assert await _fresh(db, b) == (at(15), 5.0, at(0))  # good_at moved, the value held, changed_at stayed
+
+
+async def test_a_batch_with_a_change_inside_it_and_a_bad_newest_row_takes_the_good_run(db):
+    (a,) = await _points(db)
+    await _store(db, [(a, at(0), 1.0, GOOD)])
+    await _store(db, [(a, at(10), 2.0, GOOD), (a, at(15), 2.0, GOOD), (a, at(20), None, BAD)])
+    assert await _fresh(db, a) == (at(15), 2.0, at(10))
+    assert await _latest(db, a) == (at(20), None, 1)
+
+
+async def test_a_point_removed_while_buffered_gets_no_freshness_and_the_others_do(db):
+    (a,) = await _points(db)
+    gone = a + 1000
+    await _store(db, [(a, at(0), 1.0, GOOD), (gone, at(0), 2.0, GOOD)])
+    assert await _fresh(db, a) == (at(0), 1.0, at(0))
+    assert await _fresh(db, gone) is None
+
+
+async def test_a_resent_batch_still_counts_differing_and_changes_no_freshness(db):
+    (a,) = await _points(db)
+    await _store(db, [(a, at(0), 1.0, GOOD), (a, at(5), 2.0, GOOD)])
+    result = await _store(db, [(a, at(0), 99.0, GOOD), (a, at(5), 2.0, GOOD)])
+    assert (result.new, result.already, result.differing) == (0, 1, 1)
+    assert await _fresh(db, a) == (at(5), 2.0, at(5))
+
+
+async def test_the_notify_payload_rows_keep_exactly_four_items(db, database_url):
+    a, b = await _points(db, 2)
+    async with listening(database_url, LATEST_CHANNEL) as received:
+        await _store(db, [(a, at(0), 1.0, GOOD), (a, at(5), 2.0, GOOD), (b, at(0), None, BAD)], notify=True)
+        payload = json.loads(await asyncio.wait_for(received.get(), 5))
+    assert sorted(payload) == sorted([[a, at(5).timestamp(), 2.0, 0], [b, at(0).timestamp(), None, 1]])
+    assert all(len(row) == 4 for row in payload)
+
+
+async def test_a_bad_only_point_with_the_lower_id_does_not_take_the_freshness_of_a_good_point(db):
+    # The eight arrays line up by position, in the order of the batch's newest rows (by point id): the first point has no Good
+    # row, the second has, and neither may read the other's good_at, good_value or changed_at.
+    bad, good = await _points(db, 2)
+    assert bad < good
+    await _store(db, [(bad, at(0), None, BAD), (good, at(0), 1.0, GOOD), (good, at(5), 2.0, GOOD)])
+    assert await _fresh(db, bad) == (None, None, None)
+    assert await _fresh(db, good) == (at(5), 2.0, at(5))
+    await _store(db, [(bad, at(10), None, BAD), (good, at(10), 2.0, GOOD)])  # the conflict path, same shape
+    assert await _fresh(db, bad) == (None, None, None)
+    assert await _fresh(db, good) == (at(10), 2.0, at(5))
+
+
+async def test_a_new_point_latest_row_written_by_hand_has_no_freshness_and_the_next_good_batch_starts_it(db):
+    (a,) = await _points(db)
+    await db.execute("INSERT INTO point_latest (point_id, ts, value, quality) VALUES ($1, $2, 5.0, 0)", a, at(0))
+    assert await _fresh(db, a) == (None, None, None)
+    await _store(db, [(a, at(10), 5.0, GOOD)])
+    assert await _fresh(db, a) == (at(10), 5.0, at(10))
 
 
 # --- the journal event ---

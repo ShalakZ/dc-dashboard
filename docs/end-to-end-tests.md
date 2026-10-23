@@ -529,6 +529,13 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   second Undo of the same entry refused in words; (8) Not seen: three scans of one scope, the dimmed card, the panel sentence,
   **Turn on Not seen lately**, **Remove not seen (N)...** removing only the unmapped ones. The OPC UA move itself is covered by the
   backend tests and by the controller's drill. Lookups use `exact: true` ("Undo" is inside "Undo this move").
+- `w35.spec.ts` (its own project, last in the list, after `w33`; 1440 x 900, and 1024 x 768 for the top bar) checks the data watchdog. It is
+  the slow one, in real time (about 8 to 12 minutes): it sets the stale floor to 2 minutes (put back in `afterAll`), makes a `simulator`
+  source with ONE energy counter at 5 s, waits for its first reading, then points it at a dead address. Cases (serial): `meters_stale` rises;
+  the chip reads `N of M meters stale` with `oldest ... ago` and keeps the bar's height; the Sources row says `1 of 1 meter stale`;
+  `GET /api/health/data` answers 503 without a cookie, with nine keys and no names; the figures worker opens ONE `data.stale` incident
+  (1 to 3 minutes later); deleting the source clears the chip and the URL and closes the incident as `polling_stopped`; the Storage card
+  **Data watchdog** and its dialog. Other specs may leave stale meters (N is read first); a dead enabled source with a billing meter would not.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

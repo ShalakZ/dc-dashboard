@@ -220,7 +220,7 @@ def head_revision() -> str:
 
 def test_the_migration_follows_0016_and_is_the_only_head():
     assert "0016 -> 0017" in run_alembic("history", "-r", "0016:0017").stdout
-    assert head_revision() == "0017"
+    assert head_revision() == "0018"
 
 
 def migration():

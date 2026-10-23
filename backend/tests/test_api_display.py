@@ -765,7 +765,10 @@ async def test_the_playlist_answer_follows_the_contract_for_every_skip_reason(cl
     assert body["display"] == {"name": "Hall TV"}
     assert body["site"] == {"name": "DC Dashboard", "timezone": "UTC"}
     assert body["build"] == build_info().build_id
-    assert set(body["status"]) == {"collector_alive", "readings_fresh", "last_reading_age_seconds"}
+    assert set(body["status"]) == {
+        "collector_alive", "readings_fresh", "last_reading_age_seconds",
+        "meters", "meters_waiting", "meters_stale", "meters_not_advancing", "oldest_stale_age_seconds", "rollups_late",  # w35
+    }
     assert set(body["playlist"]) == {"name", "items"} and body["playlist"]["name"] == "Wall A"
     items = body["playlist"]["items"]
     assert [item["skipped"] for item in items] == [None, None, "no_widgets", "dashboard_deleted", "focus_gone"]
@@ -793,6 +796,8 @@ async def test_the_playlist_answer_agrees_with_the_status_and_version_routes(cli
     status = (await client.get("/api/status")).json()
     assert body["status"]["collector_alive"] == status["collector_alive"]
     assert body["status"]["readings_fresh"] == status["readings_fresh"]
+    for name in ("meters", "meters_waiting", "meters_stale", "meters_not_advancing", "oldest_stale_age_seconds", "rollups_late"):
+        assert body["status"][name] == status[name], name  # w35: the same numbers (the verdict is reused for 5 s)
     assert body["build"] == (await client.get("/api/version")).json()["build_id"]
     assert body["site"]["timezone"] == (await client.get("/api/site")).json()["timezone"]
 

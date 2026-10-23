@@ -57,6 +57,24 @@ async def make_mapping(db, point_id: int, asset_id: int, metric="active_power_kw
     )
 
 
+async def make_latest(
+    db, point_id: int, *, age: float = 0.0, value: float | None = 1.0, quality: int = 0,
+    good_age: float | None = None, good_value: float | None = None, changed_age: float | None = None,
+) -> None:
+    """Write (or replace) a `point_latest` row with all its columns, the times given as ages in seconds by the DATABASE clock:
+    the reading is `age` old, the newest Good reading `good_age` old holding `good_value`, and that value has stood since
+    `changed_age` ago. A None age is NULL (a BAD-only point has good_age, good_value and changed_age all None)."""
+    await db.execute(
+        "INSERT INTO point_latest (point_id, ts, value, quality, good_at, good_value, changed_at) "
+        "VALUES ($1, now() - $2::float8 * interval '1 second', $3, $4, "
+        "        CASE WHEN $5::float8 IS NULL THEN NULL ELSE now() - $5::float8 * interval '1 second' END, $6, "
+        "        CASE WHEN $7::float8 IS NULL THEN NULL ELSE now() - $7::float8 * interval '1 second' END) "
+        "ON CONFLICT (point_id) DO UPDATE SET ts = EXCLUDED.ts, value = EXCLUDED.value, quality = EXCLUDED.quality, "
+        "    good_at = EXCLUDED.good_at, good_value = EXCLUDED.good_value, changed_at = EXCLUDED.changed_at",
+        point_id, age, value, quality, good_age, good_value, changed_age,
+    )
+
+
 @contextlib.asynccontextmanager
 async def listening(database_url: str, channel: str):
     """Yield a queue that receives the payload of every NOTIFY on `channel`."""

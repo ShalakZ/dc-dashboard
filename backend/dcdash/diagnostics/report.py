@@ -74,7 +74,7 @@ HOST_FIELDS = ("endpoint", "url", "host")  # config fields that hold a host: fed
 REPORT_SETTINGS_KEYS: dict[str, tuple[str, ...]] = {"general": ("timezone",), "billing": ("currency",)}
 REPORT_ENV_FIELDS = ("timezone", "session_hours", "scan_max_hosts", "scan_extra_ports")
 # a test fails when a Settings field is in neither of these two lists
-EXCLUDED_ENV_FIELDS = ("database_url", "secret_key")
+EXCLUDED_ENV_FIELDS = ("database_url", "secret_key", "health_token")  # secrets never go into a report
 SCAN_PROGRESS_KEYS = ("hosts", "pairs", "checked", "open", "claimed", "points", "unidentified", "needs_credentials")
 
 # Line caps (summary, full) per tail section (M7). The names are the knobs `render` turns down when the body is too long.

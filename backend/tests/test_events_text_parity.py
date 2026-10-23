@@ -45,8 +45,9 @@ def test_the_collection_sees_what_the_backend_writes():
     # a guard for the guard: a regex that matched nothing would make the checks below pass for the wrong reason
     assert {
         "source.offline", "source.online", "points.bad", "check.finished", "job.finished", "readings.conflict", "import.finished", "source.identity_changed",
+        "data.stale", "data.recovered", "readings.dropped",
     } <= kinds()
-    assert len(kinds()) >= 15
+    assert len(kinds()) >= 19
     assert {"unreachable", "auth_failed", "timeout", "protocol_error", "needs_profile", "not_supported"} <= statuses()
 
 

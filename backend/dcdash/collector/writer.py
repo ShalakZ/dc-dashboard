@@ -3,7 +3,7 @@ import logging
 
 import asyncpg
 
-from dcdash.ingest.store import Row, finite_or_bad, insert_readings, journal_conflicts
+from dcdash.ingest.store import DroppedTally, Row, finite_or_bad, insert_readings, journal_conflicts, journal_dropped
 
 log = logging.getLogger(__name__)
 
@@ -18,10 +18,15 @@ class Writer:
         self._max = max_buffer
         self._notify = notify
         self._buffer: list[Row] = []
+        self._dropped = DroppedTally()  # dropped and not yet reported; `flush` reports it after a commit
 
     @property
     def pending(self) -> int:
         return len(self._buffer)
+
+    @property
+    def dropped_unreported(self) -> int:
+        return self._dropped.dropped
 
     def add(self, rows: list[Row]) -> None:
         self._buffer.extend(finite_or_bad(row) for row in rows)
@@ -32,6 +37,7 @@ class Writer:
         if overflow > 0:
             log.warning("reading buffer full, dropping %d oldest readings", overflow)
             del self._buffer[:overflow]
+            self._dropped.dropped += overflow
 
     async def flush(self) -> int:
         if not self._buffer:
@@ -44,11 +50,14 @@ class Writer:
             self._buffer = rows + self._buffer
             self._trim()
             if isinstance(exc, Exception):
+                self._dropped.flushes_failed += 1
                 log.warning("flush failed, keeping %d readings: %s", len(rows), exc)
                 return 0
             raise
         # After the commit and outside the try: the rows are stored, so a failure here must not put them back in the buffer
         await journal_conflicts(self._pool, result)
+        if self._notify:  # the seeder's writer never says anything
+            await journal_dropped(self._pool, self._dropped, self._max)
         return len(rows)
 
     async def run(self, interval: float = 1.0) -> None:

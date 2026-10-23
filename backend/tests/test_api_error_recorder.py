@@ -156,6 +156,40 @@ async def test_an_exception_after_the_response_started_is_journaled_with_the_sta
     assert event["message"] == "GET /api/_t/half: RuntimeError"
 
 
+async def test_the_intended_503_of_the_data_health_url_is_not_journaled_but_a_real_500_there_is(api, db, monkeypatch):
+    """GET /api/health/data answers 503 on purpose while a meter is stale (a monitoring tool polls it): that is not a server error.
+    A failure of the route itself still is."""
+    from dcdash.events import watchdog_rollups
+    from helpers import make_asset, make_latest, make_mapping, make_point, make_source
+
+    point = await make_point(db, await make_source(db, name="s"), "a")
+    await make_mapping(db, point, await make_asset(db, "m"))
+    await make_latest(db, point, age=900, good_age=900, good_value=1.0, changed_age=900)  # silent for 15 minutes: stale
+    async with client_for(api) as client:
+        stale = await client.get("/api/health/data")
+        assert stale.status_code == 503 and stale.json()["status"] == "stale"
+        for _ in range(2):  # again, and a different 503 of the same route ("unavailable") is the same
+            assert (await client.get("/api/health/data")).status_code == 503
+
+        async def broken(timeout=2.0):
+            raise RuntimeError("the route itself failed")
+
+        monkeypatch.setattr(watchdog_rollups, "rollups_late", broken)
+        assert (await client.get("/api/health/data")).status_code == 500
+    [event] = await wait_for_events(db, 1)
+    await asyncio.sleep(0.3)
+    assert [(e["code"], e["detail"]["route"], e["detail"]["exception"]) for e in await events(db)] == [
+        ("500", "/api/health/data", "RuntimeError")
+    ]
+
+
+async def test_a_503_of_any_other_route_is_still_journaled_next_to_the_data_health_url(api, db):
+    async with client_for(api) as client:
+        assert (await client.get("/api/_t/unavailable")).status_code == 503
+    [event] = await wait_for_events(db, 1)
+    assert event["detail"]["route"] == "/api/_t/unavailable"
+
+
 async def test_a_failing_journal_does_not_change_the_response(api, db):
     class Closed:
         async def execute(self, *args):

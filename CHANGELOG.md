@@ -4,7 +4,7 @@ What each release (a merged wave) changed, newest first. Each section is headed 
 
 A release that needs an upgrade note carries it as a `###` entry: the schema revision it leads to when there is a migration, what
 changes and what you will notice, the pre-checks to run before it, how to verify it, whether its downgrade is lossless (which decides
-whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 13 releases on this page
+whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 14 releases on this page
 have such an entry (4 of them have no migration) and the archive has 10 more. The other releases need nothing beyond the usual steps of
 [Upgrading and going back](docs/upgrading.md); they have one or two lines here. The releases up to W7j (2026-10-13) are in the
 [changelog archive](docs/changelog-archive.md), with migrations 0004 to 0008; Phase 1A, Phase 1C and Phase 2 brought migrations 0001
@@ -15,6 +15,19 @@ this page; for a version older than W9a, first in the [changelog archive](docs/c
 heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
+
+## w35 (2026-10-23, MERGE_COMMIT)
+
+Data freshness watchdog (migration `0018`, no new permission). The top bar no longer asks "is any reading fresh?": it counts billing meters (an energy counter, else a kW meter, per asset, on enabled polled sources) that have had no good reading for more than three polls (at least 5 minutes) and says `3 of 48 meters stale` with how long the oldest has been silent. An energy counter that has not risen for 6 hours (and whose asset carries a load) shows as `N meters not rising`; a source whose counters and other points all stand still counts as stale. **Sources** shows the same per source, **Events** keeps one `data.stale` incident per source and closes it when readings return, and the writer says when it had to drop readings (`readings.dropped`). `GET /api/health/data` answers 503 for the company's own monitoring (optional token `DCDASH_HEALTH_TOKEN`; [Watching the data from outside](docs/operating.md)). Thresholds: **Storage**, **Data watchdog**. No figure, bill or closed month changes; the figures are recomputed once after the update (the engine changes).
+
+### Upgrading to w35 (migration 0018)
+
+Schema `0017` to `0018`. Downgrade: **lossless** (it drops three columns of `point_latest`, `good_at`, `good_value` and `changed_at`; the next good readings write them again). The code to go back to is `a8de5d1` (the main before w35). The upgrade adds three empty columns, fills them for the rows that read good, and waits at most 30 seconds for a lock on `point_latest`, then stops with a plain sentence and changes nothing. A point whose latest reading is bad shows as stale until it reads good again; a frozen counter is reported its threshold's hours after the update, not at once.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4: `docker compose up -d --build`.
+3. **Verify.** `docker compose exec api alembic current` prints `0018 (head)`.
+4. **Going back.** Follow [Upgrading and going back](docs/upgrading.md) with `<previous>` = `0017` and `<old commit>` = `a8de5d1`.
 
 ## w33 (2026-10-22, 5f1d636)
 

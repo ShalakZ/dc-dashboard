@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     timezone: str = "UTC"
     scan_max_hosts: int = Field(1024, ge=1, le=65536)
     scan_extra_ports: str = ""
+    # w35: when set (and not blank), GET /api/health/data wants `Authorization: Bearer <this>`; empty = the URL is open like /api/health
+    health_token: str = ""
 
     @field_validator("timezone")
     @classmethod

@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import current_user, get_db, notify, require_permission
+from dcdash.api.health import log_once
 from dcdash.api.jobs import enqueue
 from dcdash.connectors.base import connector_types
 from dcdash.core.audit import (
@@ -22,6 +23,7 @@ from dcdash.core.crypto import encrypt
 from dcdash.core.models import Mapping, Point, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
 from dcdash.events import read as events_read
+from dcdash.events import watchdog
 from dcdash.moves.load import load_offers
 from dcdash.moves.match import MOVABLE_TYPES, Offer, Two, another_server_answers
 from dcdash.moves.urls import address_key, display_endpoint
@@ -97,6 +99,17 @@ class SourceHistoryLine(BaseModel):
     last_error: str | None = None
 
 
+class SourceMeters(BaseModel):
+    """w35: how the data freshness rule judges the billing meters of one source. Counts only (the Sources page shows a line while
+    something is wrong). `stale` is the stale level of the chip: silent meters, plus the counters of a frozen source."""
+
+    total: int  # billing meters on this source (an energy counter, else a kW meter, per asset)
+    stale: int
+    not_advancing: int  # energy counters that have not risen for the set time; 0 while the source is frozen (they are in `stale`)
+    frozen: bool  # the source answers but its counters (and its other points) stand still: a server serving cached values
+    oldest_stale_age_seconds: float | None = None  # the longest silence or standstill among the stale ones; None = none, or unknown
+
+
 class SourceListOut(SourceOut):
     last_reading_age_seconds: float | None = None  # newest stored reading of any of its points; None = none yet
     mapped_points: int = 0  # points of this source that have a mapping
@@ -110,6 +123,9 @@ class SourceListOut(SourceOut):
     # w33 whole-wave review I3: a scan, Test or check met ANOTHER server at this address than the one the source used to talk to
     # (`identity.different`; polling goes on). Only the fact: never what the other server said. False for no identity.
     identity_different: bool = False
+    # w35: the freshness rule's numbers for this source; null for a source with no billing meter, and null for every source while the
+    # rule cannot be evaluated (the rest of the row is answered all the same).
+    meters: SourceMeters | None = None
 
 
 class SourceHistoryOut(BaseModel):
@@ -294,6 +310,11 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
     ]
     candidates = await _move_candidates(db, askable)
     types = connector_types()
+    try:
+        by_source = (await watchdog.get_verdict()).sources  # its own session and bound, reused for 5 s: no query of this request's
+    except Exception as exc:
+        log_once("the data freshness verdict is not available for the sources", exc)
+        by_source = {}
     return [
         SourceListOut.of(
             s, last_reading_age_seconds=ages.get(s.id), mapped_points=int(counts.get(s.id, 0)),
@@ -301,10 +322,18 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
             history=_history_line(s, history.get(s.id), types),
             move_candidate=candidates.get(s.id),
             identity_different=another_server_answers(s.identity),  # the column is on the row already: no statement
+            meters=_meters_of(by_source.get(s.id)),
             **_offline_fields(s, incidents.get(s.id)),
         )
         for s in sources
     ]
+
+
+def _meters_of(verdict: watchdog.SourceVerdict | None) -> SourceMeters | None:
+    return None if verdict is None else SourceMeters(
+        total=verdict.meters, stale=verdict.stale, not_advancing=verdict.not_advancing, frozen=verdict.frozen,
+        oldest_stale_age_seconds=verdict.oldest_stale_age_seconds,
+    )
 
 
 async def _move_candidates(db: AsyncSession, old_ids: list[int]) -> dict[int, dict[str, Any]]:

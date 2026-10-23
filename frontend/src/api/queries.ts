@@ -9,7 +9,7 @@ import type {
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, SourceImpact, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, DataWidgetType, DashboardTemplates, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
   DisplayCreated, DisplayIn, DisplayPatch, DisplayRow, DisplaysList, PlaylistIn, PlaylistRow, ImportProfile,
-  EventDetail, EventFilters, EventOptions, EventPage, EventsRetention, EventsSettings, EventSummary,
+  EventDetail, EventFilters, EventOptions, EventPage, EventsRetention, EventsSettings, EventSummary, WatchdogSettings, WatchdogValues,
 } from "./types";
 
 export const keys = {
@@ -50,6 +50,8 @@ export const keys = {
   event: (id: number | null) => ["events", "one", id] as const,
   /** The retention of the journal (`GET /api/settings/events`), with the other settings, as the storage settings are. */
   eventsSettings: ["settings", "events"] as const,
+  /** (w35) When a billing meter counts as stale or as not rising (`GET /api/settings/watchdog`), with the other settings. */
+  watchdogSettings: ["settings", "watchdog"] as const,
   site: ["site"] as const,
   billingSettings: ["settings", "billing"] as const,
   tariffs: ["tariffs"] as const,
@@ -649,6 +651,23 @@ export function useSaveEventsSettings() {
     mutationFn: ({ values, confirm }: { values: EventsRetention; confirm: boolean }) =>
       api.put<EventsSettings>(`/api/settings/events${confirm ? "?confirm=true" : ""}`, values),
     onSettled: () => invalidate(keys.eventsSettings, keys.eventsAll, keys.auditAll),
+  });
+}
+
+/** (w35) The data watchdog's two numbers (storage.view): minutes before a meter is stale, hours before a counter that does not rise is flagged, with the factory values and the bounds. */
+export const useWatchdogSettings = (enabled = true) =>
+  useQuery({ queryKey: keys.watchdogSettings, queryFn: () => api.get<WatchdogSettings>("/api/settings/watchdog"), enabled });
+
+/**
+ * Save the watchdog's numbers (storage.edit); an out-of-bounds number answers 422 and the ApiError reaches the caller. `onSettled`, not `onSuccess`: a refusal means
+ * the setting on screen is out of date. It moves the setting, the chip (`status`: the verdict is cached for a few seconds on the server, which the save clears),
+ * the Sources lines (`sources`) and the audit log (the save is audited as `watchdog.changed`).
+ */
+export function useSaveWatchdogSettings() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (values: WatchdogValues) => api.put<WatchdogSettings>("/api/settings/watchdog", values),
+    onSettled: () => invalidate(keys.watchdogSettings, keys.status, keys.sources, keys.auditAll),
   });
 }
 

@@ -124,7 +124,7 @@ function EventView({ event, timezone, now, startedByPending }: { event: SystemEv
                 )}
               </dd>
             </div>
-            <div><dt>Count</dt><dd>{text.count}</dd></div>
+            {text.count !== null && <div><dt>Count</dt><dd>{text.count}</dd></div>}
             <div><dt>Duration</dt><dd>{text.span}</dd></div>
           </>
         ) : (

@@ -139,6 +139,22 @@ describe("EventsPage: the page (w32)", () => {
     expect(screen.getByRole("heading", { level: 2, name: "Happening now" })).toBeInTheDocument();
   });
 
+  it("pins a stale-meters incident without 'offline' or a count of failed reads, and shows its row with the same words (w35)", async () => {
+    const stale = ev(9, {
+      level: "error", component: "figures", kind: "data.stale", message: "3 of 12 meters have had no good reading for up to 2 h 10 min",
+      detail: { state: "open", count: 7, meters: 12, stale: 3, not_advancing: 0, frozen: false },
+      incident: incident({ count: 7, duration_seconds: 2 * 3600 }),
+    });
+    setup("/events", {}, server([stale, OFFLINE, ONLINE]));
+    const line = await screen.findByText("Plant OPC has stale meters since 18 Oct 07:52 (2 h). 3 of 12 meters have no good reading.");
+    expect(line.closest(".open-now")).not.toBeNull();
+    expect(line).not.toHaveTextContent(/offline|failed/);
+    const row = rowFor(9);
+    expect(within(row).getByText("3 of 12 meters have no good reading")).toBeInTheDocument();
+    expect(row).not.toHaveTextContent(/failed \d+ times?/);
+    expect(row).toHaveTextContent("ongoing, 2 h");
+  });
+
   it("says so, in the place the lines would be, when nothing is open", async () => {
     const srv = server([ONLINE]);
     srv.state.open = [];

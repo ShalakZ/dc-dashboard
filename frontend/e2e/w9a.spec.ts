@@ -103,6 +103,8 @@ const ADMIN_TIER: Probe[] = [
   get("/api/audit"), get("/api/audit/options"), get("/api/audit/position"), get("/api/audit/1"), get("/api/audit.csv"),
   // w32: the retention of the system events is storage.view / storage.edit like the other storage routes; the five read routes of the journal are diagnostics.view (a Viewer and an Operator hold neither)
   get("/api/settings/events"), put("/api/settings/events"),
+  // w35: the data watchdog's two thresholds are storage.view / storage.edit too (a Viewer and an Operator hold neither); a gate that lets the PUT through answers 422 for the empty body and saves nothing
+  get("/api/settings/watchdog"), put("/api/settings/watchdog"),
   get("/api/events"), get("/api/events/1"), get("/api/events/options"), get("/api/events/summary"), get("/api/events.csv"),
   get("/api/users"), post("/api/users"), patch(`/api/users/${GONE}`), del(`/api/users/${GONE}`), post(`/api/users/${GONE}/unblock`),
   get("/api/roles"), get("/api/permissions"), post("/api/roles"), patch(`/api/roles/${GONE}`), del(`/api/roles/${GONE}`),

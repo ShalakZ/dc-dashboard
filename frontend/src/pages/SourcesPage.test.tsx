@@ -891,6 +891,7 @@ describe("SourcesPage while the list loads (W7f)", () => {
       expect(row.querySelectorAll("td:first-child .sk-line")).toHaveLength(2);
       expect(row.querySelectorAll("td:first-child > .cell-history .sk-line")).toHaveLength(1);
       expect(row.querySelectorAll("td:not(:first-child) .cell-history")).toHaveLength(0);
+      expect(row.querySelectorAll(".cell-meters")).toHaveLength(0); // w35: the watchdog's line is data and is not drawn while loading
     }
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
     expect(screen.queryByText("No sources yet.")).not.toBeInTheDocument();
@@ -1683,5 +1684,85 @@ describe("SourcesPage, moving a source to the address where its device turned up
       await show([{ ...up, ...over }]);
       expect(screen.queryByText(SAYS)).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("SourcesPage, the data watchdog's line under the age (w35)", () => {
+  const meters = (over: Record<string, unknown> = {}) => ({ total: 12, stale: 0, not_advancing: 0, frozen: false, oldest_stale_age_seconds: null, ...over });
+  const show = async (rows: Record<string, unknown>[]) => {
+    mockFetch({ ...routes("operator"), "GET /api/sources": { body: rows.map((row) => ({ ...source, status: "online", ...row })) } });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    await screen.findByText(String(rows[0].name ?? "sim"));
+  };
+  /** The Last reading cell (the sixth) of the row of this source. */
+  const cellOf = (name: string) => screen.getByText(name).closest("tr")!.querySelectorAll("td")[5] as HTMLElement;
+
+  it("says '2 of 12 meters stale' in the warning ink under the age, in the same cell", async () => {
+    await show([{ meters: meters({ stale: 2, oldest_stale_age_seconds: 7200 }) }]);
+    const cell = cellOf("sim");
+    expect(cell).toHaveClass("num");
+    const line = within(cell).getByText("2 of 12 meters stale");
+    expect(line).toHaveClass("cell-meters", "warning");
+    expect(line).not.toHaveAttribute("role");
+    expect(cell.textContent).toBe("5 s ago2 of 12 meters stale"); // the age first, the line below it
+    expect(within(cell).getByText("5 s ago")).toBeInTheDocument();
+    expect(cell.querySelector("[aria-live], [role=status], [role=alert]")).toBeNull(); // text, not a live region
+  });
+
+  it("groups the thousands of the line", async () => {
+    await show([{ meters: meters({ total: 12345, stale: 12000 }) }]);
+    expect(within(cellOf("sim")).getByText("12,000 of 12,345 meters stale")).toBeInTheDocument();
+  });
+
+  it("says '1 of 1 meter stale' for a source with a single meter", async () => {
+    await show([{ meters: meters({ total: 1, stale: 1 }) }]);
+    expect(within(cellOf("sim")).getByText("1 of 1 meter stale")).toBeInTheDocument();
+  });
+
+  it("counts the counters of a frozen source as stale, as the chip does, and names no hours", async () => {
+    await show([{ meters: meters({ total: 4, stale: 4, frozen: true, oldest_stale_age_seconds: 25_200 }) }]);
+    const line = within(cellOf("sim")).getByText("4 of 4 meters stale");
+    expect(line).toBeInTheDocument();
+    expect(cellOf("sim").textContent).not.toMatch(/\d+ ?h\b/);
+  });
+
+  it("says nothing but the stale line when counters also do not rise", async () => {
+    await show([{ meters: meters({ stale: 1, not_advancing: 3 }) }]);
+    const cell = cellOf("sim");
+    expect(within(cell).getByText("1 of 12 meters stale")).toBeInTheDocument();
+    expect(cell.textContent).not.toMatch(/not rising/);
+  });
+
+  it.each([[1, "1 meter not rising"], [3, "3 meters not rising"]])("says %s counter(s) that do not rise in the muted ink, with no hours", async (count, text) => {
+    await show([{ meters: meters({ not_advancing: count }) }]);
+    const line = within(cellOf("sim")).getByText(text);
+    expect(line).toHaveClass("cell-meters", "muted");
+    expect(line).not.toHaveClass("warning");
+    expect(cellOf("sim").textContent).toBe(`5 s ago${text}`);
+  });
+
+  it.each([
+    ["no trouble", { meters: meters() }],
+    ["null", { meters: null }],
+    ["absent (an older server)", {}],
+    ["waiting meters only (counted in the total, not in trouble)", { meters: meters({ total: 5 }) }],
+  ])("leaves the cell as it was for %s", async (_name, over) => {
+    await show([over]);
+    const cell = cellOf("sim");
+    expect(cell.textContent).toBe("5 s ago");
+    expect(cell.querySelector(".cell-meters")).toBeNull();
+  });
+
+  it("shows the line for a source that has no stored reading yet, next to the dash", async () => {
+    await show([{ last_reading_age_seconds: null, meters: meters({ total: 2, stale: 2 }) }]);
+    expect(cellOf("sim").textContent).toBe("—2 of 2 meters stale");
+  });
+
+  it("puts the line on the rows with trouble only", async () => {
+    await show([{ id: 2, name: "sim", meters: meters({ stale: 2 }) }, { id: 3, name: "quiet", meters: meters() }, { id: 4, name: "plain" }]);
+    expect(cellOf("sim").querySelector(".cell-meters")).not.toBeNull();
+    expect(cellOf("quiet").querySelector(".cell-meters")).toBeNull();
+    expect(cellOf("plain").querySelector(".cell-meters")).toBeNull();
+    expect(document.querySelectorAll(".cell-meters")).toHaveLength(1);
   });
 });

@@ -69,7 +69,8 @@ def migration():
 
 # Columns of LATER migrations (0017, w33: sources.identity): they exist at head and not at 0015, so a comparison made at head and
 # again at 0015 must not see them (`as_it_was_at_0015` leaves them out of a snapshot, `row_text` out of a row's fingerprint).
-LATER_COLUMNS = {("sources", "identity")}
+# 0018 (w35) added three columns to point_latest (good_at, good_value, changed_at), left out the same way.
+LATER_COLUMNS = {("sources", "identity"), ("point_latest", "good_at"), ("point_latest", "good_value"), ("point_latest", "changed_at")}
 
 
 async def row_text(db, name: str) -> str:

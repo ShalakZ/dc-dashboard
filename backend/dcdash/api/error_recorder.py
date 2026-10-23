@@ -41,8 +41,19 @@ class ErrorRecorder:
             # ServerErrorMiddleware, outside this one, answers 500 after the exception has passed here.
             _record(scope, 500, type(exc).__name__, status)
             raise
-        if status is not None and status >= 500:
+        if status is not None and status >= 500 and not _intended(scope, status):
             _record(scope, status, None, status)  # a handled error (an HTTPException, a 503 handler): only the status is known
+
+
+# Routes whose 503 is their answer, not a fault: the data health URL says "stale" or "unavailable" that way, for a monitoring tool to
+# poll, and the journal would fill with one `http.5xx` per minute for as long as a meter is stale (the stale meters have their own
+# incident). A real failure there (a 500, an exception) is still recorded.
+INTENDED_503 = frozenset({"/api/health/data"})
+
+
+def _intended(scope: Scope, status: int) -> bool:
+    route = getattr(scope.get("route"), "path", None) or scope.get("path")
+    return status == 503 and route in INTENDED_503
 
 
 def _record(scope: Scope, status: int, exception: str | None, status_sent: int | None) -> None:

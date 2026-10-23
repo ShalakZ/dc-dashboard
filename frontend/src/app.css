@@ -695,7 +695,7 @@
     .node .kind { display: none; }
     .qf input[type="search"] { padding-right: 10px; }
     .qf kbd { display: none; }
-    .live .detail, .site-time .zone { display: none; }
+    .live .detail, .live .wide, .site-time .zone { display: none; } /* w35: the caption goes, and " of 48" in "3 of 48 meters stale" with it, so the longer word never widens the bar */
     .who-role { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; } /* clipped, not display: none: the role word stays in the button's name */
   }
   @media (prefers-reduced-motion: reduce) {

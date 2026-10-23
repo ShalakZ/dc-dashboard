@@ -211,3 +211,37 @@ def test_every_service_built_from_backend_has_its_own_scratch_image_in_the_scrat
     for name in built_here:
         assert merged[name]["image"] == "dcdash_e2e_probe-backend:scratch", name
         assert merged[name]["image"].endswith("-backend:scratch"), name
+
+
+# ---- the data health URL (w35) -----------------------------------------------------------------------------------------------
+
+
+def test_no_service_healthcheck_asks_the_data_health_url():
+    # GET /api/health/data is for a monitoring tool. It turns 503 while a meter is stale; as a container healthcheck it would mark the
+    # api unhealthy (and hold back every service that waits for it) because of a counter, which a restart cannot fix.
+    services = compose_config()["services"]
+    checked = 0
+    for name, service in services.items():
+        check = service.get("healthcheck")
+        if check:
+            checked += 1
+            assert "health/data" not in json.dumps(check), name
+    assert checked >= 3  # the api, the web and the figures service have one
+    for path in (REPO / "compose.yaml", REPO / "backend" / "Dockerfile", REPO / "frontend" / "Dockerfile"):
+        if path.exists():
+            text = path.read_text(encoding="utf-8")
+            assert not [line for line in text.splitlines() if "health/data" in line and not line.lstrip().startswith("#")], path
+
+
+def test_the_health_token_reaches_every_backend_service_and_defaults_to_empty():
+    services = compose_config()["services"]
+    for service in ("api", "collector", "figures"):
+        environment = services[service]["environment"]
+        assert environment.get("DCDASH_HEALTH_TOKEN") == os.environ.get("DCDASH_HEALTH_TOKEN", ""), service
+    assert services["figures"]["environment"] == services["api"]["environment"] == services["collector"]["environment"]
+
+
+def test_the_env_example_documents_the_health_token_as_a_comment_only():
+    lines = (REPO / ".env.example").read_text(encoding="utf-8").splitlines()
+    assert [line for line in lines if "DCDASH_HEALTH_TOKEN" in line and not line.lstrip().startswith("#")] == []
+    assert any(line.startswith("#DCDASH_HEALTH_TOKEN=") for line in lines)
