@@ -11,10 +11,11 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 import asyncpg
 
-from dcdash.connectors.base import BAD
+from dcdash.connectors.base import BAD, GOOD
 from dcdash.core import journal
 from dcdash.core.pg import LATEST_CHANNEL
 from dcdash.ingest.kinds import READINGS_CONFLICT
@@ -65,15 +66,40 @@ _CLASSIFY = f"""
     FROM (SELECT count(*) AS found, count(*) FILTER (WHERE differs) AS differing FROM cmp) c
     LEFT JOIN (SELECT * FROM cmp WHERE differs ORDER BY point_id, ts LIMIT {SAMPLES}) d ON true
 """
+# The upsert has its own unnest: eight arrays, the four of a reading and four more per point that the freshness columns need (w35).
+# `_UNNEST` stays as it is, `_COMPARE` and `_CLASSIFY` bind their time range to $5 and $6 after it.
+_UNNEST_LATEST = (
+    "unnest($1::int[], $2::timestamptz[], $3::float8[], $4::smallint[], $5::timestamptz[], $6::float8[], $7::timestamptz[], $8::bool[]) "
+    "AS t(point_id, ts, value, quality, good_at, good_value, run_start, inner_change)"
+)
+# The batch brings a Good reading that is NEWER when the point has none stored or its time is later than the stored good_at. Only a
+# newer batch moves good_at, good_value and changed_at, together: a batch of BAD rows, or a Good row older than the stored one,
+# leaves all three as they are. changed_at takes the start of the batch's trailing run (EXCLUDED.changed_at) when the point had
+# no Good value stored (or no changed_at), the new value differs from the stored one, or the batch itself changed value on the way
+# (stored 10, batch [11, 10]: the last change is where the trailing 10 starts); otherwise the value only held and changed_at stays.
+# A SET expression sees the row as it was before the update, and the target row is locked by the time it is read, so two writers
+# cannot both think they are first.
+_NEWER = "(EXCLUDED.good_at IS NOT NULL AND (point_latest.good_at IS NULL OR EXCLUDED.good_at > point_latest.good_at))"
 # The EXISTS guard skips points deleted while their readings were buffered. One statement for the whole batch, in point_id
 # order (the lock order on point_latest); the strict < means a time that is not newer never replaces the stored one.
+# `inner_change` is not a column of point_latest, so the SET clause cannot read it from EXCLUDED: it reads the points that have it
+# from the batch itself, once, as a hashed set (`IN (SELECT ...)` over the CTE is not run again for every row).
 _UPSERT_LATEST = f"""
-    INSERT INTO point_latest (point_id, ts, value, quality)
-    SELECT t.point_id, t.ts, t.value, t.quality FROM {_UNNEST}
+    WITH batch AS MATERIALIZED (SELECT * FROM {_UNNEST_LATEST})
+    INSERT INTO point_latest (point_id, ts, value, quality, good_at, good_value, changed_at)
+    SELECT t.point_id, t.ts, t.value, t.quality, t.good_at, t.good_value, t.run_start FROM batch t
     WHERE EXISTS (SELECT 1 FROM points WHERE id = t.point_id)
     ORDER BY t.point_id
     ON CONFLICT (point_id) DO UPDATE
-        SET ts = EXCLUDED.ts, value = EXCLUDED.value, quality = EXCLUDED.quality
+        SET ts = EXCLUDED.ts, value = EXCLUDED.value, quality = EXCLUDED.quality,
+            good_at = CASE WHEN {_NEWER} THEN EXCLUDED.good_at ELSE point_latest.good_at END,
+            good_value = CASE WHEN {_NEWER} THEN EXCLUDED.good_value ELSE point_latest.good_value END,
+            changed_at = CASE WHEN {_NEWER} THEN (
+                CASE WHEN point_latest.good_at IS NULL OR point_latest.changed_at IS NULL
+                          OR EXCLUDED.good_value IS DISTINCT FROM point_latest.good_value
+                          OR EXCLUDED.point_id IN (SELECT b.point_id FROM batch b WHERE b.inner_change)
+                     THEN EXCLUDED.changed_at ELSE point_latest.changed_at END
+            ) ELSE point_latest.changed_at END
         WHERE point_latest.ts < EXCLUDED.ts
     RETURNING point_id, ts, value, quality
 """
@@ -104,8 +130,52 @@ def finite_or_bad(row: Row) -> Row:
     return row
 
 
+class Freshness(NamedTuple):
+    """What one batch says about the Good readings of one point (a reading is Good when its quality is GOOD and it has a value)."""
+
+    good_at: datetime  # the time of the newest Good row
+    good_value: float  # its value
+    run_start: datetime  # the time of the first row of the trailing run of Good rows with that exact value
+    inner_change: bool  # the batch's Good rows hold more than one distinct value
+
+
+def good_freshness(new_rows: Sequence[Row]) -> dict[int, Freshness]:
+    """The freshness of every point of a batch that has a Good row, from the batch's NEW rows (ascending by (point_id, ts)).
+
+    It is computed from all the rows, never from the newest alone: the newest row of a point can be BAD while an earlier row of
+    the batch is Good. A BAD row (or a Good one with no value) is skipped, it does not break a run of equal values. A point with
+    no Good row is not in the result."""
+    good: dict[int, list[tuple[datetime, float]]] = {}
+    for point_id, ts, value, quality in new_rows:
+        if quality == GOOD and value is not None:
+            good.setdefault(point_id, []).append((ts, value))
+    found: dict[int, Freshness] = {}
+    for point_id, run in good.items():
+        good_at, good_value = run[-1]
+        run_start = good_at
+        for ts, value in reversed(run):
+            if value != good_value:
+                break
+            run_start = ts
+        found[point_id] = Freshness(good_at, good_value, run_start, any(value != good_value for _, value in run))
+    return found
+
+
 def _columns(rows: Sequence[Row]) -> tuple[Sequence, ...]:
     return tuple(zip(*rows))
+
+
+def _latest_columns(newest: Sequence[Row], fresh: dict[int, Freshness]) -> tuple[Sequence, ...]:
+    """The eight arrays of `_UPSERT_LATEST`: the newest row of each point, then what its batch says about its Good readings
+    (NULL for a point that had no Good row in the batch)."""
+    found = [fresh.get(row[0]) for row in newest]
+    return (
+        *_columns(newest),
+        [f.good_at if f else None for f in found],
+        [f.good_value if f else None for f in found],
+        [f.run_start if f else None for f in found],
+        [f.inner_change if f else False for f in found],
+    )
 
 
 def _clean(value: float | None) -> float | None:
@@ -152,7 +222,7 @@ async def insert_readings(conn: asyncpg.Connection, rows: Sequence[Row], *, noti
     for row in new_rows:  # ascending by (point_id, ts): the last row of a point is its newest
         newest[row[0]] = row
     if newest:
-        taken = await conn.fetch(_UPSERT_LATEST, *_columns(list(newest.values())))
+        taken = await conn.fetch(_UPSERT_LATEST, *_latest_columns(list(newest.values()), good_freshness(new_rows)))
         if notify and taken:
             payload = [[r["point_id"], r["ts"].timestamp(), r["value"], r["quality"]] for r in taken]
             for start in range(0, len(payload), NOTIFY_CHUNK):

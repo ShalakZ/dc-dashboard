@@ -37,7 +37,8 @@ NOON = datetime(2026, 10, 20, 12, 0, 5, 123456, tzinfo=timezone.utc)
 LATER_TABLES = ("playlists", "playlist_items", "displays", "history_status")
 # 0017 (w33) added a column to an old table: it exists at head and not below 0017, so `snapshot` leaves it out and `fingerprints`
 # hashes the rows of that table without it (`row_text`).
-LATER_COLUMNS = {("sources", "identity")}
+# 0018 (w35) added three columns to point_latest (good_at, good_value, changed_at), left out the same way.
+LATER_COLUMNS = {("sources", "identity"), ("point_latest", "good_at"), ("point_latest", "good_value"), ("point_latest", "changed_at")}
 # 0016 also replaced the plain index of readings by a unique key: `snapshot` shows the key under the name and the definition of the
 # plain index, for the same reason (test_schema_history.py pins the swap itself).
 PLAIN_READINGS_INDEX = "CREATE INDEX readings_point_ts ON public.readings USING btree (point_id, ts DESC)"

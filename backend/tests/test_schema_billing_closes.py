@@ -15,7 +15,8 @@ FIGURES = {"month": "2026-09", "timezone": "UTC", "currency": "EUR", "days": ["2
 
 # 0017 (w33) added a column to an old table: it exists at head and not below 0017, so `snapshot` leaves it out and `fingerprints`
 # hashes the rows of that table without it (`row_text`).
-LATER_COLUMNS = {("sources", "identity")}
+# 0018 (w35) added three columns to point_latest (good_at, good_value, changed_at), left out the same way.
+LATER_COLUMNS = {("sources", "identity"), ("point_latest", "good_at"), ("point_latest", "good_value"), ("point_latest", "changed_at")}
 
 
 async def row_text(db, name: str) -> str:

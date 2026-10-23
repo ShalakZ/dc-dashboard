@@ -157,6 +157,10 @@ class PointLatest(Base):
     ts: Mapped[datetime] = mapped_column(TZ)
     value: Mapped[float | None]
     quality: Mapped[int]
+    # w35: the freshness of the newest GOOD reading (quality 0 and a value). NULL until a Good reading has been written since 0018.
+    good_at: Mapped[datetime | None] = mapped_column(TZ)
+    good_value: Mapped[float | None]
+    changed_at: Mapped[datetime | None] = mapped_column(TZ)  # when good_value last changed to its present value
 
 
 class Job(Base):
