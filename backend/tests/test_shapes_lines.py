@@ -105,7 +105,7 @@ def test_the_second_grammar_gives_lines_with_no_word_of_code_knowing_the_names()
     coarse = run(members, [decide(left, "energy_kwh")], ["Floor"])
     assert coarse.blocking and only(coarse, "collision").text == (
         '10 tags of this shape would land on each asset (HALL2 gets HALL2.RK001.PDU-L.kWh, HALL2.RK002.PDU-L.kWh, HALL2.RK003.PDU-L.kWh and 7 more); '
-        'choose "parts 1 and 2" or map them as custom'
+        'choose "parts 1 and 2" or decide those tags on the Points page'  # energy is a billing reading: never advised as custom
     )
     # parts 1 and 2 name the rack; the right side as custom lands on the same asset without a collision
     result = run(members, [decide(left, "energy_kwh", "parts12"), decide(right, "custom", "parts12")], ["Floor"])
@@ -351,10 +351,11 @@ def test_collision_two_tags_of_one_equipment_on_one_asset_blocks_and_names_the_t
     assert check.severity == "blocking" and check.shape == "pdua#_pm#_pl#"
     assert check.text == (
         '3 tags of this shape would land on each of 10 assets (PDUA01 gets PDUA01_PM0_PL1, PDUA01_PM0_PL2 and PDUA01_PM0_PL3); '
-        'choose "parts 1 and 2" or map them as custom'
+        "decide those tags on the Points page"  # parts 1 and 2 are PDUA01 PM0 for all three: no advice that would block again; active power is billing
     )
-    assert only(run(members, [decide("pdua#_q#_p")]), "collision").text.startswith(
-        "10 tags of this shape would land on each of 10 assets (PDUA01 gets PDUA01_Q1_P, PDUA01_Q2_P, PDUA01_Q3_P and 7 more)"
+    assert only(run(members, [decide("pdua#_q#_p")]), "collision").text == (
+        "10 tags of this shape would land on each of 10 assets (PDUA01 gets PDUA01_Q1_P, PDUA01_Q2_P, PDUA01_Q3_P and 7 more); "
+        'choose "parts 1 and 2" or decide those tags on the Points page'  # PDUA01 Q1, PDUA01 Q2 ... are told apart
     )
 
 
@@ -365,7 +366,59 @@ def test_collision_parts_1_and_2_lets_through_a_shape_whose_names_differ_and_doe
     assert planned(through, members)[1].problems == ()
     for name_from in ("parts12", "part1_part2"):  # PM0 is the second part of every PL tag: still three on one asset
         still = run(members, [decide("pdua#_pm#_pl#", name_from=name_from)])
-        assert still.blocking and only(still, "collision").text.endswith("map them as custom or decide them on the Points page")
+        assert still.blocking and only(still, "collision").text.endswith("; decide those tags on the Points page")  # active power: never custom
+
+
+def collision_advice(members, shape: str, metric: str, name_from: str = "part1") -> str:
+    """What the collision sentence tells the person to do (the part after the counts and the example)."""
+    text = only(run(members, [decide(shape, metric, name_from)]), "collision").text
+    return text.partition("); ")[2]
+
+
+def test_collision_advice_offers_parts_1_and_2_only_where_it_tells_the_colliding_tags_apart():
+    members = scada_members(10, 100)
+    # PL#: three tags per meter. Parts 1 and 2 are "PDUA01 PM0" for all three, so the advice would only lead to the next block
+    for metric in ("active_power_kw", "energy_kwh"):  # the two billing readings are never sent to custom either
+        assert collision_advice(members, "pdua#_pm#_pl#", metric) == "decide those tags on the Points page", metric
+    assert collision_advice(members, "pdua#_pm#_pl#", "reactive_power_kvar") == "map them as custom or decide them on the Points page"
+    # Q#: parts 1 and 2 are "PDUA01 Q1", "PDUA01 Q2" ...: they do tell the tags apart, so the advice is offered
+    for metric in ("active_power_kw", "energy_kwh"):
+        assert collision_advice(members, "pdua#_q#_p", metric) == 'choose "parts 1 and 2" or decide those tags on the Points page', metric
+    assert collision_advice(members, "pdua#_q#_p", "reactive_power_kvar") == 'choose "parts 1 and 2" or map them as custom'
+    # the advice offered really works: the same decision by parts 1 and 2 has no collision
+    assert not any(c.kind == "collision" for c in run(members, [decide("pdua#_q#_p", "active_power_kw", "parts12")]).checks)
+    # a decision that already names the asset by parts 1 and 2 (or part 1 / part 2) is never told to choose it
+    for name_from in ("parts12", "part1_part2"):
+        assert collision_advice(members, "pdua#_pm#_pl#", "active_power_kw", name_from) == "decide those tags on the Points page"
+        assert collision_advice(members, "pdua#_pm#_pl#", "reactive_power_kvar", name_from) == "map them as custom or decide them on the Points page"
+    # names that the database reads as one (a case apart) are one asset under parts 1 and 2 as well
+    folded = plain(["PDUA01_P", "pdua01_P", "PDUA02_P", "PDUA03_P"], "kW")
+    assert collision_advice(folded, "pdua#_p", "active_power_kw") == "decide those tags on the Points page"
+
+
+def test_collision_advice_offers_custom_only_where_it_works_from_the_page_which_is_one_unit():
+    names = ["PDUA01_Q1_P", "PDUA01_Q2_P", "PDUA02_Q1_P", "PDUA02_Q2_P"]
+    one_unit = plain(names, "kvar")
+    two_units = [Member(i + 1, f"a{i}", name, unit) for i, (name, unit) in enumerate(zip(names, ("kvar", "var", "kvar", "var"), strict=True))]
+    no_unit = plain(names, None)
+    assert collision_advice(one_unit, "pdua#_q#_p", "reactive_power_kvar") == 'choose "parts 1 and 2" or map them as custom'
+    for what, members in (("two units", two_units), ("no unit", no_unit)):  # a custom metric needs a unit and the page sends none
+        assert collision_advice(members, "pdua#_q#_p", "reactive_power_kvar") == 'choose "parts 1 and 2" or decide those tags on the Points page', what
+    # nothing separates the tags: the Points page is all that is left when custom cannot work either
+    same = ["PDUA01_PM0_PL1", "PDUA01_PM0_PL2", "PDUA02_PM0_PL1", "PDUA02_PM0_PL2"]
+    assert collision_advice(plain(same, "kvar"), "pdua#_pm#_pl#", "reactive_power_kvar") == "map them as custom or decide them on the Points page"
+    assert collision_advice(plain(same, None), "pdua#_pm#_pl#", "reactive_power_kvar") == "decide those tags on the Points page"
+
+
+def test_collision_advice_leaves_parts_1_and_2_out_when_the_list_is_also_too_many():
+    names = [f"E{n:04d}_Q{k}_P" for n in range(1, 502) for k in (1, 2)]  # two tags per equipment: parts 1 and 2 tell them apart
+    over = run(plain(names, "kW"), [decide("e#_q#_p", "active_power_kw")])
+    assert over.lines == 1002 and sorted(kind for kind, _ in kinds(over)) == ["collision", "too_many"]
+    assert only(over, "collision").text.endswith("); decide those tags on the Points page")  # fewer tags is the only way out, not parts 1 and 2
+    ok = run(plain(names[:1000], "kW"), [decide("e#_q#_p", "active_power_kw")])
+    assert ok.lines == 1000 and kinds(ok) == [("collision", "blocking")]  # at the limit the advice works, and is offered
+    assert only(ok, "collision").text.endswith('); choose "parts 1 and 2" or decide those tags on the Points page')
+    assert run(plain(names[:1000], "kW"), [decide("e#_q#_p", "active_power_kw", "parts12")]).checks == []
 
 
 def test_collision_a_custom_metric_never_collides():
@@ -512,7 +565,8 @@ def test_renumbered_next_to_other_tags_under_a_metric_that_collides_names_the_re
     part1 = run(first, [decide("pdua#_t#", "active_power_kw", "part1")])
     assert sorted(kinds(part1)) == [("collision", "blocking"), ("renumbered", "blocking")] and part1.csv == ""
     assert only(part1, "collision").text == (
-        '2 tags of this shape would land on each asset (PDUA01 gets PDUA01_T1 and PDUA01_T2); choose "parts 1 and 2" or map them as custom'
+        '2 tags of this shape would land on each asset (PDUA01 gets PDUA01_T1 and PDUA01_T2); '
+        'choose "parts 1 and 2" or decide those tags on the Points page'
     )
     # one repeated tag and one other tag on one asset
     two = run(RENUMBERED_NEXT_TO_OTHERS[1], [decide("pdua#_t#", "active_power_kw", "part1")])
@@ -524,7 +578,7 @@ def test_renumbered_next_to_other_tags_under_a_metric_that_collides_names_the_re
     assert sorted(kinds(clusters)) == [("collision", "blocking"), ("renumbered", "blocking")]
     assert only(clusters, "collision").text == (
         "2 tags of this shape would land on each asset (PDUA01 gets ns=3;s=1:ClusterA.PDUA01_X and ns=3;s=2:ClusterB.PDUA01_X); "
-        'choose "parts 1 and 2" or map them as custom'
+        "decide those tags on the Points page"  # the two clusters' tags have one text: "parts 1 and 2" would name them alike
     )
     # no repeat, only different tags: a collision and nothing else, as before
     plain_tags = numbered((1, "Site.PDUA01_T1"), (2, "Site.PDUA01_T2"), (3, "Site.PDUA02_T1"), (4, "Site.PDUA02_T2"))
@@ -546,7 +600,7 @@ def test_renumbered_needs_equal_stable_addresses_two_clusters_with_the_same_tag_
     assert kinds(result) == [("collision", "blocking")]
     assert only(result, "collision").text == (
         "2 tags of this shape would land on each of 2 assets (PDUA01 gets ns=3;s=1:ClusterA.PDUA01_P and ns=3;s=2:ClusterB.PDUA01_P); "
-        'choose "parts 1 and 2" or map them as custom'
+        "decide those tags on the Points page"  # the same text on both clusters: parts 1 and 2 cannot tell them apart, and power is billing
     )
     assert "renumbered" not in result.checks[0].text
     # one cluster already mapped: the other cluster's tags are other tags, not the renumbered copy of a mapped one (the planner judges the asset)

@@ -1,3 +1,4 @@
+import asyncio
 import math
 from dataclasses import asdict
 from typing import Annotated, Any
@@ -242,10 +243,17 @@ def source_json(
     return answer
 
 
+def _count_ruled(points: list[tuple[int, str, str]], twin_ids: set[int], keys: frozenset[str]) -> int:
+    """The pure part of `rules_new_counts`: the points (id, address, name) that are not twins and whose shape key has a rule. It runs in
+    a worker thread (a large source has tens of thousands of points), so it touches no session and no row of one."""
+    return sum(1 for point_id, address, name in points if point_id not in twin_ids and shape_key(member_text(address, name)) in keys)
+
+
 async def rules_new_counts(db: AsyncSession, large_ids: list[int], twin_ids: set[int]) -> dict[int, int]:
     """For each large source with saved shape rules: how many of its unmapped, non-twin points are in a shape that has a rule (the new
     tags a person already decided about). One settings lookup for all the large sources; a source without rules costs nothing more,
-    one with rules one light read of its unmapped points (id, address, name). {source id: count}, only for sources with rules."""
+    one with rules one light read of its unmapped points (id, address, name), read on the event loop and counted in a worker thread,
+    as the shapes route does. {source id: count}, only for sources with rules."""
     counts: dict[int, int] = {}
     for source_id, keys in (await load_rule_keys(db, large_ids)).items():
         unmapped = await db.execute(
@@ -253,9 +261,8 @@ async def rules_new_counts(db: AsyncSession, large_ids: list[int], twin_ids: set
                 Point.source_id == source_id, ~exists().where(Mapping.point_id == Point.id)
             )
         )
-        counts[source_id] = sum(
-            1 for p in unmapped if p.id not in twin_ids and shape_key(member_text(p.address, p.name)) in keys
-        )
+        points = [(p.id, p.address, p.name) for p in unmapped]  # plain tuples: nothing of the session crosses into the thread
+        counts[source_id] = await asyncio.to_thread(_count_ruled, points, twin_ids, keys)
     return counts
 
 

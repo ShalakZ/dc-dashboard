@@ -18,6 +18,9 @@ a stated scale, and a unit in the decision counts as one more hint of the shape.
 over the whole decision. An address a tag list cannot name exactly (the parser trims
 every cell) is never written.
 
+A collision sentence advises only what works: "parts 1 and 2" when the names it derives really differ for the colliding tags (and the
+list is not over its limit anyway), custom when the reading is not a billing one and the tags name one unit, and always the Points page.
+
 Every sentence is plain words with the numbers it is about and an example taken from the data. Nothing here knows a product or a
 site: the equipment part of a tag is whatever its first token is.
 """
@@ -27,7 +30,7 @@ from __future__ import annotations
 import math
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from dcdash.connectors.opcua_ids import stable_address
@@ -347,7 +350,38 @@ def _unnamed_text(problem: str, texts: list[str], name_from: str) -> str:
     return f"{_n(n, 'asset name', 'asset names')} would hold control or invisible characters (for example from {example}); {_NAMES_ADVICE}"
 
 
-def _collision_text(groups: dict[tuple[str, ...], list[str]], names: dict[tuple[str, ...], tuple[str, ...]], name_from: str) -> str:
+def _same_name(name: str) -> str:
+    """A name as coarsely as can be: the whitespace collapsed and the case folded. Coarser than the database's key (whatever the
+    database reads as one name this reads as one), so two names this tells apart the database tells apart too. It only decides whether
+    a piece of advice is offered, never whether two names are one asset: that is `key_of`'s."""
+    return " ".join(name.split()).casefold()
+
+
+def _parts12_separates(collisions: Iterable[Sequence[str]]) -> bool:
+    """True when choosing "parts 1 and 2" would give the tags that collide under part 1 asset names that differ. `collisions` is, for
+    each asset the tags land on, the texts of those tags (different tags); computed from the tags' own tokens. Tags of one text (two
+    clusters' tags of one name) get one name, and a tag with a single part has none: both make this false."""
+    for texts in collisions:
+        names: list[str] = []
+        for text in texts:
+            derived, problem = derive(text, "parts12")
+            if problem is not None:
+                return False
+            names.append(_same_name(derived[0]))
+        if len(set(names)) != len(names):
+            return False
+    return True
+
+
+def _collision_advice(split: bool, custom: bool) -> str:
+    """What to do about tags that land on one asset: only what works. `split`: "parts 1 and 2" would name their assets apart.
+    `custom`: the reading is not a billing one and one unit makes a custom metric possible from the page. The Points page always works."""
+    if split:
+        return 'choose "parts 1 and 2" or ' + ("map them as custom" if custom else "decide those tags on the Points page")
+    return "map them as custom or decide them on the Points page" if custom else _POINTS_PAGE
+
+
+def _collision_text(groups: dict[tuple[str, ...], list[str]], names: dict[tuple[str, ...], tuple[str, ...]], advice: str) -> str:
     sizes = [len(texts) for texts in groups.values()]
     first_keys = next(iter(groups))
     first_texts = groups[first_keys]
@@ -358,7 +392,6 @@ def _collision_text(groups: dict[tuple[str, ...], list[str]], names: dict[tuple[
         lead = f"{sizes[0]:,} tags of this shape would land on {each}"
     else:
         lead = f"From {min(sizes):,} to {max(sizes):,} tags of this shape would land on one asset, on {len(groups):,} assets in all"
-    advice = 'choose "parts 1 and 2" or map them as custom' if name_from == "part1" else "map them as custom or decide them on the Points page"
     return f"{lead} ({gets}); {advice}"
 
 
@@ -429,6 +462,9 @@ def build_lines(
     samples: list[dict[str, Any]] = []
     claims: dict[tuple[tuple[str, ...], str], tuple[str, str]] = {}  # (key path, metric) -> (label, text) of the first line that took it
     elements: set[tuple[str, ...]] = set()  # every asset of the path below the parent, as if none existed yet
+    # the collision checks of the shapes, for the advice that depends on the whole list: (index in `checks`, the groups, the names, whether
+    # "parts 1 and 2" separates the tags, whether custom can work)
+    collisions: list[tuple[int, dict[tuple[str, ...], list[str]], dict[tuple[str, ...], tuple[str, ...]], bool, bool]] = []
 
     for decision, shape, duplicate in _resolve(shape_set, decisions):
         if shape is None:
@@ -535,6 +571,7 @@ def build_lines(
             if forms[form] > 1 or form in mapped_forms.get(text, ()):
                 repeated.setdefault(form, text)
         apart: dict[tuple[str, ...], list[str]] = {}  # key path -> what the lines on it are called, where they are different tags
+        apart_texts: dict[tuple[str, ...], list[str]] = {}  # key path -> the texts of those different tags (what "parts 1 and 2" reads)
         if not custom:
             for keys, found in groups.items():
                 tags: dict[str, tuple[str, str]] = {}  # stable form -> (text, address) of the first line that spells it
@@ -543,9 +580,16 @@ def build_lines(
                 if len(tags) > 1:  # equal texts with different stable addresses are two clusters' tags of one name: told apart by address
                     texts = [text for text, _ in tags.values()]
                     apart[keys] = [address for _, address in tags.values()] if len(set(texts)) == 1 else texts
+                    apart_texts[keys] = texts
         renumbered = list(repeated.values())
         if apart:
-            checks.append(Check("collision", BLOCKING, shape.key, _collision_text(apart, names_of, decision.name_from)))
+            # Only what works is advised: "parts 1 and 2" when it names these tags' assets apart (and the list is not over its limit
+            # anyway: settled below, once every decision is in), custom when the reading is not a billing one and one unit makes it
+            # possible from the page, and the Points page.
+            split = decision.name_from == "part1" and _parts12_separates(apart_texts.values())
+            can_custom = metric not in _BILLING and len(hints_of(shape)) == 1
+            collisions.append((len(checks), apart, names_of, split, can_custom))
+            checks.append(Check("collision", BLOCKING, shape.key, _collision_text(apart, names_of, _collision_advice(split, can_custom))))
         if renumbered:
             checks.append(Check("renumbered", BLOCKING, shape.key, _renumbered_text(renumbered)))
         if not custom:
@@ -572,6 +616,10 @@ def build_lines(
             if outlier is not None:
                 checks.append(Check("outlier", WARNING, shape.key, outlier))
 
+    if len(rows) > MAX_ROWS or len(elements) > MAX_NEW_ASSETS:  # a list over its limit is not made right by naming the assets apart
+        for index, found_apart, found_names, split, can_custom in collisions:
+            if split:
+                checks[index] = replace(checks[index], text=_collision_text(found_apart, found_names, _collision_advice(False, can_custom)))
     if len(rows) > MAX_ROWS:
         checks.append(Check("too_many", BLOCKING, None, f"{len(rows):,} tags are chosen; {TOO_MANY}"))
     elif len(elements) > MAX_NEW_ASSETS:  # one sentence is enough: fewer lines fix both

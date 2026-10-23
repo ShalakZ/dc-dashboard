@@ -1050,6 +1050,28 @@ async def test_rules_new_counts_the_twin_of_a_mapped_point_when_the_addresses_ar
     assert (await graph_source(client, ids["source"]))["large"]["rules_new"] == 3
 
 
+async def test_the_rules_count_is_worked_out_off_the_event_loop_and_is_the_same_number(client, db, monkeypatch):
+    import threading
+
+    from dcdash.api import discovery as discovery_api
+
+    await login_as(client, db, "admin")
+    ids = await ruled_source(db)
+    await save_rules(db, ids["source"], "pdua#_pm#_penrg", "pdua#_pm#_p")
+    loop_thread = threading.get_ident()
+    seen: set[int] = set()
+    real = discovery_api.shape_key
+
+    def spy(text):  # runs once per unmapped point of the source with rules
+        seen.add(threading.get_ident())
+        return real(text)
+
+    monkeypatch.setattr(discovery_api, "shape_key", spy)
+    src = await graph_source(client, ids["source"])
+    assert src["large"]["rules_new"] == 3  # the same number the tests above pin (A2, A3 and B2)
+    assert seen and loop_thread not in seen  # the keys of 1,000s of points are not computed on the event loop
+
+
 async def test_rules_new_ignores_a_broken_stored_rule_and_the_rules_of_a_small_source(client, db):
     await login_as(client, db, "admin")
     ids = await ruled_source(db)
