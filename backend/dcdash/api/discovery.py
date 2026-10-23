@@ -27,6 +27,8 @@ from dcdash.moves.freshness import not_seen_map
 from dcdash.moves.load import Loaded, load_offers_detailed
 from dcdash.moves.match import MOVABLE_TYPES, Offer, Two
 from dcdash.moves.urls import address_key, display_endpoint
+from dcdash.shapes.core import member_text, shape_key
+from dcdash.shapes.rules import load_rule_keys
 
 router = APIRouter(prefix="/api/discovery", tags=["discovery"])
 MAX_UNIT_LENGTH = 20  # keep in step with MAX_UNIT_LENGTH in frontend/src/lib/drop.ts
@@ -240,6 +242,23 @@ def source_json(
     return answer
 
 
+async def rules_new_counts(db: AsyncSession, large_ids: list[int], twin_ids: set[int]) -> dict[int, int]:
+    """For each large source with saved shape rules: how many of its unmapped, non-twin points are in a shape that has a rule (the new
+    tags a person already decided about). One settings lookup for all the large sources; a source without rules costs nothing more,
+    one with rules one light read of its unmapped points (id, address, name). {source id: count}, only for sources with rules."""
+    counts: dict[int, int] = {}
+    for source_id, keys in (await load_rule_keys(db, large_ids)).items():
+        unmapped = await db.execute(
+            select(Point.id, Point.address, Point.name).where(
+                Point.source_id == source_id, ~exists().where(Mapping.point_id == Point.id)
+            )
+        )
+        counts[source_id] = sum(
+            1 for p in unmapped if p.id not in twin_ids and shape_key(member_text(p.address, p.name)) in keys
+        )
+    return counts
+
+
 @router.get("/graph", dependencies=[Depends(require_permission("discovery.view"))])
 async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     sources = (await db.scalars(select(Source).order_by(Source.name, Source.id))).all()
@@ -267,6 +286,7 @@ async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     point_columns = (Point.id, Point.source_id, Point.address, Point.name, Point.unit_hint)
     points_query = select(*point_columns).order_by(Point.name, Point.id)
     twin_counts: dict[int, int] = {}
+    twin_ids: list[int] = []
     if totals:
         large_ids = literal(sorted(totals), ARRAY(Integer))
         # Twins: the unmapped points that are the same tag as a mapped one, for the large sources whose addresses have a stable
@@ -277,7 +297,6 @@ async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
             for s in sources
             if s.id in totals and totals[s.id][1] > 0 and address_key_for(s.connector_type, s.config) is not identity_key
         }
-        twin_ids: list[int] = []
         if probed:
             light: dict[int, list[Any]] = {}
             for row in await db.execute(
@@ -304,6 +323,7 @@ async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     if totals:
         for row in await db.execute(trimmed_query):
             points_by_source.setdefault(row.source_id, []).append(row)
+    rules_new = await rules_new_counts(db, sorted(totals), set(twin_ids)) if totals else {}
     # The most recent finding per source decides "needs credentials": a later scan may have browsed it fine. The same row
     # says which scan last saw the source, and when (its finish time, or its start while it is still running).
     latest_finding = (
@@ -337,11 +357,13 @@ async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     layout = await db.execute(select(GraphLayout.node_id, GraphLayout.x, GraphLayout.y))
     def large_of(source_id: int) -> dict[str, Any] | None:
         """What a large source says about the points it does not send: all of them, the mapped ones, those that are neither mapped
-        nor the twin of a mapped one (the ones a person can still decide about), and (T7) the new ones that match a saved rule."""
+        nor the twin of a mapped one (the ones a person can still decide about), and the unmapped, non-twin ones in a shape
+        that has a saved rule (0 when the source has no rules)."""
         if source_id not in totals:
             return None
         points, mapped = totals[source_id]
-        return {"points": points, "mapped": mapped, "unmapped": points - mapped - twin_counts.get(source_id, 0), "rules_new": 0}
+        unmapped = points - mapped - twin_counts.get(source_id, 0)
+        return {"points": points, "mapped": mapped, "unmapped": unmapped, "rules_new": rules_new.get(source_id, 0)}
 
     return {
         "sources": [

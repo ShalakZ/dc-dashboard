@@ -1,6 +1,7 @@
 """GET /api/sources/{id}/shapes (w36): a source's points as a few dozen tag shapes. The pure grouping is tests/test_shapes.py."""
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
@@ -611,3 +612,180 @@ async def test_a_thousand_lines_of_a_15000_tag_source_pass_the_real_dry_run_with
     assert report["ok"] is True and report["mappings_to_create"] == 1000 and report["assets_to_create_total"] == 400
     too_many = (await client.post(lines_url(source), json=body_of(decision("pdua#_q#_p", "active_power_kw", "parts12")))).json()
     assert too_many["lines"] == 4190 and too_many["blocking"] is True and [c["kind"] for c in too_many["checks"]] == ["too_many"]
+
+
+# -- saved rules: GET and PUT /api/sources/{id}/shape-rules (T7a) -------------------------------------------------------------------
+
+def rules_url(source: int) -> str:
+    return f"/api/sources/{source}/shape-rules"
+
+
+ENERGY_RULE = {"metric": "energy_kwh", "name_from": "part1"}
+POWER_RULE = {"metric": "active_power_kw", "unit": "kW", "scale": 0.001, "interval_seconds": 30, "name_from": "parts12"}
+
+
+async def stored_rules(db, source: int):
+    return await db.fetchval("SELECT value FROM settings WHERE key = $1", f"shape_rules:{source}")
+
+
+async def test_a_source_without_rules_answers_an_empty_set(client, db):
+    source = await small_source(db)
+    await login_as(client, db, "admin")
+    response = await client.get(rules_url(source))
+    assert response.status_code == 200 and response.json() == {"rules": {}}
+    assert await stored_rules(db, source) is None  # reading writes nothing
+
+
+async def test_rules_round_trip_and_the_put_answers_what_the_get_will(client, db):
+    source = await small_source(db)
+    await login_as(client, db, "admin")
+    body = {"rules": {"pdua#_pm#_penrg": ENERGY_RULE, "pdua#_pm#_p": POWER_RULE}}
+    put = await client.put(rules_url(source), json=body)
+    assert put.status_code == 200 and put.json() == body
+    assert (await client.get(rules_url(source))).json() == body
+    stored = await stored_rules(db, source)
+    assert (json.loads(stored) if isinstance(stored, str) else stored) == body  # one settings row, under the documented key
+
+
+async def test_a_put_replaces_the_whole_rule_set_and_an_empty_set_forgets_everything(client, db):
+    source = await small_source(db)
+    other = await make_source(db, "Other", "opcua", {"endpoint": "opc.tcp://o:4840/"}, enabled=False)
+    await login_as(client, db, "admin")
+    await client.put(rules_url(other), json={"rules": {"x#": ENERGY_RULE}})
+    await client.put(rules_url(source), json={"rules": {"pdua#_pm#_penrg": ENERGY_RULE, "pdua#_pm#_p": POWER_RULE}})
+    await client.put(rules_url(source), json={"rules": {"pdua#_pm#_p": ENERGY_RULE}})  # the energy rule is gone, the power rule is replaced
+    assert (await client.get(rules_url(source))).json() == {"rules": {"pdua#_pm#_p": ENERGY_RULE}}
+    assert (await client.put(rules_url(source), json={"rules": {}})).json() == {"rules": {}}
+    assert (await client.get(rules_url(source))).json() == {"rules": {}}
+    assert (await client.get(rules_url(other))).json() == {"rules": {"x#": ENERGY_RULE}}  # another source's rules are its own
+
+
+async def test_an_empty_unit_is_not_kept_and_the_optional_keys_are_left_out(client, db):
+    source = await small_source(db)
+    await login_as(client, db, "admin")
+    sent = {"rules": {"pdua#_pm#_penrg": {"metric": "energy_kwh", "unit": "  ", "name_from": "part1_part2"}}}
+    assert (await client.put(rules_url(source), json=sent)).json() == {"rules": {"pdua#_pm#_penrg": {"metric": "energy_kwh", "name_from": "part1_part2"}}}
+
+
+async def test_rules_for_an_unknown_source_are_a_404_and_a_bad_id_a_422(client, db):
+    await login_as(client, db, "admin")
+    for call in (client.get("/api/sources/9999/shape-rules"), client.put("/api/sources/9999/shape-rules", json={"rules": {}})):
+        response = await call
+        assert response.status_code == 404 and response.json()["detail"] == "source not found"
+    assert (await client.get("/api/sources/0/shape-rules")).status_code == 422
+    assert (await client.put("/api/sources/2147483648/shape-rules", json={"rules": {}})).status_code == 422
+    assert await db.fetchval("SELECT count(*) FROM settings WHERE key LIKE 'shape_rules:%'") == 0  # a 404 stores nothing
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},  # `rules` is required
+        {"rules": {}, "extra": 1},  # extra keys are forbidden
+        {"rules": {"k#": {**ENERGY_RULE, "shape": "k#"}}},  # a rule is not a decision: it has no `shape`
+        {"rules": {"k#": {**ENERGY_RULE, "extra": 1}}},
+        {"rules": {"k#": {"metric": "energy_kwh"}}},  # name_from is required
+        {"rules": {"k#": {"metric": "bogus", "name_from": "part1"}}},
+        {"rules": {"k#": {**ENERGY_RULE, "name_from": "part3"}}},
+        {"rules": {"k#": {**ENERGY_RULE, "scale": 0}}},
+        {"rules": {"k#": {**ENERGY_RULE, "scale": -1}}},
+        {"rules": {"k#": {**ENERGY_RULE, "scale": 1e30}}},
+        {"rules": {"k#": {**ENERGY_RULE, "interval_seconds": 0}}},
+        {"rules": {"k#": {**ENERGY_RULE, "interval_seconds": 2_678_401}}},
+        {"rules": {"k#": {**ENERGY_RULE, "unit": "x" * 21}}},
+        {"rules": {"k#": {**ENERGY_RULE, "unit": "k\nW"}}},
+        {"rules": {"": ENERGY_RULE}},  # an empty key names no shape
+        {"rules": {"k" * 2001: ENERGY_RULE}},
+        {"rules": {f"k{i}#": ENERGY_RULE for i in range(301)}},  # at most 300 rules
+        {"rules": [ENERGY_RULE]},
+    ],
+    ids=lambda body: str(body)[:60],
+)
+async def test_a_bad_rule_body_is_a_422_and_stores_nothing(client, db, body):
+    source = await small_source(db)
+    await login_as(client, db, "admin")
+    assert (await client.put(rules_url(source), json=body)).status_code == 422
+    assert await stored_rules(db, source) is None
+
+
+async def test_exactly_300_rules_are_accepted(client, db):
+    source = await small_source(db)
+    await login_as(client, db, "admin")
+    body = {"rules": {f"k{i}#": ENERGY_RULE for i in range(300)}}
+    assert (await client.put(rules_url(source), json=body)).status_code == 200
+    assert len((await client.get(rules_url(source))).json()["rules"]) == 300
+
+
+async def test_the_gates_operator_reads_rules_and_cannot_write_them(client, db):
+    source = await small_source(db)
+    body = {"rules": {"pdua#_pm#_penrg": ENERGY_RULE}}
+    assert (await client.get(rules_url(source))).status_code == 401
+    assert (await client.put(rules_url(source), json=body)).status_code == 401
+    await login_as(client, db, "viewer")
+    assert (await client.get(rules_url(source))).status_code == 403
+    assert (await client.put(rules_url(source), json=body)).status_code == 403
+    await client.post("/api/logout")
+    await login_as(client, db, "operator")  # holds discovery.view, not discovery.accept
+    assert (await client.get(rules_url(source))).status_code == 200
+    assert (await client.put(rules_url(source), json=body)).status_code == 403
+    assert await stored_rules(db, source) is None
+    await client.post("/api/logout")
+    await login_as(client, db, "admin")
+    assert (await client.put(rules_url(source), json=body)).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        "[1, 2]",  # not an object
+        '"text"',
+        "5",
+        "null",
+        '{"rules": 5}',
+        '{"rules": [1]}',
+        '{"other": {}}',  # no `rules`
+        '{"rules": {"k#": {"metric": "bogus", "name_from": "part1"}}}',
+        '{"rules": {"k#": {"metric": "energy_kwh"}}}',
+        '{"rules": {"k#": {"metric": "energy_kwh", "name_from": "part1", "scale": -3}}}',
+        '{"rules": {"good#": {"metric": "energy_kwh", "name_from": "part1"}, "bad#": 7}}',  # one broken rule spoils the stored value
+    ],
+)
+async def test_a_broken_stored_value_reads_as_no_rules_and_never_raises(client, db, stored):
+    source = await small_source(db)
+    await db.execute("INSERT INTO settings (key, value) VALUES ($1, $2::jsonb)", f"shape_rules:{source}", stored)
+    await login_as(client, db, "admin")
+    assert (await client.get(rules_url(source))).json() == {"rules": {}}
+    shapes = await client.get(f"/api/sources/{source}/shapes")
+    assert shapes.status_code == 200 and all(s["rule"] is None for s in shapes.json()["shapes"])
+
+
+async def test_the_shapes_answer_carries_the_saved_rule_of_each_key_or_null(client, db):
+    source = await small_source(db)  # shapes pdua#_pm#_penrg (energy) and pdua#_pm#_p (power)
+    await login_as(client, db, "admin")
+    assert all(s["rule"] is None for s in (await client.get(f"/api/sources/{source}/shapes")).json()["shapes"])
+    await client.put(rules_url(source), json={"rules": {"pdua#_pm#_penrg": ENERGY_RULE, "gone#": POWER_RULE}})
+    energy, power = (await client.get(f"/api/sources/{source}/shapes")).json()["shapes"]
+    assert (energy["key"], energy["rule"]) == ("pdua#_pm#_penrg", ENERGY_RULE)
+    assert (power["key"], power["rule"]) == ("pdua#_pm#_p", None)  # a rule of a shape the source no longer has is simply not shown
+    filtered = (await client.get(f"/api/sources/{source}/shapes", params={"q": "PENRG"})).json()["shapes"]
+    assert [(s["key"], s["rule"]) for s in filtered] == [("pdua#_pm#_penrg", ENERGY_RULE)]
+
+
+async def test_the_shapes_answer_reads_the_settings_once(client, db):
+    from test_moves_freshness import statements
+
+    source = await small_source(db)
+    await login_as(client, db, "admin")
+    await client.put(rules_url(source), json={"rules": {"pdua#_pm#_penrg": ENERGY_RULE}})
+    await client.get(f"/api/sources/{source}/shapes")  # one unmeasured request: a session touch is written once
+    with statements() as sql:
+        assert (await client.get(f"/api/sources/{source}/shapes")).status_code == 200
+    assert sum("FROM settings" in statement for statement in sql) == 1, sql
+
+
+async def test_saving_rules_changes_no_mapping_asset_or_point(client, db):
+    source = await small_source(db)
+    await login_as(client, db, "admin")
+    before = [await db.fetchval(f"SELECT count(*) FROM {table}") for table in ("mappings", "assets", "points", "audit_log")]
+    await client.put(rules_url(source), json={"rules": {"pdua#_pm#_penrg": ENERGY_RULE}})
+    assert [await db.fetchval(f"SELECT count(*) FROM {table}") for table in ("mappings", "assets", "points", "audit_log")] == before

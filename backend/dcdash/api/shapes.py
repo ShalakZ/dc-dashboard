@@ -1,5 +1,5 @@
-"""Map by tag shape (w36): read-only routes that group a source's points into shapes and turn decisions about shapes into tag-list
-lines. They write nothing; every mapping is written by the tag-list route (api/tag_lists.py).
+"""Map by tag shape (w36): routes that group a source's points into shapes and turn decisions about shapes into tag-list lines.
+Every mapping is written by the tag-list route (api/tag_lists.py); the only thing written here is a remembered rule (below).
 
 GET /api/sources/{id}/shapes?q=     the source's points as a few dozen shapes (discovery.view): counts, examples, a guessed metric
                                     and unit, the billing label, how many equipment values lack the shape, the assets to choose a
@@ -9,24 +9,27 @@ POST /api/sources/{id}/shapes/lines the decisions about shapes as tag-list CSV l
                                     the source's points itself, builds the CSV, then runs the real tag-list parser and planner on it
                                     (dry, no lock) and reports every refusal as a blocking `planner` check, so a list the planner
                                     would refuse is never offered. The mappings are written only by POST /api/sources/{id}/tag-list.
+GET /api/sources/{id}/shape-rules   the decisions a person made about this source's shapes, remembered (discovery.view).
+PUT /api/sources/{id}/shape-rules   replaces the whole set (discovery.accept). A suggestion, never applied by itself, not audited.
 """
 import asyncio
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_permission
 from dcdash.api.discovery import same_tag_map
 from dcdash.api.tag_lists import _PART_KEYS, _plan_for
-from dcdash.core.metrics import Metric, Scale
 from dcdash.core.models import Asset, Mapping, Point, Source
-from dcdash.ingest.tag_list import MAX_INTERVAL, MAX_UNIT, TagListRefused, parse_tag_list
+from dcdash.core.settings_store import set_setting
+from dcdash.ingest.tag_list import TagListRefused, parse_tag_list
 from dcdash.shapes.core import Member, Shape, ShapeSet, build_shapes, member_text, shape_json, shape_key
 from dcdash.shapes.lines import BLOCKING, Check, LineDecision, build_lines, parts_needed, planner_checks
+from dcdash.shapes.rules import MAX_SHAPE_KEY, Rule, RulesBody, load_rules, rules_json, rules_key
 
 router = APIRouter(prefix="/api", tags=["shapes"])
 
@@ -38,7 +41,6 @@ MAX_QUERY = 100
 OTHER_EXAMPLES = 3
 MATCHES_SHOWN = 5
 MAX_DECISIONS = 60  # one per row a person can reasonably decide about in one go
-MAX_SHAPE_KEY = 2_000  # a shape key is a tag text with its digits collapsed; a tag name is far shorter, a longer key is no shape
 
 
 @dataclass
@@ -99,7 +101,11 @@ def _matches(members: list[Member], needle: str, shape_keys: set[str]) -> tuple[
     return hits, {"count": len(hits), "first": first}
 
 
-def shapes_answer(loaded: LoadedSource, shape_set: ShapeSet, assets: list[dict[str, Any]], q: str | None) -> dict[str, Any]:
+def shapes_answer(
+    loaded: LoadedSource, shape_set: ShapeSet, assets: list[dict[str, Any]], q: str | None, rules: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """`rules`: the source's saved rules by shape key; each shape carries the rule of its key, or None."""
+    rules = rules or {}
     shapes: list[Shape] = shape_set.shapes
     answer: dict[str, Any] = {
         "source_id": loaded.id,
@@ -116,7 +122,7 @@ def shapes_answer(loaded: LoadedSource, shape_set: ShapeSet, assets: list[dict[s
         hits, matches = _matches(loaded.members, q, {s.key for s in shapes})
         wanted = {shape_key(member_text(m.address, m.name)) for m in hits}
         shown = [s for s in shapes if s.key in wanted]
-    answer["shapes"] = [shape_json(s) for s in shown[:MAX_SHAPES]]
+    answer["shapes"] = [{**shape_json(s), "rule": rules.get(s.key)} for s in shown[:MAX_SHAPES]]
     answer["more_shapes"] = max(0, len(shown) - MAX_SHAPES)
     answer["assets"] = assets
     if matches is not None:
@@ -132,33 +138,21 @@ async def get_shapes(
 ) -> dict[str, Any]:
     loaded = await load_source_members(db, source_id)
     assets = await load_assets(db)
+    rules = await load_rules(db, source_id)  # one settings read; a missing or broken value is no rules
     # 30,000 tags take a fraction of a second of pure Python: off the event loop, so a poll or a login is not held up behind it
     shape_set = await asyncio.to_thread(build_shapes, loaded.members)
-    return shapes_answer(loaded, shape_set, assets, q)
+    return shapes_answer(loaded, shape_set, assets, q, rules)
 
 
 # ---- decisions as tag-list lines ----------------------------------------------------------------------------------------
 
 
-class Decision(BaseModel):
-    """One decision about one shape (the contract of the w36 plan). `unit` is read for a custom metric only; `scale` and
-    `interval_seconds` are left to the guess when absent."""
-
-    model_config = ConfigDict(extra="forbid")
+class Decision(Rule):
+    """One decision about one shape (the contract of the w36 plan): a saved Rule (shapes/rules.py: metric, unit, scale, interval,
+    name_from, with its bounds) that also names the shape. `unit` is read for a custom metric only; `scale` and `interval_seconds`
+    are left to the guess when absent."""
 
     shape: str = Field(min_length=1, max_length=MAX_SHAPE_KEY)  # the shape KEY the GET answer served
-    metric: Metric
-    unit: Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_UNIT)] | None = None
-    scale: Scale | None = None
-    interval_seconds: Annotated[int, Field(ge=1, le=MAX_INTERVAL)] | None = None
-    name_from: Literal["part1", "parts12", "part1_part2"]
-
-    @field_validator("unit")
-    @classmethod
-    def _printable(cls, value: str | None) -> str | None:
-        if value is not None and not value.isprintable():
-            raise ValueError("the unit must be printable text")
-        return value
 
 
 class LinesBody(BaseModel):
@@ -215,3 +209,31 @@ async def shape_lines(source_id: SourceId, body: LinesBody, db: AsyncSession = D
             result.blocking, result.csv = True, ""
     await db.rollback()  # a read: nothing to keep, and the connection goes back at once
     return result.as_json()
+
+
+# ---- saved rules (T7a) ---------------------------------------------------------------------------------------------------------------
+# What a person decided about a shape, remembered so a later browse can say how many NEW tags match (the Discovery card's
+# `large.rules_new`). Stored in the `settings` table under `shape_rules:<source id>` (shapes/rules.py). Not audited: a rule is a
+# suggestion that writes nothing a figure reads, and the mappings it leads to are written, and audited as `tags.mapped`, only by the
+# tag-list route. A rule is never applied by itself.
+
+
+async def require_source(db: AsyncSession, source_id: int) -> None:
+    if await db.scalar(select(exists().where(Source.id == source_id))) is not True:
+        raise HTTPException(404, "source not found")
+
+
+@router.get("/sources/{source_id}/shape-rules", dependencies=[Depends(require_permission("discovery.view"))])
+async def get_shape_rules(source_id: SourceId, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    await require_source(db, source_id)
+    return {"rules": await load_rules(db, source_id)}
+
+
+@router.put("/sources/{source_id}/shape-rules", dependencies=[Depends(require_permission("discovery.accept"))])
+async def put_shape_rules(source_id: SourceId, body: RulesBody, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    """Replaces the source's whole rule set (an empty set forgets every rule). The answer is what the next GET will say."""
+    await require_source(db, source_id)
+    rules = rules_json(body)
+    await set_setting(db, rules_key(source_id), {"rules": rules})
+    await db.commit()
+    return {"rules": rules}

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -995,3 +996,83 @@ async def test_the_number_of_statements_does_not_grow_with_the_number_of_large_s
     await large_source()
     three = await get_counted(client)
     assert len(three) == len(one), (len(one), len(three))
+
+
+# ---- large.rules_new: the new tags that match a saved shape rule (w36 T7a) ----
+
+RULE = {"metric": "energy_kwh", "name_from": "part1"}
+
+
+async def save_rules(db, source: int, *keys: str) -> None:
+    await db.execute(
+        "INSERT INTO settings (key, value) VALUES ($1, $2::jsonb) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        f"shape_rules:{source}", json.dumps({"rules": {key: RULE for key in keys}}),
+    )
+
+
+async def ruled_source(db, name: str = "scada", stable: bool = True) -> dict[str, int]:
+    """A large source: 1,000 filler points and the tags of two shapes. `pdua#_pm#_penrg`: A1 (mapped), A1B (its twin on a stable
+    source), A2 and A3; `pdua#_pm#_p`: B2. Returns the point ids by name."""
+    source = await make_source(db, name, "opcua", {"endpoint": f"opc.tcp://{name}:4840/", "stable_addresses": stable})
+    await bulk_points(db, source, 1000)
+    ids = {"source": source}
+    for tag, address in {
+        "A1": "ns=3;s=20401:Site.PDUA01_PM0_PENRG", "A1B": "ns=3;s=20501:Site.PDUA01_PM0_PENRG",
+        "A2": "ns=3;s=20402:Site.PDUA02_PM0_PENRG", "A3": "ns=3;s=20403:Site.PDUA03_PM0_PENRG",
+        "B2": "ns=3;s=20412:Site.PDUA02_PM0_P",
+    }.items():
+        ids[tag] = await db.fetchval(
+            "INSERT INTO points (source_id, address, name) VALUES ($1, $2, $3) RETURNING id", source, address, address.split(".")[-1]
+        )
+    await map_each(db, [ids["A1"]])
+    return ids
+
+
+async def test_rules_new_counts_the_unmapped_non_twin_members_of_the_shapes_that_have_a_rule(client, db):
+    await login_as(client, db, "admin")
+    ids = await ruled_source(db)
+    src = await graph_source(client, ids["source"])
+    assert src["large"] == {"points": 1005, "mapped": 1, "unmapped": 1003, "rules_new": 0}  # no rule: 0
+    await save_rules(db, ids["source"], "pdua#_pm#_penrg")
+    src = await graph_source(client, ids["source"])
+    assert src["large"]["rules_new"] == 2  # A2 and A3; A1 is mapped, A1B is the twin of A1, B2 is a shape without a rule
+    assert src["large"]["unmapped"] == 1003 and src["large"]["points"] == 1005  # the other numbers do not move
+    await save_rules(db, ids["source"], "pdua#_pm#_penrg", "pdua#_pm#_p")
+    assert (await graph_source(client, ids["source"]))["large"]["rules_new"] == 3
+    await save_rules(db, ids["source"], "no#_such_shape")
+    assert (await graph_source(client, ids["source"]))["large"]["rules_new"] == 0
+
+
+async def test_rules_new_counts_the_twin_of_a_mapped_point_when_the_addresses_are_not_stable(client, db):
+    await login_as(client, db, "admin")
+    ids = await ruled_source(db, "plain", stable=False)  # no stable key: A1B is just another unmapped tag of the shape
+    await save_rules(db, ids["source"], "pdua#_pm#_penrg")
+    assert (await graph_source(client, ids["source"]))["large"]["rules_new"] == 3
+
+
+async def test_rules_new_ignores_a_broken_stored_rule_and_the_rules_of_a_small_source(client, db):
+    await login_as(client, db, "admin")
+    ids = await ruled_source(db)
+    await db.execute("INSERT INTO settings (key, value) VALUES ($1, '[1]'::jsonb)", f"shape_rules:{ids['source']}")
+    assert (await graph_source(client, ids["source"]))["large"]["rules_new"] == 0
+    small, _ = await seed_source(db, "small")
+    await save_rules(db, small, "dev#")
+    other = await graph_source(client, small)
+    assert "large" not in other and other["point_count"] == 6  # a rule on a source that is not large changes nothing
+
+
+async def test_a_source_without_rules_costs_one_settings_lookup_for_all_large_sources_and_a_source_with_rules_one_read_more(client, db):
+    await login_as(client, db, "admin")
+    first = await ruled_source(db, "one")
+    await client.get("/api/discovery/graph")  # one unmeasured request: a session touch is written once
+    base = await get_counted(client)
+    lookups = [statement for statement in base if "FROM settings" in statement and "key" in statement]
+    assert len(lookups) >= 1
+    second = await ruled_source(db, "two")
+    third = await ruled_source(db, "three")
+    assert len(await get_counted(client)) == len(base)  # three large sources without rules: still the same statements
+    await save_rules(db, first["source"], "pdua#_pm#_penrg")
+    assert len(await get_counted(client)) == len(base) + 1  # the light read of the unmapped points of that one source
+    await save_rules(db, second["source"], "pdua#_pm#_penrg")
+    await save_rules(db, third["source"], "pdua#_pm#_penrg")
+    assert len(await get_counted(client)) == len(base) + 3
