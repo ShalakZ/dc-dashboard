@@ -264,11 +264,29 @@ async def test_any_other_error_fails_the_whole_read_without_a_halving(monkeypatc
     assert fake.requests == [200]  # no second request, no halving
 
 
-async def test_a_short_answer_ends_in_an_error_and_not_in_a_loop(monkeypatch):
+async def test_a_short_answer_ends_in_a_typed_error_at_the_first_slice_and_not_in_a_loop(monkeypatch):
     fake = use(monkeypatch, FakeSession(short_answers=True))
-    with pytest.raises(ValueError):  # the caller's strict zip: a value is never filed under the wrong address
+    with pytest.raises(ConnectorError) as typed:  # a value is never filed under the wrong address
         await create_connector("opcua", {"endpoint": ENDPOINT}).read(addresses(450))
-    assert fake.requests == [200, 200, 50]
+    assert (typed.value.status, typed.value.message) == ("protocol_error", "the server answered 199 values for 200 tags")
+    assert fake.requests == [200]  # the slice is checked on its own, before the next one is asked for
+
+
+async def test_a_long_answer_to_one_slice_is_not_hidden_by_a_short_answer_to_another(monkeypatch):
+    """The totals add up (one value too many in the first slice, one too few in the second), the slices do not: every value after
+    the first slice would be filed under the address before its own."""
+
+    class Skewed(FakeSession):
+        async def read_attributes(self, nodes, attr):
+            answers = await super().read_attributes(nodes, attr)
+            if [n.address for n in nodes] == [LIMIT_NODE]:
+                return answers
+            return [*answers, _dv(1)] if len(self.requests) == 1 else answers[:-1]
+
+    fake = use(monkeypatch, Skewed())
+    with pytest.raises(ConnectorError) as typed:
+        await create_connector("opcua", {"endpoint": ENDPOINT}).read(addresses(400))
+    assert typed.value.message == "the server answered 201 values for 200 tags" and fake.requests == [200]
 
 
 async def test_the_halving_keeps_the_order_of_a_refused_slice(monkeypatch):
@@ -286,6 +304,65 @@ async def test_the_halving_keeps_the_order_of_a_refused_slice(monkeypatch):
     assert [len(part) for part in seen] == [200, 100, 100, 50]
     assert [a for part in seen[1:] for a in part] == addresses(250)  # the halves and the rest, in the caller's order
     assert [v.address for v in values] == addresses(250)
+
+
+# -- a refusal of a short slice (review M5) ------------------------------------------------------------------------------------
+
+
+class TailRefusing(FakeSession):
+    """Takes every request except one of exactly `size` tags: a short tail the server turns away although it took longer requests."""
+
+    def __init__(self, size, **knobs):
+        super().__init__(**knobs)
+        self.size = size
+
+    async def read_attributes(self, nodes, attr):
+        if len(nodes) == self.size:
+            self.requests.append(len(nodes))
+            raise ua.UaStatusCodeError(ua.StatusCodes.BadTooManyOperations)
+        return await super().read_attributes(nodes, attr)
+
+
+async def test_a_refused_short_tail_halves_the_learned_size_instead_of_cutting_it_to_the_smallest(monkeypatch):
+    fake = use(monkeypatch, TailRefusing(15))
+    c = create_connector("opcua", {"endpoint": ENDPOINT})
+    c._slice = 100  # learned before
+    with pytest.raises(ConnectorError) as typed:
+        await c.read(addresses(115))  # 100 is taken, the tail of 15 is turned away and is too small to halve
+    assert typed.value.message == "the server refuses reads of 15 tags at once (BadTooManyOperations)"
+    assert fake.requests == [100, 15]
+    assert c._slice == 50  # not 10: one refusal of a tail is no proof that 50 is too big
+
+
+async def test_a_halved_short_tail_leaves_the_learned_size_at_its_own_half_of_the_learned_size(monkeypatch):
+    fake = use(monkeypatch, TailRefusing(30))
+    c = create_connector("opcua", {"endpoint": ENDPOINT})
+    c._slice = 100
+    values = await c.read(addresses(130))  # 100, then a tail of 30 that is turned away and goes again as 15 + 15
+    assert fake.requests == [100, 30, 15, 15] and [v.quality for v in values] == [GOOD] * 130
+    assert c._slice == 50  # half of 100, not 15
+
+
+async def test_a_refused_first_and_only_slice_still_halves_from_itself(monkeypatch):
+    fake = use(monkeypatch, FakeSession(refuse_above=20))
+    c = create_connector("opcua", {"endpoint": ENDPOINT})  # nothing learned: the size is the cap, 200
+    values = await c.read(addresses(30))  # the 30 tags are the evidence, not the cap
+    assert fake.requests == [30, 15, 15] and [v.quality for v in values] == [GOOD] * 30
+    assert c._slice == 15
+
+
+async def test_a_limit_below_the_smallest_size_says_so_in_words(monkeypatch):
+    fake = use(monkeypatch, FakeSession(refuse_above=5))
+    c = create_connector("opcua", {"endpoint": ENDPOINT})
+    c._slice = 10
+    with pytest.raises(ConnectorError) as typed:
+        await c.read(addresses(10))
+    assert typed.value.status == "protocol_error"
+    assert typed.value.message == (
+        "the server refuses reads of 10 tags at once (BadTooManyOperations); "
+        "a request is never split below 10 tags, so a server limit below 10 cannot be used"
+    )
+    assert fake.requests == [10] and c._slice == 10
 
 
 # -- the check and the poll --------------------------------------------------------------------------------------------------

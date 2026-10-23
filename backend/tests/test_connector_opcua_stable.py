@@ -9,7 +9,7 @@ from asyncua import ua
 from pydantic import ValidationError
 
 from dcdash.connectors import opcua as opcua_module
-from dcdash.connectors.base import BAD, GOOD, create_connector
+from dcdash.connectors.base import BAD, GOOD, ConnectorError, create_connector
 from dcdash.connectors.opcua import OpcUaConfig, OpcUaConnector
 from dcdash.connectors.opcua_ids import address_key_for, stable_address
 from tests.helpers import opcua_server
@@ -114,8 +114,9 @@ async def test_a_request_for_no_node_is_not_sent_but_the_session_is_still_opened
 
 async def test_an_answer_of_the_wrong_length_is_an_error_not_a_misfiled_value(session):
     session.drop_last_answer = True
-    with pytest.raises(ValueError):
+    with pytest.raises(ConnectorError) as typed:  # since F1 (review M4) each slice's answer length is checked, as a typed error
         await _connector(stable_addresses=True).read([A_NUM, B_STABLE])
+    assert (typed.value.status, typed.value.message) == ("protocol_error", "the server answered 1 values for 2 tags")
 
 
 @pytest.mark.parametrize("extra", [{}, {"stable_addresses": False}], ids=["key missing", "off"])
