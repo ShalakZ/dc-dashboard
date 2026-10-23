@@ -21,6 +21,7 @@ vi.mock("../pages/DashboardPage", () => ({ DashboardPage: () => <h1>the dashboar
 vi.mock("../pages/BillingPage", () => ({ BillingPage: () => <h1>the billing page</h1> }));
 vi.mock("../pages/SourcesPage", () => ({ SourcesPage: () => <h1>the sources page</h1> }));
 vi.mock("../pages/SourcePointsPage", () => ({ SourcePointsPage: () => <h1>the points page</h1> }));
+vi.mock("../pages/SourceShapesPage", () => ({ SourceShapesPage: () => <h1>the shapes page</h1> }));
 vi.mock("../pages/ScansPage", () => ({ ScansPage: () => <h1>the scans page</h1> }));
 vi.mock("../pages/DiscoveryPage", () => ({ DiscoveryPage: () => <h1>the discovery page</h1> }));
 vi.mock("../pages/UsersPage", () => ({ UsersPage: () => <h1>the users page</h1> }));
@@ -76,6 +77,7 @@ const ROUTES: [string, Need, string][] = [
   ["/billing", PAGE_NEED.billing, "the billing page"],
   ["/sources", PAGE_NEED.sources, "the sources page"],
   ["/sources/4/points", PAGE_NEED.sourcePoints, "the points page"],
+  ["/sources/4/shapes", PAGE_NEED.sourceShapes, "the shapes page"],
   ["/scans", PAGE_NEED.scans, "the scans page"],
   ["/discovery", PAGE_NEED.discovery, "the discovery page"],
   ["/users", PAGE_NEED.users, "the users page"],
@@ -281,6 +283,7 @@ describe("the page map", () => {
       billing: "billing.view",
       sources: "sources.view",
       sourcePoints: "sources.edit",
+      sourceShapes: "discovery.view", // w36: Map by tag shape; the page reads only discovery-gated routes
       scans: "discovery.view",
       discovery: "discovery.view",
       users: { any: ["users.view", "roles.manage"] },

@@ -18,6 +18,7 @@ export const PAGE_NEED = {
   billing: "billing.view",
   sources: "sources.view",
   sourcePoints: "sources.edit",
+  sourceShapes: "discovery.view", // w36: Map by tag shape; the page reads only discovery-gated routes
   scans: "discovery.view",
   discovery: "discovery.view",
   users: { any: ["users.view", "roles.manage"] }, // Users & Roles: the Users tab needs the first, the Roles tab the second (the page checks each)
