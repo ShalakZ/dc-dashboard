@@ -72,11 +72,21 @@ export function multiPointDrop(model: GraphModel, ids: readonly string[]): Multi
   const hits = [...wanted].map((id) => found.get(id));
   const held = hits.filter((hit): hit is { source: GraphSource; point: GraphPoint } => hit !== undefined);
   if (held.length < hits.length) return { refusal: "Some of the selected points are not in the graph any more. Refresh and try again." };
-  const mapped = held.filter((hit) => !isOfferable(hit.point)).length; // a twin counts: its tag is already mapped (w34)
-  if (mapped > 0) {
-    return { refusal: mapped === 1
-      ? "1 of the selected points is already mapped. Unmap it first, or select only unmapped points."
-      : `${mapped} of the selected points are already mapped. Unmap them first, or select only unmapped points.` };
+  const mapped = held.filter((hit) => hit.point.asset_id !== null).length;
+  const twins = held.filter((hit) => hit.point.asset_id === null && !isOfferable(hit.point)).length; // the same tag as a mapped point (w34): nothing to unmap on it
+  if (mapped > 0 || twins > 0) {
+    const said: string[] = [];
+    if (mapped > 0) {
+      said.push(mapped === 1
+        ? "1 of the selected points is already mapped. Unmap it first, or select only unmapped points."
+        : `${mapped} of the selected points are already mapped. Unmap them first, or select only unmapped points.`);
+    }
+    if (twins > 0) {
+      said.push(twins === 1
+        ? "1 of the selected points is the same tag as a mapped point."
+        : `${twins} of the selected points are the same tag as a mapped point.`);
+    }
+    return { refusal: said.join(" ") };
   }
   const source = held[0].source;
   if (held.some((hit) => hit.source.id !== source.id)) {

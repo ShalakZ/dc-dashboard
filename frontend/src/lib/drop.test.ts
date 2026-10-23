@@ -279,9 +279,19 @@ describe("a point that is the same tag as a mapped point is not offered (w34)", 
     m.sources[0].clusters[0].points[2] = point(3, "LVP01 V", { same_tag_as: 1 });
     expect(dropPayload(m, nodeId.cluster(1, "LVP01"))).toBeNull();
   });
-  it("selecting a twin with another point refuses and counts it as already mapped", () => {
+  it("selecting a twin with another point refuses and says it is the same tag, with no advice to unmap", () => {
     expect(multiPointDrop(twinModel(), [nodeId.point(2), nodeId.point(3)])).toEqual({
-      refusal: "1 of the selected points is already mapped. Unmap it first, or select only unmapped points." });
+      refusal: "1 of the selected points is the same tag as a mapped point." });
+  });
+  it("several twins are counted in the plural", () => {
+    const m = twinModel();
+    m.sources[0].clusters[0].points[2] = point(3, "LVP01 V", { same_tag_as: 1 });
+    expect(multiPointDrop(m, [nodeId.point(2), nodeId.point(3)])).toEqual({
+      refusal: "2 of the selected points are the same tag as a mapped point." });
+  });
+  it("a mapped point and a twin in one selection are each told, the mapped ones with the usual advice", () => {
+    expect(multiPointDrop(twinModel(), [nodeId.point(1), nodeId.point(2)])).toEqual({
+      refusal: "1 of the selected points is already mapped. Unmap it first, or select only unmapped points. 1 of the selected points is the same tag as a mapped point." });
   });
   it("the bulk list leaves the twin out", () => {
     const s = twinModel().sources[0];
