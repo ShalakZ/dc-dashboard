@@ -48,6 +48,10 @@
   .shapes-page .shape-readonly { font-size: var(--fs-sm); }
   .shapes-page .shape-warn { grid-column: 1 / -1; min-height: 2lh; font-size: var(--fs-sm); }
   .shapes-page .shape-warn p { margin: 0; overflow-wrap: anywhere; }
+  /* The saved rule of a row (T7b) stands in the same slot: its sentence, and Forget this rule beside it. The slot holds two lines either way, so a rule appearing after a Map, or
+     going after a Forget, moves nothing. The quiet button is app.css's (borderless, --ctl-h-sm tall). */
+  .shapes-page .shape-warn .shape-rule { display: flex; flex-wrap: wrap; align-items: center; gap: 0 12px; }
+  .shapes-page .shape-warn .shape-rule button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
   @media (max-width: 1099.98px) {
     .shapes-page .shape-row { grid-template-columns: minmax(0, 1fr); }
   }

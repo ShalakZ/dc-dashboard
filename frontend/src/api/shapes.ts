@@ -16,6 +16,11 @@ export interface ShapeSuggestion {
 /** The meters like this one: how many have the shape, and the first names (5) that lack it. */
 export interface ShapeEquipment { population: number; with_shape: number; missing: string[]; missing_total: number }
 export type Billing = "counter" | "power";
+export type NameFrom = "part1" | "parts12" | "part1_part2";
+/** A saved rule: how a person mapped a shape. The server leaves out what was never set (no nulls): a rule may lack `unit`, `scale` and `interval_seconds`. */
+export interface ShapeRule { metric: Metric; name_from: NameFrom; unit?: string; scale?: number; interval_seconds?: number }
+/** The saved rules of one source, by shape KEY. */
+export type ShapeRules = Record<string, ShapeRule>;
 export interface Shape {
   /** The identity of the shape: digits collapsed to `#`, case-folded. It may contain `#`: never put it in a selector or an id. */
   key: string;
@@ -33,7 +38,8 @@ export interface Shape {
   equipment: ShapeEquipment | null;
   /** Keys of the shapes that differ only in one letter of the equipment part. */
   similar: string[];
-  rule: null;
+  /** The rule saved for this shape's key, or null. */
+  rule: ShapeRule | null;
 }
 export interface ShapeAsset { id: number; parent_id: number | null; name: string; kind: string; icon: string | null }
 export interface ShapeMatch { name: string; address: string; shape: string | null }
@@ -51,7 +57,6 @@ export interface ShapesAnswer {
   matches?: { count: number; first: ShapeMatch[] };
 }
 
-export type NameFrom = "part1" | "parts12" | "part1_part2";
 /** One line of the lines request. `scale` and `unit` are left out on purpose: the server then uses the shape's suggested scale and its single unit hint. */
 export interface ShapeDecision { shape: string; metric: Metric; name_from: NameFrom }
 export interface ShapeLinesBody { decisions: ShapeDecision[]; parent_id: number | null; create_assets: boolean }
@@ -92,3 +97,9 @@ export const useShapes = (sourceId: number, q: string) =>
 /** Read-only: the tag-list CSV of these decisions, with the server's checks (discovery.accept). Nothing is written. */
 export const postShapeLines = (sourceId: number, body: ShapeLinesBody) =>
   api.post<ShapeLinesAnswer>(`/api/sources/${sourceId}/shapes/lines`, body);
+
+const rulesPath = (sourceId: number) => `/api/sources/${sourceId}/shape-rules`;
+/** The saved rules of the source (discovery.view). Read fresh before every change: the page only knows the rules of the rows it was shown. */
+export const getShapeRules = (sourceId: number) => api.get<{ rules: ShapeRules }>(rulesPath(sourceId));
+/** Replaces the WHOLE rule set of the source (discovery.accept): send every rule that should stay. */
+export const putShapeRules = (sourceId: number, rules: ShapeRules) => api.put<{ rules: ShapeRules }>(rulesPath(sourceId), { rules });

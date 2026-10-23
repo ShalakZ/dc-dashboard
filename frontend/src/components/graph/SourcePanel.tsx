@@ -8,6 +8,7 @@ import { useAction } from "../../hooks/useAction";
 import {
   certificateLine, countNumber, DIFFERENT_SERVER, isDifferentServer, isMappedNotSeen, looksLikeSentence, MAPPED_NOT_SEEN, moveOfferFor, notSeenSentence, serverLine, twoServersLine,
 } from "../../lib/graph";
+import { shapesPageLink } from "../../lib/shapes";
 import { useJob } from "../../hooks/useJob";
 import { JobStatus } from "../JobStatus";
 
@@ -27,6 +28,9 @@ interface Props {
   canPoints?: boolean;
   onClose: () => void;
 }
+
+/** `12 new tags match your rules: review`. */
+const newMatchSentence = (n: number) => `${countNumber(n)} new ${n === 1 ? "tag matches" : "tags match"} your rules: review`;
 
 /** Facts about one source, and, for someone who may edit sources, the way to give it credentials (or browse it again). Never shows a stored secret. */
 export function SourcePanel({ source, canEdit, seen, looks, onMoveSource, canShapes = false, canPoints = false, onClose }: Props) {
@@ -88,6 +92,10 @@ export function SourcePanel({ source, canEdit, seen, looks, onMoveSource, canSha
       <p className="muted">
         {source.connector_type} · {source.origin} · {source.status} · {source.large ? `${countNumber(source.large.points)} ${source.large.points === 1 ? "point" : "points"}, ${countNumber(source.large.mapped)} mapped` : `${source.point_count} points`}
       </p>
+      {/* (w36) New tags in a shape the owner already decided about: the whole sentence is the link, to the shapes page opened with those rows set to their rules (still through Review and Map). */}
+      {source.large && canShapes && (source.large.rules_new ?? 0) > 0 && (
+        <p><Link to={shapesPageLink(source.id, { rules: true })}>{newMatchSentence(source.large.rules_new)}</Link></p>
+      )}
       {source.large && (canShapes || canPoints) && (
         <div className="row">
           {canShapes && <Link to={`/sources/${source.id}/shapes`}>Map by shape</Link>}

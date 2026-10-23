@@ -434,3 +434,40 @@ describe("SourcePanel for a large source (w36)", () => {
     expect(within(panel()).getByRole("link", { name: "Open the Points page" })).toHaveFocus();
   });
 });
+
+// (w36 T7b) New tags that match the owner's saved rules: the panel has room for the whole sentence, as a link to the shapes page opened to review them.
+describe("SourcePanel for a large source with new tags that match saved rules (w36)", () => {
+  const big = (rules_new: number) => source({ point_count: 15000, large: { points: 15000, mapped: 800, unmapped: 14000, rules_new } });
+  const panel = () => screen.getByRole("complementary", { name: "Source details" });
+  const render = (s: GraphSource, props: { canShapes?: boolean; canPoints?: boolean } = {}) => {
+    mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+    return renderWithProviders(<SourcePanel source={s} canEdit={false} seen="Seen" onClose={() => {}} {...props} />, { route: "/discovery", path: "/discovery" });
+  };
+
+  it("says `12 new tags match your rules: review` as one link to /sources/<id>/shapes?rules=1", () => {
+    render(big(12), { canShapes: true });
+    expect(within(panel()).getByRole("link", { name: "12 new tags match your rules: review" })).toHaveAttribute("href", "/sources/5/shapes?rules=1");
+    expect(within(panel()).getByRole("link", { name: "Map by shape" })).toHaveAttribute("href", "/sources/5/shapes"); // the plain link stays
+  });
+
+  it("uses thousands separators and the singular", () => {
+    const view = render(big(1234), { canShapes: true });
+    expect(within(panel()).getByRole("link", { name: "1,234 new tags match your rules: review" })).toBeInTheDocument();
+    view.unmount();
+    render(big(1), { canShapes: true });
+    expect(within(panel()).getByRole("link", { name: "1 new tag matches your rules: review" })).toBeInTheDocument();
+  });
+
+  it("is not there without new matches, and not for a person who may not open the shapes page (a link takes its target's whole need)", () => {
+    const view = render(big(0), { canShapes: true });
+    expect(within(panel()).queryByText(/match your rules/)).not.toBeInTheDocument();
+    view.unmount();
+    render(big(12), { canShapes: false, canPoints: true });
+    expect(within(panel()).queryByText(/match your rules/)).not.toBeInTheDocument();
+  });
+
+  it("a source without `large` never says it", () => {
+    render(source({ point_count: 12 }), { canShapes: true });
+    expect(within(panel()).queryByText(/match your rules/)).not.toBeInTheDocument();
+  });
+});

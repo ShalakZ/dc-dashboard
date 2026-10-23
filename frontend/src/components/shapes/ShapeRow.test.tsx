@@ -117,3 +117,49 @@ describe("ShapeRow", () => {
     expect(row).toHaveTextContent("Asset: PDUA01");
   });
 });
+
+describe("ShapeRow: the saved rule (T7b)", () => {
+  const RULE = { metric: "energy_kwh", name_from: "parts12" } as const;
+
+  it("tells the rule in a muted line in the slot under the row, and offers Forget this rule named after the shape", async () => {
+    const onForget = vi.fn();
+    const { row } = setup({ shape: shape({ rule: RULE }), onForget });
+    const line = within(row).getByText("Saved rule: Map as energy counter, asset name parts 1 and 2");
+    expect(line).toHaveClass("muted");
+    expect(row.querySelector(".shape-warn")).toContainElement(line);
+    const button = within(row).getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" });
+    expect(button).toHaveAttribute("type", "button");
+    expect(button).toHaveTextContent("Forget this rule");
+    await userEvent.click(button);
+    expect(onForget).toHaveBeenCalledTimes(1);
+  });
+
+  it("a row without a rule has neither the line nor the button", () => {
+    const { row } = setup({ shape: shape({ rule: null }), onForget: vi.fn() });
+    expect(within(row).queryByText(/Saved rule/)).toBeNull();
+    expect(within(row).queryByRole("button")).toBeNull();
+  });
+
+  it("without the right to decide the rule is told but there is no button (no onForget is given either)", () => {
+    const { row } = setup({ shape: shape({ rule: RULE }), canDecide: false, onForget: vi.fn() });
+    expect(within(row).getByText(/^Saved rule: /)).toBeInTheDocument();
+    expect(within(row).queryByRole("button")).toBeNull();
+  });
+
+  it("no callback (the page gives none without discovery.accept), no button, even for a person marked as able to decide", () => {
+    const { row } = setup({ shape: shape({ rule: RULE }) });
+    expect(within(row).queryByRole("button")).toBeNull();
+  });
+
+  it("while a forget is on its way the button is aria-disabled, keeps the focus and a click does nothing", async () => {
+    const onForget = vi.fn();
+    const { row } = setup({ shape: shape({ rule: RULE }), onForget, forgetting: true });
+    const button = within(row).getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).not.toBeDisabled();
+    button.focus();
+    await userEvent.click(button);
+    expect(onForget).not.toHaveBeenCalled();
+    expect(button).toHaveFocus();
+  });
+});

@@ -1,7 +1,8 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router";
-import type { Shape, ShapesAnswer } from "../api/shapes";
+import { shapesKey, type Shape, type ShapeRules, type ShapesAnswer } from "../api/shapes";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { manualTimers } from "../test/manualTimers";
@@ -10,6 +11,7 @@ import { accountKnown, SignedIn } from "../test/signedIn";
 import { answer, created, linesAnswer, PENRG_B, POWER, report, shape, VOLTAGE } from "../test/shapesFixtures";
 import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
+import { useState } from "react";
 import { SourceShapesPage } from "./SourceShapesPage";
 
 const A_KEY = "pdua#_pm#_penrg";
@@ -26,15 +28,35 @@ interface Options {
   route?: string;
   linesBody?: ReturnType<typeof linesAnswer>;
   debounce?: boolean;
+  /** The rules the server has saved for the source (each row of the answer carries the rule of its key). */
+  rules?: ShapeRules;
+  /** What the server answers to the PUT of the rules and to the real run of the tag list (default: it works). */
+  putReply?: { status?: number; body?: unknown };
+  getRulesReply?: { status?: number; body?: unknown };
+  realRunReply?: { status?: number; body?: unknown };
+  /** An answer already in the page's cache when it opens (an earlier visit in the same session): it is shown at once and read again. */
+  cached?: ShapesAnswer;
+  /** The first read of the shapes waits until `release()` (the page shows its cached answer meanwhile). */
+  hold?: boolean;
+}
+
+/** Puts an answer in the cache of the (empty) query client once, before the page below it renders. */
+function Seed({ answer: cached }: { answer: ShapesAnswer }) {
+  const client = useQueryClient();
+  useState(() => { client.setQueryData(shapesKey(5, ""), cached); return 0; });
+  return null;
 }
 
 /** The page over a mocked server. `reads` records the `q` of every shapes read; `state.mapped` is what the server says is mapped (the real run and the Undo move it). */
-function setup({ user = userFor("admin"), body = answer(), route = "/sources/5/shapes", linesBody = linesAnswer() }: Options = {}) {
+function setup({
+  user = userFor("admin"), body = answer(), route = "/sources/5/shapes", linesBody = linesAnswer(), rules = {}, putReply, getRulesReply, realRunReply, cached, hold = false,
+}: Options = {}) {
   const toasts = spyToasts();
   const clock = manualTimers();
   const reads: string[] = [];
-  const state = { mapped: 12 };
+  const state = { mapped: 12, rules };
   const lines: unknown[] = [];
+  const puts: unknown[] = [];
   const calls = mockFetch({
     "GET /api/setup": { body: { needed: false } },
     "GET /api/me": { body: user },
@@ -42,18 +64,30 @@ function setup({ user = userFor("admin"), body = answer(), route = "/sources/5/s
       const q = new URL(url, "http://x").searchParams.get("q") ?? "";
       reads.push(q);
       const base = typeof body === "function" ? body(q) : body;
-      return { body: { ...base, mapped: state.mapped } };
+      return { body: { ...base, mapped: state.mapped, shapes: base.shapes.map((one) => ({ ...one, rule: state.rules[one.key] ?? null })) } };
+    },
+    "GET /api/sources/5/shape-rules": () => getRulesReply ?? { body: { rules: state.rules } },
+    "PUT /api/sources/5/shape-rules": ({ body: sent }) => {
+      puts.push(sent);
+      if (putReply !== undefined) return putReply;
+      state.rules = (sent as { rules: ShapeRules }).rules;
+      return { body: { rules: state.rules } };
     },
     "POST /api/sources/5/shapes/lines": ({ body: sent }) => { lines.push(sent); return { body: linesBody }; },
     "POST /api/sources/5/tag-list": ({ url }) => {
       if (url.includes("dry_run=1")) return { body: report() };
+      if (realRunReply !== undefined) return realRunReply;
       state.mapped += 400;
       return { body: created() };
     },
     "POST /api/tag-lists/91/undo": () => { state.mapped -= 400; return { body: { mappings: 400, assets: 398, points_removed: 0, points_kept: 0 } }; },
   });
-  const view = renderWithProviders(<><SignedIn /><Where /><SourceShapesPage timers={clock.timers} /></>, { route, path: "/sources/:id/shapes", toasts: toasts.api });
-  return { ...view, toasts, clock, reads, calls, state, lines };
+  const gate = hold ? holdFetch((method, path) => method === "GET" && path === "/api/sources/5/shapes") : { release: () => {} };
+  const view = renderWithProviders(
+    <><SignedIn /><Where />{cached !== undefined && <Seed answer={cached} />}<SourceShapesPage timers={clock.timers} /></>,
+    { route, path: "/sources/:id/shapes", toasts: toasts.api },
+  );
+  return { ...view, toasts, clock, reads, calls, state, lines, puts, release: gate.release };
 }
 
 const decision = (label: string) => screen.getByRole("combobox", { name: `Decision for ${label}` }) as HTMLSelectElement;
@@ -530,5 +564,230 @@ describe("SourceShapesPage: Review and Map", () => {
     expect(lines).toHaveLength(1);
     expect(toasts.calls[0].text).toBe("Created 400 mappings.");
     expect(reviewButton()).toHaveFocus();
+  });
+});
+
+// ---- T7b: saved rules ----
+
+const RULE_A = { metric: "energy_kwh", name_from: "part1" } as const;
+const OTHER_RULE = { metric: "current_a", name_from: "parts12", interval_seconds: 5 } as const; // a rule of a shape this page may not have been shown, with an option set
+const rulesCalls = (calls: { method: string; path: string }[]) => calls.filter((c) => c.path === "/api/sources/5/shape-rules");
+const savedLine = (label: string) => within(rowOf(label)).queryByText(/^Saved rule: /);
+
+describe("SourceShapesPage: saved rules", () => {
+  async function chooseAndMap() {
+    await userEvent.selectOptions(decision("PDUA#_PM0_PENRG"), "Map as energy counter");
+    await userEvent.click(screen.getByRole("checkbox", { name: "Same decision for PDUB#_PM0_PENRG" }));
+    await userEvent.click(reviewButton());
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText("What the tag list planner says");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Map 400 points" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  }
+
+  it("after a successful Map it reads the rules the server has NOW, merges the applied decisions into them and puts the whole set (the other rules stay as they were)", async () => {
+    const { puts, calls, toasts } = setup({ rules: { "other#": OTHER_RULE } });
+    await ready();
+    await chooseAndMap();
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]).toEqual({ rules: { "other#": OTHER_RULE, [A_KEY]: RULE_A, [B_KEY]: RULE_A } });
+    const order = rulesCalls(calls).map((c) => c.method);
+    expect(order).toEqual(["GET", "PUT"]);
+    expect(Object.keys((puts[0] as { rules: Record<string, object> }).rules[A_KEY]).sort()).toEqual(["metric", "name_from"]); // no `shape` key: the server refuses an extra one
+    expect(toasts.calls.map((c) => `${c.kind}: ${c.text}`)).toEqual(["success: Created 400 mappings."]); // silent
+    // The rows show their new rule once the lists are read again.
+    await waitFor(() => expect(savedLine("PDUA#_PM0_PENRG")).toHaveTextContent("Saved rule: Map as energy counter, asset name part 1"));
+    expect(savedLine("PDUB#_PM0_PENRG")).not.toBeNull();
+  });
+
+  it("the rules of the rows the page was never shown (a search, the 300-shape cap) are in the set it puts: the merge reads the server, not its own rows", async () => {
+    const { puts } = setup({ rules: { "never#shown": OTHER_RULE, "also#": { metric: "voltage_v", name_from: "part1" } } });
+    await ready();
+    await chooseAndMap();
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(Object.keys((puts[0] as { rules: object }).rules).sort()).toEqual(["also#", A_KEY, B_KEY, "never#shown"].sort());
+  });
+
+  it("saves nothing after a run that failed: no read and no put of the rules, and the dialog says why", async () => {
+    const { puts, calls, toasts } = setup({ realRunReply: { status: 500, body: { detail: "the database said no" } } });
+    await ready();
+    await userEvent.selectOptions(decision("PDUA#_PM0_PENRG"), "Map as energy counter");
+    await userEvent.click(reviewButton());
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText("What the tag list planner says");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Map 400 points" })); // the dry-run fixture says 400
+    await within(dialog).findByText("the database said no");
+    expect(puts).toEqual([]);
+    expect(rulesCalls(calls)).toEqual([]);
+    expect(toasts.calls).toEqual([]);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("a put that fails raises one info toast beside the success toast, never an error", async () => {
+    const { toasts, puts } = setup({ putReply: { status: 500, body: { detail: "disk full" } } });
+    await ready();
+    await chooseAndMap();
+    await waitFor(() => expect(toasts.calls).toHaveLength(2));
+    expect(toasts.calls.map((c) => `${c.kind}: ${c.text}`)).toEqual(["success: Created 400 mappings.", "info: The mapping was done; the rules could not be saved."]);
+    expect(toasts.calls[0].options?.action?.label).toBe("Undo"); // the success toast, with its Undo, is not replaced
+    expect(puts).toHaveLength(1);
+  });
+
+  it("a read of the rules that fails puts nothing (a set built from a guess would erase the others) and says the same info", async () => {
+    const { toasts, puts } = setup({ getRulesReply: { status: 500, body: { detail: "no" } } });
+    await ready();
+    await chooseAndMap();
+    await waitFor(() => expect(toasts.calls).toHaveLength(2));
+    expect(toasts.calls[1]).toMatchObject({ kind: "info", text: "The mapping was done; the rules could not be saved." });
+    expect(puts).toEqual([]);
+  });
+
+  it("a row with a saved rule says so, in a muted line, and offers Forget this rule; it is NOT preset to the rule", async () => {
+    setup({ rules: { [A_KEY]: RULE_A } });
+    await ready();
+    const line = savedLine("PDUA#_PM0_PENRG")!;
+    expect(line).toHaveTextContent("Saved rule: Map as energy counter, asset name part 1");
+    expect(line).toHaveClass("muted");
+    expect(decision("PDUA#_PM0_PENRG")).toHaveValue(""); // still Ignore
+    expect(reviewButton()).toHaveTextContent("Review mappings...");
+    expect(reviewButton()).toHaveAttribute("aria-disabled", "true");
+    expect(within(rowOf("PDUA#_PM0_PENRG")).getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" })).toHaveTextContent("Forget this rule");
+    expect(savedLine("PDUB#_PM0_PENRG")).toBeNull();
+    expect(screen.getAllByRole("button", { name: /^Forget the rule for / })).toHaveLength(1);
+  });
+
+  it("the saved-rule line lives in the slot under the row, so the row's height is held whether or not it has a rule", async () => {
+    setup({ rules: { [A_KEY]: RULE_A } });
+    await ready();
+    const slot = rowOf("PDUA#_PM0_PENRG").querySelector(".shape-warn")!;
+    expect(slot).toContainElement(savedLine("PDUA#_PM0_PENRG"));
+    expect(rowOf("PDUB#_PM0_PENRG").querySelector(".shape-warn")).toBeEmptyDOMElement();
+  });
+
+  it("Forget this rule reads the server's rules, puts them without that key (the others stay), and the focus lands on the row", async () => {
+    const { puts, calls, state } = setup({ rules: { [A_KEY]: RULE_A, "other#": OTHER_RULE } });
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" }));
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]).toEqual({ rules: { "other#": OTHER_RULE } });
+    expect(rulesCalls(calls).map((c) => c.method)).toEqual(["GET", "PUT"]);
+    expect(state.rules).toEqual({ "other#": OTHER_RULE });
+    await waitFor(() => expect(savedLine("PDUA#_PM0_PENRG")).toBeNull());
+    expect(screen.queryByRole("button", { name: /^Forget the rule for / })).toBeNull();
+    expect(rowOf("PDUA#_PM0_PENRG")).toHaveFocus();
+  });
+
+  it("while the forget is in flight its button is aria-disabled (never disabled) and a second click does nothing", async () => {
+    const { puts } = setup({ rules: { [A_KEY]: RULE_A } });
+    await ready();
+    const button = screen.getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" });
+    act(() => button.focus());
+    const hold = holdFetch((method, path) => method === "PUT" && path === "/api/sources/5/shape-rules");
+    await userEvent.click(button);
+    await waitFor(() => expect(button).toHaveAttribute("aria-disabled", "true"));
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveFocus();
+    await userEvent.click(button);
+    hold.release();
+    await waitFor(() => expect(puts).toHaveLength(1));
+    await waitFor(() => expect(savedLine("PDUA#_PM0_PENRG")).toBeNull());
+  });
+
+  it("a forget that fails says so in an error toast and keeps the rule and its button", async () => {
+    const { toasts } = setup({ rules: { [A_KEY]: RULE_A }, putReply: { status: 500, body: { detail: "disk full" } } });
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" }));
+    await waitFor(() => expect(toasts.calls).toHaveLength(1));
+    expect(toasts.calls[0]).toMatchObject({ kind: "error", text: "The rule could not be forgotten: disk full" });
+    expect(savedLine("PDUA#_PM0_PENRG")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" })).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("without discovery.accept the rule is still told, but there is no Forget button and nothing can be saved", async () => {
+    const { calls } = setup({ user: userFor("operator"), rules: { [A_KEY]: RULE_A } });
+    await ready();
+    expect(savedLine("PDUA#_PM0_PENRG")).toHaveTextContent("Saved rule: Map as energy counter, asset name part 1");
+    expect(screen.queryByRole("button", { name: /^Forget / })).toBeNull();
+    expect(rulesCalls(calls).filter((c) => c.method === "PUT")).toEqual([]);
+  });
+
+  describe("opened with ?rules=1", () => {
+    const withRules: ShapeRules = { [A_KEY]: RULE_A, [B_KEY]: RULE_A, [V_KEY]: { metric: "voltage_v", name_from: "parts12" } };
+    /** B has nothing left to decide about (all 200 mapped); V sits in the closed section. */
+    const body = () => answer({ shapes: [shape(), { ...PENRG_B(), mapped: 150, twins: 50 }, POWER(), VOLTAGE()] });
+
+    it("presets the rows that have a rule AND tags left; a row with a rule and nothing left stays at Ignore", async () => {
+      setup({ route: "/sources/5/shapes?rules=1", rules: withRules, body: body() });
+      await ready();
+      expect(decision("PDUA#_PM0_PENRG")).toHaveValue("energy_kwh");
+      expect(decision("PDUB#_PM0_PENRG")).toHaveValue(""); // 150 mapped + 50 copies of mapped ones: nothing to decide
+      expect(decision("PDUA#_PM0_P")).toHaveValue(""); // no rule
+      expect(screen.getByRole("combobox", { name: "Asset name for PDUA#_PM0_PENRG" })).toHaveValue("part1");
+    });
+
+    it("a preset row in the closed section opens it, with its asset name from the rule", async () => {
+      setup({ route: "/sources/5/shapes?rules=1", rules: withRules, body: body() });
+      await ready();
+      expect(screen.getByRole("button", { name: /^Not needed for billing/ })).toHaveAttribute("aria-expanded", "true");
+      expect(decision("PDUA#_PM0_VL#N")).toHaveValue("voltage_v");
+      expect(screen.getByRole("combobox", { name: "Asset name for PDUA#_PM0_VL#N" })).toHaveValue("parts12");
+      expect(reviewButton()).toHaveTextContent("Review 800 mappings..."); // 200 + 600
+    });
+
+    it("applies nothing by itself: no lines request, no tag-list call, no put; the person still presses Review and Map", async () => {
+      const { lines, calls, puts } = setup({ route: "/sources/5/shapes?rules=1", rules: withRules, body: body() });
+      await ready();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(lines).toEqual([]);
+      expect(calls.filter((c) => c.path === "/api/sources/5/tag-list")).toEqual([]);
+      expect(puts).toEqual([]);
+      await userEvent.click(reviewButton());
+      const dialog = await screen.findByRole("dialog");
+      expect(dialog).toBeInTheDocument();
+      await waitFor(() => expect(lines).toHaveLength(1));
+      expect((lines[0] as { decisions: { shape: string }[] }).decisions.map((d) => d.shape)).toEqual([A_KEY, V_KEY]);
+    });
+
+    it("a preset row can still be changed, and the preset is not applied again when the list is read again", async () => {
+      const { clock } = setup({ route: "/sources/5/shapes?rules=1", rules: withRules, body: body() });
+      await ready();
+      await userEvent.selectOptions(decision("PDUA#_PM0_PENRG"), "Ignore");
+      await userEvent.type(screen.getByRole("searchbox", { name: "Search tags" }), "PENRG");
+      act(() => clock.advance(300));
+      await waitFor(() => expect(screen.getByRole("group", { name: "Shape PDUA#_PM0_PENRG" })).toBeInTheDocument());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(decision("PDUA#_PM0_PENRG")).toHaveValue("");
+    });
+
+    it("a cached answer from an earlier visit does not use up the preset: it waits for the answer read after the page opened (12 new tags since then)", async () => {
+      // The cache still says every ruled row is fully mapped (the last visit ended after a Map); the server now says tags are left.
+      const stale = answer({ shapes: [shape({ mapped: 200 }), { ...PENRG_B(), mapped: 200 }, POWER(), VOLTAGE()] });
+      const { release } = setup({ route: "/sources/5/shapes?rules=1", rules: withRules, body: body(), cached: stale, hold: true });
+      await ready(); // the cached answer is on screen, the account is known (so the page may decide), and the read after the page opened is still on its way
+      expect(decision("PDUA#_PM0_PENRG")).toHaveValue("");
+      release();
+      await waitFor(() => expect(decision("PDUA#_PM0_PENRG")).toHaveValue("energy_kwh"));
+      expect(decision("PDUA#_PM0_VL#N")).toHaveValue("voltage_v");
+      expect(reviewButton()).toHaveTextContent("Review 800 mappings...");
+    });
+
+    it("keeps ?rules=1 in the address beside a search", async () => {
+      setup({ route: "/sources/5/shapes?rules=1", rules: withRules, body: body() });
+      await ready();
+      expect(screen.getByTestId("where")).toHaveTextContent("rules=1");
+    });
+
+    it("presets nothing for a role that may not decide (the decisions would be text no one can act on)", async () => {
+      setup({ user: userFor("operator"), route: "/sources/5/shapes?rules=1", rules: withRules, body: body() });
+      await ready();
+      expect(rowOf("PDUA#_PM0_PENRG")).toHaveTextContent("Decision: Ignore");
+      expect(screen.queryByRole("combobox")).toBeNull();
+    });
+
+    it("another value of rules presets nothing", async () => {
+      setup({ route: "/sources/5/shapes?rules=0", rules: withRules, body: body() });
+      await ready();
+      expect(decision("PDUA#_PM0_PENRG")).toHaveValue("");
+    });
   });
 });

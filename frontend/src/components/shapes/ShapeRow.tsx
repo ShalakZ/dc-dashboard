@@ -2,7 +2,7 @@ import type { Ref } from "react";
 import type { Metric } from "../../api/types";
 import type { NameFrom, Shape } from "../../api/shapes";
 import {
-  decisionOptions, derivedAsset, grouped, METRIC_WORDS, NAME_OPTIONS, plural, rowWarnings, suggestionSentence, type Choice,
+  decisionOptions, derivedAsset, grouped, METRIC_WORDS, NAME_OPTIONS, plural, ruleSentence, rowWarnings, suggestionSentence, type Choice,
 } from "../../lib/shapes";
 
 interface Props {
@@ -17,17 +17,21 @@ interface Props {
   highlighted: boolean;
   onChoice: (patch: Partial<Choice>) => void;
   onTick: (on: boolean) => void;
+  /** (T7b) Forget the row's saved rule. Given only when the person may decide (discovery.accept). */
+  onForget?: () => void;
+  /** (T7b) A forget is on its way: the button waits (aria-disabled, it keeps the focus). */
+  forgetting?: boolean;
   rowRef?: Ref<HTMLDivElement>;
 }
 
 /**
  * One shape of a source: what it is (a label made from the tag text, how many tags, three of them, the unit, the suggestion), and the one decision about it.
  * Every row starts at Ignore, so nothing is mapped that the person did not choose. The label, the suggestion and the asset name are guesses and the row says so
- * where it matters. The slot under the row is always there (a fixed minimum height): a warning arriving moves nothing.
+ * where it matters. The slot under the row is always there (a fixed minimum height): a warning arriving moves nothing, and it also holds the row's saved rule (T7b, with Forget this rule).
  *
  * The row is found by its `data-shape` value (the key holds `#`: never an id built from it). It can take focus by script (tabIndex -1).
  */
-export function ShapeRow({ shape, choice, canDecide, similarText, ticked, highlighted, onChoice, onTick, rowRef }: Props) {
+export function ShapeRow({ shape, choice, canDecide, similarText, ticked, highlighted, onChoice, onTick, onForget, forgetting = false, rowRef }: Props) {
   const warnings = rowWarnings(shape, choice);
   const first = shape.examples[0];
   const asset = derivedAsset(first, choice.nameFrom);
@@ -76,6 +80,19 @@ export function ShapeRow({ shape, choice, canDecide, similarText, ticked, highli
       </div>
 
       <div className="shape-warn">
+        {shape.rule !== null && (
+          <p className="muted shape-rule">
+            {ruleSentence(shape.rule)}
+            {canDecide && onForget !== undefined && (
+              <button
+                type="button" className="quiet" aria-label={`Forget the rule for ${shape.label}`} aria-disabled={forgetting ? true : undefined}
+                onClick={() => { if (!forgetting) onForget(); }}
+              >
+                Forget this rule
+              </button>
+            )}
+          </p>
+        )}
         {warnings.map((text) => <p key={text} className="warning">{text}</p>)}
       </div>
     </div>

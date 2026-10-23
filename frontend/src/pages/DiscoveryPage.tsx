@@ -61,6 +61,7 @@ import {
   tooManyGroupsNote, type Change,
 } from "../lib/graphView";
 import { mappedRefs, mappedSourcesByAsset, mappingsWhat } from "../lib/mappedRefs";
+import { shapesPageLink } from "../lib/shapes";
 import { formatOfflineSince } from "../lib/sourceStatus";
 
 /**
@@ -540,7 +541,7 @@ function Canvas({ model }: { model: GraphModel }) {
   // (w36) Map by shape on a large source's card: the page of its tag shapes. The card is a plain button, so Enter and Space press it like a click.
   const onShapes = useCallback((id: string) => {
     const source = sourceOf(id);
-    if (source?.large) navigate(`/sources/${source.id}/shapes`);
+    if (source?.large) navigate(shapesPageLink(source.id, { rules: (source.large.rules_new ?? 0) > 0 })); // new tags that match saved rules: the page opens with those rows preset
   }, [sourceOf, navigate]);
   const removable = useMemo(() => model.sources.filter(isRemovable), [model]);
   const clearUnmapped = () => {

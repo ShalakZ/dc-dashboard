@@ -5340,6 +5340,63 @@ describe("DiscoveryPage with a large source (w36)", () => {
   });
 });
 
+// ---- w36 T7b: new tags that match the owner's saved rules: the card says how many, and its button opens the shapes page with those rows preset (?rules=1) ----
+
+describe("DiscoveryPage with new tags that match saved rules (w36)", () => {
+  const onSite = (id: number, name: string) => kw(id, name, { asset_id: 10, mapping_id: id + 500, mapped_metric: "active_power_kw" });
+  const bigWith = (rules_new: number) => srcOf(1, "Big OPC", {
+    connector_type: "opcua", point_count: 15000, large: { points: 15000, mapped: 4, unmapped: 14990, rules_new },
+    clusters: [{ key: "PDUA01", points: [onSite(1, "PDUA01 a"), onSite(2, "PDUA01 b")] }, { key: "PDUA02", points: [onSite(3, "PDUA02 a"), onSite(4, "PDUA02 b")] }],
+  });
+  function Where() {
+    const at = useLocation();
+    return <output data-testid="where">{`${at.pathname}${at.search}`}</output>;
+  }
+  const show = (role: string, rules_new: number) => {
+    mockFetch(routes(role, world([bigWith(rules_new)])));
+    return renderWithProviders(<><DiscoveryPage /><SignedIn /><Where /></>, { route: "/discovery", path: "*" });
+  };
+
+  it("the card says `15,000 points, 4 mapped, 12 new` and its button `Review 12 new`, which opens /sources/1/shapes?rules=1 (click, Enter and Space)", async () => {
+    show("operator", 12);
+    expect(await screen.findByText("15,000 points, 4 mapped, 12 new")).toHaveClass("gsrc-words");
+    const button = await screen.findByRole("button", { name: "Review 12 new tags that match your rules" });
+    expect(button).toHaveTextContent("Review 12 new");
+    await userEvent.click(button);
+    expect(screen.getByTestId("where")).toHaveTextContent("/sources/1/shapes?rules=1");
+    cleanup();
+    for (const key of ["{Enter}", " "]) {
+      show("operator", 12);
+      const again = await screen.findByRole("button", { name: "Review 12 new tags that match your rules" });
+      act(() => again.focus());
+      await userEvent.keyboard(key);
+      expect(screen.getByTestId("where")).toHaveTextContent("/sources/1/shapes?rules=1");
+      cleanup();
+    }
+  });
+
+  it("without new matches the button is Map by shape and opens the plain shapes page", async () => {
+    show("operator", 0);
+    await userEvent.click(await screen.findByRole("button", { name: "Map by shape for Big OPC" }));
+    expect(screen.getByTestId("where").textContent).toBe("/sources/1/shapes");
+  });
+
+  it("the panel says the sentence as a link to the same address, for discovery.view", async () => {
+    show("operator", 12);
+    await userEvent.click(await screen.findByRole("button", { name: "Details for Big OPC" }));
+    const panel = await screen.findByRole("complementary", { name: "Source details" });
+    expect(within(panel).getByRole("link", { name: "12 new tags match your rules: review" })).toHaveAttribute("href", "/sources/1/shapes?rules=1");
+  });
+
+  it("a person without discovery.view gets neither the button nor the panel link, and the card still says how many are new", async () => {
+    show("viewer", 12);
+    await accountKnown();
+    await screen.findByText("Big OPC");
+    expect(screen.queryByRole("button", { name: /Review 12 new/ })).not.toBeInTheDocument();
+    expect(screen.getByText("15,000 points, 4 mapped, 12 new")).toBeInTheDocument();
+  });
+});
+
 describe("DiscoveryPage a source too big to draw, and Find for a large source (w36)", () => {
   /** A source of n groups of two points each, with no `large` (an older server, a mock): the client has nothing but its own model to go by. */
   const crowded = (n: number, over: Partial<GraphSource> = {}) => srcOf(1, "Big OPC", {

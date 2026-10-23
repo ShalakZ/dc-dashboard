@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
-import { SEARCH_MAX, useShapes, type Shape, type ShapesAnswer } from "../api/shapes";
+import { useInvalidate, keys } from "../api/queries";
+import { getShapeRules, putShapeRules, SEARCH_MAX, useShapes, type Shape, type ShapeDecision, type ShapesAnswer } from "../api/shapes";
 import { useAuth } from "../auth/AuthProvider";
 import { meets } from "../auth/need";
 import { Icon, type IconName } from "../components/Icon";
@@ -8,17 +9,19 @@ import { InfoTip } from "../components/InfoTip";
 import { PageHeader } from "../components/PageHeader";
 import { ReviewShapesDialog } from "../components/shapes/ReviewShapesDialog";
 import { ShapeRow } from "../components/shapes/ShapeRow";
+import { useToast } from "../components/Toasts";
 import { PAGE_NEED } from "../components/navItems";
 import { PageHeaderSkeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
 import { assetLabels, assetOptions } from "../lib/pickerRows";
 import type { Timers } from "../lib/progress";
 import {
-  chosenShapes, choiceOf, coveredTags, decide, decisionBody, grouped, MAX_DECISIONS, NO_DECISIONS, plural, readLink, reviewLabel, rowOf, searchTerm, similarSentence,
-  splitSections, tick, tooManyText, type Decisions,
+  chosenShapes, choiceOf, coveredTags, decide, decisionBody, grouped, MAX_DECISIONS, mergeRules, NO_DECISIONS, plural, presetFromRules, readLink, reviewLabel, rowOf, searchTerm,
+  similarSentence, splitSections, tick, tooManyText, wantsRules, withoutRule, type Decisions,
 } from "../lib/shapes";
 
 /** How long the search box waits after the last key before it asks the server. */
 const SEARCH_WAIT_MS = 300;
+const reasonOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const realTimers: Timers = {
   set: (fn, ms) => setTimeout(fn, ms),
   clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -54,7 +57,9 @@ function ShapesBody({ sourceId, timers }: { sourceId: number; timers: Timers }) 
   const canDecide = can("discovery.accept");
   const canPoints = meets(PAGE_NEED.sourcePoints, can);
   const [params, setParams] = useSearchParams();
-  const [start] = useState(() => readLink(params));
+  const [start] = useState(() => ({ ...readLink(params), rules: wantsRules(params) })); // `rules`: opened to review the new tags that match the saved rules (?rules=1)
+  const invalidate = useInvalidate();
+  const toast = useToast();
 
   // The search: what is typed, what the server was last asked (after the wait; the address's own search is applied at once), and the shape to look at.
   const [text, setText] = useState(start.q);
@@ -72,10 +77,11 @@ function ShapesBody({ sourceId, timers }: { sourceId: number; timers: Timers }) 
     const next = new URLSearchParams();
     if (term !== "") next.set("q", term);
     if (focusKey !== "") next.set("focus", focusKey);
+    if (start.rules) next.set("rules", "1"); // a reload asks for the same preset (rows with nothing left to decide are not preset)
     if (next.toString() !== params.toString()) setParams(next, { replace: true });
   }, [term, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps -- writes the address; reading it again would loop
 
-  const { data, error } = useShapes(sourceId, term);
+  const { data, error, isFetchedAfterMount } = useShapes(sourceId, term);
 
   // Every shape the page has been shown, by key: a decision outlives a search that no longer lists its row, and still needs its tag count and its label.
   const [seen, setSeen] = useState<{ answer: ShapesAnswer | null; shapes: ReadonlyMap<string, Shape> }>({ answer: null, shapes: new Map() });
@@ -99,6 +105,51 @@ function ShapesBody({ sourceId, timers }: { sourceId: number; timers: Timers }) 
   const heading = useRef<HTMLHeadingElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const [restOpen, setRestOpen] = useState(false);
+
+  // ?rules=1: ONCE, on the first answer READ AFTER THE PAGE OPENED, every row that has a saved rule and tags still to decide about is set to its rule (still shown, still
+  // changeable, still only through Review and Map). A cached answer from an earlier visit is shown at once but does not count: it may still say the rows are mapped (the
+  // visit before ended with a Map), and the preset would be spent on it. A later answer (a search, a refresh) never presets again. A closed section that holds a preset
+  // row is opened. A role that cannot decide gets nothing: its decisions would be text nobody can act on.
+  const presetPending = useRef(start.rules);
+  useEffect(() => {
+    if (!presetPending.current || data === undefined || !isFetchedAfterMount || !canDecide) return;
+    presetPending.current = false;
+    const preset = presetFromRules(data.shapes);
+    if (preset === NO_DECISIONS) return;
+    setDecisions(preset);
+    if (data.shapes.some((shape) => shape.billing === null && preset.choices[shape.key] !== undefined)) setRestOpen(true);
+  }, [data, isFetchedAfterMount, canDecide]);
+
+  /**
+   * The Map worked: remember the decisions as the source's rules. The server's rules are read NOW and the decided keys replaced in them, because the PUT replaces the
+   * whole set and this page only knows the rules of the rows it was shown (a search, the 300-row cap). Silent; a failure is one info toast beside the success toast.
+   */
+  async function remember(applied: ShapeDecision[]) {
+    try {
+      const { rules } = await getShapeRules(sourceId);
+      await putShapeRules(sourceId, mergeRules(rules, applied));
+    } catch {
+      toast.info("The mapping was done; the rules could not be saved.");
+      return;
+    }
+    try { await invalidate(keys.sources, keys.graph); } catch { /* the rows show the rule on their next read */ }
+  }
+  // Forget this rule: the server's rules again, without that key. One at a time; the focus goes to the row (its button is about to go).
+  const [forgetting, setForgetting] = useState<string | null>(null);
+  async function forget(shape: Shape) {
+    if (forgetting !== null) return;
+    setForgetting(shape.key);
+    try {
+      const { rules } = await getShapeRules(sourceId);
+      await putShapeRules(sourceId, withoutRule(rules, shape.key));
+      await invalidate(keys.sources, keys.graph);
+      if (root.current !== null) rowOf(root.current, shape.key)?.focus({ preventScroll: true });
+    } catch (error) {
+      toast.error(`The rule could not be forgotten: ${reasonOf(error)}`);
+    } finally {
+      setForgetting(null);
+    }
+  }
 
   const assets = useMemo(() => (data?.assets ?? []).map((asset) => ({ ...asset, sort_order: 0 })), [data?.assets]);
   const parentId = parentChoice !== null && assets.some((asset) => asset.id === parentChoice) ? parentChoice : null;
@@ -161,7 +212,7 @@ function ShapesBody({ sourceId, timers }: { sourceId: number; timers: Timers }) 
       <ShapeRow
         key={shape.key} shape={shape} choice={choiceOf(decisions, shape.key)} canDecide={canDecide}
         similarText={similar.length > 0 ? similarSentence(similar, labelOf) : null} ticked={decisions.ticks[shape.key] === true}
-        highlighted={focusKey === shape.key}
+        highlighted={focusKey === shape.key} forgetting={forgetting === shape.key} onForget={canDecide ? () => void forget(shape) : undefined}
         onChoice={(patch) => setDecisions((current) => decide(current, shape.key, patch, similarOf))}
         onTick={(on) => setDecisions((current) => tick(current, shape.key, on, similarOf))}
       />
@@ -284,7 +335,8 @@ function ShapesBody({ sourceId, timers }: { sourceId: number; timers: Timers }) 
         <ReviewShapesDialog
           sourceId={sourceId} sourceName={data.source_name} decisions={review.decisions} parentId={review.parentId}
           parentLabel={review.parentId === null ? null : (parentLabels.get(review.parentId) ?? null)} createAssets={review.createAssets}
-          labelOf={labelOf} onClose={closeReview} onMapped={() => setDecisions(NO_DECISIONS)}
+          labelOf={labelOf} onClose={closeReview}
+          onMapped={() => { void remember(review.decisions); setDecisions(NO_DECISIONS); }}
         />
       )}
     </div>

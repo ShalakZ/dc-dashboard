@@ -3,7 +3,7 @@ import { check, created, PENRG_B, POWER, report, shape, VOLTAGE } from "../test/
 import {
   chosenShapes, coveredTags, decide, decisionBody, decisionOptions, derivedAsset, dryRunPath, duplicatesWarning, exampleText, mappedSentence, MAX_DECISIONS,
   mixedUnitsWarning, namePartsWarning, NO_DECISIONS, onExistingAssets, outlierTexts, partsOf, plannerStops, readLink, realRunPath, reviewLabel, rowOf, rowWarnings,
-  searchTerm, shapeCountsSentence, shapesPageLink, similarSentence, splitSections, suggestionSentence, tick, tooManyText,
+  mergeRules, presetFromRules, ruleChoice, ruleSentence, searchTerm, shapeCountsSentence, shapesPageLink, similarSentence, splitSections, suggestionSentence, tick, tooManyText, wantsRules, withoutRule,
 } from "./shapes";
 
 const A = shape();
@@ -193,5 +193,61 @@ describe("the Review", () => {
     expect(Object.fromEntries(real.searchParams)).toEqual({
       dry_run: "0", create_assets: "1", expect_points: "0", expect_assets: "398", expect_mappings: "400", expect_plan: "digest-1",
     });
+  });
+});
+
+describe("saved rules (T7b)", () => {
+  const RULE = { metric: "energy_kwh" as const, name_from: "part1" as const };
+
+  it("words a rule the way the row says it", () => {
+    expect(ruleSentence(RULE)).toBe("Saved rule: Map as energy counter, asset name part 1");
+    expect(ruleSentence({ metric: "active_power_kw", name_from: "parts12" })).toBe("Saved rule: Map as active power, asset name parts 1 and 2");
+    expect(ruleSentence({ metric: "custom", name_from: "part1_part2", unit: "bar", scale: 2 })).toBe("Saved rule: Map as custom, asset name part 1 / part 2");
+  });
+
+  it("a rule is the choice of a row", () => {
+    expect(ruleChoice({ metric: "voltage_v", name_from: "parts12", interval_seconds: 5 })).toEqual({ metric: "voltage_v", nameFrom: "parts12" });
+  });
+
+  it("merges the decisions into the rules already saved: the decided keys are replaced, the others stay exactly as they are", () => {
+    const saved = { "other#": { metric: "current_a" as const, name_from: "part1" as const, interval_seconds: 5 }, [A.key]: { metric: "custom" as const, name_from: "part1" as const, unit: "x" } };
+    const merged = mergeRules(saved, [
+      { shape: A.key, metric: "energy_kwh", name_from: "parts12" },
+      { shape: B.key, metric: "energy_kwh", name_from: "part1" },
+    ]);
+    expect(merged).toEqual({
+      "other#": { metric: "current_a", name_from: "part1", interval_seconds: 5 },
+      [A.key]: { metric: "energy_kwh", name_from: "parts12" },
+      [B.key]: { metric: "energy_kwh", name_from: "part1" },
+    });
+    expect(Object.keys(merged[A.key]).sort()).toEqual(["metric", "name_from"]); // the decision's own `shape` is not part of a rule (the server refuses an extra key)
+    expect(saved[A.key]).toEqual({ metric: "custom", name_from: "part1", unit: "x" }); // the argument is not changed
+  });
+
+  it("forgets one key and keeps the rest", () => {
+    expect(withoutRule({ a: RULE, b: RULE }, "a")).toEqual({ b: RULE });
+    expect(withoutRule({ a: RULE }, "zzz")).toEqual({ a: RULE });
+  });
+
+  it("presets only the rows that have a rule AND unmapped tags left (count - mapped - twins)", () => {
+    const done = shape({ key: "done#", label: "DONE#", count: 10, mapped: 8, twins: 2, rule: RULE });
+    const withTwins = shape({ key: "twins#", label: "TWINS#", count: 10, mapped: 5, twins: 4, rule: RULE });
+    const none = shape({ key: "plain#", label: "PLAIN#", count: 10, rule: null });
+    const fresh = shape({ key: "fresh#", label: "FRESH#", count: 10, mapped: 9, rule: { metric: "voltage_v", name_from: "parts12", scale: 1 } });
+    const preset = presetFromRules([done, withTwins, none, fresh]);
+    expect(preset.choices).toEqual({ "twins#": { metric: "energy_kwh", nameFrom: "part1" }, "fresh#": { metric: "voltage_v", nameFrom: "parts12" } });
+    expect(preset.ticks).toEqual({});
+    expect(presetFromRules([none, done])).toEqual(NO_DECISIONS);
+  });
+
+  it("builds the shapes link with ?rules=1 beside q and focus, and reads it back; nothing else counts as on", () => {
+    expect(shapesPageLink(5, { rules: true })).toBe("/sources/5/shapes?rules=1");
+    expect(shapesPageLink(5, { rules: false })).toBe("/sources/5/shapes");
+    expect(shapesPageLink(5, { q: "PENRG", rules: true })).toBe("/sources/5/shapes?q=PENRG&rules=1");
+    expect(wantsRules(new URLSearchParams("rules=1"))).toBe(true);
+    expect(wantsRules(new URLSearchParams("q=a&rules=1"))).toBe(true);
+    expect(wantsRules(new URLSearchParams("rules=0"))).toBe(false);
+    expect(wantsRules(new URLSearchParams("rules=true"))).toBe(false);
+    expect(wantsRules(new URLSearchParams())).toBe(false);
   });
 });

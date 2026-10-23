@@ -1,5 +1,7 @@
 import { METRICS, type Metric, type TagListReport } from "../api/types";
-import { SEARCH_MAX, SEARCH_MIN, type CheckSeverity, type NameFrom, type Shape, type ShapeCheck, type ShapeDecision, type ShapeExample, type ShapeLinesByShape } from "../api/shapes";
+import {
+  SEARCH_MAX, SEARCH_MIN, type CheckSeverity, type NameFrom, type Shape, type ShapeCheck, type ShapeDecision, type ShapeExample, type ShapeLinesByShape, type ShapeRule, type ShapeRules,
+} from "../api/shapes";
 import { upperFirst } from "./upperFirst";
 
 // w36 Map by tag shape: the pure helpers of the page. The server groups the tags into shapes and checks the decisions; nothing here works out a shape.
@@ -162,14 +164,17 @@ export function searchTerm(text: string): string {
   return term.length >= SEARCH_MIN ? term : "";
 }
 
-/** The address of the page with a search and a shape to look at: both optional, both encoded (a shape key holds `#`). */
-export function shapesPageLink(sourceId: number, link: { q?: string; focus?: string } = {}): string {
+/** The address of the page with a search and a shape to look at: both optional, both encoded (a shape key holds `#`). `rules` asks for the rows that match a saved rule to be preset. */
+export function shapesPageLink(sourceId: number, link: { q?: string; focus?: string; rules?: boolean } = {}): string {
   const params = new URLSearchParams();
   if (link.q) params.set("q", link.q);
   if (link.focus) params.set("focus", link.focus);
+  if (link.rules) params.set("rules", "1");
   const query = params.toString();
   return `/sources/${sourceId}/shapes${query === "" ? "" : `?${query}`}`;
 }
+/** The page was opened to review the new tags that match the saved rules (`?rules=1`, from the Discovery card or panel). */
+export const wantsRules = (params: URLSearchParams): boolean => params.get("rules") === "1";
 /** What the address of the page asks for. */
 export function readLink(params: URLSearchParams): { q: string; focus: string } {
   return { q: (params.get("q") ?? "").slice(0, SEARCH_MAX), focus: params.get("focus") ?? "" };
@@ -235,4 +240,35 @@ export function realRunPath(sourceId: number, createAssets: boolean, report: Tag
     expect_plan: report.plan_digest,
   });
   return `/api/sources/${sourceId}/tag-list?${query}`;
+}
+
+// Saved rules (T7b): what a person decided about a shape is remembered under the shape's KEY, and shown on the row; it is never applied by itself.
+/** `Saved rule: Map as energy counter, asset name part 1`. The unit, scale and interval of a rule are not worded here: this page never sets them. */
+export const ruleSentence = (rule: ShapeRule): string => `Saved rule: Map as ${METRIC_WORDS[rule.metric]}, asset name ${NAME_TEXT[rule.name_from]}`;
+/** The row's choice a rule stands for. */
+export const ruleChoice = (rule: ShapeRule): Choice => ({ metric: rule.metric, nameFrom: rule.name_from });
+/**
+ * The rules after these decisions were applied: each decided key now holds its decision (metric and asset name only, never the decision's `shape`: the server
+ * refuses an extra key), every other rule stays exactly as it was. `saved` is the set the server has NOW, not what the page was shown.
+ */
+export function mergeRules(saved: ShapeRules, decisions: readonly ShapeDecision[]): ShapeRules {
+  const next: ShapeRules = { ...saved };
+  for (const decision of decisions) next[decision.shape] = { metric: decision.metric, name_from: decision.name_from };
+  return next;
+}
+export function withoutRule(saved: ShapeRules, key: string): ShapeRules {
+  const next: ShapeRules = { ...saved };
+  delete next[key];
+  return next;
+}
+/**
+ * `?rules=1`: every row that has a rule AND tags still to decide about (its count less the mapped and the copies of mapped ones) is set to its rule. Still shown,
+ * still changeable, still only through Review and Map.
+ */
+export function presetFromRules(shapes: readonly Shape[]): Decisions {
+  const choices: Record<string, Choice> = {};
+  for (const shape of shapes) {
+    if (shape.rule !== null && shape.count - shape.mapped - shape.twins > 0) choices[shape.key] = ruleChoice(shape.rule);
+  }
+  return Object.keys(choices).length === 0 ? NO_DECISIONS : { choices, ticks: {} };
 }

@@ -1146,3 +1146,60 @@ describe("the card of a large source (w36)", () => {
     expect(screen.getByRole("button", { name: MAP })).toBeInTheDocument();
   });
 });
+
+// (w36 T7b) New tags that match the owner's saved rules: the SAME six lines. The words line gains `, 12 new` and the Map by shape button reads `Review 12 new` (the page links it to ?rules=1).
+describe("the card of a large source with new tags that match saved rules (w36)", () => {
+  const withRules = (rules_new: number): GraphSource => ({ ...source, needs_credentials: false, point_count: 15000, large: { points: 15000, mapped: 800, unmapped: 14000, rules_new } });
+  const lines = () => Array.from(document.querySelectorAll(".gsrc-body > *")).map((line) => line.className.split(" ")[0]);
+  const SIX = ["gsrc-head", "gsrc-sub", "gsrc-status", "gsrc-mapped", "gsrc-actions", "gsrc-seen"];
+
+  it("says `15,000 points, 800 mapped, 12 new` in the words line, and the share bar is still the mapped share of the real points", () => {
+    renderNode("source", "src:1", { source: withRules(12), expanded: false });
+    expect(screen.getByText("15,000 points, 800 mapped, 12 new")).toHaveClass("gsrc-words");
+    expect(document.querySelector(".gsrc-fill")).toHaveStyle({ width: "5%" });
+  });
+
+  it("the button reads `Review 12 new` with the full sentence as its name, in the same slot as Map by shape: still six lines, same classes", () => {
+    renderNode("source", "src:1", { source: withRules(12), expanded: false, onSelect: vi.fn(), onShapes: vi.fn(), seen: "Seen in scan #8, 2 min ago" });
+    expect(lines()).toEqual(SIX);
+    const button = screen.getByRole("button", { name: "Review 12 new tags that match your rules" });
+    expect(button).toHaveTextContent("Review 12 new");
+    expect(button).toHaveClass("nodrag", "gsrc-shapes");
+    expect(button).toHaveAttribute("type", "button");
+    expect(screen.queryByRole("button", { name: /Map by shape/ })).not.toBeInTheDocument();
+    expect(Array.from(document.querySelectorAll(".gsrc-actions button")).map((b) => b.textContent)).toEqual(["Details", "Review 12 new"]);
+  });
+
+  it("uses thousands separators and the singular for one tag", () => {
+    renderNode("source", "src:1", { source: withRules(1234), expanded: false, onShapes: vi.fn() });
+    expect(screen.getByText("15,000 points, 800 mapped, 1,234 new")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review 1,234 new tags that match your rules" })).toHaveTextContent("Review 1,234 new");
+    cleanup();
+    renderNode("source", "src:1", { source: withRules(1), expanded: false, onShapes: vi.fn() });
+    expect(screen.getByRole("button", { name: "Review 1 new tag that matches your rules" })).toHaveTextContent("Review 1 new");
+  });
+
+  it("a click reports the node id, exactly as Map by shape does", async () => {
+    const onShapes = vi.fn();
+    renderNode("source", "src:1", { source: withRules(12), expanded: false, onShapes });
+    await userEvent.click(screen.getByRole("button", { name: "Review 12 new tags that match your rules" }));
+    expect(onShapes).toHaveBeenCalledWith("src:1");
+  });
+
+  it("without new matches (0, or an older server with no rules_new) the words and the button are Map by shape exactly as before", () => {
+    renderNode("source", "src:1", { source: withRules(0), expanded: false, onShapes: vi.fn() });
+    expect(screen.getByText("15,000 points, 800 mapped")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Map by shape for Plant OPC" })).toHaveTextContent("Map by shape");
+    cleanup();
+    const old = { ...withRules(0), large: { points: 15000, mapped: 800, unmapped: 14000 } } as unknown as GraphSource;
+    renderNode("source", "src:1", { source: old, expanded: false, onShapes: vi.fn() });
+    expect(screen.getByText("15,000 points, 800 mapped")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Map by shape for Plant OPC" })).toBeInTheDocument();
+  });
+
+  it("no callback (no discovery.view): the words still say how many are new, and there is no button", () => {
+    renderNode("source", "src:1", { source: withRules(12), expanded: false, onSelect: vi.fn() });
+    expect(screen.getByText("15,000 points, 800 mapped, 12 new")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Review 12 new/ })).not.toBeInTheDocument();
+  });
+});
