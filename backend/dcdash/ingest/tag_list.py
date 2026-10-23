@@ -22,6 +22,7 @@ from collections import Counter, defaultdict
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, replace
 
+from dcdash.connectors.opcua_ids import AddressIndex, identity_key
 from dcdash.core.metrics import MAX_SCALE, Metric, default_interval, unit_for
 from dcdash.ingest.normalise import NormaliseError, refuse_interval_as_energy, scale_for
 
@@ -43,6 +44,7 @@ KNOWN = (*REQUIRED, "unit", "scale", "interval_seconds", "kind", "reading")
 DELIMITERS = (",", ";", "\t")
 READINGS = ("counter", "power", "interval")
 GENERIC = "generic"
+TWO_POINTS = "two points of this source are this tag"  # w34: a source with stable addresses holds two points that are one tag
 
 # ASCII digits only: float() and int() also read the digits of other scripts.
 _NUMBER = re.compile(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
@@ -223,17 +225,25 @@ def _walk(keys: tuple[str, ...], index: AssetIndex) -> tuple[int | None, int, bo
     return parent, len(keys), False
 
 
+def _addresses(points: Mapping[str, int] | AddressIndex[int]) -> AddressIndex[int]:
+    """The points of the source as an `AddressIndex`: a plain mapping (address -> id) compares addresses as they are."""
+    return points if isinstance(points, AddressIndex) else AddressIndex(points.items(), identity_key)
+
+
 def touched(
-    parsed: ParsedList, index: AssetIndex, seg_keys: Mapping[str, str], points: Mapping[str, int]
+    parsed: ParsedList, index: AssetIndex, seg_keys: Mapping[str, str], points: Mapping[str, int] | AddressIndex[int]
 ) -> tuple[set[int], set[int]]:
     """(the existing points, the existing assets) this list may write to or under: what the route locks and whose mappings it
-    reads. A malformed line contributes nothing."""
+    reads. A malformed line contributes nothing, nor does a tag that two points of the source share (the plan refuses it)."""
+    addresses = _addresses(points)
+    twins = addresses.ambiguous_keys()
     point_ids: set[int] = set()
     asset_ids: set[int] = set()
     for row in parsed.rows:
         if row.error is not None:
             continue
-        point = points.get(row.values.get("tag", ""))
+        tag = row.values.get("tag", "")
+        point = None if addresses.key(tag) in twins else addresses.get(tag)
         if point is not None:
             point_ids.add(point)
         try:
@@ -319,10 +329,12 @@ class _Planner:
     """The state of one `plan` call: what the lines accepted so far have asked for."""
 
     def __init__(
-        self, connector_type: str, create_assets: bool, index: AssetIndex, points: Mapping[str, int],
+        self, connector_type: str, create_assets: bool, index: AssetIndex, points: Mapping[str, int] | AddressIndex[int],
         seg_keys: Mapping[str, str], mapped_points: Collection[int], asset_metrics: Collection[tuple[int, str]],
     ):
-        self.connector_type, self.create_assets, self.index, self.points = connector_type, create_assets, index, points
+        self.connector_type, self.create_assets, self.index = connector_type, create_assets, index
+        self.addresses = _addresses(points)
+        self.twins = self.addresses.ambiguous_keys()  # keys that two or more stored points share (never any with the identity key)
         self.seg_keys, self.mapped_points, self.asset_metrics = seg_keys, mapped_points, asset_metrics
         self.new_points: list[PlannedPoint] = []
         self.new_assets: dict[tuple[str, ...], PlannedAsset] = {}
@@ -375,7 +387,9 @@ class _Planner:
             if len(self.new_assets) + len(chain) > MAX_NEW_ASSETS:
                 raise _Bad(f"a list creates at most {MAX_NEW_ASSETS:,} assets; split it into smaller lists")
         kind = self._kind(values.get("kind", ""), keys, leaf_new)
-        point_id = self.points.get(tag)
+        if self.addresses.key(tag) in self.twins:  # also for a tag stored exactly: mapping one twin would map one tag twice
+            raise _Bad(TWO_POINTS)
+        point_id = self.addresses.get(tag)
         point: PlannedPoint | None = None
         if point_id is None:
             if self.connector_type != "file":
@@ -411,7 +425,8 @@ class _Planner:
             raise _Bad(f"the tag is longer than {MAX_TAG} characters")
         if not tag.isprintable():
             raise _Bad("the tag contains control or invisible characters")
-        first = self.tag_lines.setdefault(tag, row.line)  # every line counts, also one that is refused below
+        # Every line counts, also one that is refused below. Two spellings of one tag (a source with stable addresses) are one tag.
+        first = self.tag_lines.setdefault(self.addresses.key(tag), row.line)
         if first != row.line:
             raise _Bad(f"this tag is already on line {first}")
         return tag
@@ -479,7 +494,7 @@ def plan(
     connector_type: str,
     create_assets: bool,
     index: AssetIndex,
-    points: Mapping[str, int],
+    points: Mapping[str, int] | AddressIndex[int],
     seg_keys: Mapping[str, str],
     mapped_points: Collection[int],
     asset_metrics: Collection[tuple[int, str]],
@@ -488,7 +503,8 @@ def plan(
     on the order of the lines, except where two lines spell one new asset differently (the first line's spelling is the one written,
     so the order then decides what is written, and the digest follows).
 
-    `points`: address -> id of the points of THE chosen source. `seg_keys`: part text -> the database's key for it.
+    `points`: address -> id of the points of THE chosen source, or an `AddressIndex` of them (a source with stable addresses: the
+    numbered and the stable spelling of a tag name the same point). `seg_keys`: part text -> the database's key for it.
     `mapped_points`: ids of points that already have a mapping. `asset_metrics`: (asset id, metric) pairs that exist."""
     planner = _Planner(connector_type, create_assets, index, points, seg_keys, mapped_points, asset_metrics)
     problems: list[Problem] = []
