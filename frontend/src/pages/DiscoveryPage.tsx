@@ -1132,7 +1132,7 @@ function Canvas({ model }: { model: GraphModel }) {
 
   // The menu's items come from the node's own callbacks (the ones its buttons use), so a role sees exactly the actions it has buttons for.
   const nodeActions = (node: Node): RowAction[] => {
-    const d = node.data as NodeActions & Pick<AssetNodeData, "mapped" | "onUnmapSource" | "children" | "collapsed"> & Pick<SourceNodeData, "groups"> & { expanded?: boolean };
+    const d = node.data as NodeActions & Pick<AssetNodeData, "mapped" | "onUnmapSource" | "children" | "collapsed"> & Pick<SourceNodeData, "groups"> & Pick<PointNodeData, "twinOf"> & { expanded?: boolean };
     const group = node.type === "cluster";
     const items: RowAction[] = [];
     if (d.onSelect) items.push({ label: "Details", onSelect: () => d.onSelect?.(node.id) });
@@ -1140,6 +1140,8 @@ function Canvas({ model }: { model: GraphModel }) {
     // (W12c) A source has no Create assets or Remove button on its card: these two items, in its Source actions menu and its right-click menu, are where they are.
     if (d.onCreateAssets) items.push({ label: d.groups === undefined ? "Create assets…" : `Create assets for ${d.groups} ${d.groups === 1 ? "group" : "groups"}…`, onSelect: () => d.onCreateAssets?.(node.id) });
     if (d.onMap) items.push({ label: "Map…", onSelect: () => d.onMap?.(node.id) });
+    // (w34) The same tag as a mapped point: a role that maps sees the item it would have had, disabled, with the reason (the node has no button for it, so this is the only place it says so).
+    if (node.type === "point" && d.twinOf !== undefined && canAccept) items.push({ label: "Map…", disabled: true, reason: `Already mapped as ${d.twinOf}` });
     // The three that open the asset form wait for the asset list (`formWait`: aria-disabled, skipped by the keys).
     if (d.onNewAsset) items.push({ label: "New asset…", disabled: d.formWait, onSelect: () => d.onNewAsset?.(node.id) });
     if (d.menuNewAsset) items.push({ label: "New asset…", disabled: d.formWait, onSelect: () => d.menuNewAsset?.(node.id) }); // an unmapped point: its menu only

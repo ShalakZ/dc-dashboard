@@ -2134,6 +2134,31 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       expect(screen.queryByRole("button", { name: "New asset from LVP01 kW…" })).not.toBeInTheDocument(); // a point draws no button for it
     });
 
+    it("a point that is the same tag as a mapped one has its own menu: a disabled Map… that says why, the focus on the menu, Escape back to the node (w34)", async () => {
+      const model = graph();
+      model.sources[0].clusters[0].points = [
+        point(1, "LVP01 kW", { asset_id: 11, mapping_id: 4, mapped_metric: "active_power_kw" }),
+        point(2, "LVP01 V", { same_tag_as: 1 }),
+      ];
+      mockFetch(routes("admin", model));
+      open();
+      await expand("Plant OPC");
+      await expand("LVP01");
+      await screen.findByText("Already mapped as LVP01 kW");
+      rightClick("point:2");
+      const menu = await screen.findByRole("menu", { name: "Actions for LVP01 V" }); // its own menu, not the canvas's
+      expect(labelsOf(menu)).toEqual(["Map…"]);
+      const map = within(menu).getByRole("menuitem", { name: /^Map…/ });
+      expect(map).toHaveAttribute("aria-disabled", "true");
+      expect(map).toHaveTextContent("Already mapped as LVP01 kW");
+      expect(map).toHaveAttribute("title", "Already mapped as LVP01 kW");
+      expect(menu).toHaveFocus(); // nothing in it can be chosen: the focus is on the menu itself, which is named
+      await userEvent.click(map);
+      expect(screen.getByRole("menu", { name: "Actions for LVP01 V" })).toBeInTheDocument(); // a disabled item does nothing and keeps the menu
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
     it("a point that has no action for this role (no Map…) shows the canvas's menu instead", async () => {
       mockFetch(routes("operator"));
       open();
@@ -2141,6 +2166,20 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       await expand("LVP01");
       rightClick("point:1");
       expect(labelsOf(await screen.findByRole("menu", { name: "Canvas actions" }))).toEqual(["Expand all", "Collapse all", "Tidy layout", "Fit view", "Expand selection", "Collapse selection"]);
+    });
+
+    it("a twin of a role that may not accept gets the canvas's menu like any other point: it has no Map… to be disabled (w34)", async () => {
+      const model = graph();
+      model.sources[0].clusters[0].points = [
+        point(1, "LVP01 kW", { asset_id: 11, mapping_id: 4, mapped_metric: "active_power_kw" }),
+        point(2, "LVP01 V", { same_tag_as: 1 }),
+      ];
+      mockFetch(routes("operator", model));
+      open();
+      await expand("Plant OPC");
+      await expand("LVP01");
+      rightClick("point:2");
+      expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
     });
 
     it("so does a leaf asset, and so does the empty canvas (an asset with sub-assets has its own: the branch and the fold)", async () => {

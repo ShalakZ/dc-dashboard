@@ -57,6 +57,18 @@ describe("GraphContextMenu", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("a menu whose items are all disabled takes the focus itself (it is named), arrows do nothing, and Escape closes it and returns the focus", async () => {
+    const list = items({ Details: { disabled: true, reason: "Already mapped as p1" } }).slice(0, 1);
+    const { returnTo, onClose } = open({ items: list });
+    const menu = screen.getByRole("menu", { name: "Plant OPC actions" });
+    expect(menu).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}{End}{Home}");
+    expect(menu).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(returnTo).toHaveFocus();
+  });
+
   it("a disabled item's reason is a muted second line INSIDE the item (read with it) and its title; an enabled item, or a disabled one with no reason, shows plain text", async () => {
     const reason = "Select a source, group or asset first.";
     const list = items({ Details: { disabled: true, reason }, Collapse: { reason: "ignored while enabled" }, Create: { disabled: true } });

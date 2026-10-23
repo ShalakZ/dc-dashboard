@@ -68,7 +68,7 @@ export function placeBelowBox(
  * that element as the place to give the focus back to.
  *
  * `at` is read once, when the menu mounts: the page keys the menu by its open, so a second open mounts a fresh one. A disabled item is
- * `aria-disabled` (never native disabled) and skipped by the focus; its `reason`, when it has one, is a muted second line inside the item and its
+ * `aria-disabled` (never native disabled) and skipped by the focus (a menu with no enabled item takes the focus itself); its `reason`, when it has one, is a muted second line inside the item and its
  * `title`. Items are buttons; a `to` link is not supported here.
  */
 export function GraphContextMenu({ at, items, label, returnFocus, onClose }: {
@@ -105,7 +105,8 @@ export function GraphContextMenu({ at, items, label, returnFocus, onClose }: {
           : placePanel(at.box, size, viewport, 4, barHeight())
         : placeAtPoint(at, size, viewport, barHeight()),
     );
-    enabled()[0]?.focus({ preventScroll: true });
+    // With nothing to choose (every item disabled, as a twin point's menu) the menu is where the focus goes, so Escape works and its name and reasons are read.
+    (enabled()[0] ?? box).focus({ preventScroll: true });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- placed once per mount
 
   useEffect(() => { if (empty) close(); }, [empty]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -170,6 +171,7 @@ export function GraphContextMenu({ at, items, label, returnFocus, onClose }: {
       ref={panel}
       role="menu"
       aria-label={label}
+      tabIndex={-1}
       className="row-menu-panel graph-menu"
       style={place ? { top: place.top, left: place.left, maxHeight: place.maxHeight } : { top: 0, left: 0 }}
       onKeyDown={onPanelKey}
