@@ -413,7 +413,7 @@ test.describe("W36: Map by shape", () => {
       await expect(page.locator(".shell"), "the page behind is inert").toHaveAttribute("inert", "");
       await expect(dialog.getByRole("status"), "one live region").toHaveCount(1);
       await expect(dialog.getByRole("status")).toHaveText(`${MAPPINGS} tags would be mapped. Nothing is mapped until you press Map.`);
-      await expect(dialog.getByText(`${PER_FEED} tags on ${PER_FEED} assets`, { exact: true }), "both shapes: 24 tags on 24 assets").toHaveCount(2);
+      await expect(dialog.getByText(`${PER_FEED} tags on up to ${PER_FEED} assets`, { exact: true }), "both shapes: 24 tags on up to 24 assets").toHaveCount(2);
       await expect(dialog.getByRole("cell", { name: `${HALL}/PDUA01`, exact: true }), "a sample whose derived asset is PDUA01, under the hall").toBeVisible();
       await expect(dialog.locator('.shapes-checks li[data-severity="blocking"]'), "no blocking check").toHaveCount(0);
       await expect(dialog.locator(".shapes-tiles > div").filter({ hasText: "Mappings to create" }).locator("dd"), "the planner's own count").toHaveText(String(MAPPINGS));
