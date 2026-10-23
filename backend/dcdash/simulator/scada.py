@@ -23,10 +23,18 @@ import asyncio
 import dataclasses
 import itertools
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from asyncua import Server, ua
 
+from dcdash.simulator.faults import FaultConfigError
+
+PREFIX = "SIM_SCADA_"
+KNOWN = (
+    "SIM_SCADA_PORT", "SIM_SCADA_PDUS", "SIM_SCADA_BRANCH_TAGS", "SIM_SCADA_SEED", "SIM_SCADA_RESTRUCTURE",
+    "SIM_SCADA_MAX_NODES_PER_READ", "SIM_SCADA_ADVERTISED_MAX_NODES",
+)
 SPARE_NAMESPACE = "urn:dcdash:simulator:scada:vendor"  # registered first, so the cluster's namespace is index 3 like the real one's (guess)
 CLUSTER_NAMESPACE = "urn:dcdash:simulator:scada:cluster"
 NAMESPACE_INDEX = 3  # asyncua's own namespace 1 is the application URI; the spare one is 2
@@ -48,6 +56,10 @@ _NUMBERED = re.compile(r"(\d+):Site\.(.+)")
 _LIMIT_NODE = ua.ObjectIds.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead
 
 
+class ScadaConfigError(FaultConfigError):
+    """A SIM_SCADA_* setting that cannot be honoured; main() stops on it exactly as it stops on a bad SIM_FAULT_* switch."""
+
+
 @dataclass(frozen=True)
 class ScadaConfig:
     """The SCADA's knobs (SIM_SCADA_* in the environment, read by main.py). `port` None = the server does not exist."""
@@ -59,6 +71,60 @@ class ScadaConfig:
     restructure: str = ""  # "", "bad" or "by_index": the numbering the server starts with
     max_nodes_per_read: int = 0  # 0 = no limit; above 0 a Read of more nodes is refused (enforced)
     advertised_max_nodes: int | None = None  # what OperationLimits.MaxNodesPerRead shows; None = the enforced value
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str]) -> ScadaConfig:
+        """Unset or empty = the default (no port = no SCADA server). A name that is not a setting, or a value that is not honoured,
+        raises ScadaConfigError with a plain sentence: a typo must never run the rehearsal with the defaults."""
+        unknown = sorted(name for name in environ if name.startswith(PREFIX) and name not in KNOWN)
+        if unknown:
+            raise ScadaConfigError(
+                f"{', '.join(unknown)} is not a setting of the SCADA-shaped OPC UA server (a typo would run the rehearsal with the "
+                f"defaults). The settings are: {', '.join(KNOWN)}."
+            )
+
+        def value(name: str) -> str:
+            return environ.get(name, "").strip()
+
+        default = cls()
+        restructure = value("SIM_SCADA_RESTRUCTURE")
+        if restructure not in MODES:
+            raise ScadaConfigError(f"SIM_SCADA_RESTRUCTURE must be bad or by_index (or empty for none), not '{restructure}'.")
+        advertised = value("SIM_SCADA_ADVERTISED_MAX_NODES")
+        return cls(
+            port=_whole("SIM_SCADA_PORT", value("SIM_SCADA_PORT"), None, 1, 65535),
+            pdus=_whole("SIM_SCADA_PDUS", value("SIM_SCADA_PDUS"), default.pdus, 0, 200),
+            branch_tags=_whole("SIM_SCADA_BRANCH_TAGS", value("SIM_SCADA_BRANCH_TAGS"), default.branch_tags, 0, 20_000),
+            seed=_whole("SIM_SCADA_SEED", value("SIM_SCADA_SEED"), default.seed, 0, 1_000_000),
+            restructure=restructure,
+            max_nodes_per_read=_whole("SIM_SCADA_MAX_NODES_PER_READ", value("SIM_SCADA_MAX_NODES_PER_READ"), default.max_nodes_per_read, 0, 1_000_000),
+            advertised_max_nodes=_whole("SIM_SCADA_ADVERTISED_MAX_NODES", advertised, None, 0, 4_294_967_295) if advertised else None,
+        )
+
+    def describe(self) -> list[str]:
+        """One line per active fault, each starting with the variable and its value; empty for a plain (even a much bigger) cluster."""
+        lines = []
+        if self.restructure:
+            effect = ("an old numbered address answers BadNodeIdUnknown" if self.restructure == "bad"
+                      else "an old numbered address reads whatever tag holds that number now")
+            lines.append(f"SIM_SCADA_RESTRUCTURE={self.restructure}: the numbering is shifted by an extra equipment folder, {effect}")
+        if self.max_nodes_per_read:
+            lines.append(f"SIM_SCADA_MAX_NODES_PER_READ={self.max_nodes_per_read}: a Read of more nodes is refused with BadTooManyOperations")
+        if self.advertised_max_nodes is not None and self.advertised_max_nodes != self.max_nodes_per_read:
+            lines.append(f"SIM_SCADA_ADVERTISED_MAX_NODES={self.advertised_max_nodes}: MaxNodesPerRead advertises {self.advertised_max_nodes}, not the limit it enforces")
+        return lines
+
+
+def _whole(name: str, text: str, default: int | None, low: int, high: int) -> int | None:
+    if not text:
+        return default
+    try:
+        number = int(text)
+    except ValueError:
+        raise ScadaConfigError(f"{name} must be a whole number, not '{text}'.") from None
+    if not low <= number <= high:
+        raise ScadaConfigError(f"{name} must be between {low} and {high}, not '{text}'.")
+    return number
 
 
 class ScadaCounters:

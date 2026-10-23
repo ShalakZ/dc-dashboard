@@ -10,7 +10,8 @@ import pytest
 from asyncua import Client, ua
 
 from dcdash.connectors.base import BAD, GOOD, ConnectorError, create_connector
-from dcdash.simulator.scada import ScadaConfig, ScadaSim
+from dcdash.simulator import main as simulator_main
+from dcdash.simulator.scada import KNOWN, ScadaConfig, ScadaConfigError, ScadaSim
 from tests.helpers import free_port
 
 NUMBERED = re.compile(r"ns=3;s=(\d+):Site\.(.+)")
@@ -187,3 +188,118 @@ async def test_scale_knobs():
         assert len(browsed) == 2172 and {p.name for p in browsed} == set(sim.tags)
         assert sorted(int(NUMBERED.fullmatch(p.address)[1]) for p in browsed) == expected_numbers(2172)
     assert time.perf_counter() - started < 120
+
+
+# ---- the application URI and the endpoint path -----------------------------------------------------------------------------------
+
+async def test_the_server_announces_its_instance_and_serves_on_the_plantscada_path():
+    sim = ScadaSim(ScadaConfig(pdus=1), free_port(), instance="lab-2")
+    await sim.start()
+    try:
+        assert sim.endpoint.endswith("/plantscada")
+        async with Client(endpoint(sim)) as client:
+            assert (await client.get_namespace_array())[1] == "urn:dcdash:simulator:scada:lab-2"
+            assert len(await client.get_namespace_array()) == 4  # ns 0, the application URI, a spare one, the cluster's (3)
+            endpoints = await client.get_endpoints()
+            assert {e.Server.ApplicationUri for e in endpoints} == {"urn:dcdash:simulator:scada:lab-2"}
+    finally:
+        await sim.stop()
+
+
+# ---- (g) main() starts the SCADA-shaped server only with a port ---------------------------------------------------------------
+
+def test_the_settings_have_defaults_and_no_port_means_no_server():
+    assert ScadaConfig.from_env({}) == ScadaConfig() and ScadaConfig().port is None
+    assert ScadaConfig.from_env({"SIM_SCADA_PORT": "", "SIM_SCADA_PDUS": "  "}) == ScadaConfig()  # empty = unset (compose passes empty)
+    full = ScadaConfig.from_env({
+        "SIM_SCADA_PORT": "4850", "SIM_SCADA_PDUS": "3", "SIM_SCADA_BRANCH_TAGS": "2000", "SIM_SCADA_SEED": "7",
+        "SIM_SCADA_RESTRUCTURE": "by_index", "SIM_SCADA_MAX_NODES_PER_READ": "120", "SIM_SCADA_ADVERTISED_MAX_NODES": "500",
+    })
+    assert full == ScadaConfig(port=4850, pdus=3, branch_tags=2000, seed=7, restructure="by_index", max_nodes_per_read=120, advertised_max_nodes=500)
+    assert ScadaConfig.from_env({"SIM_SCADA_ADVERTISED_MAX_NODES": "0"}).advertised_max_nodes == 0  # "advertises none" is not "unset"
+    assert set(KNOWN) == {f"SIM_SCADA_{name}" for name in (
+        "PORT", "PDUS", "BRANCH_TAGS", "SEED", "RESTRUCTURE", "MAX_NODES_PER_READ", "ADVERTISED_MAX_NODES")}
+
+
+def test_main_reads_the_scada_settings_once_and_hands_serve_the_config(monkeypatch):
+    seen: list[dict] = []
+
+    async def fake_serve(**kwargs):
+        seen.append(kwargs)
+
+    monkeypatch.setattr(simulator_main, "serve", fake_serve)
+    reads = []
+    original = ScadaConfig.from_env.__func__
+    monkeypatch.setattr(ScadaConfig, "from_env", classmethod(lambda cls, environ: reads.append(1) or original(cls, environ)))
+    simulator_main.main({})
+    simulator_main.main({"SIM_SCADA_PORT": "4850", "SIM_SCADA_PDUS": "3"})
+    assert len(reads) == 2  # once per start
+    assert seen[0]["scada"].port is None and seen[0]["scada"] == ScadaConfig()
+    assert seen[1]["scada"] == ScadaConfig(port=4850, pdus=3)
+
+
+async def test_serve_starts_the_scada_server_only_when_it_has_a_port(monkeypatch):
+    started: list[tuple] = []
+
+    class Idle:  # stands in for a server: it takes its arguments and "runs" at once
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self):
+            return None
+
+        async def serve(self):
+            return None
+
+    class FakeScada(Idle):
+        def __init__(self, config, port, instance="dev"):
+            self.endpoint = ""
+            started.append((config, port, instance, self))
+
+        async def run(self):
+            started[-1] = (*started[-1][:3], self.endpoint)
+
+    monkeypatch.setattr(simulator_main, "OpcUaSim", Idle)
+    monkeypatch.setattr(simulator_main, "ModbusSim", Idle)
+    monkeypatch.setattr(simulator_main, "ScadaSim", FakeScada)
+    monkeypatch.setattr(simulator_main, "create_sim_app", lambda *args, **kwargs: None)
+    monkeypatch.setattr(simulator_main.uvicorn, "Config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(simulator_main.uvicorn, "Server", Idle)
+    await simulator_main.serve()
+    await simulator_main.serve(scada=ScadaConfig())
+    assert started == []  # the three plain servers, nothing else
+    await simulator_main.serve(scada=ScadaConfig(port=4850, pdus=3), instance="lab-2", host="0.0.0.0")
+    assert started == [(ScadaConfig(port=4850, pdus=3), 4850, "lab-2", "opc.tcp://0.0.0.0:4850/plantscada")]
+
+
+# ---- (h) a typo or a bad value stops main() before anything starts -----------------------------------------------------------
+
+def test_a_typo_in_a_scada_name_stops_the_simulator_before_anything_starts(monkeypatch):
+    async def serve_must_not_run(**kwargs):
+        raise AssertionError("serve() started with a mistyped SCADA setting")
+
+    monkeypatch.setattr(simulator_main, "serve", serve_must_not_run)
+    with pytest.raises(SystemExit) as stopped:
+        simulator_main.main({"SIM_SCADA_PORTT": "4850"})
+    assert "SIM_SCADA_PORTT" in str(stopped.value) and str(stopped.value).startswith("simulator: ")
+    with pytest.raises(ScadaConfigError):
+        ScadaConfig.from_env({"SIM_SCADA_PORTT": "4850"})
+
+
+@pytest.mark.parametrize("name, value, sentence", [
+    ("SIM_SCADA_PDUS", "many", "SIM_SCADA_PDUS must be a whole number"),
+    ("SIM_SCADA_PDUS", "201", "SIM_SCADA_PDUS must be between 0 and 200"),
+    ("SIM_SCADA_PORT", "0", "SIM_SCADA_PORT must be between 1 and 65535"),
+    ("SIM_SCADA_BRANCH_TAGS", "-1", "SIM_SCADA_BRANCH_TAGS must be between 0 and 20000"),
+    ("SIM_SCADA_RESTRUCTURE", "sideways", "SIM_SCADA_RESTRUCTURE must be bad or by_index"),
+    ("SIM_SCADA_MAX_NODES_PER_READ", "lots", "SIM_SCADA_MAX_NODES_PER_READ must be a whole number"),
+    ("SIM_SCADA_ADVERTISED_MAX_NODES", "1.5", "SIM_SCADA_ADVERTISED_MAX_NODES must be a whole number"),
+])
+def test_a_bad_scada_value_stops_the_simulator_with_the_plain_sentence(monkeypatch, name, value, sentence):
+    async def serve_must_not_run(**kwargs):
+        raise AssertionError("serve() started with a bad SCADA value")
+
+    monkeypatch.setattr(simulator_main, "serve", serve_must_not_run)
+    with pytest.raises(SystemExit) as stopped:
+        simulator_main.main({name: value})
+    assert sentence in str(stopped.value) and str(stopped.value).startswith("simulator: ")
