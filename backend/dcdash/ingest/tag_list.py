@@ -44,7 +44,7 @@ KNOWN = (*REQUIRED, "unit", "scale", "interval_seconds", "kind", "reading")
 DELIMITERS = (",", ";", "\t")
 READINGS = ("counter", "power", "interval")
 GENERIC = "generic"
-TWO_POINTS = "two points of this source are this tag"  # w34: a source with stable addresses holds two points that are one tag
+TWO_POINTS = "two points of this source have the same stable address"  # w34: a source with stable addresses holds two points that are one tag
 
 # ASCII digits only: float() and int() also read the digits of other scripts.
 _NUMBER = re.compile(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")

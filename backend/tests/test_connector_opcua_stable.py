@@ -17,7 +17,7 @@ from tests.helpers import opcua_server
 ENDPOINT = "opc.tcp://127.0.0.1:1/"
 A_NUM, B_STABLE, C_NUM = "ns=3;s=20403:Site.A", "ns=3;s=Site.B", "ns=3;s=20418:Site.C"
 A, B, C = "ns=3;s=Site.A", "ns=3;s=Site.B", "ns=3;s=Site.C"
-SAME_TEXT = "two points are the same tag (stable address ns=3;s=Site.A)"
+SAME_TEXT = "two points have the same stable address ns=3;s=Site.A"
 LIMIT_NODE = ua.NodeId(ua.ObjectIds.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead)
 
 
@@ -259,7 +259,7 @@ async def test_two_stored_forms_of_one_tag_are_both_bad_and_the_rest_are_read():
         stored = [sim.stable_id(tag) for tag in tags] + [sim.numbered_id(tags[0])]  # the first tag is stored twice, in two forms
         values = await _scada_connector(sim, stable_addresses=True).read(stored)
         assert sim.counters.read_sizes == [49]  # the pair was not sent
-    text = f"two points are the same tag (stable address {sim.stable_id(tags[0])})"
+    text = f"two points have the same stable address {sim.stable_id(tags[0])}"
     assert [(v.address, v.value, v.quality, v.status) for v in (values[0], values[-1])] == [
         (stored[0], None, BAD, text), (stored[-1], None, BAD, text)]
     assert [v.value for v in values[1:-1]] == [sim.value_of(tag) for tag in tags[1:]]

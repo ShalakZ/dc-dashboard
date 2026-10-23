@@ -121,7 +121,7 @@ async def test_a_refused_pair_and_a_halved_slice_in_the_same_call():
         assert sim.counters.read_sizes[4:] == [100, 100, 49]
     for result in (values, again):
         assert [v.address for v in result] == stored  # the caller's list, in the caller's order
-        text = f"two points are the same tag (stable address {pair})"
+        text = f"two points have the same stable address {pair}"
         assert [(v.value, v.quality, v.status) for v in (result[0], result[-1])] == [(None, BAD, text)] * 2
         assert [v.value for v in result[1:-1]] == [sim.value_of(tag) for tag in tags[1:]]
         assert [v.quality for v in result[1:-1]] == [GOOD] * 249
@@ -358,6 +358,6 @@ async def test_the_check_reads_the_stable_forms_the_poll_reads_and_keeps_the_sto
     assert not any(re.search(r"s=[0-9]+:", i) for ids in checked for i in ids)  # the timing step reads stable forms too
     rows = {row["address"]: row for row in {step.id: step for step in result.steps}["read_points"].detail["points"]}
     assert set(rows) == set(stored)  # the stored strings, not the stable forms
-    text = f"two points are the same tag (stable address {pair})"
+    text = f"two points have the same stable address {pair}"
     assert [rows[a]["status"] for a in (stored[0], pair)] == [text, text] and not rows[pair]["good"] and not rows[stored[0]]["good"]
     assert all(rows[a]["good"] for a in stored[1:11])

@@ -79,7 +79,7 @@ def test_with_the_option_off_the_same_tag_is_still_no_point_of_the_source():
 
 def test_a_tag_two_stored_points_share_is_refused_in_either_spelling_and_for_an_exact_address_too():
     points = on((NUMBERED, 7), (TWIN, 8), (OTHER, 9))
-    assert tl.TWO_POINTS == "two points of this source are this tag"
+    assert tl.TWO_POINTS == "two points of this source have the same stable address"
     for tag in (STABLE, NUMBERED, TWIN):
         result = planned(f"{tag},Hall,active_power_kw,kW", points=points)
         assert problems(result) == [(2, tl.TWO_POINTS)] and not result.mappings, tag

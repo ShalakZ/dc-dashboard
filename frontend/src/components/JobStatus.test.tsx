@@ -29,20 +29,24 @@ describe("JobStatus (w34 browse line)", () => {
     expect(await screen.findByText("found 0 points")).toBeInTheDocument();
   });
 
-  it("adds the ambiguous clause when tags match two stored points", async () => {
+  it("adds the ambiguous clause, worded for both of its causes, when tags were left as they are", async () => {
     await shown(browse({ count: 15180, matched_stored: 15000, ambiguous: 3 }));
-    expect(await screen.findByText("found 15,180 points; 3 tags match two stored points and were left as they are")).toBeInTheDocument();
+    expect(
+      await screen.findByText("found 15,180 points; 3 tags were left as they are (more than one point or server node has the same stable address)"),
+    ).toBeInTheDocument();
   });
 
   it("uses the singular for one ambiguous tag", async () => {
     await shown(browse({ count: 12, matched_stored: 10, ambiguous: 1 }));
-    expect(await screen.findByText("found 12 points; 1 tag matches two stored points and was left as it is")).toBeInTheDocument();
+    expect(
+      await screen.findByText("found 12 points; 1 tag was left as it is (more than one point or server node has the same stable address)"),
+    ).toBeInTheDocument();
   });
 
   it("leaves the clause out when nothing is ambiguous or the field is absent", async () => {
     await shown(browse({ count: 5, ambiguous: 0 }));
     const line = await screen.findByText("found 5 points");
-    expect(line.textContent).not.toMatch(/match/);
+    expect(line.textContent).not.toMatch(/left as|stable address/);
   });
 
   it("still shows a failed browse as an error", async () => {
