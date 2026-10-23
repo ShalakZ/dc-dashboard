@@ -131,7 +131,7 @@ export function SourcePointsPage() {
           </label>
           <input ref={search} type="search" aria-label="Search points" placeholder="Search points" value={view.query}
             onChange={(e) => changeView({ ...view, query: e.target.value })} />
-          <span className="muted">{`Showing ${rows.length} of ${points.length} point${points.length === 1 ? "" : "s"}`}</span>
+          <span className="muted">{`Showing ${number(rows.length)} of ${number(points.length)} point${points.length === 1 ? "" : "s"}`}</span>
         </div>
       )}
       {points.length > 0 && rows.length === 0 && <p className="muted">No points match the filters.</p>}

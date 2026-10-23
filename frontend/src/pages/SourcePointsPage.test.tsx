@@ -700,7 +700,7 @@ describe("SourcePointsPage draws 200 rows at a time (w36)", () => {
     await screen.findByText("3:1");
     expect(drawn()).toBe(200);
     expect(screen.getByText(capLine("200", "1,306"))).toBeInTheDocument();
-    expect(screen.getByText("Showing 1306 of 1306 points")).toBeInTheDocument(); // the toolbar counts the filtered rows, not the drawn ones
+    expect(screen.getByText("Showing 1,306 of 1,306 points")).toBeInTheDocument(); // the toolbar counts the filtered rows, not the drawn ones
     expect(screen.getByText("3:200")).toBeInTheDocument();
     expect(screen.queryByText("3:201")).not.toBeInTheDocument();
   });
@@ -715,7 +715,7 @@ describe("SourcePointsPage draws 200 rows at a time (w36)", () => {
     await userEvent.click(more());
     expect(drawn()).toBe(600);
     expect(screen.getByText("3:600")).toBeInTheDocument();
-    expect(screen.getByText("Showing 1306 of 1306 points")).toBeInTheDocument();
+    expect(screen.getByText("Showing 1,306 of 1,306 points")).toBeInTheDocument();
   });
 
   it("after the last press the button stays in place as All 1,306 shown, the line goes, and the focus stays on it", async () => {
@@ -750,7 +750,7 @@ describe("SourcePointsPage draws 200 rows at a time (w36)", () => {
     await userEvent.type(search, "needle");
     expect(screen.getByText("3:1000")).toBeInTheDocument();
     expect(drawn()).toBe(1);
-    expect(screen.getByText("Showing 1 of 1306 points")).toBeInTheDocument();
+    expect(screen.getByText("Showing 1 of 1,306 points")).toBeInTheDocument();
     expect(screen.queryByText(/Search to narrow them/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Show 200 more|All .* shown/ })).not.toBeInTheDocument();
     await userEvent.clear(search);
@@ -767,7 +767,7 @@ describe("SourcePointsPage draws 200 rows at a time (w36)", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: "Unmapped only" }));
     expect(drawn()).toBe(200);
     expect(screen.getByText(capLine("200", "306"))).toBeInTheDocument();
-    expect(screen.getByText("Showing 306 of 1306 points")).toBeInTheDocument();
+    expect(screen.getByText("Showing 306 of 1,306 points")).toBeInTheDocument();
     await userEvent.click(more());
     expect(drawn()).toBe(306);
     expect(screen.getByRole("button", { name: "All 306 shown" })).toHaveFocus();

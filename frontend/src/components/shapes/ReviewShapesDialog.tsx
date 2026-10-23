@@ -6,8 +6,8 @@ import { postShapeLines, type ShapeCheck, type ShapeDecision, type ShapeLinesAns
 import type { TagListReport } from "../../api/types";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
 import {
-  ASSETS_CHANGED_TEXT, assetsChanged, dryRunPath, grouped, hasBlocking, mappedSentence, onExistingAssets, outlierTexts, parentWords, plannerStops, plural, realRunPath,
-  shapeCountsSentence,
+  ASSETS_CHANGED_TEXT, assetsChanged, dryRunPath, grouped, hasBlocking, mappedSentence, metricWords, onExistingAssets, outlierTexts, parentWords, plannerStops, plural,
+  realRunPath, shapeCountsSentence,
 } from "../../lib/shapes";
 import { TAG_LIST_REFRESHED } from "../../lib/tagListUndo";
 import { undoOptions } from "../TagListDialog";
@@ -99,7 +99,7 @@ function ReportView({ report, lines }: { report: TagListReport; lines: number })
             <tbody>
               {report.units.map((unit, i) => (
                 <tr key={`${unit.unit ?? ""}-${unit.metric}-${i}`}>
-                  <td className="shapes-cell">{unit.unit ?? "none"}</td><td className="shapes-cell">{unit.metric}</td>
+                  <td className="shapes-cell">{unit.unit ?? "none"}</td><td className="shapes-cell">{metricWords(unit.metric)}</td>
                   <td className="num">{String(unit.scale)}</td><td className="num">{grouped(unit.count)}</td>
                 </tr>
               ))}
@@ -275,7 +275,7 @@ export function ReviewShapesDialog({ sourceId, sourceName, decisions, parentId, 
                           <tr key={`${i}-${sample.address}`}>
                             <td>{sample.tag}<span className="sub shapes-address">{sample.address}</span></td>
                             <td className="shapes-asset"><AssetPath path={sample.asset} /></td>
-                            <td>{sample.unit_hint ?? ""}</td><td>{sample.metric}</td><td className="num">{String(sample.scale)}</td>
+                            <td>{sample.unit_hint ?? ""}</td><td>{metricWords(sample.metric)}</td><td className="num">{String(sample.scale)}</td>
                           </tr>
                         ))}
                       </tbody>

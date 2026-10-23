@@ -2,8 +2,11 @@
   /* W7k feedback (toasts). Tokens only; every rule is scoped by a class this piece owns. */
 
   /* The stack is bottom right, above the page and below the dialogs (1000), so a later drawer can sit between (at most 800). It takes no click
-     of its own, only the toasts do, and the toasts are laid out oldest first, so the newest is the lowest one, nearest the corner. */
-  .toast-stack { position: fixed; right: 16px; bottom: 16px; z-index: 900; display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; width: min(360px, calc(100vw - 32px)); pointer-events: none; }
+     of its own, only the toasts do, and the toasts are laid out oldest first, so the newest is the lowest one, nearest the corner.
+     A page with a bar that sticks to the bottom edge (Map by shape) publishes the room under the bar's top edge as --bottom-bar-h on <html> (app.css holds 0px; the bar's
+     height while it is stuck, more at the end of the page where it is not), and the stack sits above it, so a toast with an Undo never covers the bar's controls.
+     The ladder stays: the value tip 1100, the dialogs 1000, this stack 900. */
+  .toast-stack { position: fixed; right: 16px; bottom: calc(var(--bottom-bar-h, 0px) + 16px); z-index: 900; display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; width: min(360px, calc(100vw - 32px)); pointer-events: none; }
   .toast { pointer-events: auto; display: flex; align-items: flex-start; gap: 10px; padding: 10px 8px 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); font-size: var(--fs-base); line-height: 1.4; transition: opacity var(--motion), transform var(--motion); }
   /* The slide-and-fade in is the browser's own (@starting-style); where it is not supported the toast simply appears. Reduced motion has no
      transition at all (app.css), and Toasts.tsx then removes a leaving toast at once. */

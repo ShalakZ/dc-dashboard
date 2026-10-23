@@ -140,8 +140,15 @@ export function chosenShapes(state: Decisions, known: ReadonlyMap<string, Shape>
   return out;
 }
 
-/** The tags the chosen decisions cover, by the shape counts. The Review gives the exact numbers. */
-export const coveredTags = (chosen: readonly { shape: Shape }[]): number => chosen.reduce((sum, { shape }) => sum + shape.count, 0);
+/** The most tags one tag list takes (ingest/tag_list.py `MAX_ROWS`): the server blocks a review above it. */
+export const MAX_TAGS = 1000;
+
+/**
+ * The tags the chosen decisions still cover: per shape its tags less the mapped ones and the copies of mapped ones (the Review leaves those out), never below 0.
+ * The Review gives the exact numbers.
+ */
+export const coveredTags = (chosen: readonly { shape: Shape }[]): number =>
+  chosen.reduce((sum, { shape }) => sum + Math.max(0, shape.count - shape.mapped - shape.twins), 0);
 
 /** The body of the lines request: only the keys that have a value (the server fills in scale and unit). */
 export function decisionBody(chosen: readonly { shape: Shape; choice: Choice & { metric: Metric } }[]): ShapeDecision[] {
@@ -152,6 +159,30 @@ export const tooManyText = (n: number) => `You chose ${grouped(n)} shapes; one r
 
 /** The button under the table. */
 export const reviewLabel = (tags: number) => (tags === 0 ? "Review mappings..." : `Review ${plural(tags, "mapping")}...`);
+
+export const TOO_MANY_TAGS_TEXT = `That is more than a tag list takes (${grouped(MAX_TAGS)} at a time): choose fewer shapes.`;
+export const NOTHING_LEFT_TEXT = "Everything in the chosen shapes is already mapped.";
+/**
+ * The one line beside the bar's buttons. `shapes` decisions are chosen and cover `tags` tags still to map. The first three are reasons the person should change
+ * the choice: more shapes than one review takes (the button is inert), nothing left to map (inert), more tags than a tag list takes (the button stays active: the
+ * server explains in the Review).
+ */
+export function barNote(shapes: number, tags: number): string {
+  if (shapes > MAX_DECISIONS) return tooManyText(shapes);
+  if (shapes > 0 && tags === 0) return NOTHING_LEFT_TEXT;
+  if (tags > MAX_TAGS) return TOO_MANY_TAGS_TEXT;
+  if (shapes > 0) return `${plural(shapes, "shape")} chosen. Nothing is mapped until you review it and press Map.`;
+  return "Choose a decision for at least one shape to review it.";
+}
+/** The Review button does nothing (it is `aria-disabled`, never `disabled`): nothing chosen or nothing left to map, or more shapes than one review takes. */
+export const reviewIsInert = (shapes: number, tags: number): boolean => tags === 0 || shapes > MAX_DECISIONS;
+
+/** The live line of a search: `12 tags match "PENRG", in 4 shapes.` and, for one tag, `1 tag matches ...`. */
+export const matchSentence = (tags: number, term: string, shapes: number): string =>
+  `${plural(tags, "tag")} ${tags === 1 ? "matches" : "match"} "${term}", in ${plural(shapes, "shape")}.`;
+
+/** A metric in the project's words (`energy counter`), for a table that shows what the server sent; an unknown metric stays as written. */
+export const metricWords = (metric: string): string => (Object.prototype.hasOwnProperty.call(METRIC_WORDS, metric) ? METRIC_WORDS[metric as Metric] : metric);
 
 /** The rows of the first section (a billing guess), then the rest, each in the server's order. */
 export function splitSections(shapes: readonly Shape[]): { billing: Shape[]; rest: Shape[] } {

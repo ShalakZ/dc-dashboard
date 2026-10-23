@@ -282,6 +282,13 @@ describe("FindBox: searching the tags of a large source (w36)", () => {
     expect(document.querySelector("[aria-live]")).toHaveTextContent("2 results. You can also search the tags of a large source.");
   });
 
+  it("marks only the tag search as a wrapping row (data-kind=tags), so a long source name and query are read in full and the canvas matches keep their one line", async () => {
+    const { input } = open({ shapes: BIG, onShapes: vi.fn() });
+    await userEvent.type(input, "lvp");
+    expect(options().map((o) => o.getAttribute("data-kind"))).toEqual([null, null, "tags"]);
+    expect(options()[2]).toHaveTextContent('Search the 15,000 tags of Big OPC for "lvp"'); // all of it is in the row; the stylesheet lets it wrap
+  });
+
   it("is the only option when nothing on the canvas matches, and is the active one (the index holds only what the model holds)", async () => {
     const { input } = open({ shapes: BIG, onShapes: vi.fn() });
     await userEvent.type(input, "PENRG");

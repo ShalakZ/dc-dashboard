@@ -791,3 +791,161 @@ describe("SourceShapesPage: saved rules", () => {
     });
   });
 });
+
+describe("SourceShapesPage: the small things of the whole-wave review", () => {
+  const searchBox = () => screen.getByRole("searchbox", { name: "Search tags" });
+  const bigAnswer = (over: { count: number; mapped?: number; twins?: number }) =>
+    answer({ shapes: [shape(over), PENRG_B()], shapes_total: 2 });
+
+  it("says in the bar, in words, when the chosen shapes cover more than a tag list takes, and keeps Review active so the server explains", async () => {
+    setup({ body: bigAnswer({ count: 1500 }) });
+    await ready();
+    await userEvent.selectOptions(decision("PDUA#_PM0_PENRG"), "Map as energy counter");
+    expect(reviewButton()).toHaveTextContent("Review 1,500 mappings...");
+    expect(reviewButton()).not.toHaveAttribute("aria-disabled");
+    expect(document.getElementById("shapes-bar-note")).toHaveTextContent("That is more than a tag list takes (1,000 at a time): choose fewer shapes.");
+    await userEvent.click(reviewButton());
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("counts a shape by what is left to map: nothing left makes Review inert and the bar says why", async () => {
+    const { lines } = setup({ body: bigAnswer({ count: 200, mapped: 150, twins: 50 }) });
+    await ready();
+    await userEvent.selectOptions(decision("PDUA#_PM0_PENRG"), "Map as energy counter");
+    expect(reviewButton()).toHaveTextContent("Review mappings...");
+    expect(reviewButton()).toHaveAttribute("aria-disabled", "true");
+    expect(document.getElementById("shapes-bar-note")).toHaveTextContent("Everything in the chosen shapes is already mapped.");
+    await userEvent.click(reviewButton());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(lines).toHaveLength(0);
+    // the other shape still has 200 to map: the count is its alone
+    await userEvent.selectOptions(decision("PDUB#_PM0_PENRG"), "Map as energy counter");
+    expect(reviewButton()).toHaveTextContent("Review 200 mappings...");
+    expect(reviewButton()).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("keeps the bar's note to one line: the full sentence is also its title", async () => {
+    setup();
+    await ready();
+    const note = document.getElementById("shapes-bar-note")!;
+    expect(note).toHaveAttribute("title", "Choose a decision for at least one shape to review it.");
+    await userEvent.selectOptions(decision("PDUA#_PM0_PENRG"), "Map as energy counter");
+    expect(note).toHaveAttribute("title", "1 shape chosen. Nothing is mapped until you review it and press Map.");
+  });
+
+  it("puts the focus in Search tags when the page opens with a search and no shape to look at", async () => {
+    setup({ route: "/sources/5/shapes?q=PENRG" });
+    await ready();
+    await waitFor(() => expect(searchBox()).toHaveFocus());
+    expect(searchBox()).toHaveValue("PENRG");
+  });
+
+  it("leaves the focus where it is for a page without a search, and on the row for a search with a shape to look at", async () => {
+    setup();
+    await ready();
+    expect(searchBox()).not.toHaveFocus();
+    cleanup();
+    setup({ route: `/sources/5/shapes?${new URLSearchParams({ q: "pdua#_pm#_penrg", focus: B_KEY })}` });
+    await ready();
+    await waitFor(() => expect(rowOf("PDUB#_PM0_PENRG")).toHaveFocus());
+    expect(searchBox()).not.toHaveFocus();
+  });
+
+  it("says 1 tag matches (not 1 tag match) and N tags match", async () => {
+    setup({ route: "/sources/5/shapes?q=PL1", body: () => answer({ shapes: [POWER()], matches: { count: 1, first: [] } }) });
+    await accountKnown();
+    expect(await screen.findByText('1 tag matches "PL1", in 1 shape.')).toBeInTheDocument();
+  });
+});
+
+describe("SourceShapesPage: the toast stack stays above the bottom bar (whole-wave review I-2)", () => {
+  const RealResizeObserver = globalThis.ResizeObserver; // the no-op stub of src/test/setup.ts, put back after each test
+  interface Watcher { callback: () => void; targets: Element[]; disconnect: ReturnType<typeof vi.fn> }
+  const watched: Watcher[] = [];
+  const bottomBar = () => document.documentElement.style.getPropertyValue("--bottom-bar-h");
+  /** jsdom measures nothing: the bar's box is told. `top` is where its top edge is in the window (768 px high). */
+  const barRect = (bar: Element, top: number, height: number) => {
+    (bar as HTMLElement).getBoundingClientRect = () => ({ top, height, bottom: top + height }) as DOMRect;
+  };
+  const stuck = (bar: Element, height: number) => barRect(bar, window.innerHeight - height, height); // sticky: its bottom edge is the window's
+  const TOAST_CLEAR = 96; // main's room under a page (app.css --toast-clear): at the end of the page the bar ends this far above the window's bottom
+
+  beforeEach(() => {
+    watched.length = 0;
+    vi.stubGlobal("ResizeObserver", class {
+      watcher: Watcher = { callback: () => {}, targets: [], disconnect: vi.fn() };
+      constructor(callback: () => void) { this.watcher.callback = callback; watched.push(this.watcher); }
+      observe(el: Element) { this.watcher.targets.push(el); }
+      unobserve() {}
+      disconnect() { this.watcher.disconnect(); }
+    });
+  });
+  afterEach(() => {
+    vi.stubGlobal("ResizeObserver", RealResizeObserver);
+    document.documentElement.style.removeProperty("--bottom-bar-h");
+  });
+
+  it("measures the bar, sets --bottom-bar-h (px) on the document, follows the bar when it grows, and takes the variable away when the page goes", async () => {
+    const { unmount } = setup();
+    await ready();
+    const bar = document.querySelector(".shapes-bar")!;
+    const watcher = watched.find((w) => w.targets.includes(bar));
+    expect(watcher, "an observer on the bar").toBeDefined();
+    stuck(bar, 96.4);
+    act(() => watcher!.callback());
+    expect(bottomBar()).toBe("97px"); // rounded up: the toast must clear every pixel of the bar
+    stuck(bar, 132);
+    act(() => watcher!.callback());
+    expect(bottomBar()).toBe("132px");
+    unmount();
+    expect(bottomBar()).toBe("");
+    expect(watcher!.disconnect).toHaveBeenCalled();
+  });
+
+  it("at the end of the page the bar is not stuck (it ends 96px above the window's bottom): the room is measured from its top edge, on every scroll and resize", async () => {
+    setup();
+    await ready();
+    const bar = document.querySelector(".shapes-bar")!;
+    stuck(bar, 100);
+    fireEvent.scroll(window);
+    expect(bottomBar()).toBe("100px");
+    barRect(bar, window.innerHeight - TOAST_CLEAR - 100, 100); // scrolled to the end: main's padding is under the bar
+    fireEvent.scroll(window);
+    expect(bottomBar()).toBe(`${TOAST_CLEAR + 100}px`);
+    barRect(bar, window.innerHeight - 300, 100); // a short page: the bar sits in the flow, higher still
+    fireEvent(window, new Event("resize"));
+    expect(bottomBar()).toBe("300px");
+  });
+
+  it("a bar above or below the window covers nothing, so the stack goes back to its corner", async () => {
+    setup();
+    await ready();
+    const bar = document.querySelector(".shapes-bar")!;
+    barRect(bar, -400, 100); // scrolled past
+    fireEvent.scroll(window);
+    expect(bottomBar()).toBe("0px");
+    barRect(bar, window.innerHeight + 50, 100); // not reached yet
+    fireEvent.scroll(window);
+    expect(bottomBar()).toBe("0px");
+    stuck(bar, 100);
+    fireEvent.scroll(window);
+    expect(bottomBar()).toBe("100px");
+  });
+
+  it("stops listening to the window when the page goes", async () => {
+    const removed = vi.spyOn(window, "removeEventListener");
+    const { unmount } = setup();
+    await ready();
+    unmount();
+    expect(removed).toHaveBeenCalledWith("scroll", expect.any(Function));
+    expect(removed).toHaveBeenCalledWith("resize", expect.any(Function));
+    removed.mockRestore();
+  });
+
+  it("sets nothing for a role without the bar (it cannot decide, so there is no bar for a toast to avoid)", async () => {
+    setup({ user: userFor("operator") });
+    await ready();
+    expect(document.querySelector(".shapes-bar")).toBeNull();
+    expect(bottomBar()).toBe("");
+  });
+});

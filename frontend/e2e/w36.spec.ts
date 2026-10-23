@@ -315,14 +315,14 @@ test.describe("W36: Map by shape", () => {
       await expect(rows).toHaveCount(CAP);
       await expect(page.locator(".points-cap").getByRole("status")).toHaveText(`Showing ${CAP} of ${grouped(TAGS)} points. Search to narrow them.`);
       await expect(page.locator(".points-cap").getByRole("button", { name: `Show ${CAP} more`, exact: true })).toBeVisible();
-      await expect(page.getByText(`Showing ${TAGS} of ${TAGS} points`, { exact: true }), "the toolbar counts every point").toBeVisible();
+      await expect(page.getByText(`Showing ${grouped(TAGS)} of ${grouped(TAGS)} points`, { exact: true }), "the toolbar counts every point").toBeVisible();
       const cellOf = (text: string) => page.getByRole("cell", { name: text, exact: true });
       await expect(cellOf(LAST_INCOMER), "the last incomer sorts last by address, so it is not among the first 200").toHaveCount(0);
       await page.getByRole("searchbox", { name: "Search points", exact: true }).fill(LAST_INCOMER);
       await expect(rows).toHaveCount(1);
       await expect(cellOf(LAST_INCOMER), "Search found it among the rows that were not drawn").toBeVisible();
       await expect(page.locator(".points-cap"), "one row needs no cap line").toHaveCount(0);
-      await expect(page.getByText(`Showing 1 of ${TAGS} points`, { exact: true })).toBeVisible();
+      await expect(page.getByText(`Showing 1 of ${grouped(TAGS)} points`, { exact: true })).toBeVisible();
     });
   });
 

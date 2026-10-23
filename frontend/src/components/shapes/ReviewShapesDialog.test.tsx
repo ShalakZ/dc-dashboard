@@ -114,7 +114,11 @@ describe("ReviewShapesDialog: what it shows", () => {
     expect(samples).toHaveLength(1);
     expect(samples[0]).toHaveTextContent("Hall 1/PDUA01");
     expect(samples[0]).toHaveTextContent("kWh");
-    expect(samples[0]).toHaveTextContent("energy_kwh");
+    expect(samples[0]).toHaveTextContent("energy counter"); // the project's words for the metric, not the code name
+    expect(samples[0]).not.toHaveTextContent("energy_kwh");
+    const units = within(d).getByRole("heading", { name: "Units" }).nextElementSibling!;
+    expect(units).toHaveTextContent("energy counter");
+    expect(d).not.toHaveTextContent("energy_kwh");
     expect(d).toHaveTextContent("Would create 400 mappings and 398 assets");
     expect(within(d).getByText("Mappings to create").nextSibling).toHaveTextContent("400");
     expect(d).toHaveTextContent("2 tags go onto assets that already exist."); // 400 lines less 398 assets to create
@@ -388,7 +392,7 @@ describe("ReviewShapesDialog: the samples table (F-T5)", () => {
     expect(cells[1]).toHaveTextContent("Hall 1/PDUA01");
     expect(cells[1].querySelectorAll("wbr")).toHaveLength(1);
     expect(cells[1].querySelector("wbr")!.previousSibling?.textContent).toBe("/");
-    expect(cells[3]).toHaveTextContent("energy_kwh");
+    expect(cells[3]).toHaveTextContent("energy counter");
   });
 });
 

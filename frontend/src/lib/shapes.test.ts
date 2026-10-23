@@ -1,7 +1,7 @@
 import { METRICS } from "../api/types";
 import { check, created, PENRG_B, POWER, report, shape, VOLTAGE } from "../test/shapesFixtures";
 import {
-  assetsChanged, parentWords,
+  assetsChanged, parentWords, barNote, matchSentence, MAX_TAGS, metricWords, reviewIsInert,
   chosenShapes, coveredTags, decide, decisionBody, decisionOptions, derivedAsset, dryRunPath, duplicatesWarning, exampleText, mappedSentence, MAX_DECISIONS,
   mixedUnitsWarning, namePartsWarning, NO_DECISIONS, onExistingAssets, outlierTexts, partsOf, plannerStops, readLink, realRunPath, reviewLabel, rowOf, rowWarnings,
   mergeRules, presetFromRules, ruleChoice, ruleSentence, searchTerm, shapeCountsSentence, shapesPageLink, similarSentence, splitSections, suggestionSentence, tick, tooManyText, wantsRules, withoutRule,
@@ -129,6 +129,48 @@ describe("the decisions", () => {
     expect(reviewLabel(0)).toBe("Review mappings...");
     expect(reviewLabel(1)).toBe("Review 1 mapping...");
     expect(reviewLabel(15000)).toBe("Review 15,000 mappings...");
+  });
+});
+
+describe("what the chosen decisions still cover, and what the bar says about it (whole-wave review)", () => {
+  const pick = (...shapes: ReturnType<typeof shape>[]) => shapes.map((s) => ({ shape: s }));
+
+  it("counts only what is left of a shape: its tags less the mapped ones and the copies of mapped ones, never below 0", () => {
+    expect(coveredTags(pick(shape({ count: 200, mapped: 12, twins: 3 })))).toBe(185);
+    expect(coveredTags(pick(shape({ count: 200, mapped: 200 }), shape({ key: "k#", count: 50, mapped: 10, twins: 5 })))).toBe(35);
+    expect(coveredTags(pick(shape({ count: 10, mapped: 8, twins: 5 })))).toBe(0); // the server's counts may overlap: a shape never takes the sum below 0
+    expect(coveredTags([])).toBe(0);
+  });
+
+  it("says in words what the bar can do, most urgent first: too many shapes, nothing left, more than a tag list takes, the plain count, nothing chosen", () => {
+    expect(MAX_TAGS).toBe(1000);
+    expect(barNote(61, 5000)).toBe(tooManyText(61));
+    expect(barNote(2, 0)).toBe("Everything in the chosen shapes is already mapped.");
+    expect(barNote(1, 1001)).toBe("That is more than a tag list takes (1,000 at a time): choose fewer shapes.");
+    expect(barNote(1, 1000)).toBe("1 shape chosen. Nothing is mapped until you review it and press Map.");
+    expect(barNote(2, 400)).toBe("2 shapes chosen. Nothing is mapped until you review it and press Map.");
+    expect(barNote(0, 0)).toBe("Choose a decision for at least one shape to review it.");
+    expect(barNote(61, 0)).toBe(tooManyText(61)); // more than 60 shapes wins over everything
+  });
+
+  it("gives the Review button nothing to do when no tag is left or too many shapes are chosen, and leaves it active above the tag limit (the server explains)", () => {
+    expect(reviewIsInert(0, 0)).toBe(true);
+    expect(reviewIsInert(2, 0)).toBe(true);
+    expect(reviewIsInert(61, 100)).toBe(true);
+    expect(reviewIsInert(1, 1001)).toBe(false);
+    expect(reviewIsInert(1, 200)).toBe(false);
+  });
+
+  it("words a metric the way the rows do, and leaves an unknown one as the server wrote it", () => {
+    expect(metricWords("energy_kwh")).toBe("energy counter");
+    expect(metricWords("active_power_kw")).toBe("active power");
+    expect(metricWords("something_new")).toBe("something_new");
+  });
+
+  it("words the live line of a search with the right verb: 1 tag matches, N tags match", () => {
+    expect(matchSentence(1, "PENRG", 1)).toBe('1 tag matches "PENRG", in 1 shape.');
+    expect(matchSentence(12, "PENRG", 4)).toBe('12 tags match "PENRG", in 4 shapes.');
+    expect(matchSentence(1234, "x", 2)).toBe('1,234 tags match "x", in 2 shapes.');
   });
 });
 

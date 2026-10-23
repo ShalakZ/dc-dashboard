@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
-import { parseRules, stripComments } from "../test/cssTools";
+import { customProperties, parseRules, stripComments } from "../test/cssTools";
 
 // vitest runs from the frontend directory and reads the stylesheets as text (css: false).
 const rules = parseRules(stripComments(readFileSync("src/styles/pages-shapes.css", "utf8")));
+const appBase = customProperties(parseRules(stripComments(readFileSync("src/app.css", "utf8"))).filter((rule) => rule.selector === ":root")[0].body);
 /** A selector list split at its top-level commas (a comma inside :is(...) or [...] stays in its part). */
 function parts(selector: string): string[] {
   const out: string[] = [];
@@ -62,9 +63,28 @@ describe("the Map by shape stylesheet (w36)", () => {
   it("keeps the room of what appears later: the warning slot of a row, the search line, the status line of the dialog and the note of the bar", () => {
     expect(bodyOf(".shapes-page .shape-warn")).toMatch(/min-height:\s*2lh/);
     expect(bodyOf(".shapes-page .shapes-live")).toMatch(/min-height:\s*2lh/);
-    expect(bodyOf(".shapes-page .shapes-bar-note")).toMatch(/min-height:\s*2lh/);
+    expect(bodyOf(".shapes-page .shapes-bar-note")).toMatch(/min-height:\s*1lh/); // always one line (see below), so the slot is one line
     expect(bodyOf(".shapes-dialog .shapes-status")).toMatch(/height:\s*3lh/);
     expect(bodyOf(".shapes-dialog .shapes-report")).toMatch(/height:\s*min\(/);
+  });
+
+  it("keeps the bar's note on ONE line (an ellipsis; the whole sentence is its title), so the bar is the controls and one line, never the controls and a paragraph (review Minor 6)", () => {
+    const note = bodyOf(".shapes-page .shapes-bar-note");
+    expect(note).toMatch(/white-space:\s*nowrap/);
+    expect(note).toMatch(/overflow:\s*hidden/);
+    expect(note).toMatch(/text-overflow:\s*ellipsis/);
+    expect(note).toMatch(/flex:\s*1 1 0/); // no basis of its own: it takes what the controls leave on their row ...
+    expect(note).toMatch(/min-width:\s*12rem/); // ... and goes to a row of its own (one line, the full width) when that is less than 12rem
+  });
+
+  it("gives the go button of the bar a width of its own, wide enough for 'Review 99,999 mappings...', so the label never moves the select and the tick (review I-1)", () => {
+    const go = bodyOf(".shapes-page .shapes-bar-go button");
+    expect(go).toMatch(/min-width:\s*var\(--shapes-go-w\)/);
+    expect(go).toMatch(/white-space:\s*nowrap/);
+    // The token is app.css's (this file defines none), in ch: the width of a digit in the button's own font. 25 characters of label, the padding (2 x 14px) and the border
+    // (2 x 1px) make about 207px at 13px (measured), which is 25.2 digits of an average UI font: 30ch leaves room for the widest label and a wider font.
+    expect(appBase.get("shapes-go-w")).toMatch(/^\d+ch$/);
+    expect(parseInt(appBase.get("shapes-go-w") ?? "0", 10)).toBeGreaterThanOrEqual(30);
   });
 
   it("makes the Review dialog 1080 px wide at most and never wider than the window less 24 px each side (it must stay inside 1024 and 800)", () => {

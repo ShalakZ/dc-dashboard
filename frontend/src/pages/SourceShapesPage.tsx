@@ -15,8 +15,8 @@ import { PageHeaderSkeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from
 import { assetLabels, assetOptions } from "../lib/pickerRows";
 import type { Timers } from "../lib/progress";
 import {
-  chosenShapes, choiceOf, coveredTags, decide, decisionBody, grouped, MAX_DECISIONS, mergeRules, NO_DECISIONS, plural, presetFromRules, readLink, reviewLabel, rowOf, searchTerm,
-  similarSentence, splitSections, tick, tooManyText, wantsRules, withoutRule, type Decisions,
+  barNote, chosenShapes, choiceOf, coveredTags, decide, decisionBody, grouped, matchSentence, mergeRules, NO_DECISIONS, plural, presetFromRules, readLink, reviewIsInert, reviewLabel,
+  rowOf, searchTerm, similarSentence, splitSections, tick, wantsRules, withoutRule, type Decisions,
 } from "../lib/shapes";
 
 /** How long the search box waits after the last key before it asks the server. */
@@ -83,6 +83,47 @@ function ShapesBody({ sourceId, timers }: { sourceId: number; timers: Timers }) 
 
   const { data, error, isFetchedAfterMount } = useShapes(sourceId, term);
 
+  // The page opened with a search and no shape to look at (the Find option of the Discovery canvas): the focus goes into Search tags, which holds the query. Once.
+  const searchBox = useRef<HTMLInputElement>(null);
+  const focusSearch = useRef(start.q !== "" && start.focus === "");
+  useEffect(() => {
+    if (!focusSearch.current || data === undefined) return;
+    focusSearch.current = false;
+    searchBox.current?.focus({ preventScroll: true });
+  }, [data]);
+
+  // The bottom bar sticks to the bottom edge, and so does the toast stack: the room under the bar's top edge is published as --bottom-bar-h (feedback-toasts.css lifts the stack
+  // by it), so a toast (with its Undo) never covers the bar's controls. While the bar is stuck that is its height; at the end of the page it is not stuck (it ends above the
+  // room main keeps for a settled toast), so the distance is measured from its top edge to the window's bottom, again on every scroll and resize. A bar above or below the window
+  // covers nothing: 0. The bar exists once the first answer is in and only for a role that can decide. Taken away when the page goes.
+  const bar = useRef<HTMLDivElement>(null);
+  const hasBar = canDecide && data !== undefined;
+  useEffect(() => {
+    const el = bar.current;
+    if (!hasBar || el === null) return;
+    const rootStyle = document.documentElement.style;
+    let published = "";
+    const measure = () => {
+      const { top, bottom } = el.getBoundingClientRect();
+      const room = bottom <= 0 || top >= window.innerHeight ? 0 : Math.ceil(window.innerHeight - top);
+      const next = `${room}px`;
+      if (next === published) return; // a scroll fires often; the document's styles are touched only when the value moves
+      published = next;
+      rootStyle.setProperty("--bottom-bar-h", next);
+    };
+    measure();
+    const watcher = new ResizeObserver(measure);
+    watcher.observe(el);
+    window.addEventListener("scroll", measure, { passive: true });
+    window.addEventListener("resize", measure);
+    return () => {
+      watcher.disconnect();
+      window.removeEventListener("scroll", measure);
+      window.removeEventListener("resize", measure);
+      rootStyle.removeProperty("--bottom-bar-h");
+    };
+  }, [hasBar]);
+
   // Every shape the page has been shown, by key: a decision outlives a search that no longer lists its row, and still needs its tag count and its label.
   const [seen, setSeen] = useState<{ answer: ShapesAnswer | null; shapes: ReadonlyMap<string, Shape> }>({ answer: null, shapes: new Map() });
   if (data !== undefined && seen.answer !== data) {
@@ -97,7 +138,7 @@ function ShapesBody({ sourceId, timers }: { sourceId: number; timers: Timers }) 
   const [decisions, setDecisions] = useState<Decisions>(NO_DECISIONS);
   const chosen = chosenShapes(decisions, known);
   const covered = coveredTags(chosen);
-  const tooMany = chosen.length > MAX_DECISIONS;
+  const inert = reviewIsInert(chosen.length, covered); // nothing chosen, nothing left to map, or more shapes than one review takes
   const [parentChoice, setParentChoice] = useState<number | null>(null);
   const [createAssets, setCreateAssets] = useState(true);
   const [review, setReview] = useState<{ decisions: ReturnType<typeof decisionBody>; parentId: number | null; createAssets: boolean } | null>(null);
@@ -188,7 +229,7 @@ function ShapesBody({ sourceId, timers }: { sourceId: number; timers: Timers }) 
   }, [reviewing]);
   const closeReview = () => setReview(null);
   const openReview = () => {
-    if (covered === 0 || tooMany || review !== null) return;
+    if (inert || review !== null) return;
     setReview({ decisions: decisionBody(chosen), parentId, createAssets });
   };
 
@@ -220,10 +261,8 @@ function ShapesBody({ sourceId, timers }: { sourceId: number; timers: Timers }) 
   };
 
   const matches = term !== "" ? data.matches : undefined;
-  const live = term !== "" && matches !== undefined
-    ? `${plural(matches.count, "tag")} match "${term}", in ${plural(data.shapes.length, "shape")}.`
-    : "";
-  const barNote = tooMany ? tooManyText(chosen.length) : chosen.length > 0 ? `${plural(chosen.length, "shape")} chosen. Nothing is mapped until you review it and press Map.` : "Choose a decision for at least one shape to review it.";
+  const live = term !== "" && matches !== undefined ? matchSentence(matches.count, term, data.shapes.length) : "";
+  const note = barNote(chosen.length, covered);
 
   return (
     <div className="shapes-page" ref={root}>
@@ -250,7 +289,7 @@ function ShapesBody({ sourceId, timers }: { sourceId: number; timers: Timers }) 
 
       <div className="shapes-search">
         <input
-          type="search" aria-label="Search tags" placeholder="Search tags" value={text} maxLength={SEARCH_MAX}
+          ref={searchBox} type="search" aria-label="Search tags" placeholder="Search tags" value={text} maxLength={SEARCH_MAX}
           onChange={(event) => setText(event.target.value)}
         />
       </div>
@@ -307,10 +346,10 @@ function ShapesBody({ sourceId, timers }: { sourceId: number; timers: Timers }) 
       )}
 
       {canDecide && (
-        <div className="shapes-bar">
+        <div className="shapes-bar" ref={bar}>
           <div className="shapes-bar-go">
             <button
-              ref={reviewButton} type="button" className="primary" aria-disabled={covered === 0 || tooMany ? true : undefined}
+              ref={reviewButton} type="button" className="primary" aria-disabled={inert ? true : undefined}
               aria-describedby="shapes-bar-note" onClick={openReview}
             >
               {reviewLabel(covered)}
@@ -327,7 +366,7 @@ function ShapesBody({ sourceId, timers }: { sourceId: number; timers: Timers }) 
             <input type="checkbox" checked={createAssets} onChange={(event) => setCreateAssets(event.target.checked)} />
             Create missing assets
           </label>
-          <p id="shapes-bar-note" className="muted shapes-bar-note">{barNote}</p>
+          <p id="shapes-bar-note" className="muted shapes-bar-note" title={note}>{note}</p>
         </div>
       )}
 

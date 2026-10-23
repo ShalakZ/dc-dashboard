@@ -161,6 +161,7 @@ export function FindBox({ search, onChoose, shapes = NO_TARGETS, onShapes, onClo
               role="option"
               aria-selected={index === active}
               className="graph-find-opt"
+              data-kind={item.to !== null ? "tags" : undefined} // the search of a large source's tags: its long label may wrap (graph-tools.css)
               onClick={() => choose(item)}
             >
               <Icon name={item.icon} />
