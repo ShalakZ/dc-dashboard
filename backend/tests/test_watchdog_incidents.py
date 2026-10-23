@@ -112,6 +112,7 @@ async def test_the_incident_opens_on_the_second_evaluation_in_a_row_and_not_on_t
     detail = row["detail"]
     assert (detail["state"], detail["count"], detail["meters"], detail["stale"], detail["not_advancing"], detail["frozen"]) == ("open", 1, 12, 3, 0, False)
     assert detail["oldest_stale_age_seconds"] == pytest.approx(7800, abs=5)
+    assert (detail["silent"], detail["frozen_counters"]) == (3, 0)  # the Events words read these two
     assert abs((when(detail["since"]) - (datetime.now(timezone.utc) - timedelta(seconds=7800))).total_seconds()) < 10  # it began when the silence began
     assert "last_at" in detail and "closed_at" not in detail and "closed_by" not in detail
 
@@ -281,6 +282,7 @@ async def test_a_frozen_source_is_an_error_that_says_each_counter_reads_good(db)
     assert row["level"] == "error"
     assert row["message"] == "every energy counter of this source has stood still for 7 h although each reads Good"
     assert (row["detail"]["frozen"], row["detail"]["stale"], row["detail"]["not_advancing"]) == (True, 2, 0)
+    assert (row["detail"]["silent"], row["detail"]["frozen_counters"]) == (0, 2)
     assert row["detail"]["oldest_stale_age_seconds"] == pytest.approx(8 * HOUR, abs=10)
     assert abs((when(row["detail"]["since"]) - (datetime.now(timezone.utc) - timedelta(hours=8))).total_seconds()) < 10
 

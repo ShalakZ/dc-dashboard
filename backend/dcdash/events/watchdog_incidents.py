@@ -142,6 +142,8 @@ def numbers_of(sv: SourceVerdict) -> dict[str, Any]:
         "stale": sv.stale,
         "not_advancing": sv.not_advancing,
         "frozen": sv.frozen,
+        "silent": sv.silent,  # the meters with no good reading (the Events words tell them from the counters of a frozen source)
+        "frozen_counters": sv.frozen_counters,
         "oldest_stale_age_seconds": None if oldest is None else round(oldest),
     }
 
