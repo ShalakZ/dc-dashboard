@@ -174,13 +174,26 @@ async def test_a_single_stored_point_with_the_exact_stable_address_is_updated_no
 
 
 @pytest.mark.parametrize("second_address", ["ns=3;s=Site.X", "ns=3;s=20403:Site.X"], ids=["identical", "numbered"])
-async def test_a_second_descriptor_with_the_same_stable_form_is_ambiguous_and_inserts_nothing(db, second_address):
+async def test_two_listed_tags_with_the_same_stable_form_are_both_skipped_and_counted_ambiguous(db, second_address):
     source, _ = await listing_source(db)
     result = await browse_source_detailed(
         db, source, listing(PointDescriptor("ns=3;s=Site.X", "first"), PointDescriptor(second_address, "second"))
     )
-    assert result == BrowseResult(2, matched_stored=0, ambiguous=1)
-    assert list((await points_of(db, source)).values()) == [("ns=3;s=Site.X", "first")]
+    assert result == BrowseResult(2, matched_stored=0, ambiguous=2)  # neither is the tag: both are counted, nothing is stored
+    assert await points_of(db, source) == {}
+
+
+async def test_two_listed_tags_with_one_stable_form_do_not_touch_the_stored_point_of_that_form(db):
+    source, (point,) = await listing_source(db, "ns=3;s=20410:Site.X")
+    result = await browse_source_detailed(
+        db,
+        source,
+        listing(PointDescriptor("ns=3;s=Site.X", "first"), PointDescriptor("ns=3;s=20403:Site.X", "second"), PointDescriptor("ns=3;s=Site.Y", "Y")),
+    )
+    assert result == BrowseResult(3, matched_stored=0, ambiguous=2)
+    assert await points_of(db, source) == {point: ("ns=3;s=20410:Site.X", "ns=3;s=20410:Site.X")} | {
+        point + 1: ("ns=3;s=Site.Y", "Y")
+    }
 
 
 async def test_a_listed_tag_next_to_a_stored_twin_pair_does_not_insert_a_third_point(db):
@@ -202,6 +215,19 @@ def test_the_plan_updates_in_ascending_point_id_and_follows_the_key():
     assert [d.name for d in plan.inserts] == ["D"] and (plan.matched_stored, plan.ambiguous) == (3, 0)
     plain = plan_browse(listed, stored, identity_key)  # the identity key: nothing matches, everything is new
     assert plain.updates == [] and len(plain.inserts) == 4
+
+
+def test_the_plan_inserts_in_ascending_address_whatever_order_the_server_listed_them_in():
+    listed = [PointDescriptor(f"ns=3;s=Site.{tag}", tag) for tag in "CAB"]
+    plan = plan_browse(listed, [], stable_address)
+    assert [d.address for d in plan.inserts] == ["ns=3;s=Site.A", "ns=3;s=Site.B", "ns=3;s=Site.C"]  # two browses lock rows alike
+
+
+def test_the_plan_skips_every_descriptor_of_a_shared_key_and_counts_each():
+    stored = [(1, "ns=3;s=20403:Site.X", True)]
+    listed = [PointDescriptor("ns=3;s=Site.X", "a"), PointDescriptor("ns=3;s=Site.Y", "y"), PointDescriptor("ns=3;s=7:Site.X", "b")]
+    plan = plan_browse(listed, stored, stable_address)
+    assert plan.updates == [] and [d.name for d in plan.inserts] == ["y"] and (plan.matched_stored, plan.ambiguous) == (0, 2)
 
 
 async def test_browse_source_still_returns_the_count_for_both_settings(db):
@@ -251,6 +277,46 @@ async def test_a_source_deleted_during_the_browse_is_a_plain_error_not_a_foreign
 
     with pytest.raises(LookupError, match=f"source {source} not found"):
         await browse_source_detailed(db, source, listing(PointDescriptor("ns=3;s=Site.X", "X"), hook=delete_the_source))
+
+
+# ---- the option is read as late as possible (review M2) --------------------------------------------------------------------------
+
+async def test_an_option_turned_on_during_the_walk_decides_the_matching(db):
+    source = await make_source(db, "fake", "opcua", {"endpoint": "opc.tcp://x", "stable_addresses": False})
+    stored = await make_point(db, source, "ns=3;s=20403:Site.X")
+
+    async def turn_on():
+        await set_option(db, source, True)
+
+    result = await browse_source_detailed(db, source, listing(PointDescriptor("ns=3;s=Site.X", "X new"), hook=turn_on))
+    assert result == BrowseResult(1, matched_stored=1, ambiguous=0)  # the config of the moment of storing, not of the start
+    assert await points_of(db, source) == {stored: ("ns=3;s=20403:Site.X", "X new")}
+
+
+async def test_an_option_turned_off_during_the_walk_decides_the_matching(db):
+    source, (stored,) = await listing_source(db, "ns=3;s=20403:Site.X")
+
+    async def turn_off():
+        await set_option(db, source, False)
+
+    result = await browse_source_detailed(db, source, listing(PointDescriptor("ns=3;s=Site.X", "X new"), hook=turn_off))
+    assert result == BrowseResult(1, matched_stored=0, ambiguous=0)  # the address is the identity again: a point of its own
+    after = await points_of(db, source)
+    assert after[stored] == ("ns=3;s=20403:Site.X", "ns=3;s=20403:Site.X") and sorted(a for a, _ in after.values()) == [
+        "ns=3;s=20403:Site.X", "ns=3;s=Site.X"
+    ]
+
+
+async def test_an_option_turned_off_while_the_browse_waits_for_the_source_row_is_seen_inside_the_lock(db):
+    source, (stored,) = await listing_source(db, "ns=3;s=20403:Site.X")
+    async with db.acquire() as holder, holder.transaction():
+        await holder.fetchval("SELECT 1 FROM sources WHERE id = $1 FOR UPDATE", source)  # what a PATCH holds
+        task = asyncio.create_task(browse_source_detailed(db, source, listing(PointDescriptor("ns=3;s=Site.X", "X new"))))
+        await asyncio.sleep(0.5)  # the browse has read "on", walked, and waits for the row
+        assert not task.done()
+        await holder.execute("UPDATE sources SET config = config || $2::jsonb WHERE id = $1", source, {"stable_addresses": False})
+    assert await asyncio.wait_for(task, 10) == BrowseResult(1, 0, 0)
+    assert sorted(a for a, _ in (await points_of(db, source)).values()) == ["ns=3;s=20403:Site.X", "ns=3;s=Site.X"]
 
 
 # ---- the money tests (R4): which stored point a value lands on ---------------------------------------------------------------

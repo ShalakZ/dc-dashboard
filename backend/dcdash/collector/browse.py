@@ -1,3 +1,4 @@
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -16,7 +17,9 @@ _UPSERT_POINT = """
 """
 # A point the browse matched by its stable address: its name, type and unit are refreshed, its stored address is never rewritten.
 _UPDATE_POINT = "UPDATE points SET name = $2, data_type = $3, unit_hint = $4 WHERE id = $1"
-_LOCK_SOURCE = "SELECT 1 FROM sources WHERE id = $1 FOR KEY SHARE"
+# The lock and the config in one statement: while this transaction holds the row, a PATCH (which takes it FOR UPDATE) cannot change the option.
+_LOCK_SOURCE = "SELECT connector_type, config FROM sources WHERE id = $1 FOR KEY SHARE"
+_SOURCE_KEY = "SELECT connector_type, config FROM sources WHERE id = $1"
 _STORED_POINTS = """
     SELECT p.id, p.address, EXISTS (SELECT 1 FROM mappings m WHERE m.point_id = p.id) AS mapped
     FROM points p WHERE p.source_id = $1
@@ -27,7 +30,7 @@ _STORED_POINTS = """
 class BrowseResult:
     count: int  # descriptors the server listed (what `browse_source` returns)
     matched_stored: int = 0  # listed tags that landed on a point stored under another address (same stable form)
-    ambiguous: int = 0  # listed tags left alone: two stored points (none or both mapped) or two listed tags share one stable form
+    ambiguous: int = 0  # listed tags left alone: their stable form is shared by two stored points (none or both mapped) or by another listed tag
 
 
 @dataclass
@@ -43,22 +46,23 @@ def plan_browse(
 ) -> BrowsePlan:
     """Which stored point each listed tag belongs to, decided by the source's address key (`stored` is (id, address, mapped)).
 
-    Per listed tag, by the stored points that have its key: none, insert it under the address the server gave; one, update that
-    point and keep its address; several, update the one that is mapped when exactly one is, else touch none and count it
-    ambiguous. A second listed tag with a key already handled (two server nodes, one stable form) inserts nothing and counts
-    ambiguous too. Nothing here rewrites a stored address.
+    The keys of ALL the listed tags are counted first: every listed tag whose key another listed tag has too (two server nodes, one
+    stable form) is skipped, with no insert and no update, and counts ambiguous, so which of them is "the" tag never depends on the
+    order of the listing. Per remaining tag, by the stored points that have its key: none, insert it under the address the server
+    gave; one, update that point and keep its address; several, update the one that is mapped when exactly one is, else touch none
+    and count it ambiguous. Nothing here rewrites a stored address. The inserts come back in ascending address, the updates in
+    ascending point id: two browses of one source lock rows in the same order.
     """
     owners: dict[str, list[tuple[int, str, bool]]] = {}
     for point in stored:
         owners.setdefault(key(point[1]), []).append(point)
+    listed = Counter(key(descriptor.address) for descriptor in descriptors)
     plan = BrowsePlan()
-    handled: set[str] = set()
     for descriptor in descriptors:
         stable = key(descriptor.address)
-        if stable in handled:
+        if listed[stable] > 1:
             plan.ambiguous += 1
             continue
-        handled.add(stable)
         candidates = owners.get(stable, [])
         if len(candidates) > 1:
             candidates = [point for point in candidates if point[2]]  # the mapped one is the point somebody uses
@@ -73,22 +77,16 @@ def plan_browse(
         if address != descriptor.address:
             plan.matched_stored += 1
     plan.updates.sort(key=lambda update: update[0])  # point rows are locked in ascending id, whatever else locks them
+    plan.inserts.sort(key=lambda descriptor: descriptor.address)  # and inserted in ascending address (unique-index waits)
     return plan
 
 
-async def _source_connector(
-    pool: asyncpg.Pool, source_id: int, factory: ConnectorFactory
-) -> tuple[Connector, Callable[[str], str]]:
-    """The connector of a source and the key function of its stored config, built from ONE read of the source's row."""
+async def connector_for(pool: asyncpg.Pool, source_id: int, factory: ConnectorFactory) -> Connector:
     row = await pool.fetchrow("SELECT connector_type, config, secret FROM sources WHERE id = $1", source_id)
     if row is None:
         raise LookupError(f"source {source_id} not found")
     secret = decrypt(row["secret"]) if row["secret"] else None
-    return factory(row["connector_type"], row["config"], secret), address_key_for(row["connector_type"], row["config"])
-
-
-async def connector_for(pool: asyncpg.Pool, source_id: int, factory: ConnectorFactory) -> Connector:
-    return (await _source_connector(pool, source_id, factory))[0]
+    return factory(row["connector_type"], row["config"], secret)
 
 
 async def browse_source_detailed(pool: asyncpg.Pool, source_id: int, factory: ConnectorFactory) -> BrowseResult:
@@ -99,33 +97,44 @@ async def browse_source_detailed(pool: asyncpg.Pool, source_id: int, factory: Co
 
     A source that compares addresses by their stable form (OPC UA with "Stable tag addresses") lands each listed tag on the point
     already stored for it, whatever number the server shows now (`plan_browse`), in one transaction that first takes a share
-    lock on the source row. Every other source keeps the plain upsert by address.
+    lock on the source row. Every other source keeps the plain upsert by address. Which of the two applies is decided from the
+    source's config as it is AFTER the walk (a walk of a big server takes minutes and the option can be changed meanwhile), and
+    for the stable path once more inside the lock.
     """
-    connector, key = await _source_connector(pool, source_id, factory)
+    connector = await connector_for(pool, source_id, factory)
     try:
         descriptors = await connector.browse()
     finally:
         await connector.close()
-    if key is identity_key:
+    row = await pool.fetchrow(_SOURCE_KEY, source_id)
+    if row is None:
+        raise LookupError(f"source {source_id} not found")
+    if address_key_for(row["connector_type"], row["config"]) is identity_key:
         await pool.executemany(
             _UPSERT_POINT, [(source_id, d.address, d.name, d.data_type, d.unit_hint) for d in descriptors]
         )
         result = BrowseResult(len(descriptors))
     else:
-        result = await _store_by_key(pool, source_id, descriptors, key)
+        result = await _store_by_key(pool, source_id, descriptors)
     if getattr(connector, "polls", True):  # a source that is never polled (`file`) keeps its status
         await mark_source(pool, source_id, True)
     return result
 
 
-async def _store_by_key(
-    pool: asyncpg.Pool, source_id: int, descriptors: Sequence[PointDescriptor], key: Callable[[str], str]
-) -> BrowseResult:
+async def _store_by_key(pool: asyncpg.Pool, source_id: int, descriptors: Sequence[PointDescriptor]) -> BrowseResult:
     async with pool.acquire() as conn, conn.transaction():
         # The source row first: a source being deleted holds it (FOR UPDATE) before it waits for its points, so this
         # transaction can never hold a point row that delete is waiting for while it waits for the source.
-        if await conn.fetchval(_LOCK_SOURCE, source_id) is None:
+        source = await conn.fetchrow(_LOCK_SOURCE, source_id)
+        if source is None:
             raise LookupError(f"source {source_id} not found")
+        key = address_key_for(source["connector_type"], source["config"])  # read under the lock: it cannot change from here on
+        if key is identity_key:  # the option was turned off after the read that chose this path: the plain upsert, in this transaction
+            await conn.executemany(
+                _UPSERT_POINT,
+                [(source_id, d.address, d.name, d.data_type, d.unit_hint) for d in sorted(descriptors, key=lambda d: d.address)],
+            )
+            return BrowseResult(len(descriptors))
         stored = [(row["id"], row["address"], row["mapped"]) for row in await conn.fetch(_STORED_POINTS, source_id)]
         plan = plan_browse(descriptors, stored, key)
         # An upsert, not a plain insert: a scan or another browse can have stored the same address since the points were read.
