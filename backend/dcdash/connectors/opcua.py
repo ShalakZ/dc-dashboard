@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -15,7 +16,7 @@ from urllib.parse import urlparse, urlsplit, urlunsplit
 from asyncua import Client, Node, ua
 from asyncua.client.ua_client import UaClient, UASocketProtocol
 from asyncua.common.shortcuts import Shortcuts
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 from dcdash.connectors.base import (
     BAD,
@@ -30,10 +31,15 @@ from dcdash.connectors.base import (
     url_host_port,
 )
 from dcdash.connectors.identity import from_endpoints
+from dcdash.connectors.opcua_browse import browse_tree
+from dcdash.connectors.opcua_ids import has_number_prefix, read_plan, slice_size, stable_address, tag_name
 
 if TYPE_CHECKING:
     from dcdash.diagnostics.check import CheckResult, Publish
 
+POLL_SLICE_CAP = 200  # nodes per Read request of the poll, whatever the server allows (the connection check's own cap is 100)
+MIN_SLICE = 10  # a refused slice is never halved to fewer nodes than this
+_MAX_NODES_PER_READ = ua.NodeId(ua.ObjectIds.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead)  # the node the check asks too
 _AUTH_CODES = {
     ua.StatusCodes.BadUserAccessDenied,
     ua.StatusCodes.BadIdentityTokenRejected,
@@ -51,6 +57,40 @@ class OpcUaConfig(BaseModel):
     # Only used with basic256sha256; the collector mounts ./certs read-only at /certs.
     client_cert: str = "/certs/opcua-client.pem"
     client_key: str = "/certs/opcua-client-key.pem"
+    # Off unless a person ticks it, never switched on by the platform (w34 R3). A strict bool: the string "true" or the number 1 is
+    # refused, and `address_key_for` (which the matchers use) treats anything but the real True as off, so the two never disagree.
+    stable_addresses: StrictBool = Field(
+        False,
+        json_schema_extra={
+            "title": "Stable tag addresses",
+            "description": (
+                "For AVEVA Plant SCADA: read each tag as ns=3;s=Cluster.Tag, without the number browsing puts in front of it "
+                "(20403:), which can change when the SCADA project changes. Based on a community answer, not tested against "
+                "your SCADA. Leave this off for other servers."
+            ),
+        },
+    )
+
+
+@dataclass(frozen=True)
+class StableComparison:
+    """What `OpcUaConnector.compare_stable` found: the counts and the one sentence Test shows (empty when nothing could be compared)."""
+
+    message: str
+    total: int  # the numbered addresses that were read
+    same: int = 0  # both forms good and equal
+    different: int = 0  # both forms good, other values
+    stable_unknown: int = 0  # the numbered form good, the stable form Bad
+    numbered_dead: int = 0  # the numbered form Bad, the stable form good
+
+    @property
+    def doubts_the_option(self) -> bool:
+        """The stable form read differently, or not at all, where the numbered form works: the option is not to be recommended."""
+        return self.different > 0 or self.stable_unknown > 0
+
+
+def _tags(count: int) -> str:
+    return "tag" if count == 1 else "tags"
 
 
 def _reported_path(endpoint_url: object) -> str:
@@ -240,6 +280,9 @@ class OpcUaConnector(Connector):
     def __init__(self, config: OpcUaConfig, secret: str | None = None) -> None:
         super().__init__(config, secret)
         self.config: OpcUaConfig = config
+        # Nodes per Read request. None until the first read has asked the server (once, even when the server cannot say); after a
+        # refused slice was halved it holds the smaller size. The instance lives as long as its poll group, so later polls keep it.
+        self._slice: int | None = None
 
     async def _new_client(self) -> Client:
         """A client with the configured authentication and security, not yet connected."""
@@ -313,35 +356,193 @@ class OpcUaConnector(Connector):
         return await run_check(self, points, publish)
 
     async def browse(self) -> list[PointDescriptor]:
-        found: list[PointDescriptor] = []
         async with self._session() as client:
-            root = client.get_node(self.config.root_node)
-            # Under the Objects folder, namespace 0 holds only OPC Foundation infrastructure
-            # (Server diagnostics, Aliases, ...), never process data.
-            skip_standard = root.nodeid == _OBJECTS_FOLDER
-            stack: list[Node] = [root]
-            seen: set[str] = set()
-            while stack:
-                node = stack.pop()
-                for child in await node.get_children(refs=ua.ObjectIds.HierarchicalReferences):
-                    key = child.nodeid.to_string()
-                    if key in seen or (skip_standard and child.nodeid.NamespaceIndex == 0):
-                        continue
-                    seen.add(key)
-                    node_class = await child.read_node_class()
-                    if node_class == ua.NodeClass.Variable:
-                        name = (await child.read_display_name()).Text or key
-                        found.append(PointDescriptor(address=key, name=name, unit_hint=await _unit(child)))
-                    elif node_class == ua.NodeClass.Object:
-                        stack.append(child)
+            found = await self._walk(client)
+        # The post step (w34): whatever walks the server, the descriptors of a source with the option on carry the stable
+        # address. The walk deduplicated on the raw id, so two descriptors can share a stable address (the browse upsert counts
+        # the second as ambiguous). The order is the old one: by name, ties in discovery order.
+        if self.config.stable_addresses:
+            found = [replace(d, address=stable_address(d.address)) for d in found]
         return sorted(found, key=lambda p: p.name)
+
+    async def _walk(self, client: Client) -> list[PointDescriptor]:
+        """Every variable under the root node, as the server names it (a raw node id), in discovery order. The requests are
+        batched, the order is the old depth-first walk's (see `opcua_browse`)."""
+        root = client.get_node(self.config.root_node).nodeid
+        # Under the Objects folder, namespace 0 holds only OPC Foundation infrastructure
+        # (Server diagnostics, Aliases, ...), never process data.
+        return await browse_tree(client, root, root == _OBJECTS_FOLDER)
 
     async def read(self, addresses: list[str]) -> list[PointValue]:
         ts = datetime.now(timezone.utc)
+        if self.config.stable_addresses:
+            return await self._read_stable(addresses, ts)
         async with self._session() as client:
-            nodes = [client.get_node(a) for a in addresses]
-            results = await client.read_attributes(nodes, ua.AttributeIds.Value)
+            results = await self._read_values(client, addresses)
         return [_point_value(address, ts, dv) for address, dv in zip(addresses, results, strict=True)]
+
+    async def _read_stable(self, addresses: list[str], ts: datetime) -> list[PointValue]:
+        """`read` for a source with the option on: the server is asked for the stable form of each address, and each answer is
+        filed under the STORED string it was asked for, in the caller's order. Distinct stored strings that are one tag are
+        not read at all: each comes back BAD, so one reading never reaches two points."""
+        plan = read_plan(addresses, stable_address)
+        sent = [stable for _stored, stable in plan.sent]
+        async with self._session() as client:
+            results = await self._read_values(client, sent) if sent else []  # a request for no node is not sent
+        answers = {
+            stored: _point_value(stored, ts, dv) for (stored, _stable), dv in zip(plan.sent, results, strict=True)
+        }
+        return [
+            PointValue(address, ts, None, BAD, plan.refused[address]) if address in plan.refused else answers[address]
+            for address in addresses
+        ]
+
+    async def compare_stable(self, addresses: Sequence[str], client: Client | None = None) -> StableComparison:
+        """Test's evidence about "Stable tag addresses": one Value Read, in one session, of the numbered form of each address (as
+        stored, never stripped, whatever the option says) and of its stable form, and what the pairs show. Read-only; it changes
+        nothing, not even this connector's config. An address without a number is left out.
+
+        `client`: a session that is already open (the connection check's); the comparison then uses it and opens none. Both forms
+        are read in the same request either way, so a tag that ticks cannot show up as a difference.
+
+        One sentence is returned, the most severe that applies, in this order: the two forms read different values; the stable
+        form is unknown to the server; the numbered form no longer works but the stable one does (with the option on, that sentence ends
+        in "; with "Stable tag addresses" on, your readings are not affected"); the two forms read the same.
+        A tag whose two forms are both Bad is counted in the total only; when nothing at all could be compared the message is empty.
+        """
+        numbered = [a for a in dict.fromkeys(addresses) if has_number_prefix(a)]
+        if not numbered:
+            return StableComparison("", 0)
+        stable = [stable_address(a) for a in numbered]
+        ts = datetime.now(timezone.utc)
+        async with (self._session() if client is None else contextlib.nullcontext(client)) as session:
+            answers = await self._read_values(session, [*numbered, *stable])  # the slices of the poll apply
+        pairs = [
+            (_point_value(n, ts, answers[i]), _point_value(s, ts, answers[len(numbered) + i]))
+            for i, (n, s) in enumerate(zip(numbered, stable, strict=True))
+        ]
+        same = different = stable_unknown = numbered_dead = 0
+        example: str | None = None
+        for address, (n, s) in zip(numbered, pairs, strict=True):
+            if n.quality == GOOD and s.quality == GOOD:
+                if n.value == s.value:
+                    same += 1
+                else:
+                    different += 1
+                    # ten digits: a kWh counter of 3116496.25 must not print as 3.1165e+06 (and two of them not alike)
+                    example = example or f"{tag_name(address)}: {n.value:.10g} and {s.value:.10g}"
+            elif n.quality == GOOD:
+                stable_unknown += 1
+            elif s.quality == GOOD:
+                numbered_dead += 1
+        total = len(numbered)
+        tags = f"of {total} {_tags(total)}"
+        if different:
+            message = (
+                f"the numbered and the stable address read different values for {different} {tags}: "
+                f"do not use the option (e.g. {example})"
+            )
+        elif stable_unknown:
+            advice = "turn the option off" if self.config.stable_addresses else "do not turn the option on"
+            message = f"the stable address is unknown to this server for {stable_unknown} {tags}: {advice}"
+        elif numbered_dead:
+            message = (
+                f"the numbered address no longer works for {numbered_dead} {tags} but the stable one does: "
+                "the SCADA numbering may have changed"
+            )
+            if self.config.stable_addresses:  # the option reads the stable form: the person who sees this is told nothing is lost
+                message += '; with "Stable tag addresses" on, your readings are not affected'
+        elif same:
+            message = f"{same} {tags} read the same both ways"
+        else:
+            message = ""
+        return StableComparison(message, total, same, different, stable_unknown, numbered_dead)
+
+    async def _read_values(self, client: Client, addresses: Sequence[str]) -> list[ua.DataValue]:
+        """The Value of every node, one answer per address in the same order, in requests of at most `self._slice` nodes, one
+        after another in the session of the call (w34 R9). A request for no node is not sent."""
+        if not addresses:
+            return []
+        nodes = [client.get_node(a) for a in addresses]
+        await self._learn_slice(client)
+        results: list[ua.DataValue] = []
+        start = 0
+        answered = 0  # the node count of the largest request of this call that the server answered
+        while start < len(nodes):
+            # `self._slice` is read again for every slice: a halving below lowers the size of all the slices after it. The cursor
+            # moves by what was asked, not by what came back (a wrong answer length ends in the typed error below, not in a loop).
+            batch = nodes[start : start + (self._slice or POLL_SLICE_CAP)]
+            values, answered = await self._read_slice(client, batch, answered)
+            if len(values) != len(batch):
+                # Checked per slice: two wrong lengths can add up to the right total, and every value after the first one would
+                # then be filed under the address before its own.
+                raise ConnectorError("protocol_error", f"the server answered {len(values)} values for {len(batch)} tags")
+            results.extend(values)
+            start += len(batch)
+        return results
+
+    async def _learn_slice(self, client: Client) -> None:
+        """Ask the server for `MaxNodesPerRead` once per connector (one Read of one node); a server that cannot say gives the cap,
+        and that outcome is remembered too, so it is never asked again."""
+        if self._slice is not None:
+            return
+        limit: int | None = None
+        try:
+            (data_value,) = await client.read_attributes([client.get_node(_MAX_NODES_PER_READ)], ua.AttributeIds.Value)
+            code = data_value.StatusCode_
+            value = data_value.Value.Value if data_value.Value is not None and (code is None or code.is_good()) else None
+            limit = value if isinstance(value, int) and not isinstance(value, bool) else None
+        except Exception:  # noqa: BLE001 - an unreadable limit means "no limit known"
+            limit = None
+        self._slice = slice_size(limit, POLL_SLICE_CAP)
+
+    async def _read_slice(
+        self, client: Client, nodes: list[Node], answered: int = 0
+    ) -> tuple[list[ua.DataValue], int]:
+        """One request. A server that refuses it as too many operations (whatever it advertised) gets the same nodes as two
+        requests, half each, once; the smaller size is kept for every later slice. A second refusal is a typed error.
+
+        `answered` is the node count of the largest request of this call that the server has answered so far (0: none), and the
+        same number comes back with the values, raised by what this slice had answered.
+
+        The size kept is half of what the refusal shows to be too big: the slice itself, or, when a request of this call was answered
+        before it (a short tail), half of the size in use: a tail turned away does not show that the size just answered is too big,
+        so it is not cut to the smallest size at once. Never below MIN_SLICE."""
+        try:
+            values = await client.read_attributes(nodes, ua.AttributeIds.Value)
+            return values, max(answered, len(nodes))
+        except ua.UaStatusCodeError as exc:
+            if getattr(exc, "code", None) != ua.StatusCodes.BadTooManyOperations:  # UaStatusCodeErrors (several codes) has no `code`
+                raise
+        half = (len(nodes) + 1) // 2
+        current = self._slice or POLL_SLICE_CAP
+        learned = min(current, max(MIN_SLICE, ((current if answered else len(nodes)) + 1) // 2))
+        if half < MIN_SLICE:  # too small to halve: the server refuses even this
+            self._slice = learned
+            raise _too_many_operations(len(nodes), answered)
+        results: list[ua.DataValue] = []
+        for part in (nodes[:half], nodes[half:]):
+            try:
+                results.extend(await client.read_attributes(part, ua.AttributeIds.Value))
+            except ua.UaStatusCodeError as exc:
+                if getattr(exc, "code", None) != ua.StatusCodes.BadTooManyOperations:
+                    raise
+                self._slice = learned  # remembered anyway, so the next poll starts smaller
+                raise _too_many_operations(len(part), answered) from None
+            answered = max(answered, len(part))
+        self._slice = learned
+        return results, answered
+
+
+def _too_many_operations(size: int, answered: int = 0) -> ConnectorError:
+    """`answered`: the largest request of the call the server took before this refusal (0: none)."""
+    text = f"the server refuses reads of {size} tags at once (BadTooManyOperations)"
+    if size <= MIN_SLICE:  # the smallest request there is
+        if answered:  # the server took a request already: it has no limit this small, only this one request was turned away
+            text = f"the server refused a read of {size} tags after answering a read of {answered} tags (BadTooManyOperations)"
+        else:  # a limit below it cannot be worked with, and the error says so
+            text += f"; a request is never split below {MIN_SLICE} tags, so a server limit below {MIN_SLICE} cannot be used"
+    return ConnectorError("protocol_error", text)
 
 
 def _status_text(code: ua.StatusCode) -> str:
@@ -359,12 +560,3 @@ def _point_value(address: str, ts: datetime, dv: ua.DataValue) -> PointValue:
         return PointValue(address=address, ts=ts, value=float(value), quality=GOOD)
     kind = dv.Value.VariantType.name if dv.Value is not None else "no value"
     return PointValue(address=address, ts=ts, value=None, quality=BAD, status=f"Good, non-numeric ({kind})")
-
-
-async def _unit(var: Node) -> str | None:
-    for prop in await var.get_properties():
-        if (await prop.read_browse_name()).Name == "EngineeringUnits":
-            eu = await prop.read_value()
-            text = getattr(getattr(eu, "DisplayName", None), "Text", None)
-            return text or None
-    return None

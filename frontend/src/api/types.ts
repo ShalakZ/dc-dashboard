@@ -287,7 +287,11 @@ export interface Finding { host: string; port: number; source_id: number | null;
 export interface ScanSummary { id: number; scope_id: number | null; scope_name: string; /** What the scan covered, from its snapshot (so it outlives a deleted scope); absent in old fixtures. */ targets?: string[]; ports?: number[]; status: ScanStatus; stage: "sweep" | "probe" | "browse" | null; progress: ScanCounters; created_at: string; finished_at: string | null; error: string | null }
 export interface ScanDetail extends ScanSummary { scope_snapshot: Record<string, unknown>; findings: Finding[] }
 export interface Suggestion { metric: Metric; scale: number; interval_seconds: number; custom_unit: string | null }
-export interface GraphPoint { id: number; address: string; name: string; unit_hint: string | null; mapping_id: number | null; asset_id: number | null; mapped_metric: Metric | null; suggestion: Suggestion }
+export interface GraphPoint {
+  id: number; address: string; name: string; unit_hint: string | null; mapping_id: number | null; asset_id: number | null; mapped_metric: Metric | null; suggestion: Suggestion;
+  /** (w34) The id of the MAPPED point of the same source that is the same tag as this one (stable OPC UA addresses); null or absent otherwise. Such a point is not offered for mapping. */
+  same_tag_as?: number | null;
+}
 export interface GraphCluster { key: string; points: GraphPoint[] }
 export interface GraphSource {
   id: number; name: string; connector_type: string; config: Record<string, unknown>; origin: "manual" | "discovered";

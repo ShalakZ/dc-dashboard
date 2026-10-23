@@ -262,3 +262,39 @@ describe("bulkGroups and mappableClusters (W7r: the one rule for which groups an
     expect(mappableClusters(s).map((g) => g.key)).toEqual(["B"]);
   });
 });
+
+describe("a point that is the same tag as a mapped point is not offered (w34)", () => {
+  const twinModel = () => {
+    const m = model();
+    m.sources[0].clusters[0].points[0] = point(1, "LVP01 kW", { asset_id: 11, mapping_id: 5, mapped_metric: "active_power_kw" });
+    m.sources[0].clusters[0].points[1] = point(2, "LVP01 kWh", { same_tag_as: 1 });
+    return m;
+  };
+  it("a cluster payload leaves the twin out", () => {
+    expect(dropPayload(twinModel(), nodeId.cluster(1, "LVP01"))!.points.map((x) => x.id)).toEqual([3]);
+  });
+  it("a twin alone is not droppable, and a cluster of nothing but twins and mapped points yields no payload", () => {
+    const m = twinModel();
+    expect(dropPayload(m, nodeId.point(2))).toBeNull();
+    m.sources[0].clusters[0].points[2] = point(3, "LVP01 V", { same_tag_as: 1 });
+    expect(dropPayload(m, nodeId.cluster(1, "LVP01"))).toBeNull();
+  });
+  it("selecting a twin with another point refuses and says it is the same tag, with no advice to unmap", () => {
+    expect(multiPointDrop(twinModel(), [nodeId.point(2), nodeId.point(3)])).toEqual({
+      refusal: "1 of the selected points is the same tag as a mapped point." });
+  });
+  it("several twins are counted in the plural", () => {
+    const m = twinModel();
+    m.sources[0].clusters[0].points[2] = point(3, "LVP01 V", { same_tag_as: 1 });
+    expect(multiPointDrop(m, [nodeId.point(2), nodeId.point(3)])).toEqual({
+      refusal: "2 of the selected points are the same tag as a mapped point." });
+  });
+  it("a mapped point and a twin in one selection are each told, the mapped ones with the usual advice", () => {
+    expect(multiPointDrop(twinModel(), [nodeId.point(1), nodeId.point(2)])).toEqual({
+      refusal: "1 of the selected points is already mapped. Unmap it first, or select only unmapped points. 1 of the selected points is the same tag as a mapped point." });
+  });
+  it("the bulk list leaves the twin out", () => {
+    const s = twinModel().sources[0];
+    expect(bulkGroups(s).find((g) => g.key === "LVP01")!.points.map((p) => p.id)).toEqual([3]);
+  });
+});

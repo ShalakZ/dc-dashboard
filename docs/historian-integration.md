@@ -14,12 +14,22 @@ The connector interface has test, browse, read (current values), read history, c
 
 This is the steady load. For every enabled source the collector reads its mapped tags (never an unmapped one), grouped by mapping interval. Each group has its own timer and sends one read per interval. The groups run side by side with the history fill, so a Historian can see one request per group plus one history request at the same moment. The interval is set per mapping; when none is set it is 60 seconds for an energy counter (kWh) and 5 seconds for every other metric, power included.
 
-One read of a group sends, with the simulator connector, one `GET /read` for every 200 addresses; with OPC UA, a new session and one Read for the whole group (the code sets no limit); with Modbus TCP, a new connection and one register read per register block that holds a wanted address. The rule for a new connector is at most 200 addresses in a request, and the table assumes a Historian connector keeps it. Requests an hour (at most; computed, not measured) = tags ÷ 200, rounded up, × reads an hour, added over the groups:
+One read of a group sends, with the simulator connector, one `GET /read` for every 200 addresses; with OPC UA, a new session and Reads of at most 200 addresses one after another (fewer if the server's own `MaxNodesPerRead` is lower; a server that refuses a size is asked for half of it, never fewer than 10: [Large OPC UA servers](opc-ua-at-scale.md#reads-in-slices)); with Modbus TCP, a new connection and one register read per register block that holds a wanted address. The rule for a new connector is at most 200 addresses in a request, and the table assumes a Historian connector keeps it. Requests an hour (at most; computed, not measured) = tags ÷ 200, rounded up, × reads an hour, added over the groups:
 
 | | every tag every 60 s | every tag every 5 min | defaults (kW 5 s, kWh 60 s) |
 |---|---|---|---|
 | 217 meters, 434 tags (a kWh and a kW tag each) | 180 | 36 | 1,560 |
 | 2,000 meters, 4,000 tags | 1,200 | 240 | 7,800 |
+
+A SCADA-shaped source has many more tags per meter: 27 for a PDU meter. Only mapped tags are polled, and every value is stamped with the platform's own clock. The same rule, computed for 48 meters (1,296 tags) and for a server of 15,000 tags, on the assumption that the server accepts 200 addresses in a Read (a lower `MaxNodesPerRead` raises the counts); the defaults column counts the 48 meters' kWh counters at 60 s and every other tag at 5 s:
+
+| | every tag every 60 s | every tag every 5 min | defaults (kWh 60 s, other 5 s) |
+|---|---|---|---|
+| billing only: 48 kWh counters | 60 | 12 | 60 |
+| every meter tag: 48 meters, 1,296 tags | 420 | 84 | 5,100 |
+| everything: 15,000 tags | 4,500 | 900 | 54,060 |
+
+These are upper bounds: a group's real period is its interval plus the time of the read. For a tag that changes about once a minute, map kWh counters at 60 s and kW at 30 s or less, never 60 s ([why](opc-ua-at-scale.md#mapping-intervals-for-tags-that-change-about-once-a-minute)).
 
 The history fill comes on top. The interval can be set per mapping to whatever you accept (question 17).
 
@@ -58,9 +68,9 @@ Only the stand-in Historian does, a test server of the platform's own simulator.
 
 | Action and permission | What reaches the Historian |
 |---|---|
-| Test, Test all (`sources.test`) | one connection test per source; Test all does every enabled source. Simulator: `GET /points`. OPC UA: a session and one read. Modbus: a connection and one block read |
+| Test, Test all (`sources.test`) | one connection test per source; Test all does every enabled source. Simulator: `GET /points`. OPC UA: a first session (the test itself: a session and one read), then a second session that reads the server's `MaxNodesPerRead` once (one Read of one node) and sends one Read of up to 20 nodes: 10 stored addresses in their two spellings (with and without the number browsing puts in front of a tag), to compare them; a server whose limit is below 20 gets the same nodes in smaller Reads. Modbus: a connection and one block read |
 | Check connection (`diagnostics.run`) | OPC UA: nine read-only steps (DNS, TCP, endpoints, certificates, session, server time, namespaces, a read of up to 200 mapped addresses, timing). Other types: the single test. One at a time per source |
-| Browse (`sources.edit`) | asks for every tag the source offers. Simulator: `GET /points`. OPC UA: walks the whole tree under the root node, several requests per node |
+| Browse (`sources.edit`) | asks for every tag the source offers. Simulator: `GET /points`. OPC UA: walks the tree under the root node level by level, one Browse request for up to 200 folders and Reads of up to 200 nodes at a time (about 300 requests for 15,000 tags, measured against the platform's own SCADA-shaped test server: [Large OPC UA servers](opc-ua-at-scale.md#the-browse-at-scale)) |
 | Discovery scan (`discovery.scan`) | for the addresses and ports of a scope an administrator typed and confirmed: a TCP connection to each pair, closed at once with no data (at most 200 a second); then on each open port every connector's probe until one recognises the service (Modbus: device identification, then, if that gives nothing, a read of register 0; OPC UA: GetEndpoints; simulator: `GET /`). A port nobody recognises still gets all three, so keep a Historian's address out of a scope if that is not wanted. A recognised service that is not yet a source becomes a disabled one, which the scan browses |
 | Fill by hand (a shell on the machine) | `docker compose exec api python -m dcdash.ingest.backfill --source N`: a dry run unless `--yes` is added, with the pace and size limits above |
 | Fill older range... (`sources.edit`) | the same fill, started by a person for a range of at most 31 days: it reads the same way (the limits above), and only one fill is waiting or running at a time, whichever source |
@@ -80,7 +90,7 @@ Both loops wait and retry as above and never flood. Nothing is lost while the Hi
 
 ### The numbers
 
-Measured against the stand-in with 217 meters (449 tags: a kWh and a kW tag per meter plus 15 test tags), each tag mapped at the stand-in's own interval, a minute for the meters. The times were taken while other heavy jobs ran on the same machine and are pessimistic by a factor of about 2 to 4; the request and row counts do not depend on load.
+Measured against the stand-in with 217 meters (449 tags: a kWh and a kW tag per meter plus 15 test tags), each tag mapped at the stand-in's own interval, a minute for the meters. It assumed 2 tags per meter; a SCADA-shaped source has 27 per PDU meter, which the second table of "The live poll" computes. The times were taken while other heavy jobs ran on the same machine and are pessimistic by a factor of about 2 to 4; the request and row counts do not depend on load.
 
 | Measure | First fill, 6.5 days | Afterwards, at the default pace |
 |---|---|---|
@@ -136,6 +146,21 @@ Write each answer next to its question. Nothing here needs a full answer at once
 
 24. [B] How long must the readings behind a bill be kept, and must they be the raw values or are hourly totals enough?
 25. [B] When the Historian corrects a value after a month was billed, what should happen: nothing (the bill stands), a note on the month, or a re-bill?
+
+### F. About the SCADA itself
+
+These questions come from what was learned about the SCADA's shape: its address numbers, its update rate and its counters. They are for whoever runs the SCADA, unless marked [IT] or [B]; the page [Large OPC UA servers](opc-ua-at-scale.md) says what the platform does about each answer.
+
+26. Product: which SCADA product and version is it (we believe AVEVA Plant SCADA; its OPC UA server exists since version 8.30)? Is the "Historian" AVEVA Historian, AVEVA PI, Plant SCADA's own trend logging, or something else?
+27. History over OPC UA: does the SCADA's OPC UA server support Historical Access (reading stored history for a time range)? If yes, which tags have history, and for how long?
+28. Stable addresses: the tags we can browse look like `ns=3;s=20403:Cluster.Tag`. Is the number before the colon a "browse position index" that can change when equipment is added to the SCADA project? We plan to use `ns=3;s=Cluster.Tag` without it: does that form read the same tag? Will cluster or tag names ever be renamed, and who would tell us?
+29. Validity: does each tag have a "Valid" companion (or similar), and does the OPC UA quality (good, uncertain, bad) show a meter that stopped answering? When a meter stops, what do we see: a bad status, or the last value frozen?
+30. Update rate and load: how often does each tag really change (we saw about once a minute, on a 4-second grid)? Does a client read make the SCADA ask the field device on demand? What are the limits: most tags in one request, most sessions, most subscriptions?
+31. [IT] Security and trust: which OPC UA security mode does the server require (none, sign, sign and encrypt), and which login (anonymous or a user)? How does a new client certificate get trusted, and who approves it?
+32. [IT] Existing access: which firewall rules already allow a client to reach the SCADA's OPC UA port, who owns them, and could one be requested for the platform's host?
+33. Energy counters: are the kWh counters 32-bit floating point numbers (we saw steps of 0.25 kWh at about 3.1 million kWh, which gets coarser as the number grows)? What happens at a rollover, a reset or a meter replacement?
+34. [B] Customers and feeds: which PDUs and feeds belong to which customer (the A and B feed of a rack, for example PDUA01 and PDUB01)? Is there a list we can use for billing: customer, PDU A, PDU B, contracted kW?
+35. Tag list: can you send the full list of tag names only (no values) with units and descriptions, and mark which ones are billing meters? A CSV is ideal. It lets us build the mapping without browsing 15,000 tags on the live server.
 
 ## If a connection into OT is not allowed: Option 2, files
 

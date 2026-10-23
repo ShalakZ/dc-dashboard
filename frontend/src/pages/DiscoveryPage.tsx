@@ -40,10 +40,10 @@ import { useMappingActions, type MappedInfo } from "../hooks/useMappingActions";
 import { useMovedToast } from "../hooks/useMovedToast";
 import { reducedMotion, useReducedMotion } from "../hooks/useReducedMotion";
 import { useValueTip } from "../hooks/useValueTip";
-import { afterPaint } from "../lib/afterPaint";
+import { afterPaint, framesUntil } from "../lib/afterPaint";
 import { dropPayload, mappableClusters, multiPointDrop, pickDropTarget, takenMetrics, type DropPayload } from "../lib/drop";
 import {
-  buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isNotSeen, isRemovable, layoutBatches, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, ownPlaces,
+  buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isNotSeen, isOfferable, isRemovable, layoutBatches, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, ownPlaces,
   PAGE_SIZE, pruneShown, removableNotSeen, removalDialogText, removalOutcome, seenLine, shiftedPlaces, sourceIdOfNode, visiblePoints,
   type AssetNodeData, type ClusterNodeData, type Group, type GraphView, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
@@ -227,7 +227,7 @@ function nodeData(
   }
   if (node.type === "cluster") {
     const cluster = node.data as ClusterNodeData;
-    const mappable = canAccept && !cluster.ungrouped && cluster.mappedCount < cluster.count;
+    const mappable = canAccept && !cluster.ungrouped && (cluster.offerable ?? cluster.count - cluster.mappedCount) > 0;
     return {
       ...cluster, onToggle, ...(mappable ? { onMap, onNewAsset, ...(formWait ? { formWait } : {}) } : {}),
       ...(canEdit && cluster.mappedCount > 0 ? { onMenu, onUnmap, onMove } : {}),
@@ -235,7 +235,7 @@ function nodeData(
   }
   if (node.type === "point") {
     const point = (node.data as PointNodeData).point;
-    if (canAccept && point.asset_id === null) return { ...node.data, onMap, ...(canForm ? { menuNewAsset: onNewAsset, ...(formWait ? { formWait } : {}) } : {}) };
+    if (canAccept && isOfferable(point)) return { ...node.data, onMap, ...(canForm ? { menuNewAsset: onNewAsset, ...(formWait ? { formWait } : {}) } : {}) };
     if (canEdit && point.mapping_id !== null) return { ...node.data, onMenu, onUnmap, onMove };
   }
   if (node.type === "asset") {
@@ -654,7 +654,7 @@ function Canvas({ model }: { model: GraphModel }) {
       const group = groupsOf(source).find((g) => g.points.some((p) => p.id === subject.pointId));
       if (group) {
         const at = group.points.findIndex((p) => p.id === subject.pointId);
-        for (const p of group.points.slice(at + 1)) if (p.asset_id === null) ids.push(nodeId.point(p.id));
+        for (const p of group.points.slice(at + 1)) if (isOfferable(p)) ids.push(nodeId.point(p.id));
         ids.push(nodeId.cluster(source.id, group.key));
       }
     } else if (subject.clusterId) {
@@ -707,16 +707,17 @@ function Canvas({ model }: { model: GraphModel }) {
   }, [model, focusNode]);
   /**
    * The New asset form saved an asset. A pane's or an asset's New asset ends here; a group's or a point's goes on to the Review on the new asset. `create` has
-   * already waited for the graph to be read again, but React draws that read a moment later, and the Review lists its assets from the model it is given: so
-   * wait for the paint, then look in the model of the moment. If the asset is not there (the refresh failed) the person is told and the asset stays.
+   * already waited for the graph to be read again, but React draws that read, and copies it into `modelRef`, some frames later (two are not always enough on a
+   * busy page), and the Review lists its assets from the model it is given: so wait frame by frame, for at most about 2 s, until the model of the moment has the
+   * asset. The error toast therefore means the graph really did not show the asset in that time (the refresh failed): the person is told and the asset stays.
    */
   const onNewAssetCreated = async (asset: Asset) => {
     const payload = newAsset?.payload;
     setNewAsset(null);
     if (!payload) return;
-    await afterPaint();
+    const found = await framesUntil(() => modelRef.current.assets.some((a) => a.id === asset.id), { stop: () => !mounted.current });
     if (!mounted.current) return;
-    if (modelRef.current.assets.some((a) => a.id === asset.id)) openReview(payload, { kind: "existing", assetId: asset.id }, asset.name);
+    if (found) openReview(payload, { kind: "existing", assetId: asset.id }, asset.name);
     else toast.error("The asset was created, but the graph could not be refreshed. Use Map… to map to it.");
   };
 
@@ -1132,7 +1133,7 @@ function Canvas({ model }: { model: GraphModel }) {
 
   // The menu's items come from the node's own callbacks (the ones its buttons use), so a role sees exactly the actions it has buttons for.
   const nodeActions = (node: Node): RowAction[] => {
-    const d = node.data as NodeActions & Pick<AssetNodeData, "mapped" | "onUnmapSource" | "children" | "collapsed"> & Pick<SourceNodeData, "groups"> & { expanded?: boolean };
+    const d = node.data as NodeActions & Pick<AssetNodeData, "mapped" | "onUnmapSource" | "children" | "collapsed"> & Pick<SourceNodeData, "groups"> & Pick<PointNodeData, "twinOf"> & { expanded?: boolean };
     const group = node.type === "cluster";
     const items: RowAction[] = [];
     if (d.onSelect) items.push({ label: "Details", onSelect: () => d.onSelect?.(node.id) });
@@ -1140,6 +1141,8 @@ function Canvas({ model }: { model: GraphModel }) {
     // (W12c) A source has no Create assets or Remove button on its card: these two items, in its Source actions menu and its right-click menu, are where they are.
     if (d.onCreateAssets) items.push({ label: d.groups === undefined ? "Create assets…" : `Create assets for ${d.groups} ${d.groups === 1 ? "group" : "groups"}…`, onSelect: () => d.onCreateAssets?.(node.id) });
     if (d.onMap) items.push({ label: "Map…", onSelect: () => d.onMap?.(node.id) });
+    // (w34) The same tag as a mapped point: a role that maps sees the item it would have had, disabled, with the reason (the node has no button for it, so this is the only place it says so).
+    if (node.type === "point" && d.twinOf !== undefined && canAccept) items.push({ label: "Map…", disabled: true, reason: `Already mapped as ${d.twinOf}` });
     // The three that open the asset form wait for the asset list (`formWait`: aria-disabled, skipped by the keys).
     if (d.onNewAsset) items.push({ label: "New asset…", disabled: d.formWait, onSelect: () => d.onNewAsset?.(node.id) });
     if (d.menuNewAsset) items.push({ label: "New asset…", disabled: d.formWait, onSelect: () => d.menuNewAsset?.(node.id) }); // an unmapped point: its menu only

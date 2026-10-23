@@ -1,5 +1,5 @@
 import type { GraphModel, GraphSource } from "../api/types";
-import { NO_VIEW, drawnCount, groupVisible, groupsOf, nodeId, sourceVisible, visiblePoints, type GraphView, type Group, type OpenState } from "./graph";
+import { NO_VIEW, drawnCount, groupVisible, groupsOf, isOfferable, nodeId, sourceVisible, visiblePoints, type GraphView, type Group, type OpenState } from "./graph";
 import { EXPAND_NODE_BUDGET } from "./graphView";
 import type { IconName } from "../components/Icon";
 import { assetIcon } from "./assetIcons";
@@ -48,6 +48,7 @@ export function buildFindIndex(model: GraphModel): FindEntry[] {
     });
   }
   for (const source of model.sources) {
+    let twinNames: Map<number, string> | undefined; // built when the first twin of the source turns up
     for (const group of groupsOf(source)) {
       entries.push({
         id: nodeId.cluster(source.id, group.key), kind: "cluster", label: group.label,
@@ -55,7 +56,13 @@ export function buildFindIndex(model: GraphModel): FindEntry[] {
       });
       const context = `point in ${group.label} · ${source.name}`;
       for (const p of group.points) {
-        entries.push({ id: nodeId.point(p.id), kind: "point", label: p.name, context, text: `${p.name} ${p.address}`.toLowerCase(), icon: metricIcon(pointMetric(p)) });
+        // (w34) A twin (the same tag as a mapped point of its source; the same rule as `isOfferable`) says so first: two options of one name must differ, and the line is cut at its end.
+        let twinOf: string | undefined;
+        if (p.same_tag_as && p.asset_id === null) {
+          twinNames ??= new Map(groupsOf(source).flatMap((g) => g.points.map((q) => [q.id, q.name] as const)));
+          twinOf = twinNames.get(p.same_tag_as) ?? "another point";
+        }
+        entries.push({ id: nodeId.point(p.id), kind: "point", label: p.name, context: twinOf === undefined ? context : `already mapped as ${twinOf} · ${context}`, text: `${p.name} ${p.address}`.toLowerCase(), icon: metricIcon(pointMetric(p)) });
       }
     }
   }
@@ -173,7 +180,7 @@ export function findPlan(model: GraphModel, open: OpenState, entry: FindEntry, b
   if (!source || !group) return same;
 
   // Hidden by the filter: the plan is worked out with the filter off (that is how the node will be drawn), and says so.
-  const mappedPoint = isPoint && group.points.some((p) => nodeId.point(p.id) === entry.id && p.asset_id !== null);
+  const mappedPoint = isPoint && group.points.some((p) => nodeId.point(p.id) === entry.id && !isOfferable(p)); // the filter hides it: mapped, or the twin of a mapped point (w34)
   const hidden = view.unmappedOnly && (!sourceVisible(source, view) || !groupVisible(group, view) || mappedPoint);
   const now: GraphView = hidden ? { ...view, unmappedOnly: false } : view;
 

@@ -782,3 +782,10 @@ describe("selectionStates", () => {
     });
   });
 });
+
+describe("graphCounts with a point that is the same tag as a mapped point (w34)", () => {
+  it("the twin is a point, it is not mapped, and it is not among the unmapped points the filter leaves", () => {
+    const sources = [source(1, { clusters: [{ key: "G", points: [point(1, "a", { asset_id: 10, mapping_id: 1 }), point(2, "b", { same_tag_as: 1 }), point(3, "c")] }] })];
+    expect(graphCounts(model({ sources }))).toEqual({ sources: 1, points: 3, mapped: 1, needing: 0, unmapped: 1 });
+  });
+});

@@ -17,6 +17,7 @@ from dcdash.simulator import main as simulator_main
 from dcdash.simulator.faults import KNOWN, Faults
 from dcdash.simulator.historian import KNOWN as HISTORIAN_KNOWN
 from dcdash.simulator.historian import HistorianConfig
+from dcdash.simulator.scada import ScadaConfig
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "backend" / "dcdash"
@@ -258,3 +259,46 @@ def test_main_reads_the_historian_settings_once_and_hands_serve_the_port_and_the
     assert len(reads) == 2  # once per start, not once per request
     assert seen[0]["historian_port"] == 9100 and seen[0]["historian"] == HistorianConfig()
     assert seen[1]["historian_port"] == 9123 and seen[1]["historian"] == HistorianConfig(port=9123, meters=7, rate=3)
+
+
+# ---- the SCADA-shaped OPC UA server's SIM_SCADA_* settings (w34) have the same walls --------------------------------------------
+# Its size and two faults (a renumbering, a read limit). compose.yaml does not pass them at all: a scratch stack sets them in its own
+# override, so nothing in the shipped Compose file can switch the SCADA-shaped server on, and with no SIM_SCADA_PORT it does not exist.
+
+def test_no_module_outside_the_simulator_folder_names_a_scada_variable():
+    offenders = [str(path.relative_to(ROOT)) for path in outside_the_simulator() if "SIM_SCADA_" in path.read_text(encoding="utf-8")]
+    assert offenders == []  # the connector talks OPC UA to the server and never reads, or even knows, how it is switched
+
+
+def test_compose_does_not_mention_a_scada_variable_anywhere():
+    document = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    for name, service in document["services"].items():  # any service, the simulator included
+        assert "SIM_SCADA_" not in json.dumps(service), name
+        assert "env_file" not in service, name  # an env_file would hand a SIM_SCADA_ line of a file to that service
+    assert "SIM_SCADA_" not in json.dumps({key: value for key, value in document.items() if key != "services"})  # any top-level key
+    assert "SIM_SCADA_" not in COMPOSE.read_text(encoding="utf-8")  # not even in a comment
+
+
+def test_the_scada_warning_line_is_logged_for_a_fault_and_not_for_a_bigger_cluster(caplog):
+    with caplog.at_level(logging.WARNING, logger="dcdash.simulator"):
+        simulator_main.announce_scada_faults(ScadaConfig.from_env({"SIM_SCADA_PORT": "4850", "SIM_SCADA_PDUS": "200", "SIM_SCADA_BRANCH_TAGS": "4190"}))
+        assert caplog.records == []  # a bigger cluster is not a fault
+        simulator_main.announce_scada_faults(ScadaConfig.from_env({"SIM_SCADA_RESTRUCTURE": "bad", "SIM_SCADA_MAX_NODES_PER_READ": "120"}))
+    assert len(caplog.records) == 1 and caplog.records[0].levelno == logging.WARNING and caplog.records[0].name == "dcdash.simulator"
+    line = caplog.records[0].getMessage()
+    assert line.startswith("FAULT INJECTION ACTIVE: ") and "\n" not in line
+    assert "SIM_SCADA_RESTRUCTURE=bad" in line and "SIM_SCADA_MAX_NODES_PER_READ=120" in line and "SIM_SCADA_ADVERTISED" not in line
+    for settings in ({"SIM_SCADA_RESTRUCTURE": "by_index"}, {"SIM_SCADA_MAX_NODES_PER_READ": "50"}, {"SIM_SCADA_ADVERTISED_MAX_NODES": "500"}):
+        assert ScadaConfig.from_env(settings).describe(), settings
+    assert len(ScadaConfig.from_env({"SIM_SCADA_MAX_NODES_PER_READ": "120", "SIM_SCADA_ADVERTISED_MAX_NODES": "120"}).describe()) == 1  # the limit only
+
+
+@pytest.mark.parametrize("name, value", [("SIM_SCADA_PORTT", "4850"), ("SIM_SCADA_PDUS", "many"), ("SIM_SCADA_RESTRUCTURE", "sideways")])
+def test_a_scada_typo_or_bad_value_stops_the_simulator_before_anything_starts(monkeypatch, name, value):
+    async def serve_must_not_run(**kwargs):
+        raise AssertionError("serve() started with a bad SCADA setting")
+
+    monkeypatch.setattr(simulator_main, "serve", serve_must_not_run)
+    with pytest.raises(SystemExit) as stopped:
+        simulator_main.main({name: value})
+    assert str(stopped.value).startswith("simulator: ") and name in str(stopped.value)

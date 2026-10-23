@@ -46,6 +46,7 @@ import asyncpg
 from pydantic import ValidationError
 
 from dcdash.connectors.base import BAD, GOOD
+from dcdash.connectors.opcua_ids import AddressIndex, address_key_for, identity_key
 from dcdash.core import compute, journal
 from dcdash.core.audit import audit_pool
 from dcdash.core.pg import create_pool
@@ -302,7 +303,7 @@ def point_info(point_id: int, metric: str | None, scale: float | None, reading: 
 class ParseContext:
     layout: Layout
     profile: ImportProfile
-    points: Mapping[str, PointInfo]  # address -> point, of the chosen source only
+    points: Mapping[str, PointInfo] | AddressIndex[PointInfo]  # address -> point, of the chosen source only
     now: datetime  # read once per run: the dry run and the real run judge the window alike
     retention_days: int
     closed: frozenset[str] = frozenset()  # the closed billing months, "YYYY-MM"
@@ -376,6 +377,7 @@ def parse_chunk(
     the second pass and shift every row after it by an hour. (An hourly export's own second pass of that hour, with the same value as
     the first, is dropped the same way; it is counted, and its twin is stored.)"""
     layout, profile, points = ctx.layout, ctx.profile, ctx.points
+    series = points.key if isinstance(points, AddressIndex) else identity_key  # a tag's spellings that name one point are one series
     delimiter, tag_at, time_at, value_at = layout.delimiter, layout.tag, layout.time, layout.value
     unit_at, quality_at, need = layout.unit, layout.quality, layout.need
     interval = profile.reading == "interval"
@@ -421,18 +423,19 @@ def parse_chunk(
             continue
 
         time_cell, value_cell = cells[time_at].strip(), cells[value_at].strip()
-        if zoned and repeated.get(tag) == (time_cell, value_cell):
+        stream = series(tag)
+        if zoned and repeated.get(stream) == (time_cell, value_cell):
             reject(number, DUPLICATE)
             continue
         read = _read_time(time_cell, profile.time_format) if len(time_cell) <= MAX_TIME_CHARS else None
         if read is None:
             reject(number, normalise.Rejected.NOT_A_TIME.value)
             continue
-        moment = normalise.parse_time(read, profile.zone, previous=resolved.get(tag))
+        moment = normalise.parse_time(read, profile.zone, previous=resolved.get(stream))
         if isinstance(moment, normalise.Rejected):
             reject(number, moment.value)
             continue
-        resolved[tag] = moment  # the stamp as written, before an interval moves to its start: the series order is the file's
+        resolved[stream] = moment  # the stamp as written, before an interval moves to its start: the series order is the file's
         if interval:
             try:
                 moment = normalise.period_start(moment, profile.period_seconds or 0, profile.stamp or "start")
@@ -484,7 +487,7 @@ def parse_chunk(
         month = moment.astimezone(ctx.site_zone).strftime("%Y-%m") if ctx.closed and ctx.site_zone is not None else None
         kept.append(Kept(number, tag, info.point_id, moment, value, quality, month, label))
         if zoned:
-            repeated[tag] = (time_cell, value_cell)
+            repeated[stream] = (time_cell, value_cell)
     return result
 
 
@@ -705,6 +708,7 @@ def report_lines(report: ImportReport) -> list[str]:
 
 _TRY_LOCK = "SELECT pg_try_advisory_lock($1, 0)"
 _POINTS = "SELECT p.id, p.address, m.metric, m.scale FROM points p LEFT JOIN mappings m ON m.point_id = p.id WHERE p.source_id = $1"
+_SOURCE = "SELECT connector_type, config FROM sources WHERE id = $1"
 _CLOSED_MONTHS = "SELECT month FROM billing_closes WHERE reopened_at IS NULL"
 # The floor of the raw readings, read ONCE before the first write, and the newest minute of the minute rollup that lies below it (the
 # raw retention dropped the raw data of those minutes, the summaries stay). No raw reading at all is a floor at infinity: every
@@ -898,10 +902,18 @@ async def _import(
         retention = await rollups.raw_retention_days(pool)
         closed = frozenset(found["month"] for found in await conn.fetch(_CLOSED_MONTHS))
         site = ZoneInfo(await rollups.site_timezone(pool)) if closed else None
-        points = {
-            found["address"]: point_info(found["id"], found["metric"], found["scale"], profile.reading)
-            for found in await conn.fetch(_POINTS, source_id)
-        }
+        source = await conn.fetchrow(_SOURCE, source_id)
+        key = address_key_for(source["connector_type"], source["config"]) if source is not None else identity_key
+        points = AddressIndex(
+            (
+                (found["address"], point_info(found["id"], found["metric"], found["scale"], profile.reading))
+                for found in await conn.fetch(_POINTS, source_id)
+            ),
+            key,
+        )
+        twins = points.ambiguous_keys()  # w34: two points that are one tag (stable addresses): no file row is stored for either
+        if twins:
+            points = AddressIndex(((address, info) for address, info in points.items() if key(address) not in twins), key)
         # The floor of the raw readings BEFORE the first write: the rows this run stores lower `min(ts)`, which would hide the summaries
         # below them. When summaries lie below that floor, their raw readings are gone: a row among them is refused here (stored, it
         # would lower the floor for every later run), up to the first whole hour after the newest of them, so that no accepted row

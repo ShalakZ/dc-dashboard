@@ -54,7 +54,7 @@ async def test_browse_job_upserts_points(db):
     source = await make_source(db, secret="k")
     first = await add_job(db, "browse_source", source)
     await run_pending_jobs(db, factory())
-    assert (await job(db, first))["result"] == {"count": 60}
+    assert (await job(db, first))["result"] == {"count": 60, "matched_stored": 0, "ambiguous": 0}
     await add_job(db, "browse_source", source)
     await run_pending_jobs(db, factory())
     assert await db.fetchval("SELECT count(*) FROM points WHERE source_id = $1", source) == 60

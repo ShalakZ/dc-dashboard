@@ -22,6 +22,10 @@
   .gprogress-host { position: relative; }
   .gprogress { position: absolute; left: 0; bottom: 0; height: 3px; max-width: 100%; background: var(--accent); }
 
+  /* w34: the line of a point that is the same tag as a mapped one ("Already mapped as <name>": the reason first, so an ellipsis cuts only the name). A real tag name makes it longer than the 204px the node has, so it stays on ONE line and ends in an
+     ellipsis (the whole sentence is in the node's title): the node is no taller than one with its Map row, and nothing below it moves. */
+  .gnode-twin { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
   /* W12b: the "Show 50 more" node at the end of a paged group's points. It is the button alone: the node's own frame is invisible (the border keeps its 1px so the box is as wide as a
      point's), so it reads as a quiet control in the point column and, at about 19px, is never taller than a point node. Two classes beat app.css's `.gnode` (padding, border, background). */
   .gnode-more.gnode-more { padding: 0; border-color: transparent; background: none; } /* doubled class: it beats the base .gnode rule without naming .gnode here (app.css.test.ts keeps one page file from restyling another) */

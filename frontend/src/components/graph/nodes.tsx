@@ -240,15 +240,16 @@ function ClusterNode({ id, data }: NodeProps<Node<ClusterNodeData, "cluster">>) 
 }
 
 function PointNode({ id, data }: NodeProps<Node<PointNodeData, "point">>) {
-  const { point, onMap, onNewAsset, onMenu } = data;
-  const detail = [point.unit_hint, point.mapped_metric && `→ ${point.mapped_metric}`].filter(Boolean).join(" ");
+  const { point, twinOf, onMap, onNewAsset, onMenu } = data;
+  // (w34) The same tag as a mapped point: that sentence takes the detail line (the node is no taller than an unmapped one, which has its Map row), and no Map / New asset is drawn.
+  const detail = twinOf !== undefined ? `Already mapped as ${twinOf}` : [point.unit_hint, point.mapped_metric && `→ ${point.mapped_metric}`].filter(Boolean).join(" ");
   return (
     <div className={onMenu ? "gnode gnode-point gnode-hasmenu" : "gnode gnode-point"}>
       <Handles>
         <Title icon={metricIcon(pointMetric(point))}>{point.name}</Title>
         <MenuButton name={point.name} onMenu={onMenu} />
-        {detail && <div className="muted">{detail}</div>}
-        <MapButtons id={id} name={point.name} onMap={onMap} onNewAsset={onNewAsset} />
+        {detail && <div className={twinOf !== undefined ? "muted gnode-twin" : "muted"} title={twinOf !== undefined ? detail : undefined}>{detail}</div>}
+        <MapButtons id={id} name={point.name} onMap={twinOf === undefined ? onMap : undefined} onNewAsset={twinOf === undefined ? onNewAsset : undefined} />
       </Handles>
     </div>
   );

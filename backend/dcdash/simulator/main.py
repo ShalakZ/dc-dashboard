@@ -3,7 +3,8 @@
 All three serve the same `Simulator` model, so every protocol reports the same
 counters and reacts to the same fault modes. A fourth server, the stand-in
 Historian (historian.py), runs beside them when it is given a port; it has a
-model of its own (values that are a pure function of the instant).
+model of its own (values that are a pure function of the instant). A fifth, the
+SCADA-shaped OPC UA server (scada.py), runs only when SIM_SCADA_PORT is set.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from dcdash.simulator.historian import HistorianConfig, create_historian_app
 from dcdash.simulator.modbus import ModbusSim
 from dcdash.simulator.model import Simulator
 from dcdash.simulator.opcua import OpcUaSim
+from dcdash.simulator.scada import ENDPOINT_PATH, ScadaConfig, ScadaSim
 
 log = logging.getLogger("dcdash.simulator")
 DEFAULT_INSTANCE = "dev"
@@ -48,9 +50,16 @@ def announce_historian_faults(config: HistorianConfig) -> None:
         log.warning("FAULT INJECTION ACTIVE: %s", "; ".join(lines))
 
 
+def announce_scada_faults(config: ScadaConfig) -> None:
+    """The same line for the SCADA-shaped server's faults (SIM_SCADA_RESTRUCTURE, a read limit); nothing for a bigger cluster."""
+    if lines := config.describe():
+        log.warning("FAULT INJECTION ACTIVE: %s", "; ".join(lines))
+
+
 async def serve(http_port: int = 9000, opcua_port: int = 4840, modbus_port: int = 5020, host: str = "0.0.0.0",
                 api_key: str | None = None, opcua_password: str | None = None, faults: Faults | None = None,
-                historian_port: int | None = None, historian: HistorianConfig | None = None, instance: str = DEFAULT_INSTANCE) -> None:
+                historian_port: int | None = None, historian: HistorianConfig | None = None, instance: str = DEFAULT_INSTANCE,
+                scada: ScadaConfig | None = None) -> None:
     sim = Simulator()
     faults = faults or Faults()
     ua = OpcUaSim(sim, opcua_port, password=opcua_password, faults=faults, instance=instance)  # refuses a fault it cannot honour, before any socket
@@ -67,12 +76,18 @@ async def serve(http_port: int = 9000, opcua_port: int = 4840, modbus_port: int 
             create_historian_app(historian, api_key=api_key, instance=instance), host=host, port=historian_port, log_level="warning",
         )
         servers.append(uvicorn.Server(stand_in).serve())
+    if scada is not None and scada.port is not None:  # optional: no port, no SCADA-shaped server
+        announce_scada_faults(scada)
+        shaped = ScadaSim(scada, scada.port, instance=instance)
+        shaped.endpoint = f"opc.tcp://{host}:{scada.port}{ENDPOINT_PATH}"
+        servers.append(shaped.run())
     await asyncio.gather(*servers)
 
 
 def main(environ: Mapping[str, str] = os.environ) -> None:
     try:
         historian = HistorianConfig.from_env(environ)  # read once here, like the faults; HistorianConfigError is a FaultConfigError
+        scada = ScadaConfig.from_env(environ)  # the same: a typo or a bad value stops the start; no SIM_SCADA_PORT, no SCADA server
         asyncio.run(serve(
             http_port=int(environ.get("SIM_HTTP_PORT", "9000")),
             opcua_port=int(environ.get("SIM_OPCUA_PORT", "4840")),
@@ -83,6 +98,7 @@ def main(environ: Mapping[str, str] = os.environ) -> None:
             historian_port=historian.port,
             historian=historian,
             instance=instance_id(environ),
+            scada=scada,
         ))
     except FaultConfigError as exc:
         raise SystemExit(f"simulator: {exc}") from None

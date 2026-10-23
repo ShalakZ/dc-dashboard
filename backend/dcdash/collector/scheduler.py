@@ -12,6 +12,7 @@ import asyncpg
 from dcdash.collector.incidents import IncidentBook
 from dcdash.collector.writer import Row, Writer
 from dcdash.connectors.base import BAD, Connector, ConnectorError, ConnectorFactory, PointValue, create_connector
+from dcdash.connectors.opcua_ids import address_key_for, read_plan, stable_address
 from dcdash.core import journal
 from dcdash.core.audit import clip_error
 from dcdash.core.crypto import decrypt
@@ -47,6 +48,10 @@ class PollGroup:
     secret: str | None
     interval: int
     points: tuple[tuple[int, str], ...]  # (point_id, address)
+    # (address, status) of the points of this group that are the same tag as another mapped point of the SOURCE, at any interval
+    # (stable addresses on; w34): they are not read and come back BAD with that status. Part of the group's equality, so a twin
+    # appearing or going restarts the group.
+    refused: tuple[tuple[str, str], ...] = ()
 
 
 async def mark_source(pool: asyncpg.Pool, source_id: int, online: bool, error: str | None = None) -> bool:
@@ -70,6 +75,25 @@ async def mark_source(pool: asyncpg.Pool, source_id: int, online: bool, error: s
         return False
 
 
+def _twins_by_source(rows: list[asyncpg.Record]) -> dict[int, dict[str, str]]:
+    """For each source that compares addresses by their stable form: the mapped addresses (ALL its intervals together) that share
+    their stable form with another mapped address, each with the status it is written BAD with (`read_plan`'s own text). A poll group
+    is one source at one interval, so the connector's read cannot see a twin that is polled at another interval; this can."""
+    keys: dict[int, Callable[[str], str]] = {}
+    addresses: dict[int, list[str]] = {}
+    for row in rows:
+        source_id = row["source_id"]
+        if source_id not in keys:
+            keys[source_id] = address_key_for(row["connector_type"], row["config"])
+        if keys[source_id] is stable_address:  # the option is on (the other key compares addresses as they are)
+            addresses.setdefault(source_id, []).append(row["address"])
+    twins: dict[int, dict[str, str]] = {}
+    for source_id, mapped in addresses.items():
+        if refused := read_plan(mapped, keys[source_id]).refused:  # the same stored string twice is one address, not a twin
+            twins[source_id] = refused
+    return twins
+
+
 async def load_groups(pool: asyncpg.Pool, book: IncidentBook | None = None) -> list[PollGroup]:
     """One group per enabled source and interval. A source whose stored secret cannot be decrypted has no group: it is reported to
     `book` (an incident that counts every reload, not a row per reload) and marked offline."""
@@ -77,6 +101,7 @@ async def load_groups(pool: asyncpg.Pool, book: IncidentBook | None = None) -> l
     grouped: dict[tuple[int, int], list[asyncpg.Record]] = {}
     for row in rows:
         grouped.setdefault((row["source_id"], row["interval_seconds"]), []).append(row)
+    twins = _twins_by_source(rows)
     groups: list[PollGroup] = []
     undecryptable: set[int] = set()
     for (source_id, interval), members in grouped.items():
@@ -94,6 +119,7 @@ async def load_groups(pool: asyncpg.Pool, book: IncidentBook | None = None) -> l
                     known=journal.known_for(first["config"], None),
                 )
             continue
+        mine = twins.get(source_id, {})
         groups.append(
             PollGroup(
                 source_id,
@@ -102,6 +128,7 @@ async def load_groups(pool: asyncpg.Pool, book: IncidentBook | None = None) -> l
                 secret,
                 interval,
                 tuple((m["point_id"], m["address"]) for m in members),
+                tuple(dict((m["address"], mine[m["address"]]) for m in members if m["address"] in mine).items()),
             )
         )
     return groups
@@ -109,13 +136,22 @@ async def load_groups(pool: asyncpg.Pool, book: IncidentBook | None = None) -> l
 
 async def poll_once(group: PollGroup, connector: Connector, writer: Writer) -> list[PointValue]:
     """Read the group's points and queue the rows. Returns one value per point of the group, in the group's order; an address
-    the connector did not answer for comes back as a BAD value with the status NO_VALUE (it is written as BAD too)."""
-    values = await connector.read([address for _, address in group.points])
+    the connector did not answer for comes back as a BAD value with the status NO_VALUE (it is written as BAD too).
+
+    The addresses in `group.refused` (twins of another mapped point of the source) are not sent to the connector: each gets a BAD
+    row and a BAD value with the status the group carries. The connector is called anyway, with what is left (maybe nothing): a
+    source that cannot be reached must still say so."""
+    refused = dict(group.refused)
+    values = await connector.read([address for _, address in group.points if address not in refused])
     by_address = {value.address: value for value in values}
     now = datetime.now(timezone.utc)
     rows: list[Row] = []
     answered: list[PointValue] = []
     for point_id, address in group.points:
+        if address in refused:
+            rows.append((point_id, now, None, BAD))
+            answered.append(PointValue(address, now, None, BAD, refused[address]))
+            continue
         value = by_address.get(address)
         if value is None:
             rows.append((point_id, now, None, BAD))

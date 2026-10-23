@@ -9,12 +9,14 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dcdash.api.address_guard import mapped_twins_for, twin_sentence
 from dcdash.api.asset_names import AssetName, require_free_name
 from dcdash.api.assets import get_asset
 from dcdash.api.deps import current_user, get_db, notify, require_permission
 from dcdash.api.scans import SCAN_START_LOCK
 from dcdash.api.sources import _lock_source, _mapped_counts, _offline_fields
 from dcdash.connectors.identity import usable_key
+from dcdash.connectors.opcua_ids import address_key_for, identity_key
 from dcdash.core.asset_kinds import icon_for, kind_icons
 from dcdash.core.audit import audit, hidden_values, safe_config, scrub_url_credentials
 from dcdash.core.discovery import MappingGuess, PointInfo, guess_mapping, suggest_groups
@@ -86,7 +88,7 @@ class LayoutIn(BaseModel):
     nodes: list[LayoutNode] = Field(max_length=2000)
 
 
-def point_json(point: Any, mapping: Any, guess: MappingGuess) -> dict[str, Any]:
+def point_json(point: Any, mapping: Any, guess: MappingGuess, same_tag_as: int | None = None) -> dict[str, Any]:
     return {
         "id": point.id,
         "address": point.address,
@@ -95,6 +97,7 @@ def point_json(point: Any, mapping: Any, guess: MappingGuess) -> dict[str, Any]:
         "mapping_id": None if mapping is None else mapping.id,
         "asset_id": None if mapping is None else mapping.asset_id,
         "mapped_metric": None if mapping is None else mapping.metric,
+        "same_tag_as": same_tag_as,  # w34: the MAPPED point of this source that is the same tag (stable addresses); null otherwise
         "suggestion": {
             "metric": guess.metric.value,
             "scale": guess.scale,
@@ -139,6 +142,24 @@ def name_hint_of(source: Source) -> str | None:
     return name.strip() if where is not None and where[0] == host.strip().lower() else None
 
 
+def same_tag_map(source: Source, rows: list[Any], mappings: dict[int, Any]) -> dict[int, int]:
+    """Unmapped point id -> the id of the MAPPED point of the same source that is the same tag, for a source whose "Stable tag
+    addresses" option is on (an OPC UA source after a SCADA renumbering can hold both). Empty for every other source. One pass."""
+    key = address_key_for(source.connector_type, source.config)
+    if key is identity_key:
+        return {}
+    mapped: dict[str, int] = {}
+    for row in rows:
+        if row.id in mappings:
+            stable = key(row.address)
+            mapped[stable] = min(row.id, mapped.get(stable, row.id))
+    twin_of: dict[int, int] = {}
+    for row in rows:
+        if row.id not in mappings and (twin := mapped.get(key(row.address))) is not None:
+            twin_of[row.id] = twin
+    return twin_of
+
+
 def move_candidate_json(said: Offer | Two | None, loaded: Loaded, rows: dict[int, Source]) -> dict[str, Any] | None:
     """What the card of a NEW source says about the old source it looks like: the offer (who, since when, what is mapped, why) or
     that several servers could be it. The old source's address is shown without user info (`display_endpoint`)."""
@@ -177,8 +198,10 @@ def source_json(
     guess_for = {info.id: guess_mapping(info) for info in infos}
     groups, ungrouped = suggest_groups(infos)
 
+    twin_of = same_tag_map(source, rows, mappings)
+
     def render(point_id: int) -> dict[str, Any]:
-        return point_json(by_id[point_id], mappings.get(point_id), guess_for[point_id])
+        return point_json(by_id[point_id], mappings.get(point_id), guess_for[point_id], twin_of.get(point_id))
 
     last_error = source.last_error
     if last_error is not None:
@@ -318,6 +341,12 @@ async def accept(
         raise HTTPException(404, "point not found")
     if any(p.source_id != source.id for p in found.values()):
         raise HTTPException(422, "a point does not belong to this source")
+    # A source that reads two stored addresses as one tag (the "Stable tag addresses" option) maps only one of them (w34): checked under
+    # the source lock above, for every point against the mapped ones and against each other, before anything is added.
+    if twins := await mapped_twins_for(db, source, point_ids):
+        sentence = twin_sentence(*twins[0], requested=point_ids)
+        await db.rollback()  # nothing was written: the source lock goes before the answer
+        raise HTTPException(409, sentence)
     # Everything that can 404 or 422 is checked before the first db.add, so a rejected request leaves nothing behind.
     new = body.new_asset
     if new is not None:

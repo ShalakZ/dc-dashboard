@@ -44,6 +44,7 @@ from starlette.requests import ClientDisconnect
 from dcdash.api.asset_names import _KEY, lock_asset_names
 from dcdash.api.deps import current_user, get_db, notify, refuse_another_site, require_permission
 from dcdash.api.mappings import try_again
+from dcdash.connectors.opcua_ids import AddressIndex, address_key_for
 from dcdash.core.audit import audit
 from dcdash.core.models import Asset, AuditLog, Mapping, Point, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
@@ -128,14 +129,18 @@ _MAPPINGS_OF = text(
 
 
 async def _plan_for(
-    db: AsyncSession, source_id: int, connector_type: str, parsed: ParsedList, create_assets: bool, *, lock: bool
+    db: AsyncSession, source_id: int, connector_type: str, config: object, parsed: ParsedList, create_assets: bool, *, lock: bool
 ) -> Plan:
     """The plan of `parsed` against the database as it is now. With `lock`, the existing assets it writes under are locked FOR KEY
     SHARE in one id-ordered statement before the mappings are read (see the module text)."""
     parts = segments_of(parsed)
     seg_keys = {row.part: row.key for row in await db.execute(_PART_KEYS, {"parts": parts})} if parts else {}
     index = AssetIndex.build((row.id, row.parent_id, row.key) for row in await db.execute(_ASSET_KEYS))
-    points = {row.address: row.id for row in await db.execute(select(Point.address, Point.id).where(Point.source_id == source_id))}
+    # The source's own key (w34): with stable addresses on, the numbered and the stable spelling of a tag name the same point.
+    points = AddressIndex(
+        ((row.address, row.id) for row in await db.execute(select(Point.address, Point.id).where(Point.source_id == source_id))),
+        address_key_for(connector_type, config),
+    )
     point_ids, asset_ids = touched(parsed, index, seg_keys, points)
     if lock and asset_ids:
         locked = (await db.scalars(_LOCK_TARGETS, {"ids": sorted(asset_ids)})).all()
@@ -255,10 +260,10 @@ async def map_tag_list(
     except TagListRefused as refused:
         raise HTTPException(refused.status, str(refused)) from None
     if dry_run:
-        connector_type = await db.scalar(select(Source.connector_type).where(Source.id == source_id))
-        if connector_type is None:
+        found = (await db.execute(select(Source.connector_type, Source.config).where(Source.id == source_id))).first()
+        if found is None:
             raise HTTPException(404, "source not found")
-        plan_ = await _plan_for(db, source_id, connector_type, parsed, create_assets, lock=False)
+        plan_ = await _plan_for(db, source_id, found.connector_type, found.config, parsed, create_assets, lock=False)
         await db.rollback()  # a read: nothing to keep, and the connection goes back at once
         return _report(plan_, parsed, source_id, dry_run=True)
     if expect_points is None or expect_assets is None or expect_mappings is None or not expect_plan:
@@ -269,15 +274,14 @@ async def map_tag_list(
         # 1. The source row, before anything of its points or any mapping (see the module text).
         source = (
             await db.execute(
-                select(Source.connector_type, Source.enabled, Source.origin)
+                select(Source.connector_type, Source.config, Source.enabled, Source.origin)
                 .where(Source.id == source_id).with_for_update(key_share=True)  # FOR NO KEY UPDATE
             )
         ).first()
         if source is None:
             raise HTTPException(404, "source not found")
-        connector_type = source.connector_type
         await lock_asset_names(db)  # 2.
-        plan_ = await _plan_for(db, source_id, connector_type, parsed, create_assets, lock=True)  # 3. and 4.
+        plan_ = await _plan_for(db, source_id, source.connector_type, source.config, parsed, create_assets, lock=True)  # 3. and 4.
         shown = (expect_points, expect_assets, expect_mappings, expect_plan)
         if (len(plan_.points), len(plan_.assets), len(plan_.mappings), plan_.digest) != shown:
             await db.rollback()

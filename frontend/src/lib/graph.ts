@@ -77,8 +77,11 @@ export type ClusterNodeData = NodeActions & {
   sourceId: number; key: string; label: string; count: number; mappedCount: number; expanded: boolean; ungrouped: boolean;
   /** W12b: the points the "Unmapped only" filter lets through, and how many of them an open group draws (the page; `count` stays the total). Absent = `count`. */
   visibleCount?: number; shownCount?: number;
+  /** (w34) How many of the group's points can still be offered for mapping (`isOfferable`: not mapped, not the twin of a mapped point). Absent = `count - mappedCount`. */
+  offerable?: number;
 };
-export type PointNodeData = NodeActions & { sourceId: number; clusterKey: string; point: GraphPoint };
+/** (w34) `twinOf` is set on a point that is the same tag as a mapped point of its source: the name of that point (or a stand-in when it is not in the graph). Such a node offers no Map. */
+export type PointNodeData = NodeActions & { sourceId: number; clusterKey: string; point: GraphPoint; twinOf?: string };
 /** W12b: the "Show 50 more (70 left)" control at the end of a paged group's points. `step` is how many the next press adds (the page, or what is left). */
 export type MoreNodeData = NodeActions & { clusterId: string; label: string; left: number; step: number };
 export type AssetNodeData = NodeActions & {
@@ -151,9 +154,15 @@ export interface GraphView {
 }
 export const NO_VIEW: GraphView = Object.freeze({ unmappedOnly: false, shown: new Map<string, number>(), assetsClosed: new Set<number>(), pageSize: Infinity });
 
-/** The points of a group the view lets through. "Mapped" is `asset_id !== null` everywhere (the summary, the group's count, the filter). */
+/**
+ * (w34) A point Discovery may offer for mapping: it has no asset and it is not the same tag as a point of its source that has one (`same_tag_as`).
+ * Every place that means "an unmapped point that can be offered" (the filter, the bulk and drop lists) asks this; a place that means "is mapped" keeps `asset_id !== null`.
+ */
+export const isOfferable = (point: GraphPoint): boolean => point.asset_id === null && !point.same_tag_as;
+
+/** The points of a group the view lets through. "Mapped" is `asset_id !== null` (the summary, the group's count); the filter keeps what can still be offered (`isOfferable`). */
 export function visiblePoints(group: Group, view: GraphView): GraphPoint[] {
-  return view.unmappedOnly ? group.points.filter((p) => p.asset_id === null) : group.points;
+  return view.unmappedOnly ? group.points.filter(isOfferable) : group.points;
 }
 
 /** How many points an OPEN group draws: all the visible ones, or the page when there are more than a page. */
@@ -164,7 +173,7 @@ export function drawnCount(group: Group, clusterId: string, view: GraphView): nu
 
 /** A group is hidden by the filter when it has points and every one of them is mapped. A group with no points stays (it is not "all mapped"). */
 export function groupVisible(group: Group, view: GraphView): boolean {
-  return !view.unmappedOnly || group.points.length === 0 || group.points.some((p) => p.asset_id === null);
+  return !view.unmappedOnly || group.points.length === 0 || group.points.some(isOfferable);
 }
 
 /**
@@ -176,7 +185,7 @@ export function sourceVisible(source: GraphSource, view: GraphView): boolean {
   if (!view.unmappedOnly) return true;
   const groups = groupsOf(source);
   const total = groups.reduce((n, g) => n + g.points.length, 0);
-  return total === 0 || groups.some((g) => g.points.some((p) => p.asset_id === null));
+  return total === 0 || groups.some((g) => g.points.some(isOfferable));
 }
 
 /** The page extents of groups that are still open (a closed group, or one of a closed source, starts again at one page). New map; the one passed in is never changed. */
@@ -366,19 +375,24 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
       ariaLabel: `${source.name}, source, ${countOf(allGroups.length, "group")}, ${countOf(totalPoints, "point")}, ${sourceOpen ? "open" : "closed"}`,
     });
     let rows = 1;
+    let twinNames: Map<number, string> | undefined; // built once per source, only when a drawn point is a twin
     if (sourceOpen) {
       for (const group of filtering ? allGroups.filter((g) => groupVisible(g, view)) : allGroups) {
         const cid = nodeId.cluster(source.id, group.key);
         const clusterOpen = open.clusters.has(cid);
         let mappedCount = 0;
-        for (const p of group.points) if (p.asset_id !== null) mappedCount++;
+        let offerable = 0;
+        for (const p of group.points) {
+          if (p.asset_id !== null) mappedCount++;
+          if (isOfferable(p)) offerable++;
+        }
         const visible = visiblePoints(group, view);
         const drawn = drawnCount(group, cid, view);
         // A paged group says so in its name as the node does on screen ("50 of 120 shown"): a screen reader must not take the page for the whole list.
         const pagedNote = clusterOpen && drawn < visible.length ? `, ${drawn} shown` : "";
         const clusterShift = add(cid, "cluster", X.cluster, cursor + SOURCE_H + (rows - 1) * ROW, {
           sourceId: source.id, key: group.key, label: group.label, count: group.points.length, mappedCount,
-          expanded: clusterOpen, ungrouped: group.ungrouped, visibleCount: visible.length, shownCount: drawn,
+          expanded: clusterOpen, ungrouped: group.ungrouped, visibleCount: visible.length, shownCount: drawn, offerable,
         } satisfies ClusterNodeData, sourceShift, {
           ariaLabel: `${group.label}, group of ${countOf(group.points.length, "point")}, ${mappedCount} mapped, ${clusterOpen ? "open" : "closed"}${pagedNote}`,
         });
@@ -389,8 +403,16 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
           for (let i = 0; i < drawn; i++) {
             const p = visible[i];
             const pid = nodeId.point(p.id);
-            add(pid, "point", X.point, cursor + SOURCE_H + (rows - 1) * ROW, { sourceId: source.id, clusterKey: group.key, point: p } satisfies PointNodeData, clusterShift, {
-              ariaLabel: `${p.name}, point, ${p.asset_id === null ? "unmapped" : assetNames.has(p.asset_id) ? `mapped to ${assetNames.get(p.asset_id)}` : "mapped"}`,
+            // (w34) The same tag as a mapped point of this source: the node says whose, in the same words on screen and to a screen reader.
+            let twinOf: string | undefined;
+            if (p.same_tag_as && p.asset_id === null) { // the same rule as isOfferable: a point with an asset is a mapped point, whatever same_tag_as says
+              twinNames ??= new Map(pointsOf(source).map((q) => [q.id, q.name]));
+              twinOf = twinNames.get(p.same_tag_as) ?? "another point";
+            }
+            add(pid, "point", X.point, cursor + SOURCE_H + (rows - 1) * ROW,
+              { sourceId: source.id, clusterKey: group.key, point: p, ...(twinOf !== undefined ? { twinOf } : {}) } satisfies PointNodeData, clusterShift, {
+              ariaLabel: `${p.name}, point, ${twinOf !== undefined && p.asset_id === null ? `already mapped as ${twinOf}`
+                : p.asset_id === null ? "unmapped" : assetNames.has(p.asset_id) ? `mapped to ${assetNames.get(p.asset_id)}` : "mapped"}`,
             });
             link(cid, pid, false, fanStyle); // a group's point edges are dashed (solid past FAN_DASH_LIMIT) but never flow: they are the bulk of a big graph's edges
             if (!filtering && p.asset_id !== null && assetIds.has(p.asset_id)) mappedLinks(pid, new Map([[visibleOf(p.asset_id), 1]]), flow);

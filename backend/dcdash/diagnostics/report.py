@@ -44,6 +44,7 @@ from dcdash.core.models import AuditLog, DiagEvent, Scan, Source, User, UserSess
 from dcdash.core.sign_in_policy import get_sign_in_policy
 from dcdash.core.storage import StorageStats, storage_stats
 from dcdash.core.widgets import STALE_AFTER_INTERVALS, STALE_MINIMUM
+from dcdash.diagnostics.hints import SUGGEST_STABLE
 from dcdash.diagnostics.redact import build_known, clip
 
 Detail = Literal["summary", "full"]
@@ -59,7 +60,7 @@ HEALTH_WINDOW_MINUTES = 10
 # What a source's config may show per connector type (M6). A URL value passes `without_credentials`. Everything else in a config is
 # left out. tests/test_diagnostics_report.py fails when a registered connector has a config field in neither this nor the list below.
 REPORT_CONFIG_FIELDS: dict[str, tuple[str, ...]] = {
-    "opcua": ("endpoint", "security_policy", "root_node", "timeout_seconds", "client_cert"),
+    "opcua": ("endpoint", "security_policy", "root_node", "timeout_seconds", "client_cert", "stable_addresses"),
     "modbus": ("host", "port", "unit_id", "profile", "timeout_seconds"),
     "simulator": ("url", "timeout_seconds"),
     "file": (),  # a source filled by importing files has no configuration
@@ -213,6 +214,9 @@ class SourceHealth:
     # None: the source has no history_status row (the report then says nothing about history). A read that failed is not kept
     # here, once per source: it is `ReportData.history_unavailable`.
     history: HistoryInfo | None = None
+    # w34 R6: an OPC UA source that looks like AVEVA Plant SCADA and has not tried "Stable tag addresses" (see `_stable_suggestions`):
+    # SOURCE HEALTH adds the one suggestion line. A guess from a community answer, never a switch.
+    suggest_stable: bool = False
 
 
 @dataclass(frozen=True)
@@ -419,13 +423,25 @@ async def gather(
         audit=await _guard(db, lambda: _audit(db, CAPS["audit"][full])),
         api_errors=await _guard(db, lambda: _api_errors(db, CAPS["api_errors"][full] * 3)),
     )
-    # Its own savepoint, after the sections above: a database without the table (an older schema) still gets its health lines.
+    # Their own savepoints, after the sections above: a database without the table (an older schema) still gets its health lines,
+    # and a suggestion that cannot be worked out is simply not made.
     history = await _guard(db, lambda: _history(db, source_id))
+    suggestions = await _guard(db, lambda: _stable_suggestions(db, source_id))
     if isinstance(history, Unavailable):
-        return replace(data, history_unavailable=history)
+        data = replace(data, history_unavailable=history)
     if isinstance(data.health, Unavailable):
         return data
-    return replace(data, health=tuple(replace(item, history=history.get(item.source_id)) for item in data.health))
+    return replace(
+        data,
+        health=tuple(
+            replace(
+                item,
+                history=None if isinstance(history, Unavailable) else history.get(item.source_id),
+                suggest_stable=not isinstance(suggestions, Unavailable) and item.source_id in suggestions,
+            )
+            for item in data.health
+        ),
+    )
 
 
 async def load_known(
@@ -767,6 +783,36 @@ async def _history(db: AsyncSession, source_id: int | None) -> dict[int, History
         )
         for r in rows
     }
+
+
+# The addresses `looks_like_plant_scada` judges: up to 200 string ids of the source, mapped ones first, then by id (the sample Test
+# takes, collector/jobs.py `_COMPARE_ADDRESSES`; ids of another kind do not dilute the share).
+_STABLE_SAMPLE = """
+    SELECT p.address FROM points p WHERE p.source_id = :sid AND p.address ~ '^(ns=[0-9]+;)?s='
+    ORDER BY EXISTS (SELECT 1 FROM mappings m WHERE m.point_id = p.id) DESC, p.id LIMIT 200
+"""
+
+
+async def _stable_suggestions(db: AsyncSession, source_id: int | None) -> frozenset[int]:
+    """The OPC UA sources for which SOURCE HEALTH suggests "Stable tag addresses" (w34 R6): the option is off (the real boolean
+    True is the only "on", as everywhere else) and the source looks like AVEVA Plant SCADA, by what `looks_like_plant_scada` makes of
+    its endpoint, the identity it remembers and its stored addresses. It reads nothing from the server, so unlike Test it has no
+    comparison to hold the suggestion back. A guess from a community answer, never a switch."""
+    from dcdash.connectors.opcua_ids import looks_like_plant_scada  # lazy, like the other connector imports of this module
+
+    query = select(Source.id, Source.config, Source.identity).where(Source.connector_type == "opcua").order_by(Source.id)
+    if source_id is not None:
+        query = query.where(Source.id == source_id)
+    found = set()
+    for row in (await db.execute(query)).all():
+        config = row.config if isinstance(row.config, dict) else {}
+        if config.get("stable_addresses") is True:
+            continue
+        sample = (await db.execute(text(_STABLE_SAMPLE), {"sid": row.id})).scalars().all()
+        identity = row.identity if isinstance(row.identity, dict) else None
+        if looks_like_plant_scada(identity, str(config.get("endpoint") or ""), sample):
+            found.add(row.id)
+    return frozenset(found)
 
 
 _POINT_STATES = """
@@ -1394,6 +1440,9 @@ class _Renderer:
                 bad = f", {item.bad / item.reads:.1%} bad" if item.reads else ""
                 reads = f"{item.reads / HEALTH_WINDOW_MINUTES:.1f} reads/min"
             lines.append(f"{self.src(item.source_id)}: {reads}{bad}, {newest}")
+            # w34 R6: one line, and a tight report drops it with the history lines of the sources that are fine.
+            if item.suggest_stable and self.caps["history_lines"]:
+                lines.append("   suggestion: " + self.text(SUGGEST_STABLE))
             # A source the backfill never ran for says nothing: every older report stays as it was. A tight report keeps only the
             # history lines that say something is wrong (see TRIM_STEPS).
             if item.history is not None and (self.caps["history_lines"] or self._history_trouble(item.history)):

@@ -23,7 +23,7 @@ profile and the key. It is the only connector that can read history, from the st
 optional `username` (the password is the source secret), `root_node` (default `i=85`, the Objects
 folder; browsing descends from here) and `timeout_seconds` (default 5, 0.5 to 60). With `basic256sha256` the collector
 signs and encrypts with a client certificate read from `client_cert` / `client_key` (default
-`/certs/opcua-client.pem` and `/certs/opcua-client-key.pem`), as described below.
+`/certs/opcua-client.pem` and `/certs/opcua-client-key.pem`), as described below. `stable_addresses` (off) reads Plant SCADA tags without the number browsing puts in front of them: [Large OPC UA servers](opc-ua-at-scale.md).
 
 ### OPC UA client certificate
 
