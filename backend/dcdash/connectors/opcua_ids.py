@@ -96,3 +96,11 @@ def read_plan(stored: Sequence[str], key: Callable[[str], str]) -> ReadPlan:
         else:
             refused[address] = f"two points are the same tag (stable address {stable})"
     return ReadPlan(sent, refused)
+
+
+def slice_size(server_limit: int | None, cap: int) -> int:
+    """Nodes per Read request, the ONE rule the poll and the connection check share (w34 R9): the server's `MaxNodesPerRead` when
+    it is a positive whole number, but never more than `cap`; a missing, zero (= no limit), negative or non-numeric limit gives `cap`."""
+    if isinstance(server_limit, int) and not isinstance(server_limit, bool) and server_limit > 0:
+        return min(server_limit, cap)
+    return cap

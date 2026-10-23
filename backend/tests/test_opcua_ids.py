@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from dcdash.connectors.base import create_connector
-from dcdash.connectors.opcua_ids import AddressIndex, address_key_for, identity_key, read_plan, stable_address
+from dcdash.connectors.opcua_ids import AddressIndex, address_key_for, identity_key, read_plan, slice_size, stable_address
 from tests.helpers import opcua_server
 
 SAMPLES = json.loads((Path(__file__).resolve().parent / "fixtures" / "opcua_id_samples.json").read_text(encoding="ascii"))
@@ -185,3 +185,14 @@ def test_read_plan_with_the_identity_key_never_refuses():
     assert plan.sent == [(a, a) for a in stored] and plan.refused == {}
     empty = read_plan([], stable_address)
     assert empty.sent == [] and empty.refused == {}
+
+
+@pytest.mark.parametrize(
+    ("limit", "cap", "expected"),
+    [(None, 200, 200), (0, 200, 200), (-5, 200, 200), (True, 200, 200), (False, 100, 100), ("120", 200, 200), (120.0, 200, 200),
+     (80, 200, 80), (80, 100, 80), (500, 200, 200), (500, 100, 100), (1, 100, 1), (100, 100, 100)],
+    ids=["none", "zero is no limit", "negative", "bool true", "bool false", "text", "float", "80 under 200", "80 under 100",
+         "500 over 200", "500 over 100", "one", "equal to the cap"],
+)
+def test_slice_size(limit, cap, expected):
+    assert slice_size(limit, cap) == expected

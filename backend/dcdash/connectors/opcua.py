@@ -32,11 +32,14 @@ from dcdash.connectors.base import (
 )
 from dcdash.connectors.identity import from_endpoints
 from dcdash.connectors.opcua_browse import browse_tree
-from dcdash.connectors.opcua_ids import read_plan, stable_address
+from dcdash.connectors.opcua_ids import read_plan, slice_size, stable_address
 
 if TYPE_CHECKING:
     from dcdash.diagnostics.check import CheckResult, Publish
 
+POLL_SLICE_CAP = 200  # nodes per Read request of the poll, whatever the server allows (the connection check's own cap is 100)
+MIN_SLICE = 10  # a refused slice is never halved to fewer nodes than this
+_MAX_NODES_PER_READ = ua.NodeId(ua.ObjectIds.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead)  # the node the check asks too
 _AUTH_CODES = {
     ua.StatusCodes.BadUserAccessDenied,
     ua.StatusCodes.BadIdentityTokenRejected,
@@ -256,6 +259,9 @@ class OpcUaConnector(Connector):
     def __init__(self, config: OpcUaConfig, secret: str | None = None) -> None:
         super().__init__(config, secret)
         self.config: OpcUaConfig = config
+        # Nodes per Read request. None until the first read has asked the server (once, even when the server cannot say); after a
+        # refused slice was halved it holds the smaller size. The instance lives as long as its poll group, so later polls keep it.
+        self._slice: int | None = None
 
     async def _new_client(self) -> Client:
         """A client with the configured authentication and security, not yet connected."""
@@ -371,9 +377,65 @@ class OpcUaConnector(Connector):
         ]
 
     async def _read_values(self, client: Client, addresses: Sequence[str]) -> list[ua.DataValue]:
-        """The wire request of a read: the Value of every node, in one request, one answer per address in the same order."""
+        """The Value of every node, one answer per address in the same order, in requests of at most `self._slice` nodes, one
+        after another in the session of the call (w34 R9). A request for no node is not sent."""
+        if not addresses:
+            return []
         nodes = [client.get_node(a) for a in addresses]
-        return await client.read_attributes(nodes, ua.AttributeIds.Value)
+        await self._learn_slice(client)
+        results: list[ua.DataValue] = []
+        start = 0
+        while start < len(nodes):
+            # `self._slice` is read again for every slice: a halving below lowers the size of all the slices after it. The cursor
+            # moves by what was asked, not by what came back (a short answer must end in the caller's strict zip, not in a loop).
+            batch = nodes[start : start + (self._slice or POLL_SLICE_CAP)]
+            results.extend(await self._read_slice(client, batch))
+            start += len(batch)
+        return results
+
+    async def _learn_slice(self, client: Client) -> None:
+        """Ask the server for `MaxNodesPerRead` once per connector (one Read of one node); a server that cannot say gives the cap,
+        and that outcome is remembered too, so it is never asked again."""
+        if self._slice is not None:
+            return
+        limit: int | None = None
+        try:
+            (data_value,) = await client.read_attributes([client.get_node(_MAX_NODES_PER_READ)], ua.AttributeIds.Value)
+            code = data_value.StatusCode_
+            value = data_value.Value.Value if data_value.Value is not None and (code is None or code.is_good()) else None
+            limit = value if isinstance(value, int) and not isinstance(value, bool) else None
+        except Exception:  # noqa: BLE001 - an unreadable limit means "no limit known"
+            limit = None
+        self._slice = slice_size(limit, POLL_SLICE_CAP)
+
+    async def _read_slice(self, client: Client, nodes: list[Node]) -> list[ua.DataValue]:
+        """One request. A server that refuses it as too many operations (whatever it advertised) gets the same nodes as two
+        requests, half each, once; the smaller size is kept for every later slice. A second refusal is a typed error."""
+        try:
+            return await client.read_attributes(nodes, ua.AttributeIds.Value)
+        except ua.UaStatusCodeError as exc:
+            if getattr(exc, "code", None) != ua.StatusCodes.BadTooManyOperations:  # UaStatusCodeErrors (several codes) has no `code`
+                raise
+        half = (len(nodes) + 1) // 2
+        current = self._slice or POLL_SLICE_CAP
+        if half < MIN_SLICE:  # too small to halve: the server refuses even this
+            self._slice = min(current, MIN_SLICE)
+            raise _too_many_operations(len(nodes))
+        results: list[ua.DataValue] = []
+        for part in (nodes[:half], nodes[half:]):
+            try:
+                results.extend(await client.read_attributes(part, ua.AttributeIds.Value))
+            except ua.UaStatusCodeError as exc:
+                if getattr(exc, "code", None) != ua.StatusCodes.BadTooManyOperations:
+                    raise
+                self._slice = min(current, half)  # remembered anyway, so the next poll starts smaller
+                raise _too_many_operations(len(part)) from None
+        self._slice = min(current, half)
+        return results
+
+
+def _too_many_operations(size: int) -> ConnectorError:
+    return ConnectorError("protocol_error", f"the server refuses reads of {size} tags at once (BadTooManyOperations)")
 
 
 def _status_text(code: ua.StatusCode) -> str:

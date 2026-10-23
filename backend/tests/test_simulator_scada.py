@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import pytest
 from asyncua import Client, ua
 
-from dcdash.connectors.base import BAD, GOOD, ConnectorError, create_connector
+from dcdash.connectors.base import BAD, GOOD, create_connector
 from dcdash.simulator import main as simulator_main
 from dcdash.simulator import scada as scada_module
 from dcdash.simulator.scada import KNOWN, METER_SUFFIXES, ScadaConfig, ScadaConfigError, ScadaSim, sample, value
@@ -144,11 +144,11 @@ async def test_read_limit_is_enforced_and_advertised():
             with pytest.raises(ua.UaStatusCodeError) as refused:
                 await client.read_attributes(ids, ua.AttributeIds.Value)
             assert refused.value.code == ua.StatusCodes.BadTooManyOperations
-        c = connector(sim)  # through the connector the refusal is the typed protocol_error
-        assert len(await c.read([sim.stable_id(tag) for tag in sim.tags[:120]])) == 120
-        with pytest.raises(ConnectorError) as typed:
-            await c.read([sim.stable_id(tag) for tag in sim.tags[:121]])
-        assert typed.value.status == "protocol_error" and "BadTooManyOperations" in typed.value.message
+        c = connector(sim)  # the connector reads in slices of the advertised limit, so it is never refused (w34 R9)
+        sim.counters.reset()
+        values = await c.read([sim.stable_id(tag) for tag in sim.tags[:121]])
+        assert len(values) == 121 and all(v.quality == GOOD for v in values)
+        assert sim.counters.read_sizes == [120, 1] and sim.counters.limit_reads == 1
     async with scada(pdus=1, max_nodes_per_read=120, advertised_max_nodes=500) as sim:
         async with Client(endpoint(sim)) as client:
             limit = client.get_node(ua.NodeId(ua.ObjectIds.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead))
@@ -164,23 +164,25 @@ async def test_counters_count_requests_and_nodes():
     async with scada(pdus=1, max_nodes_per_read=40) as sim:  # 64 tags in 12 folders
         c = connector(sim)
         assert sim.counters.read_sizes == [] and sim.counters.browse == 0  # the set-up is not counted
+        assert sim.counters.limit_reads == 0
         await c.read([sim.stable_id(tag) for tag in sim.tags[:5]])
         await c.read([sim.numbered_id(tag) for tag in sim.tags[:40]])
-        with pytest.raises(ConnectorError):
-            await c.read([sim.stable_id(tag) for tag in sim.tags[:41]])  # a refused request is still a request
-        assert sim.counters.read_sizes == [5, 40, 41]
-        assert sim.counters.limit_reads == 0 and sim.counters.browse == 0
+        assert sim.counters.read_sizes == [5, 40] and sim.counters.limit_reads == 1  # the connector asks for the limit once
+        await c.read([sim.stable_id(tag) for tag in sim.tags[:41]])  # sliced by the advertised limit of 40: no refusal
+        assert sim.counters.read_sizes == [5, 40, 40, 1] and sim.counters.limit_reads == 1 and sim.counters.browse == 0
         async with Client(endpoint(sim)) as client:
+            with pytest.raises(ua.UaStatusCodeError):  # a refused request is still a request
+                await client.read_attributes([client.get_node(sim.stable_id(tag)) for tag in sim.tags[:41]], ua.AttributeIds.Value)
             await client.get_node(ua.NodeId(ua.ObjectIds.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead)).read_value()
             await client.get_node("i=2259").read_value()  # ServerState: not ours, not counted
-        assert sim.counters.limit_reads == 1 and sim.counters.read_sizes == [5, 40, 41]
+        assert sim.counters.limit_reads == 2 and sim.counters.read_sizes == [5, 40, 40, 1, 41]
         sim.counters.reset()
         assert (sim.counters.read_sizes, sim.counters.limit_reads, sim.counters.browse, sim.counters.nodes_browsed) == ([], 0, 0, 0)
         await c.browse()
         # Objects, Site, the 12 folders (PDUA01 PDUB01 IT1IN..IT5IN ME1IN..ME5IN; the extra equipment is not listed) and the 64 variables
-        assert sim.counters.browse == sim.counters.nodes_browsed == 1 + 1 + 12 + 64
-        assert sim.counters.browse_next == 0
-        assert sim.counters.read_sizes and all(size == 1 for size in sim.counters.read_sizes)  # the connector reads one node at a time
+        assert sim.counters.nodes_browsed == 1 + 1 + 12 + 64
+        assert sim.counters.browse < 10 and sim.counters.browse_next == 0  # the browse goes level by level, not node by node (w34 T10)
+        assert sim.counters.read_sizes and max(sim.counters.read_sizes) > 1  # and reads the names and units in batches
 
 
 async def test_scale_knobs():

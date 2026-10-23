@@ -29,6 +29,7 @@ from cryptography.x509.oid import NameOID
 
 from dcdash.connectors.base import GOOD, url_host_port
 from dcdash.connectors.opcua import OpcUaConnector, ReportingClient, _point_value, _status_text, close_quietly
+from dcdash.connectors.opcua_ids import read_plan, slice_size, stable_address
 from dcdash.core.audit import hidden_values
 from dcdash.diagnostics.check import Checker, CheckResult, Publish, StepFailed, StepOutcome
 from dcdash.diagnostics.hints import CLOCK_SKEW, hint_for
@@ -462,12 +463,20 @@ class OpcUaCheck:
             limit = value if isinstance(value, int) and not isinstance(value, bool) else None
         except Exception:  # noqa: BLE001 - an unreadable limit means the default
             limit = None
-        chunk = min(limit, MAX_CHUNK) if limit and limit > 0 else MAX_CHUNK  # 0 means "no limit"
+        chunk = slice_size(limit, MAX_CHUNK)  # the rule the poll uses too (its cap is larger); 0 means "no limit"
         valid: list[tuple[str, ua.NodeId]] = []
         invalid: list[dict[str, Any]] = []
-        for address in self.points:
+        # The check reads what the poll reads. With the option on that is the stable form of each address (a pair of stored
+        # strings that are one tag is not read: a BAD row, as in the poll); the row keeps the STORED string. Option off: as stored.
+        if self.config.stable_addresses:
+            plan = read_plan(self.points, stable_address)
+            wanted = list(plan.sent)
+            invalid.extend({"address": stored, "good": False, "status": status} for stored, status in plan.refused.items())
+        else:
+            wanted = [(address, address) for address in self.points]
+        for address, to_parse in wanted:
             try:
-                valid.append((address, ua.NodeId.from_string(address)))
+                valid.append((address, ua.NodeId.from_string(to_parse)))
             except Exception as exc:  # noqa: BLE001
                 invalid.append({"address": address, "good": False, "status": f"invalid node id ({type(exc).__name__})"})
         self._plan_cache = (limit, chunk, valid, invalid)

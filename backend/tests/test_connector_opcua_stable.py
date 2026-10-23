@@ -18,6 +18,7 @@ ENDPOINT = "opc.tcp://127.0.0.1:1/"
 A_NUM, B_STABLE, C_NUM = "ns=3;s=20403:Site.A", "ns=3;s=Site.B", "ns=3;s=20418:Site.C"
 A, B, C = "ns=3;s=Site.A", "ns=3;s=Site.B", "ns=3;s=Site.C"
 SAME_TEXT = "two points are the same tag (stable address ns=3;s=Site.A)"
+LIMIT_NODE = ua.NodeId(ua.ObjectIds.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead)
 
 
 def _good(value):
@@ -35,7 +36,8 @@ class FakeSession:
 
     def __init__(self, values):
         self.values = values
-        self.requests = []
+        self.requests = []  # the Reads of tags (the one-off Read of the server's MaxNodesPerRead is counted in `limit_reads`)
+        self.limit_reads = 0
         self.sessions = 0
         self.drop_last_answer = False
 
@@ -45,6 +47,9 @@ class FakeSession:
     async def read_attributes(self, nodes, attr):
         assert attr == ua.AttributeIds.Value
         addresses = [n.address for n in nodes]
+        if addresses == [LIMIT_NODE]:
+            self.limit_reads += 1
+            return [_good(0)]  # "no limit"
         self.requests.append(addresses)
         answers = [
             _good(self.values[a]) if a in self.values else ua.DataValue(StatusCode_=ua.StatusCode(ua.StatusCodes.BadNodeIdUnknown))
