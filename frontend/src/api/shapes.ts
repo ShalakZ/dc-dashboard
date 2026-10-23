@@ -71,6 +71,13 @@ export interface ShapeLinesAnswer {
   by_shape: ShapeLinesByShape[];
   checks: ShapeCheck[];
   samples: ShapeSample[];
+  /**
+   * The new assets the route's own read-only planner run planned; null when that run did not happen (a check blocked first, or no line). Absent in an older
+   * answer. The Review compares it with the tag-list dry run's `assets_to_create_total`: they must be equal before Map opens.
+   */
+  plan_assets?: number | null;
+  /** The asset names the server used for the parent (`[]` = the top level, also for a parent that is gone). Absent in an older answer. */
+  parent_path?: string[];
 }
 
 /** The longest `q` the server takes (a longer one is a 422). */

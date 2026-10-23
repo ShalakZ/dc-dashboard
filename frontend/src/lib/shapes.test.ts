@@ -1,6 +1,7 @@
 import { METRICS } from "../api/types";
 import { check, created, PENRG_B, POWER, report, shape, VOLTAGE } from "../test/shapesFixtures";
 import {
+  assetsChanged, parentWords,
   chosenShapes, coveredTags, decide, decisionBody, decisionOptions, derivedAsset, dryRunPath, duplicatesWarning, exampleText, mappedSentence, MAX_DECISIONS,
   mixedUnitsWarning, namePartsWarning, NO_DECISIONS, onExistingAssets, outlierTexts, partsOf, plannerStops, readLink, realRunPath, reviewLabel, rowOf, rowWarnings,
   mergeRules, presetFromRules, ruleChoice, ruleSentence, searchTerm, shapeCountsSentence, shapesPageLink, similarSentence, splitSections, suggestionSentence, tick, tooManyText, wantsRules, withoutRule,
@@ -48,7 +49,11 @@ describe("the words of a row", () => {
     expect(mixedUnitsWarning(A)).toBeNull();
     expect(mixedUnitsWarning(shape({ unit_hints: ["kWh", "Wh"], mixed_units: true }))).toBe("This shape has the units kWh and Wh, so it can only be mapped as custom.");
     expect(duplicatesWarning(A)).toBeNull();
-    expect(duplicatesWarning(shape({ duplicates: 1200 }))).toMatch(/^1,200 tags of this shape appear twice \(the SCADA renumbered them\)\. Switch on "Stable tag addresses"/);
+    // `duplicates` counts the MEMBERS involved (a pair is 2): the sentence counts the tags that appear twice, half of that, rounded down.
+    expect(duplicatesWarning(shape({ duplicates: 1200 }))).toMatch(/^600 tags of this shape appear twice \(the SCADA renumbered them\)\. Switch on "Stable tag addresses"/);
+    expect(duplicatesWarning(shape({ duplicates: 2 }))).toMatch(/^1 tag of this shape appears twice \(the SCADA renumbered it\)\. Switch on "Stable tag addresses"/);
+    expect(duplicatesWarning(shape({ duplicates: 7 }))).toMatch(/^3 tags of this shape appear twice/);
+    expect(duplicatesWarning(shape({ duplicates: 1 }))).toMatch(/^1 tag of this shape appears twice/); // never "0 tags" while the server says there are duplicates
     const solo = shape({ examples: [{ name: "Solo", address: "a" }] });
     expect(namePartsWarning(solo, { metric: "energy_kwh", nameFrom: "parts12" })).toBe('The example Solo has only one part, so "parts 1 and 2" does not fit. Choose "part 1".');
     expect(namePartsWarning(solo, { metric: "energy_kwh", nameFrom: "part1" })).toBeNull();
@@ -162,9 +167,27 @@ describe("the sections, the search and the address", () => {
 
 describe("the Review", () => {
   it("words the counts of a shape and leaves out what is zero", () => {
-    expect(shapeCountsSentence({ shape: "k", label: "L", lines: 400, assets: 400, skipped_mapped: 12, skipped_twins: 0 })).toBe("400 tags on 400 assets, 12 already mapped, left as they are");
-    expect(shapeCountsSentence({ shape: "k", label: "L", lines: 1, assets: 1, skipped_mapped: 0, skipped_twins: 1 })).toBe("1 tag on 1 asset, 1 copy of a mapped tag, left as they are");
-    expect(shapeCountsSentence({ shape: "k", label: "L", lines: 1200, assets: 3, skipped_mapped: 0, skipped_twins: 0 })).toBe("1,200 tags on 3 assets");
+    expect(shapeCountsSentence({ shape: "k", label: "L", lines: 400, assets: 400, skipped_mapped: 12, skipped_twins: 0 })).toBe("400 tags on up to 400 assets, 12 already mapped, left as they are");
+    expect(shapeCountsSentence({ shape: "k", label: "L", lines: 1, assets: 1, skipped_mapped: 0, skipped_twins: 1 })).toBe("1 tag on up to 1 asset, 1 copy of a mapped tag, left as they are");
+    expect(shapeCountsSentence({ shape: "k", label: "L", lines: 1200, assets: 3, skipped_mapped: 0, skipped_twins: 0 })).toBe("1,200 tags on up to 3 assets");
+  });
+
+  it("says the assets changed only when the server gave a number and the planner's count differs from it", () => {
+    expect(assetsChanged(398, report())).toBe(false); // equal
+    expect(assetsChanged(400, report())).toBe(true); // the planner now creates 398
+    expect(assetsChanged(0, report({ assets_to_create_total: 0 }))).toBe(false);
+    expect(assetsChanged(0, report())).toBe(true);
+    expect(assetsChanged(null, report())).toBe(false); // the server's planner did not run: nothing to compare
+    expect(assetsChanged(undefined, report())).toBe(false); // an older answer without the field
+    expect(assetsChanged(398, null)).toBe(false); // no dry run yet
+  });
+
+  it("joins the parent path the server used, or says nothing when the answer has none", () => {
+    expect(parentWords(["Hall 1", "Row A"], "Hall 1")).toBe("under Hall 1 / Row A");
+    expect(parentWords(["Hall 1"], null)).toBe("under Hall 1");
+    expect(parentWords([], "Hall 1")).toBe("at the top level"); // the server used the top level (the parent is gone): that is what the sentence says
+    expect(parentWords(undefined, "Hall 1")).toBe("under Hall 1"); // an older answer: the label the page chose
+    expect(parentWords(undefined, null)).toBe("at the top level");
   });
 
   it("counts the tags that go onto assets that exist already, never below zero", () => {

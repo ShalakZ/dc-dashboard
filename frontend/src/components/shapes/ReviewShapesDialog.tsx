@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ApiError, api } from "../../api/client";
 import { useInvalidate } from "../../api/queries";
@@ -6,7 +6,8 @@ import { postShapeLines, type ShapeCheck, type ShapeDecision, type ShapeLinesAns
 import type { TagListReport } from "../../api/types";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
 import {
-  dryRunPath, grouped, hasBlocking, mappedSentence, onExistingAssets, outlierTexts, plannerStops, plural, realRunPath, shapeCountsSentence,
+  ASSETS_CHANGED_TEXT, assetsChanged, dryRunPath, grouped, hasBlocking, mappedSentence, onExistingAssets, outlierTexts, parentWords, plannerStops, plural, realRunPath,
+  shapeCountsSentence,
 } from "../../lib/shapes";
 import { TAG_LIST_REFRESHED } from "../../lib/tagListUndo";
 import { undoOptions } from "../TagListDialog";
@@ -32,6 +33,20 @@ interface Message { tone: "info" | "error"; text: string }
 type Busy = "lines" | "check" | "map";
 
 const reasonOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/** The synthetic blocking line of a plan that moved between the lines call and the dry run (I3); shown with the server's own checks. */
+const ASSETS_CHANGED: ShapeCheck = { kind: "assets_changed", severity: "blocking", shape: null, text: ASSETS_CHANGED_TEXT };
+
+/** An asset path (`Hall 1/PDUA01`) that may wrap only after a slash: `<wbr>` is a break opportunity that adds no text. */
+function AssetPath({ path }: { path: string }) {
+  return (
+    <>
+      {path.split("/").map((part, i) => (
+        <Fragment key={i}>{i > 0 && <>/<wbr /></>}{part}</Fragment>
+      ))}
+    </>
+  );
+}
 
 function CheckList({ checks, label }: { checks: readonly ShapeCheck[]; label: (key: string) => string }) {
   if (checks.length === 0) return null;
@@ -114,6 +129,7 @@ export function ReviewShapesDialog({ sourceId, sourceName, decisions, parentId, 
   const toast = useToast();
   const root = useRef<HTMLDivElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
+  const result = useRef<HTMLDivElement>(null);
   const ids = useId();
   const titleId = `${ids}-title`;
   const statusId = `${ids}-status`;
@@ -172,7 +188,17 @@ export function ReviewShapesDialog({ sourceId, sourceName, decisions, parentId, 
     return () => { alive.current = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- once per open: the decisions of a dialog do not change
 
-  const ready = lines !== null && !lines.blocking && lines.lines > 0 && report !== null && !plannerStops(report) && report.mappings_to_create > 0 && busy === null;
+  // The parent is chosen by id and written by name: if the server's own planner run and the tag-list dry run disagree about the new assets, something above them moved in
+  // between and the Map would plan a second tree. Map stays closed until a new read agrees.
+  const moved = lines !== null && assetsChanged(lines.plan_assets, report);
+  const ready = lines !== null && !lines.blocking && lines.lines > 0 && report !== null && !moved && !plannerStops(report) && report.mappings_to_create > 0 && busy === null;
+
+  /** Review again: the lines and the dry run are read again in this dialog. The button is about to go, so the focus moves to the result box (named, a tab stop) first: never to the page body. */
+  function reviewAgain() {
+    if (busy !== null || mapping.current) return;
+    result.current?.focus({ preventScroll: true });
+    void load();
+  }
 
   async function map() {
     if (mapping.current || !ready || lines === null || report === null) return;
@@ -208,6 +234,7 @@ export function ReviewShapesDialog({ sourceId, sourceName, decisions, parentId, 
   }
 
   const checks = lines?.checks ?? [];
+  const shownChecks = moved ? [ASSETS_CHANGED, ...checks] : checks;
   const blocking = lines !== null && (lines.blocking || hasBlocking(checks));
   const status =
     busy === "lines" ? "Asking the server what these decisions would map..."
@@ -217,6 +244,7 @@ export function ReviewShapesDialog({ sourceId, sourceName, decisions, parentId, 
     : lines === null ? ""
     : blocking ? "Some checks block this. Fix them first (choose other shapes or another asset name); nothing has been mapped."
     : lines.lines === 0 ? "Nothing is left to map: every tag of these shapes is mapped already."
+    : moved ? "Nothing has been mapped. Press Review again to check the list once more."
     : report !== null && plannerStops(report) ? "The tag list planner found problems with this list. Nothing has been mapped."
     : report !== null ? `${plural(report.mappings_to_create, "tag")} would be mapped. Nothing is mapped until you press Map.`
     : "";
@@ -228,26 +256,26 @@ export function ReviewShapesDialog({ sourceId, sourceName, decisions, parentId, 
       <div ref={root} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className="dialog shapes-dialog">
         <h2 id={titleId}>{`Review mappings by shape: ${sourceName}`}</h2>
         <p className="muted">
-          {`${plural(decisions.length, "shape")} chosen. New assets go ${parentLabel === null ? "at the top level" : `under ${parentLabel}`}${createAssets ? "" : ", and an asset that is missing is a problem"}. The asset names are a guess from the tag text: check the samples.`}
+          {`${plural(decisions.length, "shape")} chosen. New assets go ${parentWords(lines?.parent_path, parentLabel)}${createAssets ? "" : ", and an asset that is missing is a problem"}. The asset names are a guess from the tag text: check the samples.`}
         </p>
 
-        <p id={statusId} className="shapes-status" role="status" data-tone={message?.tone === "error" && busy === null ? "error" : undefined}>{status}</p>
-        <div className="shapes-report" role="region" aria-label="Result of the review" tabIndex={0}>
+        <div ref={result} className="shapes-report" role="region" aria-label="Result of the review" tabIndex={0}>
           {lines !== null && (
             <>
-              <CheckList checks={checks} label={label} />
+              <CheckList checks={shownChecks} label={label} />
               {lines.by_shape.map((row) => (
                 <section key={row.shape}>
                   <h3>{row.label}</h3>
                   <p>{shapeCountsSentence(row)}</p>
                   {lines.samples.some((sample) => sample.shape === row.shape) && (
-                    <table>
-                      <thead><tr><th>Tag</th><th>Address</th><th>Asset</th><th>Unit hint</th><th>Metric</th><th className="num">Scale</th></tr></thead>
+                    <table className="shapes-samples">
+                      <thead><tr><th>Tag and address</th><th>Asset</th><th>Unit hint</th><th>Metric</th><th className="num">Scale</th></tr></thead>
                       <tbody>
                         {lines.samples.filter((sample) => sample.shape === row.shape).map((sample, i) => (
                           <tr key={`${i}-${sample.address}`}>
-                            <td className="shapes-cell">{sample.tag}</td><td className="shapes-cell">{sample.address}</td><td className="shapes-cell">{sample.asset}</td>
-                            <td className="shapes-cell">{sample.unit_hint ?? ""}</td><td className="shapes-cell">{sample.metric}</td><td className="num">{String(sample.scale)}</td>
+                            <td>{sample.tag}<span className="sub shapes-address">{sample.address}</span></td>
+                            <td className="shapes-asset"><AssetPath path={sample.asset} /></td>
+                            <td>{sample.unit_hint ?? ""}</td><td>{sample.metric}</td><td className="num">{String(sample.scale)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -260,8 +288,11 @@ export function ReviewShapesDialog({ sourceId, sourceName, decisions, parentId, 
           )}
         </div>
 
+        {/* The footer: the one live region, at the left of the buttons it speaks for (a reserved height, so a sentence arriving moves nothing). */}
         <div className="row">
+          <p id={statusId} className="shapes-status" role="status" data-tone={message?.tone === "error" && busy === null ? "error" : undefined}>{status}</p>
           <button ref={cancel} type="button" className="shapes-cancel" aria-disabled={busy === "map" ? true : undefined} onClick={requestClose}>Cancel</button>
+          {moved && busy === null && <button type="button" className="shapes-again" onClick={reviewAgain}>Review again</button>}
           <button type="button" className="primary shapes-go" aria-disabled={ready ? undefined : true} aria-describedby={statusId} onClick={() => void map()}>{goLabel}</button>
         </div>
       </div>

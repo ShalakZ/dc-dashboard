@@ -651,9 +651,9 @@ describe("SourceShapesPage: saved rules", () => {
     expect(decision("PDUA#_PM0_PENRG")).toHaveValue(""); // still Ignore
     expect(reviewButton()).toHaveTextContent("Review mappings...");
     expect(reviewButton()).toHaveAttribute("aria-disabled", "true");
-    expect(within(rowOf("PDUA#_PM0_PENRG")).getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" })).toHaveTextContent("Forget this rule");
+    expect(within(rowOf("PDUA#_PM0_PENRG")).getByRole("button", { name: "Forget this rule for PDUA#_PM0_PENRG" })).toHaveTextContent("Forget this rule");
     expect(savedLine("PDUB#_PM0_PENRG")).toBeNull();
-    expect(screen.getAllByRole("button", { name: /^Forget the rule for / })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /^Forget this rule for / })).toHaveLength(1);
   });
 
   it("the saved-rule line lives in the slot under the row, so the row's height is held whether or not it has a rule", async () => {
@@ -667,20 +667,20 @@ describe("SourceShapesPage: saved rules", () => {
   it("Forget this rule reads the server's rules, puts them without that key (the others stay), and the focus lands on the row", async () => {
     const { puts, calls, state } = setup({ rules: { [A_KEY]: RULE_A, "other#": OTHER_RULE } });
     await ready();
-    await userEvent.click(screen.getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" }));
+    await userEvent.click(screen.getByRole("button", { name: "Forget this rule for PDUA#_PM0_PENRG" }));
     await waitFor(() => expect(puts).toHaveLength(1));
     expect(puts[0]).toEqual({ rules: { "other#": OTHER_RULE } });
     expect(rulesCalls(calls).map((c) => c.method)).toEqual(["GET", "PUT"]);
     expect(state.rules).toEqual({ "other#": OTHER_RULE });
     await waitFor(() => expect(savedLine("PDUA#_PM0_PENRG")).toBeNull());
-    expect(screen.queryByRole("button", { name: /^Forget the rule for / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Forget this rule for / })).toBeNull();
     expect(rowOf("PDUA#_PM0_PENRG")).toHaveFocus();
   });
 
   it("while the forget is in flight its button is aria-disabled (never disabled) and a second click does nothing", async () => {
     const { puts } = setup({ rules: { [A_KEY]: RULE_A } });
     await ready();
-    const button = screen.getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" });
+    const button = screen.getByRole("button", { name: "Forget this rule for PDUA#_PM0_PENRG" });
     act(() => button.focus());
     const hold = holdFetch((method, path) => method === "PUT" && path === "/api/sources/5/shape-rules");
     await userEvent.click(button);
@@ -696,11 +696,11 @@ describe("SourceShapesPage: saved rules", () => {
   it("a forget that fails says so in an error toast and keeps the rule and its button", async () => {
     const { toasts } = setup({ rules: { [A_KEY]: RULE_A }, putReply: { status: 500, body: { detail: "disk full" } } });
     await ready();
-    await userEvent.click(screen.getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" }));
+    await userEvent.click(screen.getByRole("button", { name: "Forget this rule for PDUA#_PM0_PENRG" }));
     await waitFor(() => expect(toasts.calls).toHaveLength(1));
     expect(toasts.calls[0]).toMatchObject({ kind: "error", text: "The rule could not be forgotten: disk full" });
     expect(savedLine("PDUA#_PM0_PENRG")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" })).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("button", { name: "Forget this rule for PDUA#_PM0_PENRG" })).not.toHaveAttribute("aria-disabled");
   });
 
   it("without discovery.accept the rule is still told, but there is no Forget button and nothing can be saved", async () => {

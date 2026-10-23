@@ -190,10 +190,14 @@ export function rowOf(root: ParentNode, key: string): HTMLElement | null {
 export function mixedUnitsWarning(shape: Shape): string | null {
   return shape.mixed_units ? `This shape has the units ${listOf(shape.unit_hints)}, so it can only be mapped as custom.` : null;
 }
+/** `duplicates` counts the MEMBERS involved (a pair is 2), so the tags that appear twice are half of it, rounded down (never below 1 while the server says there are duplicates). */
 export function duplicatesWarning(shape: Shape): string | null {
-  return shape.duplicates > 0
-    ? `${plural(shape.duplicates, "tag")} of this shape appear twice (the SCADA renumbered them). Switch on "Stable tag addresses" for this source and browse again, or decide them on the Points page.`
-    : null;
+  if (shape.duplicates <= 0) return null;
+  const tags = Math.max(1, Math.floor(shape.duplicates / 2));
+  const tail = 'Switch on "Stable tag addresses" for this source and browse again, or decide them on the Points page.';
+  return tags === 1
+    ? `1 tag of this shape appears twice (the SCADA renumbered it). ${tail.replace("decide them", "decide it")}`
+    : `${grouped(tags)} tags of this shape appear twice (the SCADA renumbered them). ${tail}`;
 }
 /** The chosen asset name needs two parts and the first example has one. */
 export function namePartsWarning(shape: Shape, choice: Choice): string | null {
@@ -207,9 +211,12 @@ export function rowWarnings(shape: Shape, choice: Choice): string[] {
 }
 
 // The Review dialog.
-/** 400 tags on 400 assets, 12 already mapped, left as they are. */
+/**
+ * 400 tags on up to 400 assets, 12 already mapped, left as they are. The server's `assets` is an upper bound: it counts a parent and its child asset together for
+ * `part 1 / part 2` and counts an asset that exists already as a new one.
+ */
 export function shapeCountsSentence(row: ShapeLinesByShape): string {
-  const parts = [`${plural(row.lines, "tag")} on ${plural(row.assets, "asset")}`];
+  const parts = [`${plural(row.lines, "tag")} on up to ${plural(row.assets, "asset")}`];
   if (row.skipped_mapped > 0) parts.push(`${grouped(row.skipped_mapped)} already mapped, left as they are`);
   if (row.skipped_twins > 0) parts.push(`${plural(row.skipped_twins, "copy", "copies")} of a mapped tag, left as they are`);
   return parts.join(", ");
@@ -217,6 +224,21 @@ export function shapeCountsSentence(row: ShapeLinesByShape): string {
 /** How many of the lines go onto assets that exist already: the lines less the assets the planner would create. Nothing to say when that is not above zero. */
 export function onExistingAssets(lines: number, assetsToCreateTotal: number): number {
   return Math.max(0, lines - assetsToCreateTotal);
+}
+/**
+ * The new assets are chosen under a parent by id and written by name, so the assets the server's own planner run planned (`plan_assets`) must be the assets the
+ * tag-list dry run now plans. Different (the parent or something above it was renamed, removed or added in between) stops the Map. A `plan_assets` that is null
+ * (the server's planner did not run) or absent (an older answer) compares nothing.
+ */
+export function assetsChanged(planAssets: number | null | undefined, report: TagListReport | null): boolean {
+  return typeof planAssets === "number" && report !== null && planAssets !== report.assets_to_create_total;
+}
+export const ASSETS_CHANGED_TEXT =
+  "The assets changed while this list was being checked (something above the new assets was renamed, removed or added). Review again.";
+/** Where the new assets go, for the Review's header: the path the server used when its answer has one, else the label the page chose. */
+export function parentWords(parentPath: readonly string[] | undefined, parentLabel: string | null): string {
+  const path = parentPath === undefined ? parentLabel : parentPath.length > 0 ? parentPath.join(" / ") : null;
+  return path === null ? "at the top level" : `under ${path}`;
 }
 export const hasBlocking = (checks: readonly ShapeCheck[]) => checks.some((check) => check.severity === "blocking");
 export const checksOf = (checks: readonly ShapeCheck[], severity: CheckSeverity) => checks.filter((check) => check.severity === severity);

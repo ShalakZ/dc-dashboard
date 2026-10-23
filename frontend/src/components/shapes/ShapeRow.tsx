@@ -85,7 +85,7 @@ export function ShapeRow({ shape, choice, canDecide, similarText, ticked, highli
             {ruleSentence(shape.rule)}
             {canDecide && onForget !== undefined && (
               <button
-                type="button" className="quiet" aria-label={`Forget the rule for ${shape.label}`} aria-disabled={forgetting ? true : undefined}
+                type="button" className="quiet" aria-label={`Forget this rule for ${shape.label}`} aria-disabled={forgetting ? true : undefined}
                 onClick={() => { if (!forgetting) onForget(); }}
               >
                 Forget this rule

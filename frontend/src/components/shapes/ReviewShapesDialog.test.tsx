@@ -109,7 +109,7 @@ describe("ReviewShapesDialog: what it shows", () => {
     await loaded();
     const d = dialog();
     expect(within(d).getByRole("heading", { name: "PDUA#_PM0_PENRG" })).toBeInTheDocument();
-    expect(d).toHaveTextContent("400 tags on 400 assets, 12 already mapped, left as they are");
+    expect(d).toHaveTextContent("400 tags on up to 400 assets, 12 already mapped, left as they are");
     const samples = within(d).getAllByRole("row").filter((row) => row.textContent?.includes("PDUA01_PM0_PENRG"));
     expect(samples).toHaveLength(1);
     expect(samples[0]).toHaveTextContent("Hall 1/PDUA01");
@@ -344,5 +344,123 @@ describe("ReviewShapesDialog: the frame", () => {
     await waitFor(() => expect(linesSeen).toHaveLength(1));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(listSeen).toHaveLength(0);
+  });
+});
+
+describe("ReviewShapesDialog: the header sentence and the counts (F-T5)", () => {
+  it("shows the parent path the server used in the header sentence", async () => {
+    const { dialog } = setup({ lines: linesAnswer({ parent_path: ["Hall 1", "Row A"] }) });
+    await loaded();
+    expect(dialog()).toHaveTextContent("New assets go under Hall 1 / Row A.");
+  });
+
+  it("says top level when the server used none (the parent is gone), and keeps the page's label for an older answer without the field", async () => {
+    const gone = setup({ lines: linesAnswer({ parent_path: [] }) });
+    await loaded();
+    expect(gone.dialog()).toHaveTextContent("New assets go at the top level.");
+    cleanup();
+    const old = setup({ lines: linesAnswer() });
+    await loaded();
+    expect(old.dialog()).toHaveTextContent("New assets go under Hall 1.");
+  });
+
+  it("says up to N assets: the server's count is an upper bound", async () => {
+    const { dialog } = setup({ lines: linesAnswer({ by_shape: [{ shape: "pdua#_pm#_penrg", label: "PDUA#_PM0_PENRG", lines: 400, assets: 400, skipped_mapped: 12, skipped_twins: 0 }] }) });
+    await loaded();
+    expect(dialog()).toHaveTextContent("400 tags on up to 400 assets, 12 already mapped, left as they are");
+  });
+});
+
+describe("ReviewShapesDialog: the samples table (F-T5)", () => {
+  it("has the tag and its address in ONE cell (the address as a muted second line), and the asset path may wrap only after a slash", async () => {
+    const { dialog } = setup();
+    await loaded();
+    expect(dialog().querySelector("table.shapes-samples")).not.toBeNull();
+    const heads = Array.from(dialog().querySelectorAll("table.shapes-samples th")).map((th) => th.textContent);
+    expect(heads).toEqual(["Tag and address", "Asset", "Unit hint", "Metric", "Scale"]);
+    const first = dialog().querySelector("table.shapes-samples tbody tr")!;
+    const cells = first.querySelectorAll("td");
+    expect(cells).toHaveLength(5);
+    expect(cells[0].firstChild?.textContent).toBe("PDUA01_PM0_PENRG");
+    const address = cells[0].querySelector(".shapes-address");
+    expect(address).toHaveTextContent("ns=3;s=20403:Site.PDUA01_PM0_PENRG");
+    expect(address).toHaveClass("sub");
+    expect(cells[1]).toHaveTextContent("Hall 1/PDUA01");
+    expect(cells[1].querySelectorAll("wbr")).toHaveLength(1);
+    expect(cells[1].querySelector("wbr")!.previousSibling?.textContent).toBe("/");
+    expect(cells[3]).toHaveTextContent("energy_kwh");
+  });
+});
+
+describe("ReviewShapesDialog: the assets must match before Map opens (F-T5, I3)", () => {
+  const sentence = /The assets changed while this list was being checked \(something above the new assets was renamed, removed or added\)\. Review again\./;
+
+  it("equal: Map is open and nothing about a change is shown", async () => {
+    const { dialog, map } = setup({ lines: linesAnswer({ plan_assets: 398, parent_path: ["Hall 1"] }) });
+    await loaded();
+    expect(map()).not.toHaveAttribute("aria-disabled");
+    expect(map()).toHaveTextContent("Map 400 points");
+    expect(dialog()).not.toHaveTextContent("The assets changed");
+    expect(within(dialog()).queryByRole("button", { name: "Review again" })).toBeNull();
+  });
+
+  it("different: Map stays closed with a blocking line and Review again; a click on Map writes nothing", async () => {
+    const { dialog, map, listSeen } = setup({ lines: linesAnswer({ plan_assets: 400 }) }); // the dry run says 398
+    await loaded();
+    const item = within(dialog()).getByText(sentence).closest("li")!;
+    expect(item).toHaveAttribute("data-severity", "blocking");
+    expect(item).toHaveTextContent("Blocking");
+    expect(map()).toHaveAttribute("aria-disabled", "true");
+    expect(map()).not.toBeDisabled();
+    expect(map()).toHaveTextContent("Map points");
+    expect(within(dialog()).getByRole("status")).toHaveTextContent("Nothing has been mapped");
+    const again = within(dialog()).getByRole("button", { name: "Review again" });
+    expect(again).toHaveAttribute("type", "button");
+    await userEvent.click(map());
+    expect(listSeen.filter((c) => c.url.includes("dry_run=0"))).toHaveLength(0);
+    expect(listSeen).toHaveLength(1); // the dry run only
+  });
+
+  it("different, then Review again: the lines and the dry run are read again in the same dialog, the focus never falls to the page body, and Map opens when they match", async () => {
+    let asked = 0;
+    const { dialog, map, linesSeen, listSeen, onClose } = setup({ lines: () => ({ body: linesAnswer({ plan_assets: ++asked === 1 ? 400 : 398 }) }) });
+    await loaded();
+    const again = within(dialog()).getByRole("button", { name: "Review again" });
+    again.focus();
+    await userEvent.click(again);
+    expect(document.activeElement).not.toBe(document.body);
+    expect(dialog().contains(document.activeElement)).toBe(true);
+    await waitFor(() => expect(linesSeen).toHaveLength(2));
+    await waitFor(() => expect(map()).not.toHaveAttribute("aria-disabled"));
+    expect(listSeen.filter((c) => c.url.includes("dry_run=1"))).toHaveLength(2);
+    expect(dialog()).not.toHaveTextContent("The assets changed");
+    expect(within(dialog()).queryByRole("button", { name: "Review again" })).toBeNull();
+    expect(dialog().contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(document.body);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("different again after Review again: it blocks again (the person decides when to stop)", async () => {
+    const { dialog, map, linesSeen } = setup({ lines: linesAnswer({ plan_assets: 400 }) });
+    await loaded();
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Review again" }));
+    await waitFor(() => expect(linesSeen).toHaveLength(2));
+    await within(dialog()).findByText(sentence);
+    expect(map()).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("plan_assets null (the server's planner did not run): no comparison, Map is open", async () => {
+    const { dialog, map } = setup({ lines: linesAnswer({ plan_assets: null }) });
+    await loaded();
+    expect(map()).not.toHaveAttribute("aria-disabled");
+    expect(dialog()).not.toHaveTextContent("The assets changed");
+  });
+
+  it("no plan_assets at all (an older answer): no comparison, Map is open", async () => {
+    const { dialog, map } = setup({ lines: linesAnswer() });
+    await loaded();
+    expect("plan_assets" in linesAnswer()).toBe(false);
+    expect(map()).not.toHaveAttribute("aria-disabled");
+    expect(dialog()).not.toHaveTextContent("The assets changed");
   });
 });

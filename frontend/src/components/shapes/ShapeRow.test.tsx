@@ -85,7 +85,9 @@ describe("ShapeRow", () => {
     const { row } = setup({ shape: shape({ unit_hints: ["kWh", "Wh"], mixed_units: true, duplicates: 200 }) });
     const slot = row.querySelector(".shape-warn")!;
     expect(slot).toHaveTextContent("This shape has the units kWh and Wh");
-    expect(slot).toHaveTextContent("200 tags of this shape appear twice (the SCADA renumbered them)");
+    // `duplicates` counts the members involved (a pair is 2), so 200 members are 100 tags that appear twice
+    expect(slot).toHaveTextContent("100 tags of this shape appear twice (the SCADA renumbered them)");
+    expect(slot).not.toHaveTextContent("200 tags");
   });
 
   it("warns, in that slot, when the chosen asset name needs two parts and the example has one", () => {
@@ -127,9 +129,10 @@ describe("ShapeRow: the saved rule (T7b)", () => {
     const line = within(row).getByText("Saved rule: Map as energy counter, asset name parts 1 and 2");
     expect(line).toHaveClass("muted");
     expect(row.querySelector(".shape-warn")).toContainElement(line);
-    const button = within(row).getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" });
+    const button = within(row).getByRole("button", { name: "Forget this rule for PDUA#_PM0_PENRG" });
     expect(button).toHaveAttribute("type", "button");
     expect(button).toHaveTextContent("Forget this rule");
+    expect(button.getAttribute("aria-label")).toContain(button.textContent); // the name holds the visible words (label in name: a person who says what they see is understood)
     await userEvent.click(button);
     expect(onForget).toHaveBeenCalledTimes(1);
   });
@@ -154,7 +157,7 @@ describe("ShapeRow: the saved rule (T7b)", () => {
   it("while a forget is on its way the button is aria-disabled, keeps the focus and a click does nothing", async () => {
     const onForget = vi.fn();
     const { row } = setup({ shape: shape({ rule: RULE }), onForget, forgetting: true });
-    const button = within(row).getByRole("button", { name: "Forget the rule for PDUA#_PM0_PENRG" });
+    const button = within(row).getByRole("button", { name: "Forget this rule for PDUA#_PM0_PENRG" });
     expect(button).toHaveAttribute("aria-disabled", "true");
     expect(button).not.toBeDisabled();
     button.focus();

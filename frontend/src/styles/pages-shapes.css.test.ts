@@ -67,6 +67,28 @@ describe("the Map by shape stylesheet (w36)", () => {
     expect(bodyOf(".shapes-dialog .shapes-report")).toMatch(/height:\s*min\(/);
   });
 
+  it("makes the Review dialog 1080 px wide at most and never wider than the window less 24 px each side (it must stay inside 1024 and 800)", () => {
+    expect(bodyOf(".shapes-dialog")).toMatch(/width:\s*min\(1080px,\s*calc\(100vw - 48px\)\)/);
+    expect(bodyOf(".shapes-dialog")).not.toMatch(/\b64rem\b/);
+  });
+
+  it("puts the dialog's one status line in the footer row, with the room of three lines, and gives it the whole first line of the footer in a narrow window", () => {
+    expect(bodyOf(".shapes-dialog .shapes-status")).toMatch(/flex:\s*1 1 18rem/);
+    const narrow = rules.find((rule) => rule.at.join(" ").includes("max-width") && parts(rule.selector).includes(".shapes-dialog .shapes-status"));
+    expect(narrow?.body).toMatch(/flex-basis:\s*100%/);
+  });
+
+  it("keeps a word whole in the samples table: no break inside the tag, the unit hint, the metric or the scale; only the address may break anywhere; the asset path breaks at a slash", () => {
+    expect(bodyOf(".shapes-dialog .shapes-samples td")).toMatch(/white-space:\s*nowrap/);
+    expect(bodyOf(".shapes-dialog .shapes-samples th")).toMatch(/white-space:\s*nowrap/);
+    expect(bodyOf(".shapes-dialog .shapes-samples .shapes-address")).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(bodyOf(".shapes-dialog .shapes-samples .shapes-asset")).toMatch(/white-space:\s*normal/);
+    expect(bodyOf(".shapes-dialog .shapes-samples .shapes-asset")).not.toMatch(/anywhere/);
+    for (const rule of rules) {
+      if (/\.shapes-samples/.test(rule.selector) && !/shapes-address/.test(rule.selector)) expect(rule.body, rule.selector).not.toMatch(/overflow-wrap:\s*anywhere/);
+    }
+  });
+
   it("styles a button that waits by aria-disabled, never by :disabled (the focus may be on it)", () => {
     const text = rules.map((rule) => rule.selector).join("\n");
     expect(text).toContain('[aria-disabled="true"]');

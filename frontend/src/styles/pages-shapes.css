@@ -65,19 +65,25 @@
   .shapes-page .shapes-bar button[aria-disabled="true"] { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); cursor: not-allowed; }
   .shapes-page .shapes-bar button[aria-disabled="true"]:hover { background: var(--surface); }
 
-  /* The Review dialog (portaled). A column, not the dialog's grid: the result box has a height of its own, so the status line and the buttons stay in sight with a long
-     result. It carries .dialog (app.css's) beside its own class and never names it. */
-  .shapes-dialog { display: flex; flex-direction: column; gap: 12px; width: min(64rem, 100%); }
+  /* The Review dialog (portaled). A column, not the dialog's grid: the result box has a height of its own, so the buttons stay in sight with a long result. It carries
+     .dialog (app.css's) beside its own class and never names it. Wide enough (1080 px, and never wider than the window less 24 px each side) for the samples table to
+     keep a tag, an address, an asset path and three short columns on a line each at 1440 and 1024; at 800 it is 752 px and the footer is still inside the window. */
+  .shapes-dialog { display: flex; flex-direction: column; gap: 12px; width: min(1080px, calc(100vw - 48px)); }
   .shapes-dialog > * { flex: none; }
   .shapes-dialog h2 { overflow-wrap: anywhere; }
   /* The buttons stick to the bottom edge of the dialog (its own scroll box), as the tag list dialog's do: the negative margin undoes the dialog's padding so the row runs
      edge to edge, and its own padding puts the buttons where they were. */
-  .shapes-dialog { scroll-padding-bottom: calc(var(--ctl-h) + 12px + 22px + 1px + 12px); }
+  .shapes-dialog { scroll-padding-bottom: calc(3lh + 12px + 22px + 1px + 12px); }
   .shapes-dialog > .row { justify-content: flex-end; position: sticky; bottom: 0; z-index: 1; margin: 0 -24px -22px; padding: 12px 24px 22px; border-top: 1px solid var(--border); background: var(--bg); box-shadow: 0 22px 0 var(--bg); }
 
-  /* The one line that speaks for the dialog: a FIXED three lines, so a longer sentence never moves the box under it or the buttons (it scrolls inside). */
-  .shapes-dialog .shapes-status { height: 3lh; overflow: auto; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+  /* The one line that speaks for the dialog stands in the footer, at the left of the buttons it speaks for: no empty band between the first sentence and the result.
+     A FIXED three lines, so a longer sentence never moves the box above it or the buttons (it scrolls inside). Under 1000 px the window is too narrow to share the line
+     with three buttons: the sentence takes the whole first line of the footer and the buttons the second, whatever the sentence says. */
+  .shapes-dialog .shapes-status { flex: 1 1 18rem; min-width: 0; height: 3lh; overflow: auto; font-size: var(--fs-sm); overflow-wrap: anywhere; text-align: left; }
   .shapes-dialog .shapes-status[data-tone="error"] { color: var(--crit); font-weight: 600; }
+  @media (max-width: 999.98px) {
+    .shapes-dialog .shapes-status { flex-basis: 100%; }
+  }
 
   /* The result: a box of a FIXED height that scrolls (a tab stop, so the keyboard can scroll it). A result arriving moves nothing. */
   .shapes-dialog .shapes-report { display: grid; gap: 14px; align-content: start; height: min(26rem, 44vh); overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); }
@@ -86,7 +92,14 @@
   .shapes-dialog .shapes-report h4 { margin: 8px 0 0; font-size: var(--fs-sm); font-weight: 600; }
   .shapes-dialog .shapes-report table { margin: 4px 0; }
   .shapes-dialog .shapes-report p { margin: 0; font-size: var(--fs-sm); }
-  .shapes-dialog .shapes-cell { overflow-wrap: anywhere; }
+  .shapes-dialog .shapes-cell { overflow-wrap: anywhere; } /* the planner's problem lines and units (an address or a sentence): these may break anywhere */
+
+  /* The samples table: never a break in the middle of a word. The tag, the unit hint, the metric and the scale stay on one line; the address is the muted second line of the
+     tag's own cell and is the only text that may break anywhere; the asset path breaks after a slash (the <wbr> after each one) or at a space, never inside a name. With
+     overflow-wrap: anywhere on every cell the table's minimum width was one letter and the columns were squeezed until they broke words (PDUA01_PM0_PEN / RG). */
+  .shapes-dialog .shapes-samples td, .shapes-dialog .shapes-samples th { white-space: nowrap; }
+  .shapes-dialog .shapes-samples .shapes-asset { white-space: normal; overflow-wrap: normal; }
+  .shapes-dialog .shapes-samples .shapes-address { white-space: normal; overflow-wrap: anywhere; }
 
   /* The checks: a blocking one in the error style, a warning in the warning style; the word says which, colour is not the only sign. */
   .shapes-dialog .shapes-checks { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); }
