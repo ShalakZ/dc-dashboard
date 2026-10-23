@@ -16,7 +16,7 @@ import json
 import os
 from pathlib import Path
 
-from auth_expectations import DISPLAY, PUBLIC, ROUTE_PERMISSIONS, SIGNED_IN, satisfies
+from auth_expectations import DISPLAY, PUBLIC, PUBLIC_AFTER_FREEZE, ROUTE_PERMISSIONS, SIGNED_IN, satisfies
 from auth_probe import classify, patch_stream, route_requests, send, silent_client
 from dcdash.api.main import create_app
 from dcdash.core.permissions import BUILTIN
@@ -111,8 +111,19 @@ def test_every_route_added_after_the_freeze_is_in_the_permission_table():
     frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
     later = sorted(set(route_requests(create_app())) - set(frozen))
     # PUBLIC and SIGNED_IN are subsets of the frozen keys; a display route (W28) is neither public nor an account's.
-    missing = [key for key in later if key not in ROUTE_PERMISSIONS and key not in DISPLAY]
-    assert missing == [], "a route the matrix does not know must declare its permission in ROUTE_PERMISSIONS, or be listed in DISPLAY"
+    missing = [key for key in later if key not in ROUTE_PERMISSIONS and key not in DISPLAY and key not in PUBLIC_AFTER_FREEZE]
+    assert missing == [], (
+        "a route the matrix does not know must declare its permission in ROUTE_PERMISSIONS, or be listed in DISPLAY or PUBLIC_AFTER_FREEZE"
+    )
+
+
+def test_public_routes_added_after_the_freeze_are_not_in_the_frozen_matrix():
+    frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    assert PUBLIC_AFTER_FREEZE, "the table is empty"
+    assert sorted(set(PUBLIC_AFTER_FREEZE) & set(frozen)) == [], "the fixture is never edited: a public route was added after the freeze"
+    assert set(PUBLIC_AFTER_FREEZE).isdisjoint(set(PUBLIC) | set(SIGNED_IN) | set(ROUTE_PERMISSIONS) | set(DISPLAY))
+    assert all(reason.strip() for reason in PUBLIC_AFTER_FREEZE.values())
+    assert set(PUBLIC_AFTER_FREEZE) <= set(route_requests(create_app())), "listed with no such route"
 
 
 def test_display_routes_are_not_in_the_frozen_matrix():
@@ -129,7 +140,9 @@ def test_every_frozen_route_is_public_open_to_any_account_or_in_the_permission_t
     # comparison.
     frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
     added_after_freeze = set(route_requests(create_app())) - set(frozen)
-    assert added_after_freeze <= set(ROUTE_PERMISSIONS) | set(DISPLAY), "a route the fixture does not know must be in ROUTE_PERMISSIONS or DISPLAY"
+    assert added_after_freeze <= set(ROUTE_PERMISSIONS) | set(DISPLAY) | set(PUBLIC_AFTER_FREEZE), (
+        "a route the fixture does not know must be in ROUTE_PERMISSIONS, DISPLAY or PUBLIC_AFTER_FREEZE"
+    )
     assert set(frozen) == (set(ROUTE_PERMISSIONS) | set(PUBLIC) | set(SIGNED_IN) | set(DISPLAY)) - added_after_freeze
 
 

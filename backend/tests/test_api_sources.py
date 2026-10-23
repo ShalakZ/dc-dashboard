@@ -6,7 +6,7 @@ import pytest
 from dcdash.connectors.base import BAD, GOOD
 from dcdash.core.crypto import decrypt
 from dcdash.core.pg import CONFIG_CHANNEL
-from helpers import listening, login_as, make_asset, make_mapping, make_point, make_source
+from helpers import listening, login_as, make_asset, make_latest, make_mapping, make_point, make_source
 from test_collector_jobs_identity import run as run_jobs
 
 SIM = {
@@ -812,3 +812,102 @@ async def test_the_other_routes_do_not_grow_the_field(client, db):
     created = await client.post("/api/sources", json=SIM)
     assert "identity_different" not in created.json()
     assert "identity_different" not in (await client.patch(f"/api/sources/{source}", json={"enabled": False})).json()
+
+
+# ---- w35: the data freshness rule's numbers per source ----------------------------------------------------------------------------
+
+
+async def billing_meter(db, source: int, address: str, *, metric="active_power_kw", good_age: float | None = 5,
+                        changed_age: float | None = None) -> int:
+    point = await make_point(db, source, address)
+    await make_mapping(db, point, await make_asset(db, f"asset {address}"), metric=metric)
+    if good_age is not None:
+        await make_latest(db, point, age=good_age, good_age=good_age, good_value=1.0,
+                          changed_age=good_age if changed_age is None else changed_age)
+    return point
+
+
+async def test_the_list_gives_each_sources_billing_meter_numbers_and_null_for_a_source_without_one(client, db):
+    await login_as(client, db, "operator")
+    healthy = await make_source(db, name="healthy")
+    quiet = await make_source(db, name="quiet")
+    still = await make_source(db, name="still")
+    await make_source(db, name="plain")  # a manual source with nothing mapped
+    voltage_only = await make_source(db, name="volts")
+    await billing_meter(db, healthy, "h1")
+    await billing_meter(db, quiet, "q1", good_age=900)  # silent for 15 minutes: stale
+    await billing_meter(db, quiet, "q2")
+    await billing_meter(db, still, "s1", metric="energy_kwh", changed_age=7 * 3600)  # a lone counter standing still: soft
+    await billing_meter(db, voltage_only, "v1", metric="voltage_v")  # mapped, but not a billing meter
+    rows = {s["name"]: s for s in (await client.get("/api/sources")).json()}
+    assert rows["healthy"]["meters"] == {"total": 1, "stale": 0, "not_advancing": 0, "frozen": False, "oldest_stale_age_seconds": None}
+    assert rows["quiet"]["meters"]["total"] == 2 and rows["quiet"]["meters"]["stale"] == 1
+    assert 899 <= rows["quiet"]["meters"]["oldest_stale_age_seconds"] < 920
+    assert rows["still"]["meters"] == {"total": 1, "stale": 0, "not_advancing": 1, "frozen": False, "oldest_stale_age_seconds": None}
+    assert rows["plain"]["meters"] is None and rows["volts"]["meters"] is None
+    assert set(rows["healthy"]["meters"]) == {"total", "stale", "not_advancing", "frozen", "oldest_stale_age_seconds"}  # no `waiting`
+
+
+async def test_a_frozen_source_counts_its_counters_at_the_stale_level(client, db):
+    await login_as(client, db, "operator")
+    cached = await make_source(db, name="cached")
+    for address in ("c1", "c2"):
+        await billing_meter(db, cached, address, metric="energy_kwh", changed_age=7 * 3600)
+    await billing_meter(db, cached, "volts", metric="voltage_v", changed_age=7 * 3600)
+    row = next(s for s in (await client.get("/api/sources")).json() if s["name"] == "cached")
+    assert row["meters"]["frozen"] is True and row["meters"]["stale"] == 2 and row["meters"]["not_advancing"] == 0
+    assert row["meters"]["oldest_stale_age_seconds"] >= 7 * 3600 - 5
+
+
+async def test_a_meter_nobody_has_read_yet_is_not_stale_on_the_sources_page(client, db):
+    await login_as(client, db, "operator")
+    new = await make_source(db, name="new")
+    await billing_meter(db, new, "n1", good_age=None)  # mapped, never polled
+    row = (await client.get("/api/sources")).json()[0]
+    assert row["meters"] == {"total": 1, "stale": 0, "not_advancing": 0, "frozen": False, "oldest_stale_age_seconds": None}
+
+
+async def test_the_meter_numbers_cost_one_verdict_for_the_whole_list(client, db, monkeypatch):
+    from dcdash.events import watchdog
+
+    await login_as(client, db, "operator")
+    for n in range(6):
+        await billing_meter(db, await make_source(db, name=f"s{n}"), f"a{n}")
+    asked = []
+    real = watchdog.compute_verdict
+
+    async def counting(session_factory):
+        asked.append(1)
+        return await real(session_factory)
+
+    monkeypatch.setattr(watchdog, "compute_verdict", counting)
+    rows = (await client.get("/api/sources")).json()
+    assert len(rows) == 6 and all(r["meters"]["total"] == 1 for r in rows)
+    assert len(asked) == 1
+    await client.get("/api/sources")
+    assert len(asked) == 1  # the next list, inside five seconds, asks nothing
+
+
+async def test_when_the_rule_cannot_be_evaluated_every_meters_is_null_and_the_rest_of_the_row_is_answered(client, db, monkeypatch):
+    from dcdash.events import watchdog
+
+    await login_as(client, db, "operator")
+    source = await make_source(db, name="busy")
+    await billing_meter(db, source, "b1")
+
+    async def broken(timeout=2.0):
+        raise watchdog.VerdictUnavailable("took longer than 2 s")
+
+    monkeypatch.setattr(watchdog, "get_verdict", broken)
+    response = await client.get("/api/sources")
+    assert response.status_code == 200
+    [row] = response.json()
+    assert row["meters"] is None and row["name"] == "busy" and row["mapped_points"] == 1 and row["last_reading_age_seconds"] is not None
+
+
+async def test_only_the_list_carries_the_meter_numbers(client, db):
+    await login_as(client, db, "admin")
+    created = await create_sim(client)
+    assert "meters" not in created
+    patched = await client.patch(f"/api/sources/{created['id']}", json={"name": "renamed"})
+    assert patched.status_code == 200 and "meters" not in patched.json()

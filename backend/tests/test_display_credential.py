@@ -13,7 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from auth_expectations import DISPLAY, DISPLAY_CLAIM, PUBLIC
+from auth_expectations import DISPLAY, DISPLAY_CLAIM, PUBLIC, PUBLIC_AFTER_FREEZE
 from auth_probe import BODY_METHODS, patch_stream, route_requests, silent_client
 from dcdash.api import display
 from helpers import login_as, make_display
@@ -62,7 +62,7 @@ async def test_a_display_cookie_gets_401_on_every_route_that_is_not_a_display_ro
             for key, response in answers.items():
                 if key in DISPLAY:
                     continue
-                if key in PUBLIC:  # a public route behaves as if the cookie were not there
+                if key in PUBLIC or key in PUBLIC_AFTER_FREEZE:  # a public route behaves as if the cookie were not there
                     assert (response.status_code, response.content) == (nothing[key].status_code, nothing[key].content), (name, key)
                 else:
                     assert response.status_code == 401, (name, key, response.status_code)

@@ -340,7 +340,7 @@ def test_every_settings_field_is_reported_or_explicitly_excluded():
     declared = set(Settings.model_fields)
     shown, excluded = set(report.REPORT_ENV_FIELDS), set(report.EXCLUDED_ENV_FIELDS)
     assert declared == shown | excluded and not shown & excluded
-    assert {"database_url", "secret_key"} <= excluded
+    assert {"database_url", "secret_key", "health_token"} <= excluded
 
 
 def test_report_config_drops_credentials_the_user_name_and_unlisted_fields():

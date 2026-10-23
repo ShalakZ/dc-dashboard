@@ -17,7 +17,7 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.routing import APIRoute, iter_route_contexts
 
-from auth_expectations import DISPLAY, DISPLAY_CLAIM, PUBLIC, ROUTE_PERMISSIONS, SIGNED_IN, satisfies
+from auth_expectations import DISPLAY, DISPLAY_CLAIM, PUBLIC, PUBLIC_AFTER_FREEZE, ROUTE_PERMISSIONS, SIGNED_IN, satisfies
 from auth_probe import classify, patch_stream, probe, route_requests, send_for_response, silent_client
 from dcdash.api.deps import current_user, get_db, require_any_permission, require_permission
 from dcdash.api.main import create_app
@@ -32,6 +32,7 @@ except ImportError:
     current_display = None
 
 DCDASH = Path(__file__).resolve().parents[1] / "dcdash"
+ALL_PUBLIC = {**PUBLIC, **PUBLIC_AFTER_FREEZE}  # the gate treats a route added after the freeze like the frozen public ones
 CUSTOM_IDS = sorted(ALL_IDS - NOT_FOR_CUSTOM_ROLES)
 
 
@@ -121,7 +122,7 @@ def gate_problems(app: FastAPI, route_permissions: dict, public: dict, signed_in
 
 
 def test_every_route_declares_what_the_table_says():
-    assert gate_problems(create_app(), ROUTE_PERMISSIONS, PUBLIC, SIGNED_IN, DISPLAY) == []
+    assert gate_problems(create_app(), ROUTE_PERMISSIONS, ALL_PUBLIC, SIGNED_IN, DISPLAY) == []
 
 
 def test_main_includes_every_router_without_dependencies():
@@ -297,7 +298,7 @@ def a_display_dependency(monkeypatch):
 def test_the_display_table_is_a_list_of_its_own():
     assert DISPLAY_CLAIM in DISPLAY
     assert all(key.split(" ", 1)[1].startswith("/api/display/") for key in DISPLAY)
-    assert set(DISPLAY).isdisjoint(set(ROUTE_PERMISSIONS) | set(PUBLIC) | set(SIGNED_IN))
+    assert set(DISPLAY).isdisjoint(set(ROUTE_PERMISSIONS) | set(ALL_PUBLIC) | set(SIGNED_IN))
     assert all(reason.strip() for reason in DISPLAY.values())
 
 
@@ -513,8 +514,10 @@ async def test_nobody_signed_in_is_refused_everywhere_except_the_public_routes(a
     async with silent_client(app) as client:
         # The display routes are probed on their own below: the claim answers an empty body 422, not 401.
         statuses = await probe(client, requests, [key for key in requests if key not in DISPLAY])
-    assert {key: classify(status) for key, status in statuses.items() if key not in PUBLIC and status != 401} == {}
-    assert {key for key in PUBLIC if statuses[key] in (401, 403)} == set()
+    assert {key: classify(status) for key, status in statuses.items() if key not in ALL_PUBLIC and status != 401} == {}
+    assert {key for key in ALL_PUBLIC if statuses[key] in (401, 403)} == set()
+    # GET /api/health/data answers 200 here: the probe database has no billing meter ("no_meters"); with one stale meter it would be
+    # the intended 503, which the `>= 500` check below would count as a fault.
     assert {key for key, status in statuses.items() if status >= 500} == set()
 
 
