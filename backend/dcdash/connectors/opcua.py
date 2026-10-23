@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -15,7 +16,7 @@ from urllib.parse import urlparse, urlsplit, urlunsplit
 from asyncua import Client, Node, ua
 from asyncua.client.ua_client import UaClient, UASocketProtocol
 from asyncua.common.shortcuts import Shortcuts
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 from dcdash.connectors.base import (
     BAD,
@@ -30,6 +31,7 @@ from dcdash.connectors.base import (
     url_host_port,
 )
 from dcdash.connectors.identity import from_endpoints
+from dcdash.connectors.opcua_ids import read_plan, stable_address
 
 if TYPE_CHECKING:
     from dcdash.diagnostics.check import CheckResult, Publish
@@ -51,6 +53,19 @@ class OpcUaConfig(BaseModel):
     # Only used with basic256sha256; the collector mounts ./certs read-only at /certs.
     client_cert: str = "/certs/opcua-client.pem"
     client_key: str = "/certs/opcua-client-key.pem"
+    # Off unless a person ticks it, never switched on by the platform (w34 R3). A strict bool: the string "true" or the number 1 is
+    # refused, and `address_key_for` (which the matchers use) treats anything but the real True as off, so the two never disagree.
+    stable_addresses: StrictBool = Field(
+        False,
+        json_schema_extra={
+            "title": "Stable tag addresses",
+            "description": (
+                "For AVEVA Plant SCADA: read each tag as ns=3;s=Cluster.Tag, without the number browsing puts in front of it "
+                "(20403:), which can change when the SCADA project changes. Based on a community answer, not tested against "
+                "your SCADA. Leave this off for other servers."
+            ),
+        },
+    )
 
 
 def _reported_path(endpoint_url: object) -> str:
@@ -313,35 +328,67 @@ class OpcUaConnector(Connector):
         return await run_check(self, points, publish)
 
     async def browse(self) -> list[PointDescriptor]:
-        found: list[PointDescriptor] = []
         async with self._session() as client:
-            root = client.get_node(self.config.root_node)
-            # Under the Objects folder, namespace 0 holds only OPC Foundation infrastructure
-            # (Server diagnostics, Aliases, ...), never process data.
-            skip_standard = root.nodeid == _OBJECTS_FOLDER
-            stack: list[Node] = [root]
-            seen: set[str] = set()
-            while stack:
-                node = stack.pop()
-                for child in await node.get_children(refs=ua.ObjectIds.HierarchicalReferences):
-                    key = child.nodeid.to_string()
-                    if key in seen or (skip_standard and child.nodeid.NamespaceIndex == 0):
-                        continue
-                    seen.add(key)
-                    node_class = await child.read_node_class()
-                    if node_class == ua.NodeClass.Variable:
-                        name = (await child.read_display_name()).Text or key
-                        found.append(PointDescriptor(address=key, name=name, unit_hint=await _unit(child)))
-                    elif node_class == ua.NodeClass.Object:
-                        stack.append(child)
+            found = await self._walk(client)
+        # The post step (w34): whatever walks the server, the descriptors of a source with the option on carry the stable
+        # address. The walk deduplicated on the raw id, so two descriptors can share a stable address (the browse upsert counts
+        # the second as ambiguous). The order is the old one: by name, ties in discovery order.
+        if self.config.stable_addresses:
+            found = [replace(d, address=stable_address(d.address)) for d in found]
         return sorted(found, key=lambda p: p.name)
+
+    async def _walk(self, client: Client) -> list[PointDescriptor]:
+        """Every variable under the root node, as the server names it (a raw node id), in discovery order."""
+        found: list[PointDescriptor] = []
+        root = client.get_node(self.config.root_node)
+        # Under the Objects folder, namespace 0 holds only OPC Foundation infrastructure
+        # (Server diagnostics, Aliases, ...), never process data.
+        skip_standard = root.nodeid == _OBJECTS_FOLDER
+        stack: list[Node] = [root]
+        seen: set[str] = set()
+        while stack:
+            node = stack.pop()
+            for child in await node.get_children(refs=ua.ObjectIds.HierarchicalReferences):
+                key = child.nodeid.to_string()
+                if key in seen or (skip_standard and child.nodeid.NamespaceIndex == 0):
+                    continue
+                seen.add(key)
+                node_class = await child.read_node_class()
+                if node_class == ua.NodeClass.Variable:
+                    name = (await child.read_display_name()).Text or key
+                    found.append(PointDescriptor(address=key, name=name, unit_hint=await _unit(child)))
+                elif node_class == ua.NodeClass.Object:
+                    stack.append(child)
+        return found
 
     async def read(self, addresses: list[str]) -> list[PointValue]:
         ts = datetime.now(timezone.utc)
+        if self.config.stable_addresses:
+            return await self._read_stable(addresses, ts)
         async with self._session() as client:
-            nodes = [client.get_node(a) for a in addresses]
-            results = await client.read_attributes(nodes, ua.AttributeIds.Value)
+            results = await self._read_values(client, addresses)
         return [_point_value(address, ts, dv) for address, dv in zip(addresses, results, strict=True)]
+
+    async def _read_stable(self, addresses: list[str], ts: datetime) -> list[PointValue]:
+        """`read` for a source with the option on: the server is asked for the stable form of each address, and each answer is
+        filed under the STORED string it was asked for, in the caller's order. Distinct stored strings that are one tag are
+        not read at all: each comes back BAD, so one reading never reaches two points."""
+        plan = read_plan(addresses, stable_address)
+        sent = [stable for _stored, stable in plan.sent]
+        async with self._session() as client:
+            results = await self._read_values(client, sent) if sent else []  # a request for no node is not sent
+        answers = {
+            stored: _point_value(stored, ts, dv) for (stored, _stable), dv in zip(plan.sent, results, strict=True)
+        }
+        return [
+            PointValue(address, ts, None, BAD, plan.refused[address]) if address in plan.refused else answers[address]
+            for address in addresses
+        ]
+
+    async def _read_values(self, client: Client, addresses: Sequence[str]) -> list[ua.DataValue]:
+        """The wire request of a read: the Value of every node, in one request, one answer per address in the same order."""
+        nodes = [client.get_node(a) for a in addresses]
+        return await client.read_attributes(nodes, ua.AttributeIds.Value)
 
 
 def _status_text(code: ua.StatusCode) -> str:
