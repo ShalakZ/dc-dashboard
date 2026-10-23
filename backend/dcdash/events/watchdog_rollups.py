@@ -5,8 +5,9 @@
 (the view is missing, no permission, the database is slow) answers False and never raises: this is a hint on the status answer and
 the data health URL, not a verdict, and it must never turn either of them into an error.
 
-The question runs in a session of its own (a failed statement must not abort the request's transaction), in one shared task, and
-the answer is reused for 5 seconds per process, like `watchdog.get_verdict`. `reset()` forgets the answer, `aclear()` also waits
+The question runs in a session of its own (a failed statement must not abort the request's transaction), in one shared task that
+ends after `watchdog.COMPUTE_SECONDS` at the latest (a hung query is a failure like any other), and the answer is reused for
+5 seconds per process, like `watchdog.get_verdict`. `reset()` forgets the answer, `aclear()` also waits
 for a question still running (for tests).
 """
 import asyncio
@@ -18,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.core.db import get_sessionmaker
+from dcdash.events.watchdog import COMPUTE_SECONDS
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +56,9 @@ async def _query(session: AsyncSession) -> bool:
 
 async def _ask() -> bool:
     try:
-        async with get_sessionmaker()() as session:
+        # Bounded like the verdict's shared task (a query that hangs on a half-open connection must not leave the task pending for
+        # good): the `TimeoutError` is a failure like any other, answered False and remembered for CACHE_SECONDS. Read at call time.
+        async with asyncio.timeout(COMPUTE_SECONDS), get_sessionmaker()() as session:
             return await _query(session)
     except Exception as exc:
         kind = type(exc).__name__

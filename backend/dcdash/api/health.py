@@ -206,7 +206,8 @@ def _unavailable() -> JSONResponse:
 async def health_data(request: Request) -> JSONResponse:
     configured = get_settings().health_token.strip()  # blank = no token set
     if configured and not _bearer_ok(request.headers.get("authorization"), configured):
-        return JSONResponse({}, status_code=401, headers={"Cache-Control": "no-store"})  # nothing to learn from it: no detail, no hint
+        # nothing to learn from it: no detail, no hint in the body; the header only names the scheme (RFC 7235 asks a 401 for one)
+        return JSONResponse({}, status_code=401, headers={"Cache-Control": "no-store", "WWW-Authenticate": "Bearer"})
     # The three questions run together, so a database that does not answer costs one bound, not three. None of them uses the
     # request's session (it has no time bound).
     answers, verdict, alive, late = await asyncio.gather(

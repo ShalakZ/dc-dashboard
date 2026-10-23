@@ -246,7 +246,7 @@ async def test_a_blank_token_means_none_is_set(client, db, set_token, configured
     assert (await get(client)).status_code == 200
 
 
-async def test_with_a_token_a_missing_or_wrong_one_is_401_with_an_empty_body(client, db, set_token):
+async def test_with_a_token_a_missing_or_wrong_one_is_401_with_an_empty_body_and_a_bearer_challenge(client, db, set_token):
     set_token("s3cret-token")
     await meter(db, "a", good_age=500)  # would be a 503 if the token had been accepted
     for headers in (
@@ -257,7 +257,7 @@ async def test_with_a_token_a_missing_or_wrong_one_is_401_with_an_empty_body(cli
         response = await get(client, headers=headers)
         assert response.status_code == 401, headers
         assert response.text == "{}" and response.json() == {}, headers  # no detail, no hint
-        assert "www-authenticate" not in response.headers
+        assert response.headers["www-authenticate"] == "Bearer", headers  # RFC 7235: a 401 names the scheme it wants
 
 
 async def test_the_right_token_gets_the_real_answer(client, db, set_token):

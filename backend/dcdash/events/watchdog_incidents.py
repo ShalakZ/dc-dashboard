@@ -126,9 +126,9 @@ def message_of(sv: SourceVerdict) -> str:
         span = "" if sv.frozen_shortest_seconds is None else f" for {format_span(sv.frozen_shortest_seconds)}"
         parts.append(f"every energy counter of this source has stood still{span} although each reads Good")
     elif sv.not_advancing:
-        noun = "counter" if sv.counters == 1 else "counters"
+        noun = "counter" if sv.not_advancing == 1 else "counters"  # no "of N": the meters are not all counters
         parts.append(
-            f"{sv.not_advancing} of {sv.counters} energy {noun} {'has' if sv.not_advancing == 1 else 'have'} not risen"
+            f"{sv.not_advancing} energy {noun} {'has' if sv.not_advancing == 1 else 'have'} not risen"
             f"{_for(sv.not_advancing, sv.not_advancing_oldest_seconds)}"
         )
     return "; ".join(parts)
@@ -147,8 +147,14 @@ def numbers_of(sv: SourceVerdict) -> dict[str, Any]:
 
 
 def _trouble_age(sv: SourceVerdict) -> float:
-    """How long the trouble has stood: the longest silence, standstill or slow counter (0 when no age is known)."""
-    ages = [sv.silent_oldest_seconds, sv.frozen_oldest_seconds if sv.frozen else None, sv.not_advancing_oldest_seconds]
+    """How long the trouble has stood, which is when the incident began (0 = now when no age is known). An error began when the
+    SILENCE did: the longer of the silent meters' oldest age and the frozen counters' oldest standstill; counters that merely
+    stopped rising earlier do not move it back (they sit in the same row, but they are not why the row is an error). Only a
+    warning, whose whole trouble is counters that do not rise, begins when the oldest of them stopped."""
+    if level_of(sv) == "error":
+        ages = [sv.silent_oldest_seconds, sv.frozen_oldest_seconds if sv.frozen else None]
+    else:
+        ages = [sv.not_advancing_oldest_seconds]
     return max((age for age in ages if age is not None), default=0.0)
 
 
@@ -161,7 +167,8 @@ _OPEN_SOURCES = text(
 )
 
 # The newest open row of the source is bumped, else one is opened; `since` is written only when it opens (the trouble began before the
-# row: the oldest silence or standstill), a bump keeps it and writes the numbers again. `RETURNING` says which of the two happened.
+# row: the oldest silence or standstill, or for a warning the oldest slow counter), a bump keeps it and writes the numbers again.
+# `RETURNING` says which of the two happened.
 _OPEN_OR_BUMP = text(
     f"""
     WITH t AS (

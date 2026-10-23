@@ -2,11 +2,12 @@
 no; a job whose last success is long ago says yes), and fakes for the cache, the failures and the bound."""
 import asyncio
 import logging
+import time
 
 import pytest
 
 from dcdash.core.db import get_sessionmaker
-from dcdash.events import watchdog_rollups
+from dcdash.events import watchdog, watchdog_rollups
 
 HOUR_ROLLUP_JOB = "SELECT job_id FROM timescaledb_information.jobs WHERE proc_name = 'policy_refresh_continuous_aggregate' ORDER BY job_id LIMIT 1"
 
@@ -147,3 +148,38 @@ async def test_reset_forgets_the_answer(monkeypatch):
     assert await watchdog_rollups.rollups_late() is True
     watchdog_rollups.reset()
     assert await watchdog_rollups.rollups_late() is False
+
+
+async def test_a_question_that_hangs_ends_at_its_own_bound_as_a_failure_cached_for_five_seconds(monkeypatch, caplog):
+    asked = []
+    now = [100.0]
+    gate = asyncio.Event()  # never set: the query hangs on a half-open connection
+
+    async def hangs(_session):
+        asked.append(1)
+        await gate.wait()
+        return True
+
+    assert watchdog_rollups.COMPUTE_SECONDS == watchdog.COMPUTE_SECONDS  # the one bound of the shared computations
+    monkeypatch.setattr(watchdog_rollups, "_query", hangs)
+    monkeypatch.setattr(watchdog_rollups, "_clock", lambda: now[0])
+    monkeypatch.setattr(watchdog_rollups, "COMPUTE_SECONDS", 0.2)
+    caplog.set_level(logging.WARNING)
+
+    started = time.monotonic()
+    assert await watchdog_rollups.rollups_late() is False  # the caller's 2 s is longer than the bound: the task ended, not the caller
+    assert time.monotonic() - started < 1.5
+    assert watchdog_rollups._task is None and not watchdog_rollups._running  # nothing is left waiting for ever
+    assert watchdog_rollups._entry == (100.0, False)
+    assert [r.getMessage() for r in caplog.records if "rollup refresh jobs" in r.getMessage()] == [
+        "could not ask whether the rollup refresh jobs are late (TimeoutError); answering no"
+    ]
+
+    now[0] += 4.0  # a failure is remembered for 5 s: no new question
+    assert await watchdog_rollups.rollups_late() is False
+    assert len(asked) == 1
+
+    now[0] += 1.2  # 5.2 s after it: the next call asks again (and this time the database answers)
+    gate.set()
+    assert await watchdog_rollups.rollups_late() is True
+    assert len(asked) == 2

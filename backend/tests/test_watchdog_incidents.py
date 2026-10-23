@@ -248,7 +248,7 @@ async def test_slow_counters_alone_are_a_warning_and_a_silent_meter_that_appears
     await step()
     (row,) = await rows_of(db)
     assert row["level"] == "warning"
-    assert row["message"] == "2 of 3 energy counters have not risen for up to 8 h"
+    assert row["message"] == "2 energy counters have not risen for up to 8 h"
     assert (row["detail"]["stale"], row["detail"]["not_advancing"], row["detail"]["frozen"]) == (0, 2, False)
     assert row["detail"]["oldest_stale_age_seconds"] is None
 
@@ -257,7 +257,7 @@ async def test_slow_counters_alone_are_a_warning_and_a_silent_meter_that_appears
     await step()
     (row,) = await rows_of(db)
     assert row["level"] == "error" and row["detail"]["count"] == 2  # the same row, bumped, now an error
-    assert row["message"] == "1 of 4 meters has had no good reading for 15 min; 2 of 3 energy counters have not risen for up to 8 h"
+    assert row["message"] == "1 of 4 meters has had no good reading for 15 min; 2 energy counters have not risen for up to 8 h"
     assert (row["detail"]["stale"], row["detail"]["not_advancing"]) == (1, 2)
 
     await silent_for(db, extra, 1)
@@ -283,6 +283,86 @@ async def test_a_frozen_source_is_an_error_that_says_each_counter_reads_good(db)
     assert (row["detail"]["frozen"], row["detail"]["stale"], row["detail"]["not_advancing"]) == (True, 2, 0)
     assert row["detail"]["oldest_stale_age_seconds"] == pytest.approx(8 * HOUR, abs=10)
     assert abs((when(row["detail"]["since"]) - (datetime.now(timezone.utc) - timedelta(hours=8))).total_seconds()) < 10
+
+
+async def test_one_slow_counter_is_named_without_a_total_and_began_when_it_stopped_rising(db):
+    source = await make_source(db, "Plant")
+    counter = await meter(db, source, "c1", "energy_kwh")
+    voltage = await meter(db, source, "v", "voltage_v")
+    await read_now(db, counter, changed=7 * HOUR)
+    await read_now(db, voltage, changed=5)
+    await step()
+    await step()
+    (row,) = await rows_of(db)
+    assert row["level"] == "warning"
+    assert row["message"] == "1 energy counter has not risen for 7 h"
+    assert abs((when(row["detail"]["since"]) - (datetime.now(timezone.utc) - timedelta(hours=7))).total_seconds()) < 10
+
+
+async def test_a_warning_incident_began_when_its_oldest_counter_stopped_rising(db):
+    await counters_site(db)  # two counters standing for 7 and 8 hours, nothing silent
+    await step()
+    await step()
+    (row,) = await rows_of(db)
+    assert row["level"] == "warning" and row["detail"]["oldest_stale_age_seconds"] is None
+    assert abs((when(row["detail"]["since"]) - (datetime.now(timezone.utc) - timedelta(hours=8))).total_seconds()) < 10
+
+
+async def test_an_error_incident_began_when_the_silence_began_not_when_a_counter_stopped_rising(db):
+    source, _, _ = await counters_site(db)  # counters that have not risen for up to 8 h ...
+    quiet = await meter(db, source, "gone", "active_power_kw")
+    await silent_for(db, quiet, 3 * HOUR)  # ... and a meter that has been silent for 3 h
+    await step()
+    await step()
+    (row,) = await rows_of(db)
+    assert row["level"] == "error" and row["detail"]["not_advancing"] == 2
+    assert abs((when(row["detail"]["since"]) - (datetime.now(timezone.utc) - timedelta(hours=3))).total_seconds()) < 10
+
+
+async def test_an_error_incident_with_no_known_silence_age_began_now_whatever_the_counters_say(db):
+    source, _, _ = await counters_site(db)
+    await make_latest(db, await meter(db, source, "bad", "active_power_kw"), age=3, value=None, quality=1)  # polled, never a Good value
+    await step()
+    await step()
+    (row,) = await rows_of(db)
+    assert row["level"] == "error" and row["detail"]["stale"] == 1 and row["detail"]["oldest_stale_age_seconds"] is None
+    assert abs((when(row["detail"]["since"]) - datetime.now(timezone.utc)).total_seconds()) < 10
+
+
+async def test_a_bump_never_changes_since(db):
+    source, quiet, _ = await plant(db)
+    await step()
+    await step()
+    (first,) = await rows_of(db)
+    await silent_for(db, quiet[0], 9 * HOUR)  # the silence now reads older: the row still began when it opened
+    await step()
+    (later,) = await rows_of(db)
+    assert later["detail"]["count"] == 2 and later["detail"]["since"] == first["detail"]["since"]
+
+
+def _verdict_of(**kwargs) -> watchdog.SourceVerdict:
+    base = dict(
+        source_id=1, meters=4, counters=2, waiting=0, stale=0, not_advancing=0, frozen=False, oldest_stale_age_seconds=None, silent=0,
+        silent_oldest_seconds=None, frozen_counters=0, frozen_oldest_seconds=None, frozen_shortest_seconds=None,
+        not_advancing_oldest_seconds=None,
+    )
+    return watchdog.SourceVerdict(**{**base, **kwargs})
+
+
+def test_the_age_of_a_trouble_by_the_kind_of_incident():
+    both = _verdict_of(stale=1, silent=1, silent_oldest_seconds=3 * HOUR, not_advancing=2, not_advancing_oldest_seconds=8 * HOUR)
+    assert incidents._trouble_age(both) == 3 * HOUR  # error: the silence, never the slow counters
+    frozen = _verdict_of(stale=2, frozen=True, frozen_counters=2, frozen_oldest_seconds=5 * HOUR, frozen_shortest_seconds=4 * HOUR)
+    assert incidents._trouble_age(frozen) == 5 * HOUR
+    silent_and_frozen = _verdict_of(
+        stale=3, silent=1, silent_oldest_seconds=6 * HOUR, frozen=True, frozen_counters=2, frozen_oldest_seconds=5 * HOUR,
+        not_advancing_oldest_seconds=9 * HOUR,
+    )
+    assert incidents._trouble_age(silent_and_frozen) == 6 * HOUR  # the larger of the two
+    slow = _verdict_of(not_advancing=1, not_advancing_oldest_seconds=8 * HOUR)
+    assert incidents._trouble_age(slow) == 8 * HOUR  # warning: the slow counter
+    assert incidents._trouble_age(_verdict_of(stale=1, not_advancing=1, not_advancing_oldest_seconds=8 * HOUR)) == 0.0  # error, no age known
+    assert incidents._trouble_age(_verdict_of(not_advancing=1)) == 0.0  # warning, no age known
 
 
 async def test_the_words_are_singular_for_one_meter(db):
