@@ -27,6 +27,7 @@ SAME = "10 of 10 tags read the same both ways"
 UNKNOWN_ON = "the stable address is unknown to this server for 10 of 10 tags: turn the option off"
 UNKNOWN_OFF = "the stable address is unknown to this server for 10 of 10 tags: do not turn the option on"
 DEAD = "the numbered address no longer works for 10 of 10 tags but the stable one does: the SCADA numbering may have changed"
+DEAD_ON = f'{DEAD}; with "Stable tag addresses" on, your readings are not affected'  # said only while the option is on
 
 
 # ---- the pure functions -------------------------------------------------------------------------------------------------------
@@ -138,7 +139,7 @@ async def test_the_comparison_ignores_the_option_it_reads_the_numbered_form_as_s
         _tags, numbered = await first_ten(sim, connector(sim))
         on = connector(sim, stable_addresses=True)
         sim.restructure("bad")  # every old number is dead: with the option on, a plain read would never notice
-        assert (await on.compare_stable(numbered)).message == DEAD
+        assert (await on.compare_stable(numbered)).message == DEAD_ON
 
 
 async def test_a_renumbered_server_says_the_numbered_address_no_longer_works():
@@ -268,9 +269,10 @@ async def test_the_most_severe_finding_is_the_one_sentence_different_values_then
     assert (await c.compare_stable(NUMBERED[2:])).message == (
         "the stable address is unknown to this server for 3 of 8 tags: do not turn the option on"
     )
-    assert (await c.compare_stable(NUMBERED[5:])).message == (
-        "the numbered address no longer works for 3 of 5 tags but the stable one does: the SCADA numbering may have changed"
-    )
+    dead = "the numbered address no longer works for 3 of 5 tags but the stable one does: the SCADA numbering may have changed"
+    assert (await c.compare_stable(NUMBERED[5:])).message == dead  # the option is off: the sentence is exactly what it was
+    on = fake_connector(stable_addresses=True)  # option ON: the readings use the stable form, and Test says they are not hurt
+    assert (await on.compare_stable(NUMBERED[5:])).message == f'{dead}; with "Stable tag addresses" on, your readings are not affected'
     assert (await c.compare_stable(NUMBERED[8:])).message == "2 of 2 tags read the same both ways"
 
 
@@ -462,7 +464,7 @@ async def test_numbers_that_no_longer_work_are_good_news_for_the_option_so_detai
         _tags, numbered = await numbered_of(sim, 10)
         sim.restructure("bad")
         step = await read_points_step(sim, numbered, stable_addresses=True)
-        assert step.detail["stable_comparison"] == DEAD and step.hint is None
+        assert step.detail["stable_comparison"] == DEAD_ON and step.hint is None
 
 
 async def test_an_unknown_stable_address_is_a_hint_line_after_the_status_hints(monkeypatch):

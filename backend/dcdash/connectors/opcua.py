@@ -406,7 +406,8 @@ class OpcUaConnector(Connector):
         are read in the same request either way, so a tag that ticks cannot show up as a difference.
 
         One sentence is returned, the most severe that applies, in this order: the two forms read different values; the stable
-        form is unknown to the server; the numbered form no longer works but the stable one does; the two forms read the same.
+        form is unknown to the server; the numbered form no longer works but the stable one does (with the option on, that sentence ends
+        in "; with "Stable tag addresses" on, your readings are not affected"); the two forms read the same.
         A tag whose two forms are both Bad is counted in the total only; when nothing at all could be compared the message is empty.
         """
         numbered = [a for a in dict.fromkeys(addresses) if has_number_prefix(a)]
@@ -449,6 +450,8 @@ class OpcUaConnector(Connector):
                 f"the numbered address no longer works for {numbered_dead} {tags} but the stable one does: "
                 "the SCADA numbering may have changed"
             )
+            if self.config.stable_addresses:  # the option reads the stable form: the person who sees this is told nothing is lost
+                message += '; with "Stable tag addresses" on, your readings are not affected'
         elif same:
             message = f"{same} {tags} read the same both ways"
         else:
