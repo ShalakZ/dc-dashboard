@@ -12,7 +12,7 @@ import asyncpg
 from dcdash.collector.incidents import IncidentBook
 from dcdash.collector.writer import Row, Writer
 from dcdash.connectors.base import BAD, Connector, ConnectorError, ConnectorFactory, PointValue, create_connector
-from dcdash.connectors.opcua_ids import address_key_for, identity_key, read_plan
+from dcdash.connectors.opcua_ids import address_key_for, read_plan, stable_address
 from dcdash.core import journal
 from dcdash.core.audit import clip_error
 from dcdash.core.crypto import decrypt
@@ -85,11 +85,11 @@ def _twins_by_source(rows: list[asyncpg.Record]) -> dict[int, dict[str, str]]:
         source_id = row["source_id"]
         if source_id not in keys:
             keys[source_id] = address_key_for(row["connector_type"], row["config"])
-        if keys[source_id] is not identity_key:
+        if keys[source_id] is stable_address:  # the option is on (the other key compares addresses as they are)
             addresses.setdefault(source_id, []).append(row["address"])
     twins: dict[int, dict[str, str]] = {}
     for source_id, mapped in addresses.items():
-        if refused := read_plan(mapped, keys[source_id]).refused:  # one point mapped twice is one address, not a twin
+        if refused := read_plan(mapped, keys[source_id]).refused:  # the same stored string twice is one address, not a twin
             twins[source_id] = refused
     return twins
 
