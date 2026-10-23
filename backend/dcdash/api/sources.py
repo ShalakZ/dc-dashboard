@@ -12,6 +12,7 @@ from sqlalchemy import distinct, exists, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dcdash.api.address_guard import mapped_twins_of_source, option_on, patch_sentence
 from dcdash.api.deps import current_user, get_db, notify, require_permission
 from dcdash.api.health import log_once
 from dcdash.api.jobs import enqueue
@@ -421,6 +422,15 @@ async def update_source(
         submitted = reconcile_config(source.config, body.config, body.clear_config_credentials)
         reject_hidden_marker(submitted, source.config)
         source.config = validated_config(source.connector_type, submitted)
+        if not option_on(source.connector_type, raw_config) and option_on(source.connector_type, source.config):
+            # Turning "Stable tag addresses" on (w34): two MAPPED points that are the same tag would make the poll read neither. Inside
+            # the row lock above; no_autoflush so the half-made edit (a name that may clash) is not flushed by this read.
+            with db.no_autoflush:
+                twins = await mapped_twins_of_source(db, source)
+            if twins:
+                sentence = patch_sentence(twins)
+                await db.rollback()  # nothing was changed: let go of the row lock before answering
+                raise HTTPException(422, sentence)
     # A source that now points at another host or port is not talking to the server it remembers (w33 whole-wave review I1): forget it,
     # so a stale identity cannot read "a different server answers here" for good or carry a move offer. A Test learns it again.
     identity_cleared = source.identity is not None and body.config is not None and _host_and_port(source) != place_before

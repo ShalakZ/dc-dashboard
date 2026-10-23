@@ -4,14 +4,15 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dcdash.api.address_guard import mapped_twin, twin_sentence
 from dcdash.api.deps import current_user, get_db, notify, require_permission
 from dcdash.core.audit import audit, audit_change
 from dcdash.core.metrics import Metric, Scale, default_interval
-from dcdash.core.models import Asset, Mapping, Point, User
+from dcdash.core.models import Asset, Mapping, Point, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
 
 router = APIRouter(prefix="/api", tags=["mappings"])
@@ -85,6 +86,27 @@ async def lock_assets(db: AsyncSession, asset_ids: Iterable[int]) -> None:
         raise HTTPException(409, TRY_AGAIN)
 
 
+async def refuse_a_twin(db: AsyncSession, point: Point) -> None:
+    """A point of an OPC UA source is mapped only if no other mapped point of that source is the same tag (the "Stable tag addresses" option;
+    api/address_guard.py). The source row is taken FOR NO KEY UPDATE first, the mode `accept` uses: it waits for a PATCH of the source
+    (FOR UPDATE) and for another mapping of the same source, so the check cannot miss a mapping that is being made. Any other kind of source:
+    no lock and nothing else read. The type is read as a column (the config is read again under the lock, never from an earlier load)."""
+    kind = await db.scalar(select(Source.connector_type).where(Source.id == point.source_id))
+    if kind != "opcua":
+        return
+    source = await db.scalar(
+        select(Source)
+        .where(Source.id == point.source_id)
+        .with_for_update(key_share=True)
+        .execution_options(populate_existing=True)
+    )
+    if source is None:  # deleted while this waited, and its points with it
+        raise HTTPException(404, "point not found")
+    twin = await mapped_twin(db, source, point.id)
+    if twin is not None:
+        raise HTTPException(409, twin_sentence(point, twin))
+
+
 async def _flush(db: AsyncSession) -> None:
     try:
         await db.flush()
@@ -117,9 +139,12 @@ async def get_mapping(db: AsyncSession, mapping_id: int) -> Mapping:
 async def create_mapping(
     body: MappingIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
 ) -> Mapping:
-    await _require(db, Point, body.point_id, "point")
+    point = await db.get(Point, body.point_id)
+    if point is None:
+        raise HTTPException(404, "point not found")
     await _require(db, Asset, body.asset_id, "asset")
     async with try_again(db, CLASH):
+        await refuse_a_twin(db, point)  # the source row first, then the assets (w34 D3)
         await lock_assets(db, [body.asset_id])  # before the insert: its foreign keys take the point's lock, then the asset's
         mapping = Mapping(
             point_id=body.point_id,
