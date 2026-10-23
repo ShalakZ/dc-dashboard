@@ -98,7 +98,7 @@ class LiveStatus(BaseModel):
 _FRESH = text(
     """
     SELECT count(*) AS read_points,
-           coalesce(bool_or(l.ts >= now() - greatest(m.interval_seconds * :k * interval '1 second',
+           coalesce(bool_or(l.ts >= now() - greatest(m.interval_seconds * CAST(:k AS float8) * interval '1 second',
                                                      :floor * interval '1 second')), false) AS fresh
     FROM mappings m
     JOIN points p ON p.id = m.point_id

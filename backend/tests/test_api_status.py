@@ -107,6 +107,15 @@ async def test_freshness_follows_the_rule_of_the_asset_pages(client, db, interva
     assert (await status(client))["readings_fresh"] is fresh
 
 
+async def test_a_huge_polling_interval_does_not_break_the_status(client, db):
+    # `interval_seconds * 3` overflowed int4 above 715,827,882 s: one such mapping made the whole answer fail (w35 re-review R-M3)
+    await login_as(client, db, "viewer")
+    await mapped_point(db, "huge", interval=1_000_000_000, seconds_ago=5000)
+    await mapped_point(db, "max", interval=2_147_483_647, seconds_ago=5000)
+    body = await status(client)
+    assert body["readings_fresh"] is True  # 3 x 1e9 s is a long time: the reading is still within it
+
+
 async def test_one_fresh_point_among_stale_ones_is_enough(client, db):
     await login_as(client, db, "viewer")
     await mapped_point(db, "stale", interval=5, seconds_ago=500)

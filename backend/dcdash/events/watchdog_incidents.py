@@ -24,6 +24,7 @@ only decides WHEN to write. The statements run through the worker's own `session
 connection; before each write `held_now()` says the worker still holds the lock. The kind is NOT one of `collector.incidents.KINDS`,
 so the collector's reconcile never touches it.
 """
+import asyncio
 import contextlib
 import json
 import logging
@@ -39,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 # (the same damaged-row guards as the collector's incident statements: a `count` or a `since` edited by hand never fails a statement)
 from dcdash.collector.incidents import _COUNT_OF, _SINCE_OF, format_span
 from dcdash.core import ledger
-from dcdash.events.watchdog import SourceVerdict, Verdict, compute_verdict
+from dcdash.events.watchdog import COMPUTE_SECONDS, SourceVerdict, Verdict, compute_verdict
 from dcdash.ingest.kinds import DATA_RECOVERED, DATA_STALE
 
 log = logging.getLogger(__name__)
@@ -299,7 +300,8 @@ async def step(
     warning says what failed); a stop request (`CancelledError`) passes through."""
     result = StepResult()
     try:
-        verdict = await compute_verdict(sessions)
+        async with asyncio.timeout(COMPUTE_SECONDS):  # the step must never hold the figures loop for ever (a half-open connection)
+            verdict = await compute_verdict(sessions)
     except Exception as exc:
         _warn("verdict", "data.stale: the verdict could not be computed (%s); the incidents were left as they are", _cause(exc))
         return result
