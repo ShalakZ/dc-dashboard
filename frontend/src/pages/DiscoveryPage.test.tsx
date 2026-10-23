@@ -3139,10 +3139,11 @@ describe("DiscoveryPage New asset, the + and several points at once (W12a)", () 
       await openAll();
       await userEvent.click(screen.getByRole("button", { name: "New asset from LVP01…" }));
       await userEvent.click(within(await screen.findByRole("dialog", { name: "New asset" })).getByRole("button", { name: "Save" }));
-      await waitFor(() => expect(toasts.calls).toContainEqual({ kind: "error", text: "The asset was created, but the graph could not be refreshed. Use Map… to map to it." }));
+      // the page waits frame by frame, for about 2 s, before it says the graph did not show the asset
+      await waitFor(() => expect(toasts.calls).toContainEqual({ kind: "error", text: "The asset was created, but the graph could not be refreshed. Use Map… to map to it." }), { timeout: 4000 });
       expect(screen.queryByRole("dialog", { name: "New asset" })).not.toBeInTheDocument();
       expect(screen.queryByRole("dialog", { name: "Review mappings" })).not.toBeInTheDocument();
-    });
+    }, 10_000);
 
     it.each([
       ["discovery.accept alone", ["discovery.view", "discovery.accept"] as PermissionId[]],

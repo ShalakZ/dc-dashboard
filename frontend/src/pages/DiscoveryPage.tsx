@@ -40,7 +40,7 @@ import { useMappingActions, type MappedInfo } from "../hooks/useMappingActions";
 import { useMovedToast } from "../hooks/useMovedToast";
 import { reducedMotion, useReducedMotion } from "../hooks/useReducedMotion";
 import { useValueTip } from "../hooks/useValueTip";
-import { afterPaint } from "../lib/afterPaint";
+import { afterPaint, framesUntil } from "../lib/afterPaint";
 import { dropPayload, mappableClusters, multiPointDrop, pickDropTarget, takenMetrics, type DropPayload } from "../lib/drop";
 import {
   buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isNotSeen, isOfferable, isRemovable, layoutBatches, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, ownPlaces,
@@ -707,16 +707,17 @@ function Canvas({ model }: { model: GraphModel }) {
   }, [model, focusNode]);
   /**
    * The New asset form saved an asset. A pane's or an asset's New asset ends here; a group's or a point's goes on to the Review on the new asset. `create` has
-   * already waited for the graph to be read again, but React draws that read a moment later, and the Review lists its assets from the model it is given: so
-   * wait for the paint, then look in the model of the moment. If the asset is not there (the refresh failed) the person is told and the asset stays.
+   * already waited for the graph to be read again, but React draws that read, and copies it into `modelRef`, some frames later (two are not always enough on a
+   * busy page), and the Review lists its assets from the model it is given: so wait frame by frame, for at most about 2 s, until the model of the moment has the
+   * asset. The error toast therefore means the graph really did not show the asset in that time (the refresh failed): the person is told and the asset stays.
    */
   const onNewAssetCreated = async (asset: Asset) => {
     const payload = newAsset?.payload;
     setNewAsset(null);
     if (!payload) return;
-    await afterPaint();
+    const found = await framesUntil(() => modelRef.current.assets.some((a) => a.id === asset.id), { stop: () => !mounted.current });
     if (!mounted.current) return;
-    if (modelRef.current.assets.some((a) => a.id === asset.id)) openReview(payload, { kind: "existing", assetId: asset.id }, asset.name);
+    if (found) openReview(payload, { kind: "existing", assetId: asset.id }, asset.name);
     else toast.error("The asset was created, but the graph could not be refreshed. Use Map… to map to it.");
   };
 
