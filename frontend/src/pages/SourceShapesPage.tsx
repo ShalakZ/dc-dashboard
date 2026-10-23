@@ -272,7 +272,7 @@ function ShapesBody({ sourceId, timers }: { sourceId: number; timers: Timers }) 
               {parentOptions.map((option) => <option key={option.id} value={option.id}>{option.text}</option>)}
             </select>
           </div>
-          <label className="inline">
+          <label className="shapes-bar-check">
             <input type="checkbox" checked={createAssets} onChange={(event) => setCreateAssets(event.target.checked)} />
             Create missing assets
           </label>

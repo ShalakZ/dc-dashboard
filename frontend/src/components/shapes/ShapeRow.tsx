@@ -68,7 +68,7 @@ export function ShapeRow({ shape, choice, canDecide, similarText, ticked, highli
         )}
         <p className="muted shape-asset">{asset === null ? "Asset: (no name from this example)" : `Asset: ${asset}`}</p>
         {canDecide && similarText !== null && (
-          <label className="inline shape-tick">
+          <label className="shape-tick">
             <input type="checkbox" checked={ticked} onChange={(event) => onTick(event.target.checked)} />
             {similarText}
           </label>
