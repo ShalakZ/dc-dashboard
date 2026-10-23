@@ -187,3 +187,74 @@ def test_the_read_and_the_matchers_agree_on_the_flag(raw, accepted, on):
         with pytest.raises(ValidationError):
             create_connector("opcua", config)
     assert (key is stable_address) is on
+
+
+# -- against the SCADA-shaped server (simulator/scada.py): the numbers a Browse shows, and the values a read brings back ------------
+
+
+@asynccontextmanager
+async def scada_server(**knobs):
+    from dcdash.simulator.scada import ScadaConfig, ScadaSim  # imported here: a problem in that module fails these tests only
+    from tests.helpers import free_port
+
+    sim = ScadaSim(ScadaConfig(**knobs), free_port())
+    await sim.start()
+    try:
+        yield sim
+    finally:
+        await sim.stop()
+
+
+def _scada_connector(sim, **extra):
+    endpoint = sim.endpoint.replace("0.0.0.0", "127.0.0.1")
+    return create_connector("opcua", {"endpoint": endpoint, "timeout_seconds": 10, **extra})
+
+
+async def test_browse_with_the_option_on_lists_no_number_and_with_it_off_every_address_has_one():
+    import re
+
+    async with scada_server(pdus=2) as sim:  # 4 meters x 27 tags + 10 incomers
+        off = await _scada_connector(sim).browse()
+        on = await _scada_connector(sim, stable_addresses=True).browse()
+    assert len(sim.tags) == 118 and len(off) == len(on) == 118
+    assert all(re.fullmatch(r"ns=3;s=[0-9]+:Site\.[A-Za-z0-9_]+", d.address) for d in off)
+    assert not any(re.search(r"s=[0-9]+:", d.address) for d in on)
+    assert {d.address for d in on} == {sim.stable_id(tag) for tag in sim.tags}
+    assert [(d.name, d.unit_hint) for d in on] == [(d.name, d.unit_hint) for d in off]  # the same descriptors in the same order
+    assert [d.address for d in on] == [stable_address(d.address) for d in off]
+    assert [d.name for d in on] == sorted(d.name for d in on)
+
+
+async def test_200_mixed_numbered_and_stable_addresses_each_get_their_own_value():
+    async with scada_server(pdus=4) as sim:  # 226 tags, every one has its own value
+        tags = sim.tags[:200]
+        stored = [sim.numbered_id(tag) if index % 2 == 0 else sim.stable_id(tag) for index, tag in enumerate(tags)]
+        values = await _scada_connector(sim, stable_addresses=True).read(stored)
+        assert sim.counters.read_sizes == [200]  # one request, today's shape
+    assert [v.address for v in values] == stored
+    assert [v.quality for v in values] == [GOOD] * 200
+    assert [v.value for v in values] == [sim.value_of(tag) for tag in tags]
+    assert len({v.value for v in values}) == 200
+
+
+async def test_the_stored_numbers_can_be_wrong_and_every_value_still_lands_on_its_own_address():
+    async with scada_server(pdus=4) as sim:
+        tags = sim.tags[:200]
+        stored = [sim.numbered_id(tag) for tag in tags]  # the numbers of the first browse
+        for mode in ("bad", "by_index"):
+            sim.restructure(mode)
+            on = await _scada_connector(sim, stable_addresses=True).read(stored)
+            assert [v.value for v in on] == [sim.value_of(tag) for tag in tags], mode
+            assert [v.address for v in on] == stored
+
+
+async def test_two_stored_forms_of_one_tag_are_both_bad_and_the_rest_are_read():
+    async with scada_server(pdus=4) as sim:
+        tags = sim.tags[:50]
+        stored = [sim.stable_id(tag) for tag in tags] + [sim.numbered_id(tags[0])]  # the first tag is stored twice, in two forms
+        values = await _scada_connector(sim, stable_addresses=True).read(stored)
+        assert sim.counters.read_sizes == [49]  # the pair was not sent
+    text = f"two points are the same tag (stable address {sim.stable_id(tags[0])})"
+    assert [(v.address, v.value, v.quality, v.status) for v in (values[0], values[-1])] == [
+        (stored[0], None, BAD, text), (stored[-1], None, BAD, text)]
+    assert [v.value for v in values[1:-1]] == [sim.value_of(tag) for tag in tags[1:]]
