@@ -59,7 +59,7 @@ HEALTH_WINDOW_MINUTES = 10
 # What a source's config may show per connector type (M6). A URL value passes `without_credentials`. Everything else in a config is
 # left out. tests/test_diagnostics_report.py fails when a registered connector has a config field in neither this nor the list below.
 REPORT_CONFIG_FIELDS: dict[str, tuple[str, ...]] = {
-    "opcua": ("endpoint", "security_policy", "root_node", "timeout_seconds", "client_cert"),
+    "opcua": ("endpoint", "security_policy", "root_node", "timeout_seconds", "client_cert", "stable_addresses"),
     "modbus": ("host", "port", "unit_id", "profile", "timeout_seconds"),
     "simulator": ("url", "timeout_seconds"),
     "file": (),  # a source filled by importing files has no configuration
