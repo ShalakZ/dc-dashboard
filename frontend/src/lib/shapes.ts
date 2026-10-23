@@ -188,7 +188,7 @@ export function rowOf(root: ParentNode, key: string): HTMLElement | null {
 
 // What a row says under itself before anything is sent.
 export function mixedUnitsWarning(shape: Shape): string | null {
-  return shape.mixed_units ? `This shape has the units ${listOf(shape.unit_hints)}, so it can only be mapped as custom.` : null;
+  return shape.mixed_units ? `This shape has the units ${listOf(shape.unit_hints)}, so it cannot be mapped by shape; decide those tags on the Points page.` : null;
 }
 /** `duplicates` counts the MEMBERS involved (a pair is 2), so the tags that appear twice are half of it, rounded down (never below 1 while the server says there are duplicates). */
 export function duplicatesWarning(shape: Shape): string | null {

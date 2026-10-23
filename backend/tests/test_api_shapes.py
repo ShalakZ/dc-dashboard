@@ -502,6 +502,33 @@ async def test_two_unmapped_points_of_one_tag_are_a_renumbered_check_under_every
         assert answer["lines"] == 4 and answer["blocking"] is True and answer["plan_assets"] is None, metric
 
 
+async def test_a_renumbered_tag_next_to_other_tags_of_its_asset_is_found_under_a_custom_metric_through_the_route(client, db):
+    source = await make_source(db, "Next to", "opcua", {"endpoint": "opc.tcp://h:4840/"}, enabled=False)  # "Stable tag addresses" off: no twins
+    await add_points(db, source, [
+        ("ns=3;s=101:Site.PDUA01_T1", "PDUA01_T1", "degC"), ("ns=3;s=201:Site.PDUA01_T1", "PDUA01_T1", "degC"),
+        ("ns=3;s=102:Site.PDUA01_T2", "PDUA01_T2", "degC"), ("ns=3;s=103:Site.PDUA02_T1", "PDUA02_T1", "degC"),
+    ])
+    await login_as(client, db, "admin")
+    custom = (await client.post(lines_url(source), json=body_of(decision("pdua#_t#", "custom")))).json()
+    assert [c["kind"] for c in custom["checks"]] == ["renumbered"] and custom["blocking"] is True and custom["csv"] == ""
+    assert custom["checks"][0]["text"].startswith("1 tag of this shape appears twice (the SCADA renumbered it)") and custom["plan_assets"] is None
+    power = (await client.post(lines_url(source), json=body_of(decision("pdua#_t#", "active_power_kw")))).json()  # the unit degC is not a power unit
+    assert sorted(c["kind"] for c in power["checks"]) == ["collision", "renumbered", "units"]
+
+
+async def test_a_stated_scale_or_unit_never_makes_a_unit_of_another_reading_right_through_the_route(client, db):
+    source = await make_source(db, "Power as energy", "opcua", {"endpoint": "opc.tcp://h:4840/"}, enabled=False)
+    await add_points(db, source, [(f"m{n}", f"M{n}_E", "kW") for n in (1, 2, 3)])
+    await login_as(client, db, "admin")
+    for extra in ({"scale": 1}, {"scale": 1000}, {}):
+        answer = (await client.post(lines_url(source), json=body_of(decision("m#_e", "energy_kwh", **extra)))).json()
+        assert [c["kind"] for c in answer["checks"]] == ["units"] and answer["blocking"] is True and answer["csv"] == "", extra
+        assert answer["checks"][0]["text"].endswith("is not one that energy_kwh knows; decide those tags on the Points page")
+    chosen = (await client.post(lines_url(source), json=body_of(decision("m#_e", "active_power_kw", unit="Wh")))).json()
+    assert [c["kind"] for c in chosen["checks"]] == ["units"] and "chosen is not one that active_power_kw knows" in chosen["checks"][0]["text"]
+    assert (await client.post(lines_url(source), json=body_of(decision("m#_e", "active_power_kw", unit="kW")))).json()["blocking"] is False
+
+
 async def test_the_twin_of_a_mapped_tag_is_left_out_and_counted_on_a_stable_source(client, db):
     source = await make_source(db, "Stable", "opcua", {"endpoint": "opc.tcp://h:4840/", "stable_addresses": True}, enabled=False)
     ids = await add_points(db, source, [

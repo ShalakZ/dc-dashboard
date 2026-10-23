@@ -47,7 +47,7 @@ describe("the words of a row", () => {
 
   it("warns about mixed units, about renumbered duplicates and about an asset name that needs two parts", () => {
     expect(mixedUnitsWarning(A)).toBeNull();
-    expect(mixedUnitsWarning(shape({ unit_hints: ["kWh", "Wh"], mixed_units: true }))).toBe("This shape has the units kWh and Wh, so it can only be mapped as custom.");
+    expect(mixedUnitsWarning(shape({ unit_hints: ["kWh", "Wh"], mixed_units: true }))).toBe("This shape has the units kWh and Wh, so it cannot be mapped by shape; decide those tags on the Points page.");
     expect(duplicatesWarning(A)).toBeNull();
     // `duplicates` counts the MEMBERS involved (a pair is 2): the sentence counts the tags that appear twice, half of that, rounded down.
     expect(duplicatesWarning(shape({ duplicates: 1200 }))).toMatch(/^600 tags of this shape appear twice \(the SCADA renumbered them\)\. Switch on "Stable tag addresses"/);

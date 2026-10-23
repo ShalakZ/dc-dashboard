@@ -222,7 +222,7 @@ def test_a_unit_the_metric_does_not_know_blocks_unless_the_decision_states_the_s
     blocked = run(gwh, [decide("m#_e", "energy_kwh")])
     assert blocked.blocking and kinds(blocked) == [("units", "blocking")]
     assert only(blocked, "units").text == (
-        'The unit "GWh" of the 2 tags of this shape is not one that energy_kwh knows; map it as custom, or decide them on the Points page'
+        'The unit "GWh" of the 2 tags of this shape is not one that energy_kwh knows; decide those tags on the Points page'
     )
     stated = run(gwh, [decide("m#_e", "energy_kwh", scale=1_000_000)])
     assert not stated.blocking and scales_written(stated) == ["1000000.0"] * 2 and stated.samples[0]["scale"] == 1_000_000.0
@@ -234,28 +234,100 @@ def test_a_unit_the_metric_does_not_know_blocks_unless_the_decision_states_the_s
     assert "The unit \"kW\" of the 2 tags" in only(one, "units").text
 
 
+def test_a_stated_scale_never_overrides_a_unit_that_another_reading_knows():  # m1 of the re-review
+    for members, metric in ((units_of("kW", "kW", "kW"), "energy_kwh"), (units_of("Wh", "Wh", "Wh"), "voltage_v"), (units_of("MW", "MW"), "energy_kwh"),
+                            (units_of("kWh", "kWh"), "active_power_kw"), (units_of("V", "V"), "current_a"), (units_of("kvar", "kvar"), "apparent_power_kva")):
+        for scale in (1, 1000, 0.001):
+            result = run(members, [decide("m#_e", metric, scale=scale)])
+            assert result.blocking and result.csv == "" and kinds(result) == [("units", "blocking")], (members[0].unit_hint, metric, scale)
+            assert f"is not one that {metric} knows" in only(result, "units").text
+    # a unit nobody knows is the person's to state; a unit the metric itself knows still has to agree with the scale
+    for hint in ("GWh", "degC", "bar"):
+        assert not run(units_of(hint, hint), [decide("m#_e", "energy_kwh", scale=1_000_000)]).blocking, hint
+    assert only(run(units_of("Wh", "Wh"), [decide("m#_e", "energy_kwh", scale=1)]), "units").text.startswith('The unit "Wh" of the 2 tags of this shape means a scale of 0.001')
+    assert not run(units_of("kW", "kW"), [decide("m#_e", "active_power_kw", scale=1)]).blocking
+
+
+def test_a_unit_in_a_decision_for_a_known_metric_is_one_more_hint_of_the_shape_or_it_blocks():  # m2 of the re-review
+    bare = units_of(None, None, None)
+    wh = run(bare, [decide("m#_e", "energy_kwh", unit="Wh")])  # no hint on the tags: the unit chosen gives the scale
+    assert not wh.blocking and scales_written(wh) == ["0.001"] * 3 and wh.samples[0]["scale"] == 0.001
+    assert planned(wh, bare)[1].problems == () and [m.scale for m in planned(wh, bare)[1].mappings] == [0.001] * 3
+    assert parse_tag_list(wh.csv.encode()).rows[0].values["unit"] == ""  # the unit column stays empty: the planner never sees it
+    assert scales_written(run(bare, [decide("m#_e", "energy_kwh", unit=" kWh ")])) == [""] * 3
+    assert scales_written(run(bare, [decide("m#_e", "energy_kwh", unit="mwh", scale=1000)])) == ["1000.0"] * 3
+    # a unit the metric does not know: refused, with or without a scale
+    for scale in (None, 1, 1000):
+        refused = run(bare, [decide("m#_e", "energy_kwh", unit="kW", scale=scale)])
+        assert refused.blocking and refused.csv == "" and kinds(refused) == [("units", "blocking")], scale
+    assert only(run(bare, [decide("m#_e", "energy_kwh", unit="kW")]), "units").text == (
+        'The unit "kW" chosen is not one that energy_kwh knows; decide those tags on the Points page'
+    )
+    # a unit and a scale that disagree
+    clash = run(bare, [decide("m#_e", "energy_kwh", unit="Wh", scale=1)])
+    assert kinds(clash) == [("units", "blocking")] and only(clash, "units").text == (
+        'The unit "Wh" chosen means a scale of 0.001, but the scale chosen is 1; leave the scale out, or decide these tags on the Points page'
+    )
+    assert not run(bare, [decide("m#_e", "energy_kwh", unit="Wh", scale=0.001)]).blocking
+    # a unit and the unit of the tags
+    same = run(units_of("wh", "WH", "Wh"), [decide("m#_e", "energy_kwh", unit="Wh")])
+    assert not same.blocking and scales_written(same) == ["0.001"] * 3
+    against = run(units_of("Wh", "Wh"), [decide("m#_e", "energy_kwh", unit="kWh")])
+    assert kinds(against) == [("units", "blocking")] and against.csv == "" and only(against, "units").text == (
+        'The unit "kWh" chosen is not the unit "Wh" of the 2 tags of this shape; leave the unit out, or decide these tags on the Points page'
+    )
+    unknown = run(units_of("GWh", "GWh"), [decide("m#_e", "energy_kwh", unit="kWh", scale=1)])  # the tags name a unit nobody here knows
+    assert kinds(unknown) == [("units", "blocking")] and "is not the unit \"GWh\"" in only(unknown, "units").text
+    # tags that disagree among themselves are the first fault, as before
+    assert kinds(run(units_of("Wh", None), [decide("m#_e", "energy_kwh", unit="Wh")])) == [("mixed_units", "blocking")]
+    # for a custom metric the unit is the unit column, as before
+    assert not run(bare, [decide("m#_e", "custom", unit="degC")]).blocking
+
+
+def test_the_unit_sentences_do_not_send_a_billing_row_to_custom_and_keep_it_only_where_it_can_work():  # m3 of the re-review
+    points = "decide those tags on the Points page"
+    for metric in ("energy_kwh", "active_power_kw"):
+        another = "Wh" if metric == "active_power_kw" else "kW"  # a unit the OTHER billing metric knows
+        for members in (units_of("GWh", "GWh"), units_of("degC", "degC"), units_of(another, another)):
+            result = run(members, [decide("m#_e", metric)])
+            texts = [check.text for check in result.checks]
+            assert texts and all("custom" not in text and text.endswith(points) for text in texts), (metric, texts)
+        for members in (units_of("kWh", "Wh"), units_of("W", "kW", None), units_of("Wh", None, None), units_of("kW", "kW", None)):
+            result = run(members, [decide("m#_e", metric)])
+            texts = [check.text for check in result.checks if check.kind == "mixed_units"]
+            assert texts and all("custom" not in text and text.endswith(f"; {points}") for text in texts), (metric, texts)
+    # another metric: custom takes the one unit the tags name, so it can work; with several units it needs a unit the page cannot send
+    one = run(units_of("degC", "degC"), [decide("m#_e", "voltage_v")])
+    assert only(one, "units").text == f'The unit "degC" of the 2 tags of this shape is not one that voltage_v knows; {points}, or map the shape as custom'
+    partly = run(units_of("V", "V", None), [decide("m#_e", "voltage_v")])
+    assert only(partly, "mixed_units").text == f"2 tags of this shape name the unit V and 1 names none; {points}, or map the shape as custom"
+    several = run(units_of("V", "kV"), [decide("m#_e", "voltage_v")])
+    assert only(several, "mixed_units").text == f"This shape has the units V and kV (1 names V and 1 names kV); {points}"
+    assert not run(units_of("V", "V", None), [decide("m#_e", "custom")]).blocking  # and the advice is true: custom takes the one unit
+
+
 def test_tags_of_one_shape_that_name_a_unit_and_tags_that_name_none_block_in_both_directions():
     two_of_five = run(units_of("Wh", "Wh", None, None, None), [decide("m#_e", "energy_kwh")])  # the Wh ones would be 1,000 times too high
     assert two_of_five.blocking and two_of_five.csv == "" and kinds(two_of_five) == [("mixed_units", "blocking")]
     assert only(two_of_five, "mixed_units").text == (
-        "2 tags of this shape name the unit Wh and 3 name none; map it as custom or decide it on the Points page"
+        "2 tags of this shape name the unit Wh and 3 name none; decide those tags on the Points page"
     )
     four_of_five = run(units_of("Wh", "Wh", "Wh", "Wh", None), [decide("m#_e", "energy_kwh")])  # the one would be written 0.001 or 1: neither is known
     assert four_of_five.blocking and only(four_of_five, "mixed_units").text == (
-        "4 tags of this shape name the unit Wh and 1 names none; map it as custom or decide it on the Points page"
+        "4 tags of this shape name the unit Wh and 1 names none; decide those tags on the Points page"
     )
     both = run(units_of("kWh", "kWh", "kWh", "Wh"), [decide("m#_e", "energy_kwh")])
     assert only(both, "mixed_units").text == (
-        "This shape has the units kWh and Wh (3 name kWh and 1 names Wh); map it as custom or decide it on the Points page"
+        "This shape has the units kWh and Wh (3 name kWh and 1 names Wh); decide those tags on the Points page"
     )
     three = run(units_of("kWh", "Wh", "MWh", None), [decide("m#_e", "energy_kwh")])
     assert only(three, "mixed_units").text == (
-        "1 tag of this shape names the unit kWh, 1 names Wh, 1 names MWh and 1 names none; map it as custom or decide it on the Points page"
+        "1 tag of this shape names the unit kWh, 1 names Wh, 1 names MWh and 1 names none; decide those tags on the Points page"
     )
     many = run(units_of("a", "b", "c", "d", "d", None), [decide("m#_e", "energy_kwh")])  # three units are named, the rest are counted
     assert only(many, "mixed_units").text == (
         "2 tags of this shape name the unit d, 1 names a, 1 names b, 1 names another unit and 1 names none; "
-        "map it as custom or decide it on the Points page"
+        "decide those tags on the Points page"
     )
     assert not run(units_of("Wh", "Wh", None, None, None), [decide("m#_e", "custom", unit="Wh")]).blocking  # as custom it is a plain unit
 
@@ -409,6 +481,64 @@ def test_renumbered_blocks_a_custom_metric_too_one_tag_must_not_be_mapped_twice(
     assert not run(two, [decide("pdua#_pm#_x", "custom")]).blocking
 
 
+def numbered(*pairs: tuple[int, str], hint: str | None = "kW") -> list[Member]:
+    """One member per (position number, `Cluster.Tag`): the address is `ns=3;s=<number>:<Cluster.Tag>`, the name is the tag."""
+    return [Member(i + 1, f"ns=3;s={number}:{path}", path.partition(".")[2], hint) for i, (number, path) in enumerate(pairs)]
+
+
+RENUMBERED_NEXT_TO_OTHERS = (  # review of the re-fix, I-1: the renumbered tags are NOT alone on their asset
+    numbered((101, "Site.PDUA01_T1"), (201, "Site.PDUA01_T1"), (102, "Site.PDUA01_T2"), (202, "Site.PDUA01_T2"), (103, "Site.PDUA02_T1")),
+    numbered((101, "Site.PDUA01_T1"), (201, "Site.PDUA01_T1"), (102, "Site.PDUA01_T2")),
+    numbered((1, "ClusterA.PDUA01_X"), (9, "ClusterA.PDUA01_X"), (2, "ClusterB.PDUA01_X")),
+)
+
+
+def test_renumbered_is_found_by_stable_form_over_the_whole_decision_not_only_when_the_tag_is_alone_on_its_asset():
+    for members, tags in zip(RENUMBERED_NEXT_TO_OTHERS, (2, 1, 1), strict=True):
+        shape = build_shapes(members).shapes[0].key
+        result = run(members, [decide(shape, "custom")])  # a custom metric holds many tags per asset: only the repeat is wrong
+        assert result.blocking and result.csv == "" and kinds(result) == [("renumbered", "blocking")], members[0].address
+        text = only(result, "renumbered").text
+        assert text.startswith(f"{tags} tag{'s' if tags > 1 else ''} of this shape appear{'' if tags > 1 else 's'} twice"), text
+
+
+def test_renumbered_next_to_other_tags_under_a_metric_that_collides_names_the_repeat_and_calls_a_collision_only_what_is_one():
+    first = RENUMBERED_NEXT_TO_OTHERS[0]
+    # parts 1 and 2 give every tag its own asset: nothing collides, the repeats are the only fault (and the advice is not "choose parts 1 and 2")
+    parts12 = run(first, [decide("pdua#_t#", "active_power_kw", "parts12")])
+    assert kinds(parts12) == [("renumbered", "blocking")] and parts12.csv == ""
+    assert only(parts12, "renumbered").text.startswith('2 tags of this shape appear twice (the SCADA renumbered them); switch on "Stable tag addresses"')
+    # part 1 puts T1 and T2, two different tags, on PDUA01: that is still a collision, of two tags (not of four lines), next to the repeat
+    part1 = run(first, [decide("pdua#_t#", "active_power_kw", "part1")])
+    assert sorted(kinds(part1)) == [("collision", "blocking"), ("renumbered", "blocking")] and part1.csv == ""
+    assert only(part1, "collision").text == (
+        '2 tags of this shape would land on each asset (PDUA01 gets PDUA01_T1 and PDUA01_T2); choose "parts 1 and 2" or map them as custom'
+    )
+    # one repeated tag and one other tag on one asset
+    two = run(RENUMBERED_NEXT_TO_OTHERS[1], [decide("pdua#_t#", "active_power_kw", "part1")])
+    assert sorted(kinds(two)) == [("collision", "blocking"), ("renumbered", "blocking")]
+    assert only(two, "renumbered").text.startswith("1 tag of this shape appears twice")
+    assert "2 tags of this shape would land on each asset (PDUA01 gets PDUA01_T1 and PDUA01_T2)" in only(two, "collision").text
+    # two clusters' tags of one name, one of them renumbered: the clusters are told apart by address, the repeat is a repeat
+    clusters = run(RENUMBERED_NEXT_TO_OTHERS[2], [decide("pdua#_x", "active_power_kw")])
+    assert sorted(kinds(clusters)) == [("collision", "blocking"), ("renumbered", "blocking")]
+    assert only(clusters, "collision").text == (
+        "2 tags of this shape would land on each asset (PDUA01 gets ns=3;s=1:ClusterA.PDUA01_X and ns=3;s=2:ClusterB.PDUA01_X); "
+        'choose "parts 1 and 2" or map them as custom'
+    )
+    # no repeat, only different tags: a collision and nothing else, as before
+    plain_tags = numbered((1, "Site.PDUA01_T1"), (2, "Site.PDUA01_T2"), (3, "Site.PDUA02_T1"), (4, "Site.PDUA02_T2"))
+    assert kinds(run(plain_tags, [decide("pdua#_t#", "active_power_kw")])) == [("collision", "blocking")]
+
+
+def test_renumbered_counts_each_repeated_tag_once_and_names_the_first_as_the_example():
+    members = numbered((1, "ClusterA.PDUA01_X"), (9, "ClusterA.PDUA01_X"), (2, "ClusterB.PDUA01_X"), (8, "ClusterB.PDUA01_X"), (3, "ClusterB.PDUA02_X"))
+    result = run(members, [decide("pdua#_x", "custom")])
+    assert kinds(result) == [("renumbered", "blocking")]  # two tags of one name, each spelled twice: two repeats
+    assert only(result, "renumbered").text.startswith("2 tags of this shape appear twice")
+    assert only(result, "renumbered").text.endswith("(for example PDUA01_X)")
+
+
 def test_renumbered_needs_equal_stable_addresses_two_clusters_with_the_same_tag_names_are_a_collision_naming_both_addresses():
     members = [Member(1, "ns=3;s=1:ClusterA.PDUA01_P", "PDUA01_P", "kW"), Member(2, "ns=3;s=2:ClusterB.PDUA01_P", "PDUA01_P", "kW"),
                Member(3, "ns=3;s=3:ClusterA.PDUA02_P", "PDUA02_P", "kW"), Member(4, "ns=3;s=4:ClusterB.PDUA02_P", "PDUA02_P", "kW")]
@@ -430,7 +560,7 @@ def test_mixed_units_block_a_known_metric_but_not_a_custom_one_with_a_unit():
     assert blocked.blocking and blocked.csv == ""
     check = only(blocked, "mixed_units")
     assert check.shape == "m#_e" and check.text == (
-        "This shape has the units kWh and Wh (3 name kWh and 1 names Wh); map it as custom or decide it on the Points page"
+        "This shape has the units kWh and Wh (3 name kWh and 1 names Wh); decide those tags on the Points page"
     )
     assert not run(members, [decide("m#_e", "custom", unit="kWh")]).blocking
     unitless = run(members, [decide("m#_e", "custom")])

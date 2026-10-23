@@ -13,7 +13,9 @@ the database's own normalisation of an asset name). Python's `casefold` never de
 
 A shape's unit hint reaches the scale of its lines (a counter in Wh billed as kWh is a bill 1,000 times too high): where every tag
 of the shape names one unit the metric knows, that unit gives the scale and a different scale in the decision blocks; where the
-tags disagree about the unit, or some name none, the shape blocks. An address a tag list cannot name exactly (the parser trims
+tags disagree about the unit, or some name none, the shape blocks. A unit another metric knows (kW for energy) is never made right by
+a stated scale, and a unit in the decision counts as one more hint of the shape. A tag spelled twice is found by its stable address
+over the whole decision. An address a tag list cannot name exactly (the parser trims
 every cell) is never written.
 
 Every sentence is plain words with the numbers it is about and an example taken from the data. Nothing here knows a product or a
@@ -31,7 +33,7 @@ from typing import Any
 from dcdash.connectors.opcua_ids import stable_address
 from dcdash.core.discovery import _tokens
 from dcdash.core.metrics import Metric
-from dcdash.ingest.normalise import NormaliseError, scale_for
+from dcdash.ingest.normalise import UNITS, NormaliseError, _spelling, scale_for
 from dcdash.ingest.tag_list import MAX_NEW_ASSETS, MAX_ROWS, MAX_SEGMENT, MAX_TAG, ParsedList, Problem
 from dcdash.shapes.core import Member, Shape, ShapeSet, member_text
 
@@ -46,6 +48,8 @@ TOO_MANY = f"at most {MAX_ROWS:,} tags at a time (the limit of a tag list): choo
 
 _FEW = {"parts12": "parts 1 and 2", "part1_part2": "part 1 / part 2"}
 _NAMES_ADVICE = "decide these tags on the Points page"
+_POINTS_PAGE = "decide those tags on the Points page"
+_BILLING = frozenset({Metric.ENERGY_KWH, Metric.ACTIVE_POWER_KW})
 
 
 @dataclass(frozen=True)
@@ -170,13 +174,22 @@ def _says(count: int, what: str) -> str:
     return f"{count:,} {'names' if count == 1 else 'name'} {what}"
 
 
-def _mixed_units_text(hints: list[tuple[str, int]], none: int) -> str:
+def _way_out(metric: Metric, custom_works: bool) -> str:
+    """What a person can do about a unit: the Points page, which takes any scale. Custom is offered only for a reading that is not a
+    billing one (the energy and power figures read those two metrics, so a billing row mapped as custom is lost to them) and only where
+    it can work from this page: it needs one unit, and the page sends none, so it takes the one unit the tags name."""
+    if metric in _BILLING or not custom_works:
+        return _POINTS_PAGE
+    return f"{_POINTS_PAGE}, or map the shape as custom"
+
+
+def _mixed_units_text(hints: list[tuple[str, int]], none: int, metric: Metric) -> str:
     """Several units, or a unit on some tags and none on the others: one scale cannot fit all of them."""
     shown, rest = hints[:TAGS_NAMED], sum(n for _, n in hints[TAGS_NAMED:])
     parts = [_says(n, _shown(hint)) for hint, n in shown]
     if rest:
         parts.append(_says(rest, "another unit" if rest == 1 else "other units"))
-    advice = "map it as custom or decide it on the Points page"
+    advice = _way_out(metric, custom_works=len(hints) == 1)
     if not none:
         units = _listed([hint for hint, _ in shown], len(hints) - len(shown))
         return f"This shape has the units {units} ({_joined(parts)}); {advice}"
@@ -194,30 +207,65 @@ def _figure(value: float) -> str:
     return format(value, ",.10g")
 
 
+def _known_elsewhere(unit: str) -> bool:
+    """True when the table of some metric knows this spelling (kW is the power reading's, Wh the energy reading's): a unit that is
+    somebody's, so a scale can never make it right for another reading."""
+    spelled = _spelling(unit)
+    return any(spelled in table for table in UNITS.values())
+
+
 def _non_custom_scale(shape: Shape, decision: LineDecision, metric: Metric) -> tuple[float, Check | None]:
     """The scale of every line of a decision with a metric that knows its unit, and the check that blocks it, if any. The CSV's unit
-    column stays empty, so the planner never sees the shape's unit: it is read here, with the planner's own `scale_for`.
+    column stays empty, so the planner never sees the shape's unit nor the decision's: both are read here, with the planner's own
+    `scale_for`.
     - several units, or a unit on some tags and none on others: blocking `mixed_units`;
+    - a unit in the decision is one more hint of the shape: `scale_for` must accept it for the metric, the decision's scale must be the
+      same number, and the unit of the tags (if they name one) must be the same unit; any other case blocks (`units`);
     - one unit on every tag: that unit's scale. A decision scale that is not the same number blocks (`units`). A unit the metric does
-      not know (`scale_for` refuses it) blocks, unless the decision states the scale: then the person's number is used;
-    - no tag names a unit: the decision's scale, else the shape's suggested scale when the metric is the suggested one, else 1."""
+      not know (`scale_for` refuses it) blocks, unless NO metric knows it and the decision states the scale: then the person's number
+      is used. A unit that another metric knows (kW for energy) always blocks, whatever scale is stated;
+    - no tag names a unit: the decision's unit gives the scale, else the decision's scale, else the shape's suggested scale when the
+      metric is the suggested one, else 1."""
     hints, none = _unit_counts(shape)
     given = None if decision.scale is None else float(decision.scale)
     fallback = given if given is not None else float(shape.suggestion.scale) if metric == shape.suggestion.metric else 1.0
     if len(hints) > 1 or (hints and none):
-        return fallback, Check("mixed_units", BLOCKING, shape.key, _mixed_units_text(hints, none))
+        return fallback, Check("mixed_units", BLOCKING, shape.key, _mixed_units_text(hints, none, metric))
+    stated = (decision.unit or "").strip()
+    own: float | None = None  # the scale of the unit the decision names
+    if stated:
+        try:
+            own = scale_for(stated, metric.value)
+        except NormaliseError:
+            return fallback, Check(
+                "units", BLOCKING, shape.key,
+                f'The unit "{_shown(stated)}" chosen is not one that {metric.value} knows; {_way_out(metric, custom_works=False)}',
+            )
+        if given is not None and not math.isclose(given, own, rel_tol=1e-9):
+            return own, Check(
+                "units", BLOCKING, shape.key,
+                f'The unit "{_shown(stated)}" chosen means a scale of {_figure(own)}, but the scale chosen is {_figure(given)}; '
+                "leave the scale out, or decide these tags on the Points page",
+            )
     if not hints:
-        return fallback, None
+        return (fallback if own is None else own), None
     hint = hints[0][0]
     subject = f'The unit "{_shown(hint)}" of the {len(shape.members):,} tags of this shape'
     try:
-        from_unit = scale_for(hint, metric.value)
+        from_unit: float | None = scale_for(hint, metric.value)
     except NormaliseError:
-        if given is not None:
+        from_unit = None
+    if own is not None and (from_unit is None or not math.isclose(from_unit, own, rel_tol=1e-9)):
+        return own, Check(
+            "units", BLOCKING, shape.key,
+            f'The unit "{_shown(stated)}" chosen is not the unit "{_shown(hint)}" of the {len(shape.members):,} tags of this shape; '
+            "leave the unit out, or decide these tags on the Points page",
+        )
+    if from_unit is None:
+        if given is not None and not _known_elsewhere(hint):
             return given, None
         return 1.0, Check(
-            "units", BLOCKING, shape.key,
-            f"{subject} is not one that {metric.value} knows; map it as custom, or decide them on the Points page",
+            "units", BLOCKING, shape.key, f"{subject} is not one that {metric.value} knows; {_way_out(metric, custom_works=True)}",
         )
     if given is not None and not math.isclose(given, from_unit, rel_tol=1e-9):
         return from_unit, Check(
@@ -474,23 +522,28 @@ def build_lines(
                 "unit_hint": line.member.unit_hint, "metric": metric.value, "scale": scale,
             })
 
-        # One TAG spelled twice (the same text and the same stable address: the SCADA renumbered it) is wrong under every metric, a
-        # custom one too: it would be mapped twice onto one asset. Two tags on one asset and metric (`apart`) is a collision only for a
-        # metric that cannot hold two; a custom one holds as many as it is given.
-        twice: list[str] = []  # the text of each tag that two of the lines spell
+        # One TAG spelled twice (two numbered addresses with the same stable form: the SCADA renumbered it) is wrong under every metric, a
+        # custom one too: it would be mapped twice onto one asset, whatever else lands on that asset. It is found per decision by its
+        # stable form, not per asset. Two DIFFERENT tags on one asset and metric (`apart`) are a collision only for a metric that cannot
+        # hold two (a custom one holds as many as it is given), and a repeated tag counts there once.
+        forms = Counter(stable_address(member.address) for member, _, _, _ in emitted)
+        # a tag that is already mapped under its other spelling counts too (a source whose "Stable tag addresses" is off has no twins to
+        # leave out); the same name under another stable address is another tag, and the planner judges whether its asset can take it
+        repeated: dict[str, str] = {}  # stable form -> the text of each tag that two lines spell, or that is mapped already
+        for member, text, _, _ in emitted:
+            form = stable_address(member.address)
+            if forms[form] > 1 or form in mapped_forms.get(text, ()):
+                repeated.setdefault(form, text)
         apart: dict[tuple[str, ...], list[str]] = {}  # key path -> what the lines on it are called, where they are different tags
-        for keys, found in groups.items():
-            if len(found) < 2:
-                continue
-            texts = [text for text, _ in found]
-            if len(set(texts)) == 1 and len({stable_address(address) for _, address in found}) == 1:
-                twice.append(texts[0])
-            elif not custom:  # equal texts with different stable addresses are two clusters' tags of one name: told apart by address
-                apart[keys] = [address for _, address in found] if len(set(texts)) == 1 else texts
-        # a tag that is already mapped under its other spelling (a source whose "Stable tag addresses" is off has no twins to leave out);
-        # the same name under another stable address is another tag, and the planner judges whether its asset can take it
-        again = [text for member, text, _, _ in emitted if stable_address(member.address) in mapped_forms.get(text, ())]
-        renumbered = list(dict.fromkeys([*twice, *again]))
+        if not custom:
+            for keys, found in groups.items():
+                tags: dict[str, tuple[str, str]] = {}  # stable form -> (text, address) of the first line that spells it
+                for text, address in found:
+                    tags.setdefault(stable_address(address), (text, address))
+                if len(tags) > 1:  # equal texts with different stable addresses are two clusters' tags of one name: told apart by address
+                    texts = [text for text, _ in tags.values()]
+                    apart[keys] = [address for _, address in tags.values()] if len(set(texts)) == 1 else texts
+        renumbered = list(repeated.values())
         if apart:
             checks.append(Check("collision", BLOCKING, shape.key, _collision_text(apart, names_of, decision.name_from)))
         if renumbered:
