@@ -32,6 +32,8 @@ EXEMPT: dict[str, str] = {
     "POST /api/assets/move-preview": "a read sent as POST: the body is the planned move",
     "PUT /api/me/preferences": "a personal display setting of the signed-in account (mode and theme), not configuration; "
                                "it changes nothing another user or the system can see",
+    "POST /api/sources/{source_id}/shapes/lines": "a read sent as POST: the body is the decisions; it writes nothing (the mappings are "
+                                                  "written by the tag-list route, which audits them)",
 }
 
 
