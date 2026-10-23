@@ -208,7 +208,7 @@ lacks says "No access".
   apart, that billing meters of the source have no good reading (error) or that its energy counters have stopped rising (warning). It
   says how many (`3 of 12 meters have no good reading`, never a meter's name), counts and shows how long it has lasted, closes by itself
   when the meters report again with one "Meters reporting again" row (`data.recovered`), and when the source is switched off or deleted
-  meanwhile it closes as "stopped being read after ..." with no recovery row. A third kind, "Readings dropped" (`readings.dropped`, an
+  meanwhile, or is still polled but is left without a billing meter, it closes as "stopped being read after ..." with no recovery row. A third kind, "Readings dropped" (`readings.dropped`, an
   error), says the collector had to throw readings away because the database did not take them in time; it is written once the database
   answers again, at most every 10 minutes. The collector's own
   `scan.finished` entries (a scan ended) stay in the Audit log, where they were always written. On top, four tiles: **Open problems**
@@ -242,7 +242,9 @@ lacks says "No access".
      and drops the age.
   3. Otherwise the readings' own state, as before w35: `No readings yet`, `Stale` (no mapped point has a recent reading) or `Live`, each
      with the age of the newest reading (`last reading 4 s ago`).
-  4. `Live` with energy counters that stand still shows `2 meters not rising` in place of the age. That is a warning only.
+  4. `Live` with energy counters that stand still shows `2 meters not rising` in place of the age. That is a warning only. Below about
+     1180 px the chip's detail is hidden, as it always was, so on a narrow window this warning is not shown in the top bar (the word stays
+     `Live`; the Sources page and System events still show it). The stale word keeps its count.
 
   When the meter numbers are missing (an older server, or the rule could not be worked out for a moment), the chip shows the third
   state's words exactly as before. The chip only helps whoever looks at it; to be told when nobody is looking, see [Watching the data from

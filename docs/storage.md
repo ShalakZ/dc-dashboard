@@ -85,13 +85,14 @@ flagged after 6 hours without rising." What those words mean for the top bar, th
 numbers and the range each accepts: **Stale after (minutes)**, 2 to 60, and **Counter not rising after (hours)**, 1 to 72. A value outside
 the range, a fraction or a half-filled form is refused with a sentence. A shorter time finds a dead meter sooner and may flag one that is
 only slow; a longer one is calmer and slower to tell. The meter's own rhythm still counts: a meter polled every 5 minutes is stale
-after 15 whatever the floor says. Saving deletes nothing and asks nothing, so there is no confirmation step.
+after at least 15 (three of its own polls, or the floor when that is longer). Saving deletes nothing and asks nothing, so there is no confirmation step.
 
 **When it takes effect.** The top bar, the Sources line and the URL use the new numbers within a few seconds (the verdict is kept for at
-most 5 seconds, and a save drops it). A `data.stale` incident in System events follows at the figures service's next look, which comes
-every minute to a minute and a half. A missing or damaged stored value reads as the factory values, so the watchdog always has a rule.
+most 5 seconds, and a save drops it). A `data.stale` incident in System events follows at the figures service's second look in a row that finds trouble: the service looks
+about once a minute, so it opens 1 to 3 minutes after the meter turns stale. A missing or damaged stored value reads as the factory values, so the watchdog always has a rule.
 
-**The audit entry.** A save is recorded as `watchdog.changed` with the values before and after, and the Audit page words it like this:
+**The audit entry.** A save that changes a number is recorded as `watchdog.changed` with the values before and after (a save that changes
+nothing writes no entry), and the Audit page words it like this:
 `Changed the data watchdog: stale after 10 minutes (was 5), counters flagged after 12 hours (was 6)`. It lists only the number or
 numbers that changed.
 

@@ -51,8 +51,11 @@ has had no answer for 30 s it says "Collector status cannot be read" instead, an
 from the last answer. After a restore the old heartbeat reads as "silent" until the collector starts.
 
 `GET /api/health/data` is a second check, for the freshness of the data, meant for a monitoring tool: [Watching the data from
-outside](#watching-the-data-from-outside). The top bar's chip follows the same rule. It counts billing meters that have stopped giving
-good readings; before w35 it only asked whether any reading at all was recent, so one dead meter among many never showed.
+outside](#watching-the-data-from-outside). The top bar's chip follows the same rule for stale meters: it counts billing meters that have
+stopped giving good readings; before w35 it only asked whether any reading at all was recent, so one dead meter among many never showed.
+Its plain `Stale` word (no meter is counted, but no mapped point has a reading from the last minute or so) still uses that older
+60-second any-reading rule, so the chip can read `Stale` while the URL still answers 200 for up to about 4 minutes, until the 5-minute
+floor has passed.
 
 ## Watching the data from outside
 
@@ -70,7 +73,11 @@ curl -s -o /dev/null -w '%{http_code}' https://<host>/api/health/data
   truly stand still, so that is a warning on the screens and not a failure here).
 - **503** means one of three things: at least one billing meter has had no good reading for its allowed time (`"status":"stale"`); a
   whole source stands still, all its counters and its other points (`frozen_sources`, see below); or the answer could not be had in
-  time, because the database did not answer within 2 seconds (the body is then only `{"status":"unavailable"}`).
+  time, because the database did not answer within 2 seconds or the query for the meters failed (the body is then only
+  `{"status":"unavailable"}`, and a failed answer is reused for 5 seconds).
+
+Use **GET**: the route answers 405 to HEAD and to POST. Some uptime monitors probe with HEAD by default; set the check to GET, or it reads a
+permanent "down".
 
 The body of a 200 or of a stale 503 holds these fields:
 
@@ -83,8 +90,13 @@ The body of a 200 or of a stale 503 holds these fields:
 | `not_advancing` | energy counters that have not risen for the set hours (a warning; not part of `stale`) |
 | `frozen_sources` | sources whose counters and other points all stand still |
 | `oldest_stale_age_seconds` | how long the longest-silent stale meter has been silent; `null` when none, or when it is not known |
-| `collector_alive` | whether the collector's heartbeat is recent; told only, never a 503 by itself (the stale meters say the same soon enough) |
+| `collector_alive` | whether the collector's heartbeat is recent; told only, never a 503 by itself (see below) |
 | `rollups_late` | a refresh of the long-range rollups is late, so charts over long ranges lag; told only, never a 503 |
+
+**A collector that never ran.** Stale meters show a stopped collector soon enough only once the meters have been read at least once. If
+the collector has never run (a new install, or a crash loop before the first reading), every meter is only `waiting`: the chip says
+`Collector offline`, but `GET /api/health/data` answers 200 `ok` with `waiting` greater than 0 and `collector_alive` false. A monitor
+that wants to alarm on that case reads the body (`collector_alive`, `waiting`), not just the status code.
 
 **How to watch it.** Poll it every 1 to 5 minutes and raise the alarm after 2 failures in a row (a 503, a 401, or no answer). The answer
 is reused for 5 seconds, so a monitor does not load the database. A refused connection or a timeout is the monitor's own alarm: the host
@@ -93,8 +105,8 @@ platform shows the problem to whoever looks (the top bar, [Sources and System ev
 someone who is not looking.
 
 **A token, if you want one.** Put `DCDASH_HEALTH_TOKEN=<a long random string>` in `.env` and run `docker compose up -d`. The URL then
-answers only to the header below; a missing or wrong token is a 401 with an empty body, and a token in the address is never read. A blank
-value means no token.
+answers only to the header below; a missing or wrong token is a 401 with the body `{}` and the header `WWW-Authenticate: Bearer`, and a
+token in the address is never read. A blank value means no token.
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer <token>' https://<host>/api/health/data
@@ -118,7 +130,10 @@ The numbers are set in Storage, card **Data watchdog** ([Storage](storage.md#the
   refresh a meter, although it does refresh the **Last reading** age on the Sources page, which counts every reading: a row can show
   `12 s ago` and `3 of 8 meters stale` together. A meter that has rows but never a good one is stale at once.
 - **Waiting.** A mapped meter with no reading at all yet is waiting, not stale, so a new mapping does not raise an alarm before its first
-  poll. The exception is a source that has been offline (an open `source.offline` problem) for longer than the meter's limit.
+  poll. The exception is a source that has been offline (an open `source.offline` problem) for longer than the meter's limit. The
+  other side of the same rule: a source that is switched on again, or a point that is mapped again, counts as stale until its first
+  poll (about one connection attempt), because its old reading is still stored with its old age; the monitor pages only after 2
+  failures in a row, so a short window like that does not page.
 - **Not rising.** An energy counter whose value has not changed for 6 hours (1 to 72) is flagged as not rising. This is a warning. A
   counter on a circuit that carries no load is left alone: its asset's power meter, if fresh, reads 0.05 kW or less, and a circuit
   like that may truly stand still. Near very large counter values a small load moves a 32-bit counter only once in many hours, so a
@@ -158,8 +173,8 @@ the database table `figure_ledger`, so that Billing and the dashboards do not ha
   every time they are read ([Watching the data from outside](#watching-the-data-from-outside)).
 - **The stale-meter check.** About once a minute the service that holds the work lock looks at the billing meters and keeps one `data.stale`
   incident per source in System events: it opens on the second look in a row that finds trouble, and when the meters report again it
-  closes with one `data.recovered` line. A source that is switched off or deleted while its incident is open closes it as "stopped being
-  read". This check does not depend on the ledger: with `DCDASH_FIGURE_LEDGER=0` the service still runs it (and takes the work lock for
+  closes with one `data.recovered` line. A source that is switched off or deleted while its incident is open, or one that is still polled
+  but loses its last billing meter (its points unmapped), closes it as "stopped being read". This check does not depend on the ledger: with `DCDASH_FIGURE_LEDGER=0` the service still runs it (and takes the work lock for
   it), and only the figures work is skipped.
 - **Settings.** Put them in `.env` (Compose passes them to the api and the service; run `docker compose up -d` after a change).
   `DCDASH_FIGURE_LEDGER`: `0`, `false`, `off` or `no` (any case) switches the ledger off for the api and the service; anything else,
