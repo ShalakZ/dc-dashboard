@@ -149,7 +149,7 @@ def read_plan(stored: Sequence[str], key: Callable[[str], str]) -> ReadPlan:
         if shared[stable] == 1:
             sent.append((address, stable))
         else:
-            refused[address] = f"two points have the same stable address {stable}"
+            refused[address] = f"two points have the same stable address ({stable})"
     return ReadPlan(sent, refused)
 
 

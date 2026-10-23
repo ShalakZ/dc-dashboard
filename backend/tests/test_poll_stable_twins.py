@@ -82,7 +82,7 @@ async def test_twins_at_different_intervals_are_refused_in_each_of_their_groups(
     fast, slow = group_at(groups, source, 5), group_at(groups, source, 60)
     assert fast.points == ((a_old, A_OLD), (c, C)) and slow.points == ((a_new, A_NEW),)  # the points are all still there
     assert fast.refused == ((A_OLD, TWIN_STATUS),) and slow.refused == ((A_NEW, TWIN_STATUS),)  # each group lists its own twin
-    assert TWIN_STATUS == f"two points have the same stable address {STABLE_A}"
+    assert TWIN_STATUS == f"two points have the same stable address ({STABLE_A})"
 
 
 async def test_twins_in_one_group_are_refused_too(db):
@@ -183,7 +183,7 @@ async def test_the_real_connector_reads_nothing_for_twins_at_two_intervals(db):
         slow_values, slow_rows = results[60]
         assert [(v.quality, v.value) for v in fast_values] == [(BAD, None), (GOOD, sim.value_of(other))]
         assert [(v.quality, v.value) for v in slow_values] == [(BAD, None)]
-        twin_text = f"two points have the same stable address {sim.stable_id(first)}"
+        twin_text = f"two points have the same stable address ({sim.stable_id(first)})"
         assert fast_values[0].status == slow_values[0].status == twin_text
         assert {r[0]: r[3] for r in fast_rows + slow_rows}[third] == GOOD
         assert [r[3] for r in fast_rows + slow_rows].count(GOOD) == 1

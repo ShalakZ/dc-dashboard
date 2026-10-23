@@ -174,7 +174,7 @@ def test_read_plan_sends_each_distinct_stored_string_once_in_the_callers_order()
 def test_read_plan_refuses_every_member_of_a_shared_stable_form():
     stored = ["ns=3;s=20403:Site.A", "ns=3;s=Site.C", "ns=3;s=20410:Site.A", "ns=3;s=Site.A", "ns=3;s=20403:Site.A"]
     plan = read_plan(stored, stable_address)
-    text = "two points have the same stable address ns=3;s=Site.A"
+    text = "two points have the same stable address (ns=3;s=Site.A)"
     assert plan.refused == {"ns=3;s=20403:Site.A": text, "ns=3;s=20410:Site.A": text, "ns=3;s=Site.A": text}
     assert plan.sent == [("ns=3;s=Site.C", "ns=3;s=Site.C")]
 
