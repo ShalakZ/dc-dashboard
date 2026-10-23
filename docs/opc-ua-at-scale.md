@@ -113,7 +113,7 @@ The platform's simulator can play a SCADA the way the real one behaves, so every
 
     docker compose -f compose.yaml -f scada-override.yaml --profile dev up -d --force-recreate simulator
 
-Add an OPC UA source with the endpoint `opc.tcp://simulator:4850/plantscada` and security policy `none`. The example above is 15,000 tags (400 meters of 27 tags, 10 incomers and 4,190 branch tags); starting such a server takes about 10 to 14 seconds. A name that starts with `SIM_SCADA_` and is not in the table, or a value that is not honoured, stops the simulator at start with a sentence, so a typo never runs the rehearsal with the defaults.
+Add an OPC UA source with the endpoint `opc.tcp://simulator:4850/plantscada` and security policy `none`. The example above is 15,000 tags (400 meters of 27 tags, 10 incomers and 4,190 branch tags); starting such a server takes about 10 to 14 seconds. **Map by shape** is how to try it: browse the source, then decide its 29 shapes instead of its 15,000 points ([Mapping a large source by tag shape](mapping-large-sources.md)). A name that starts with `SIM_SCADA_` and is not in the table, or a value that is not honoured, stops the simulator at start with a sentence, so a typo never runs the rehearsal with the defaults.
 
 | Setting | Default | What it does |
 |---|---|---|
