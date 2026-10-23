@@ -2,8 +2,9 @@
 
 It exists to test the connector against what the real plant SCADA does and the plain simulator does not:
 
-- a Browse answer shows each tag as `ns=3;s=<n>:Site.<tag>`, with a number n counted from 20000 in listing order (the real meter's
-  sequence skips 20409 and 20418, so this one does too), while the node itself has the STABLE id `ns=3;s=Site.<tag>`. Read and
+- a Browse answer shows each tag as `ns=3;s=<n>:Site.<tag>`, with a number n counted from 20000 in the order of the `tags` list (feed A
+  meters, feed B meters, branch tags, incomers), not in the order of the folders (the real meter's sequence skips 20409 and 20418, so
+  this one does too), while the node itself has the STABLE id `ns=3;s=Site.<tag>`. Read and
   Browse accept the stable id or the CURRENT numbered id. Everything about that numbering is a guess from a forum answer and the
   owner's briefing: it is a model of the trouble, not a copy of a product;
 - `restructure(mode)` renumbers at run time, as a SCADA project change does: "bad" makes an old numbered id answer
@@ -18,8 +19,8 @@ Nothing outside `dcdash/simulator/` may import this module (the walls are in tes
 Values come in two forms. A hand-built `ScadaConfig()` has `live=False`: constants that differ from tag to tag (`1000.0 + index`,
 as `Double`), so a test can prove a reading landed on its own tag. The simulator process (`ScadaConfig.from_env`) has `live=True`:
 every Read is answered at the instant `clock()` gives, by the pure function `sample(seed, tag, instant)` further down, as the real
-meters behave (each tag on its own 64 to 76 s clock, a quarter of the updates repeating, float32 widened to double, a kWh counter,
-`SourceTimestamp` on the tag's own update). `value_of(tag)` is then "the value at the clock's instant".
+meters behave (each tag on its own clock of 64 to 76 s plus one 4 s grid step of jitter, so the gap between two updates is 60 to 80 s;
+a quarter of the updates repeating, float32 widened to double, a kWh counter, `SourceTimestamp` on the tag's own update). `value_of(tag)` is then "the value at the clock's instant".
 """
 
 from __future__ import annotations
