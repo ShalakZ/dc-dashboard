@@ -37,6 +37,14 @@ more writes, no clean-up). At most two connections: the pool's one and the lock'
 it writes its events, and closes it again). A worker whose engine id could not be computed (`ledger.UNAVAILABLE`: no reader
 would take a row it labelled) writes nothing: each target is counted as refused and ONE line says why.
 
+The data freshness incident (w35). The process that holds the lock also keeps the `data.stale` incident of the journal (`events/watchdog_incidents.py`):
+at most every `WATCHDOG_EVERY` (60 s) it recomputes the data freshness verdict and opens, bumps or closes ONE incident per source, writing
+`data.recovered` when one ends. This is independent of the figure ledger: with `DCDASH_FIGURE_LEDGER=0` the worker still takes the lock and runs
+this step, and only the cycle is skipped. The step has its own try/except (a failure there never touches the cycle or its backoff), runs through
+`sessions` (never the lock connection) and every wait in it ends at a stop. A standby writes nothing. STOPPING THIS PROCESS ALSO STOPS THE INCIDENT:
+no `data.stale` row opens, grows or closes while no worker runs (the top bar chip, `GET /api/health/data` and the Sources line stay true, they are
+computed when asked). A long cycle or a backoff delays the step, which is logged when it comes more than `WATCHDOG_LATE` (5 minutes) after the last.
+
 Never in the way. The process runs at a lower CPU priority (`os.nice(10)`, set in `main`), the cycles keep a fixed rate (`interval`
 from the start of one cycle to the start of the next, never back to back), every statement has a timeout, and a failing target
 rests: after one prompt retry it waits `RETRY_UNIT * 2**n` seconds for `n` failures in a row (at most ten minutes), and a value the
@@ -82,6 +90,7 @@ from dcdash.core.tree import AssetTree
 
 # One source of truth for the window a widget asks for: the very function `compute_widget` calls (a private name of its module).
 from dcdash.core.widgets import _ceil_hour, _hour_window
+from dcdash.events import watchdog_incidents
 
 log = logging.getLogger(__name__)
 
@@ -110,6 +119,8 @@ BACKOFF_FIRST = 5.0  # a failed cycle waits at least this long (and at least one
 BACKOFF_MAX = 300.0
 RETRY_UNIT = 60.0  # a target that failed `n` times in a row (n >= 2) rests RETRY_UNIT * 2**n seconds, up to SETTLED_EVERY
 LOG_EVERY = 60.0  # one log line per kind of failure per this many seconds
+WATCHDOG_EVERY = 60.0  # the lock holder evaluates the data.stale incident at most this often (the loop runs every `interval`, so it is 60 to 90 s in practice)
+WATCHDOG_LATE = 300.0  # a gap longer than this since the previous evaluation is logged (a long cycle or a backoff delayed it)
 SUMMARY_EVERY = 600.0  # one INFO line sums the routine cycles up per this many seconds
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 CONNECT_TIMEOUT = 10.0  # seconds the lock connection waits for the database (connecting, and its liveness probe)
@@ -424,6 +435,7 @@ class WorkerState:
         self.nightly_failure_day: date | None = None
         self.nightly_not_before = -math.inf  # `_monotonic()` before which a failed check is not tried again
         self.refused_since = 0  # values the codec refused since the last nightly check (it logs them)
+        self.watchdog_at: float | None = None  # `_monotonic()` when the data.stale step last started (None: not yet in this process)
         self.stop = asyncio.Event()
         self.stop_at: float | None = None  # `time.monotonic()` when the stop was first seen (not `_monotonic`: a test moves that one)
         self.heartbeat_path = heartbeat_path  # None: the module's HEARTBEAT_PATH, read when it beats
@@ -1076,6 +1088,34 @@ async def _site_zone(sessions: async_sessionmaker[AsyncSession]) -> str:
         return await current_timezone(session)
 
 
+async def _watchdog_step(state: WorkerState, sessions: async_sessionmaker[AsyncSession], lock: AdvisoryLock) -> None:
+    """The data.stale incident (`events/watchdog_incidents.py`), at most every WATCHDOG_EVERY seconds, by the lock holder only (the caller
+    checks). It has its own try/except: a failure is one throttled warning and never touches the cycle or its backoff; a stop
+    (`_Stopped`, which is an `Exception`) is re-raised first so that the loop ends. The whole step is one wait that a stop cuts short."""
+    now = _monotonic()
+    last = state.watchdog_at
+    if last is not None and now - last < WATCHDOG_EVERY:
+        return
+    state.watchdog_at = now  # (a failing step waits its turn too)
+    if last is not None and now - last > WATCHDOG_LATE:
+        _log_throttled(
+            "watchdog:late", "figures worker: the data.stale check came %d s after the previous one (a long cycle or a backoff delayed it)",
+            round(now - last),
+        )
+    try:
+        result = await _unless_stopped(state, watchdog_incidents.step(sessions, held_now=lock.held_now))
+    except _Stopped:
+        raise
+    except Exception as exc:
+        _log_throttled(f"watchdog:{type(exc).__name__}", "figures worker: the data.stale check failed (%s)", ledger.error_label(exc))
+        return
+    if isinstance(result, watchdog_incidents.StepResult):
+        log.debug(
+            "data.stale check: %d opened, %d bumped, %d recovered, %d stopped, %d errors",
+            len(result.opened), len(result.bumped), len(result.recovered), result.stopped, result.errors,
+        )
+
+
 async def _run_cycle(
     sessions: async_sessionmaker[AsyncSession], now: datetime, tz_name: str, state: WorkerState, lock: AdvisoryLock | None = None
 ) -> Report | None:
@@ -1183,6 +1223,7 @@ async def amain(state: WorkerState | None = None, *, clock: Callable[[], datetim
     lock = AdvisoryLock(settings.database_url)
     events = JournalPool(settings.database_url)
     backoff = 0.0
+    watchdog_incidents.reset()  # (a new process knows nothing of the previous evaluation: an incident opens on the second one)
     log.info("figures worker started")
     try:
         while not state.stop.is_set():
@@ -1191,9 +1232,14 @@ async def amain(state: WorkerState | None = None, *, clock: Callable[[], datetim
             interval = interval_seconds()
             delay = None  # None: the fixed rate (`next_delay`)
             try:
+                # The lock is taken even with the ledger off: the data.stale step needs one writer too. Its failures never reach the
+                # backoff below (see `_watchdog_step`); a stop does.
+                holder = await _unless_stopped(state, lock.ensure())
+                if holder:
+                    await _watchdog_step(state, sessions, lock)
                 if not ledger.enabled():
-                    pass  # DCDASH_FIGURE_LEDGER=0: readers ignore the table, and so does this process
-                elif not await _unless_stopped(state, lock.ensure()):
+                    pass  # DCDASH_FIGURE_LEDGER=0: readers ignore the table, and so does this process (the step above still ran)
+                elif not holder:
                     pass  # another worker is the writer: an idle standby, which still beats the heartbeat
                 else:
                     tz_name = await _unless_stopped(state, _site_zone(sessions))

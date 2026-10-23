@@ -37,8 +37,9 @@ from dcdash.core.config import get_settings
 from dcdash.core.db import get_sessionmaker
 from dcdash.core.timeutil import month_bounds, resolve_range
 from dcdash.core.widgets import validate_config, widget_data
+from dcdash.events import watchdog_incidents
 from dcdash.figures import rebuild, worker
-from helpers import insert_readings
+from helpers import insert_readings, make_asset, make_latest, make_mapping, make_point, make_source
 from test_figures import NOW, build, compare_config
 
 UTC = timezone.utc
@@ -68,9 +69,11 @@ def _fresh_worker(monkeypatch, tmp_path):
     worker._reported_zones.clear()
     worker._last_logged.clear()
     worker._refused_kinds.clear()
+    watchdog_incidents.reset()
     ledger.reset_stats()
     yield
     ledger.reset_stats()
+    watchdog_incidents.reset()
 
 
 class Clock:
@@ -1767,3 +1770,169 @@ def test_lost_a_race_recognises_a_serialization_failure_wrapped_or_not_and_nothi
     assert not worker.lost_a_race(DBAPIError("INSERT ...", {}, UniqueViolation()))
     assert not worker.lost_a_race(asyncpg.exceptions.DeadlockDetectedError("deadlock"))  # another transaction failure: a real error
     assert not worker.lost_a_race(worker.LockLost())
+
+
+# ---- the data.stale step in the loop (w35) -------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def watch(monkeypatch):
+    """Replace the data.stale step by a recorder, and spy on the cycle: `seen` lists "step" and "cycle" in the order they ran."""
+
+    class Watch:
+        seen: list[str] = []
+        held: list[bool] = []
+        behaviour = None  # an async callable (state-free) the fake step awaits, to raise or to stop
+
+    Watch.seen, Watch.held = [], []
+
+    async def fake_step(sessions, *, held_now):
+        Watch.seen.append("step")
+        Watch.held.append(await held_now())
+        if Watch.behaviour is not None:
+            await Watch.behaviour()
+        return watchdog_incidents.StepResult()
+
+    monkeypatch.setattr(watchdog_incidents, "step", fake_step)
+    real = worker._run_cycle
+
+    async def spy(*args, **kwargs):
+        Watch.seen.append("cycle")
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(worker, "_run_cycle", spy)
+    return Watch
+
+
+async def test_the_data_stale_step_runs_before_the_cycle_on_the_lock_holder_with_the_locks_own_probe(db, fast_loop, watch):
+    await build(db)
+    async with running() as (state, task):
+        await wait_until(lambda: "cycle" in watch.seen)
+        await wait_until(lambda: rows_exist(db))
+    assert watch.seen[0] == "step" and "cycle" in watch.seen  # the step first, then the cycle
+    assert watch.held[0] is True  # `held_now` is the lock's probe, and this worker holds the lock
+    assert watch.seen.count("step") == 1  # (every 60 s: the loop ran a dozen cycles meanwhile, if it ran any)
+
+
+async def test_a_standby_worker_does_not_run_the_data_stale_step(db, fast_loop, watch):
+    await build(db)
+    holder = worker.AdvisoryLock(get_settings().database_url)
+    assert await holder.ensure() is True
+    try:
+        async with running() as (state, task):
+            await wait_until(lambda: heartbeat_mtime() is not None)
+            await asyncio.sleep(0.6)
+            assert watch.seen == [] and not task.done()
+            await holder.close()  # the holder goes away: this worker takes the lock and starts its work
+            await wait_until(lambda: "step" in watch.seen)
+            assert watch.seen[0] == "step"
+    finally:
+        await holder.close()
+
+
+async def test_with_the_ledger_off_the_worker_still_takes_the_lock_and_runs_the_step_but_no_cycle(db, fast_loop, watch, monkeypatch):
+    await build(db)
+    monkeypatch.setenv("DCDASH_FIGURE_LEDGER", "0")
+    async with running() as (state, task):
+        await wait_until(lambda: "step" in watch.seen)
+        await asyncio.sleep(0.6)  # about six loop turns
+        held = await db.fetchval(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND classid::bigint = $1 AND objid::bigint = $2 AND granted",
+            worker.LOCK_SPACE, worker.LOCK_KEY,
+        )
+        assert held == 1 and not task.done()
+    assert "cycle" not in watch.seen and watch.held[0] is True
+    assert await rows(db) == []
+
+
+async def test_the_real_step_opens_the_incident_through_the_loop_even_with_the_ledger_off(db, fast_loop, monkeypatch):
+    monkeypatch.setenv("DCDASH_FIGURE_LEDGER", "0")
+    monkeypatch.setattr(worker, "WATCHDOG_EVERY", 0.05)
+    source = await make_source(db, "Plant")
+    point = await make_point(db, source, "kW")
+    await make_mapping(db, point, await make_asset(db, "Pump"), "active_power_kw", 60)
+    await make_latest(db, point, age=3600, good_age=3600, good_value=1.0, changed_age=3600)
+    async with running() as (state, task):
+        await wait_until(lambda: db.fetchval("SELECT count(*) FROM diag_events WHERE kind = 'data.stale'"))
+        await asyncio.sleep(0.3)  # more evaluations: still one row, bumped
+    (row,) = await db.fetch("SELECT * FROM diag_events WHERE kind = 'data.stale'")
+    assert (row["source_id"], row["level"], row["component"], row["detail"]["state"]) == (source, "error", "figures", "open")
+    assert row["detail"]["count"] >= 2 and row["message"] == "1 of 1 meter has had no good reading for 1 h"
+    assert await rows(db) == []
+
+
+async def test_a_stop_raised_inside_the_step_ends_the_turn_and_runs_no_cycle(db, fast_loop, watch, monkeypatch):
+    await build(db)
+    monkeypatch.setattr(worker, "interval_seconds", lambda: 5.0)  # (the next turn is seconds away: what ran in THIS turn is all there is to see)
+
+    async def stop_now():
+        raise worker._Stopped()  # (`_Stopped` is an Exception: the step's own `except Exception` must not swallow it)
+
+    watch.behaviour = stop_now
+    async with running() as (state, task):
+        await wait_until(lambda: "step" in watch.seen)
+        await asyncio.sleep(0.5)
+        assert watch.seen == ["step"]  # the turn ended at the step: the cycle that follows it did not run
+        state.stop.set()
+        await asyncio.wait_for(task, 5)
+    assert task.exception() is None
+
+
+async def test_a_step_that_fails_every_time_does_not_stop_the_cycle_or_slow_it_down(db, fast_loop, watch, monkeypatch, caplog):
+    await build(db)
+    monkeypatch.setattr(worker, "WATCHDOG_EVERY", 0.0)
+    monkeypatch.setattr(worker, "BACKOFF_FIRST", 2.0)  # a failed cycle would now rest 2 s; the loop must go on at its 0.1 s interval
+    monkeypatch.setattr(worker, "BACKOFF_MAX", 2.0)
+    caplog.set_level(logging.WARNING, logger=worker.log.name)
+
+    async def fail():
+        raise RuntimeError("the step is broken")
+
+    watch.behaviour = fail
+    async with running() as (state, task):
+        await wait_until(lambda: watch.seen.count("cycle") >= 4, timeout=3)  # four cycles well inside one backoff
+        assert not task.done()
+    assert watch.seen.count("step") >= 4
+    messages = [r.getMessage() for r in caplog.records]
+    assert sum("the data.stale check failed (RuntimeError)" in m for m in messages) == 1  # one warning a minute
+    assert not any("the cycle failed" in m for m in messages)
+
+
+async def test_the_step_runs_at_most_once_a_minute_and_a_late_one_is_logged(monkeypatch, caplog):
+    clock = Clock()
+    monkeypatch.setattr(worker, "_monotonic", clock)
+    caplog.set_level(logging.WARNING, logger=worker.log.name)
+    calls = []
+
+    async def fake_step(sessions, *, held_now):
+        calls.append(clock.now)
+        return watchdog_incidents.StepResult()
+
+    monkeypatch.setattr(watchdog_incidents, "step", fake_step)
+    state, lock = make_state(), object.__new__(worker.AdvisoryLock)
+    for moment in (1000.0, 1030.0, 1059.0, 1060.0, 1100.0, 1120.0, 1130.0):
+        clock.now = moment
+        await worker._watchdog_step(state, None, lock)
+    assert calls == [1000.0, 1060.0, 1120.0]  # the first one, then one a minute at the earliest (checked at each turn of the loop)
+    assert not [r for r in caplog.records if "data.stale check came" in r.getMessage()]  # a minute apart is not news
+    clock.now = 1120.0 + 400
+    await worker._watchdog_step(state, None, lock)
+    assert calls[-1] == 1520.0
+    assert [r.getMessage() for r in caplog.records if "data.stale check came" in r.getMessage()] == [
+        "figures worker: the data.stale check came 400 s after the previous one (a long cycle or a backoff delayed it)"
+    ]
+
+
+async def test_a_stop_cuts_a_step_that_waits_for_the_database_short(monkeypatch):
+    state = make_state()
+
+    async def never(sessions, *, held_now):
+        await asyncio.sleep(1000)
+
+    monkeypatch.setattr(watchdog_incidents, "step", never)
+    lock = object.__new__(worker.AdvisoryLock)
+    waiting = asyncio.ensure_future(worker._watchdog_step(state, None, lock))
+    await asyncio.sleep(0.1)
+    state.stop.set()
+    with pytest.raises(worker._Stopped):
+        await asyncio.wait_for(waiting, 5)
