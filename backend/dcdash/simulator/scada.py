@@ -13,18 +13,29 @@ It exists to test the connector against what the real plant SCADA does and the p
 - the tags are many (15,000 is the size to test with), each has a DisplayName and an EngineeringUnits property (units on every tag
   is the worst case for the browse), and the counters say how many requests of which size came in.
 
-Nothing outside `dcdash/simulator/` may import this module (the walls are in tests/test_simulator_faults_isolation.py). Values are
-constants that differ from tag to tag (`value_of`), so a test can prove a reading landed on its own tag.
+Nothing outside `dcdash/simulator/` may import this module (the walls are in tests/test_simulator_faults_isolation.py).
+
+Values come in two forms. A hand-built `ScadaConfig()` has `live=False`: constants that differ from tag to tag (`1000.0 + index`,
+as `Double`), so a test can prove a reading landed on its own tag. The simulator process (`ScadaConfig.from_env`) has `live=True`:
+every Read is answered at the instant `clock()` gives, by the pure function `sample(seed, tag, instant)` further down, as the real
+meters behave (each tag on its own 64 to 76 s clock, a quarter of the updates repeating, float32 widened to double, a kWh counter,
+`SourceTimestamp` on the tag's own update). `value_of(tag)` is then "the value at the clock's instant".
 """
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import itertools
+import math
 import re
+import struct
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from functools import lru_cache
 
 from asyncua import Server, ua
 
@@ -67,7 +78,8 @@ class ScadaConfig:
     port: int | None = None
     pdus: int = 24  # PDUs per feed: 24 gives 48 meters x 27 + 10 incomers = 1,306 tags
     branch_tags: int = 0  # extra tags PDUAnn_Q<k>_P, spread over the PDUs round robin
-    seed: int = 1  # for the live values of a later task; the constants of this one do not use it
+    seed: int = 1  # the live values (and every tag's own clock) are a function of it
+    live: bool = False  # True = time-varying float32 values (the simulator process, from_env); False = the constants of `value_of`
     restructure: str = ""  # "", "bad" or "by_index": the numbering the server starts with
     max_nodes_per_read: int = 0  # 0 = no limit; above 0 a Read of more nodes is refused (enforced)
     advertised_max_nodes: int | None = None  # what OperationLimits.MaxNodesPerRead shows; None = the enforced value
@@ -99,10 +111,12 @@ class ScadaConfig:
             restructure=restructure,
             max_nodes_per_read=_whole("SIM_SCADA_MAX_NODES_PER_READ", value("SIM_SCADA_MAX_NODES_PER_READ"), default.max_nodes_per_read, 0, 1_000_000),
             advertised_max_nodes=_whole("SIM_SCADA_ADVERTISED_MAX_NODES", advertised, None, 0, 4_294_967_295) if advertised else None,
+            live=True,  # the process that serves a rehearsal serves live values; there is no setting for it (and none for the tests: they build the dataclass)
         )
 
     def describe(self) -> list[str]:
-        """One line per active fault, each starting with the variable and its value; empty for a plain (even a much bigger) cluster."""
+        """One line per active fault, each starting with the variable and its value; empty for a plain (even a much bigger) cluster.
+        `live` is not a fault, so it never adds a line."""
         lines = []
         if self.restructure:
             effect = ("an old numbered address answers BadNodeIdUnknown" if self.restructure == "bad"
@@ -172,6 +186,181 @@ def unit_of(tag: str) -> str:  # guess: a plausible unit for every tag
     return {"P": "kW", "S": "kVA", "Q": "kvar"}[suffix[0]]
 
 
+# ---- the live values: a pure function of seed, tag and instant (the style of simulator/historian.py) -------------------------------
+# What the briefing showed (all of it a model, none of it a copy of a product): a tag changes on its OWN clock of 64 to 76 s on a 4 s
+# grid, about a quarter of its updates repeat the last value, the values are float32 widened to double, and PENRG is a kWh counter near
+# 3,116,496 that moves in 0.25 steps (float32 has no finer step up there, and 0.5 steps above 4,194,304, with no code of ours).
+
+GRID_S = 4  # every update of every tag sits on this grid (seconds since 1970)
+PERIOD_STEPS = (16, 17, 18, 19)  # a tag's period in grid steps: 64, 68, 72 or 76 s
+REPEAT_SHARE = 0.24  # the share of a tag's updates that repeat its previous value
+MAX_REPEAT_RUN = 16  # a run of repeats is followed back at most this far (0.24 ** 16 is nothing); keeps the function O(1)
+COUNTER_BASE_KWH = 3_116_496  # PENRG at the counter's epoch
+COUNTER_EPOCH_S = datetime(2026, 10, 1, tzinfo=timezone.utc).timestamp()
+LOAD_SWING = 0.15  # a meter's load moves this much around its mean in a day
+DAY_S = 86400
+OMEGA = 2 * math.pi / DAY_S
+_MASK = (1 << 64) - 1
+
+
+def clock() -> float:
+    """The instant the live values are computed for, in seconds since 1970 (UTC). The ONE place the wall clock is read: a test replaces
+    this function (monkeypatch `dcdash.simulator.scada.clock`) to fix or move time."""
+    return time.time()
+
+
+def _mix(*numbers: int) -> int:
+    """A 64-bit hash of whole numbers (splitmix64 steps): the same numbers always give the same answer, in every process."""
+    x = 0x9E3779B97F4A7C15
+    for number in numbers:
+        x = (x + (number & _MASK) + 0x9E3779B97F4A7C15) & _MASK
+        x ^= x >> 30
+        x = (x * 0xBF58476D1CE4E5B9) & _MASK
+        x ^= x >> 27
+        x = (x * 0x94D049BB133111EB) & _MASK
+        x ^= x >> 31
+    return x
+
+
+def _uniform(*numbers: int) -> float:
+    """A number in [0, 1) that depends on nothing but the arguments."""
+    return (_mix(*numbers) >> 11) / (1 << 53)
+
+
+@lru_cache(maxsize=None)
+def _name_key(text: str) -> int:
+    return int.from_bytes(hashlib.blake2b(text.encode(), digest_size=8).digest(), "big")  # python's own str hash changes per process
+
+
+def float32(number: float) -> float:
+    """What a float32 variable shows once a client widens it to a double."""
+    return struct.unpack("f", struct.pack("f", number))[0]
+
+
+@dataclass(frozen=True, slots=True)
+class _Meter:
+    """The seeded character of one meter, shared by its tags. Guesses throughout: sizes that look like a PDU, a branch and an incomer."""
+
+    p0: float  # mean active power, kW
+    pf: float  # mean power factor
+    shares: tuple[float, float, float]  # how the power splits over the three phases (they add up to 1)
+    v0: float  # mean phase voltage, V
+    thd_a: float  # mean current distortion, %
+    thd_v: float  # mean voltage distortion, %
+    phase: float  # where in its day the load peaks, radians
+
+
+@lru_cache(maxsize=None)
+def _meter(seed: int, name: str) -> _Meter:
+    """`name` is the first two parts of a tag: PDUA01_PM0 (a PDU meter), PDUA01_Q3 (a branch) or IT1IN_QM (an incomer)."""
+    key = _mix(seed, _name_key(name))
+    second = name.split("_", 1)[1]
+    if second == "PM0":
+        p0 = 20 + 40 * _uniform(key, 1)  # a PENRG that moves by more than one 0.25 kWh step per update, whatever the clock
+    elif second == "QM":
+        p0 = 120 + 280 * _uniform(key, 1)
+    else:
+        p0 = 0.5 + 5.5 * _uniform(key, 1)
+    first, second_share = 1 / 3 + 0.08 * (_uniform(key, 2) - 0.5), 1 / 3 + 0.08 * (_uniform(key, 3) - 0.5)
+    return _Meter(
+        p0=p0, pf=0.88 + 0.09 * _uniform(key, 4), shares=(first, second_share, 1 - first - second_share), v0=228 + 4 * _uniform(key, 5),
+        thd_a=2 + 5 * _uniform(key, 6), thd_v=0.8 + 1.7 * _uniform(key, 7), phase=2 * math.pi * _uniform(key, 8),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _Clock:
+    key: int  # the tag's own hash: its clock, its repeats and its noise all come from it
+    period: int  # grid steps between two updates, on average
+    phase: int  # the grid step modulo the period at which it updates
+    meter: _Meter
+    metric: str
+
+
+@lru_cache(maxsize=None)
+def _clock_of(seed: int, tag: str) -> _Clock:
+    key = _mix(seed, _name_key(tag))
+    period = PERIOD_STEPS[_mix(key, 1) % len(PERIOD_STEPS)]
+    first, second, metric = tag.split("_", 2)  # PDUA01 _ PM0 _ A_L1: the metric keeps its own underscore
+    return _Clock(key, period, _mix(key, 2) % period, _meter(seed, f"{first}_{second}"), metric)
+
+
+def _update_step(clock_: _Clock, n: int) -> int:
+    """The grid step of the tag's n-th update: n periods after the phase, one step late on half of them (the jitter), so two
+    updates are 15 to 20 steps (60 to 80 s) apart and never closer."""
+    return clock_.phase + n * clock_.period + (_mix(clock_.key, 4, n) & 1)
+
+
+def _load(meter: _Meter, instant: float) -> float:
+    return 1 + LOAD_SWING * math.sin(OMEGA * instant + meter.phase)
+
+
+_PHASED = re.compile(r"(PL|SL|QL|A_THDL|A_L|VTHD_L|VL)([123])N?")
+
+
+def _signal(meter: _Meter, metric: str, instant: float) -> float:
+    """The noise-free value of a metric at an instant (seconds since 1970); `metric` is one of METER_SUFFIXES (or P for branches and incomers)."""
+    power = meter.p0 * _load(meter, instant)
+    pf = meter.pf + 0.01 * math.sin(OMEGA * 3 * instant + meter.phase)
+    apparent = power / pf
+    reactive = math.sqrt(max(apparent * apparent - power * power, 0.0))
+    if metric == "PENRG":  # kWh: the integral of the load from the epoch, in closed form, so it only ever rises
+        late = max(instant, COUNTER_EPOCH_S)
+        swing = LOAD_SWING / OMEGA * (math.cos(OMEGA * COUNTER_EPOCH_S + meter.phase) - math.cos(OMEGA * late + meter.phase))
+        return COUNTER_BASE_KWH + meter.p0 / 3600 * (late - COUNTER_EPOCH_S + swing)
+    whole = {"P": power, "S": apparent, "Q": reactive, "PF": pf, "FQ": 50 + 0.04 * math.sin(OMEGA * 40 * instant + meter.phase)}
+    if metric in whole:
+        return whole[metric]
+    found = _PHASED.fullmatch(metric)
+    if found is None:
+        raise ValueError(f"no live model for the metric {metric}")
+    kind, index = found[1], int(found[2]) - 1
+    share = meter.shares[index]
+    volts = meter.v0 * (1 + 0.004 * math.sin(OMEGA * 5 * instant + meter.phase + index))
+    ripple = 1 + 0.2 * math.sin(OMEGA * 2 * instant + meter.phase + index)
+    return {
+        "PL": power * share, "SL": apparent * share, "QL": reactive * share, "VL": volts, "A_L": power * share * 1000 / (volts * pf),
+        "A_THDL": meter.thd_a * ripple, "VTHD_L": meter.thd_v * ripple,
+    }[kind]
+
+
+def sample(seed: int, tag: str, instant: float) -> tuple[float, float]:
+    """(the value the tag shows, the instant of its latest update) at `instant`, both a pure function of the three arguments.
+
+    The latest update is the tag's own: update n happens on the 4 s grid at phase + n * period (+ one step of jitter). The value
+    changes only then; 24 percent of the updates repeat the previous value (a hash of the update decides, and a run of repeats is
+    followed back to the update that last changed it). A value is the metric's smooth signal at the time of the update that last
+    changed it, plus a little noise, rounded and narrowed to float32. The instant returned is on the grid and never ahead of `instant`."""
+    tag_clock = _clock_of(seed, tag)
+    step = math.floor(instant / GRID_S)
+    n = (step - tag_clock.phase) // tag_clock.period
+    if _update_step(tag_clock, n) > step:  # the jitter put this update one step later than the instant asked for
+        n -= 1
+    stamp = _update_step(tag_clock, n) * GRID_S
+    changed = n
+    for _ in range(MAX_REPEAT_RUN):
+        if _uniform(tag_clock.key, 3, changed) >= REPEAT_SHARE:
+            break
+        changed -= 1  # this update repeated the one before it
+    at = _update_step(tag_clock, changed) * GRID_S
+    metric = tag_clock.metric
+    number = _signal(tag_clock.meter, metric, at)
+    wobble = 2 * _uniform(tag_clock.key, 5, changed) - 1  # -1 .. 1, new on every update that changes the value
+    if metric == "PENRG":
+        return float32(number), float(stamp)  # a counter has no noise: it only rises, in float32 steps
+    if metric == "FQ":
+        return float32(round(number + 0.01 * wobble, 4)), float(stamp)
+    if metric == "PF":
+        return float32(round(number + 0.004 * wobble, 4)), float(stamp)
+    relative = 0.003 if metric.startswith("V") and "THD" not in metric else 0.01
+    return float32(round(number * (1 + relative * wobble), 3)), float(stamp)
+
+
+def value(seed: int, tag: str, instant: float) -> float:
+    """The value of the tag at an instant: `sample(...)[0]`."""
+    return sample(seed, tag, instant)[0]
+
+
 class ScadaSim:
     def __init__(self, config: ScadaConfig, port: int, instance: str = "dev") -> None:
         if config.restructure not in MODES:
@@ -191,8 +380,13 @@ class ScadaSim:
 
     # -- the model ------------------------------------------------------------------------------------------------------------
     def value_of(self, tag: str) -> float:
-        """The value the tag shows (a constant, distinct per tag)."""
-        return self._values[tag]
+        """The value the tag shows: `live=False` a constant, distinct per tag; `live=True` the value at the instant `clock()` gives
+        now (the one a Read would answer, float32 widened to a double)."""
+        if not self.config.live:
+            return self._values[tag]
+        if tag not in self._values:
+            raise KeyError(tag)
+        return value(self.config.seed, tag, clock())
 
     def stable_id(self, tag: str) -> str:
         return f"ns={NAMESPACE_INDEX};s={CLUSTER}.{tag}"
@@ -233,7 +427,8 @@ class ScadaSim:
             if equipment not in folders:
                 folders[equipment] = await site.add_object(ua.NodeId(f"{CLUSTER}.{equipment}", idx), ua.QualifiedName(equipment, idx))
             variable = await folders[equipment].add_variable(
-                ua.NodeId(f"{CLUSTER}.{tag}", idx), ua.QualifiedName(tag, idx), self._values[tag], ua.VariantType.Double,
+                ua.NodeId(f"{CLUSTER}.{tag}", idx), ua.QualifiedName(tag, idx), self.value_of(tag),
+                ua.VariantType.Float if self.config.live else ua.VariantType.Double,  # a Read of a live node is answered by `_live`
             )  # the DisplayName is the tag name (guess)
             unit = unit_of(tag)
             await variable.add_property(idx, "EngineeringUnits", ua.EUInformation(DisplayName=ua.LocalizedText(unit), Description=ua.LocalizedText(unit)))
@@ -289,7 +484,29 @@ class ScadaSim:
         translated = [
             node if (nodeid := self._translate(node.NodeId)) is node.NodeId else dataclasses.replace(node, NodeId_=nodeid) for node in nodes
         ]
-        return self._read_original(dataclasses.replace(params, NodesToRead=translated))
+        answers = self._read_original(dataclasses.replace(params, NodesToRead=translated))
+        return self._live(translated, answers) if self.config.live else answers
+
+    def _live(self, nodes: list[ua.ReadValueId], answers: list[ua.DataValue]) -> list[ua.DataValue]:
+        """Replace the Value of every cluster tag in a Read by the live one: a float32 Variant, `SourceTimestamp` on the tag's own update
+        (the grid instant), `ServerTimestamp` the clock's now. The nodes are the translated ones, so a number that means another tag
+        (restructure "by_index") reads that tag's live value. Anything else (another attribute, a bad answer) is left as it is."""
+        instant = clock()
+        server_time = datetime.fromtimestamp(instant, timezone.utc)
+        live = list(answers)
+        for position, (node, answer) in enumerate(zip(nodes, answers, strict=True)):
+            identifier = node.NodeId.Identifier
+            if node.AttributeId != ua.AttributeIds.Value or node.NodeId.NamespaceIndex != NAMESPACE_INDEX or not isinstance(identifier, str):
+                continue
+            tag = identifier.removeprefix(f"{CLUSTER}.")
+            if tag == identifier or tag not in self._values or (answer.StatusCode_ is not None and not answer.StatusCode_.is_good()):
+                continue
+            number, stamp = sample(self.config.seed, tag, instant)
+            live[position] = ua.DataValue(
+                Value=ua.Variant(number, ua.VariantType.Float),
+                SourceTimestamp=datetime.fromtimestamp(stamp, timezone.utc), ServerTimestamp=server_time,
+            )
+        return live
 
     def _browse(self, params: ua.BrowseParameters) -> list[ua.BrowseResult]:
         self.counters.browse += 1
