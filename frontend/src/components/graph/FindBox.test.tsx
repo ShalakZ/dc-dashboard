@@ -266,3 +266,128 @@ describe("FindBox", () => {
     expect(within(screen.getByRole("search")).queryAllByRole("button")).toHaveLength(0);
   });
 });
+
+describe("FindBox: searching the tags of a large source (w36)", () => {
+  const BIG = [{ id: 7, name: "Big OPC", points: 15000 }];
+  const TWO = [...BIG, { id: 9, name: "Hall bus", points: 2300 }];
+  const names = () => options().map((o) => o.textContent);
+  const labelOf = (option: HTMLElement) => option.querySelector(".graph-find-label")?.textContent;
+
+  it("with a query of 2 characters or more it adds ONE last option for the source, with thousands separators and the query as typed", async () => {
+    const { input } = open({ shapes: BIG, onShapes: vi.fn() });
+    await userEvent.type(input, "lvp");
+    expect(options().map(labelOf)).toEqual(["LVP01 kW", "LVP room", 'Search the 15,000 tags of Big OPC for "lvp"']);
+    expect(options()[2]).toHaveAttribute("role", "option");
+    expect(options()[2].querySelector("svg")).not.toBeNull(); // an icon like the others
+    expect(document.querySelector("[aria-live]")).toHaveTextContent("2 results. You can also search the tags of a large source.");
+  });
+
+  it("is the only option when nothing on the canvas matches, and is the active one (the index holds only what the model holds)", async () => {
+    const { input } = open({ shapes: BIG, onShapes: vi.fn() });
+    await userEvent.type(input, "PENRG");
+    expect(options().map(labelOf)).toEqual(['Search the 15,000 tags of Big OPC for "PENRG"']);
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(input).toHaveAttribute("aria-controls", screen.getByRole("listbox").id);
+    expect(input).toHaveAttribute("aria-activedescendant", options()[0].id);
+    expect(options()[0]).toHaveAttribute("aria-selected", "true");
+    expect(document.querySelector("[aria-live]")).toHaveTextContent("No match on the canvas. You can search the tags of a large source.");
+  });
+
+  it("one option per large source, after every canvas match, in the order given", async () => {
+    const { input } = open({ shapes: TWO, onShapes: vi.fn() });
+    await userEvent.type(input, "lvp");
+    expect(options().map(labelOf)).toEqual(["LVP01 kW", "LVP room", 'Search the 15,000 tags of Big OPC for "lvp"', 'Search the 2,300 tags of Hall bus for "lvp"']);
+    expect(new Set(options().map((o) => o.id)).size).toBe(4);
+    await userEvent.clear(input);
+    await userEvent.type(input, "zzz");
+    expect(document.querySelector("[aria-live]")).toHaveTextContent("No match on the canvas. You can search the tags of 2 large sources.");
+  });
+
+  it("is offered for 2 to 100 characters of the trimmed query, not for 1 and not for 101", async () => {
+    const { input } = open({ shapes: BIG, onShapes: vi.fn() });
+    await userEvent.type(input, "x");
+    expect(options()).toHaveLength(0);
+    await userEvent.type(input, "y");
+    expect(options()).toHaveLength(1);
+    await userEvent.clear(input);
+    await userEvent.type(input, "   a   "); // one character once trimmed (the canvas still lists its own matches for "a")
+    expect(names().filter((n) => n?.startsWith("Search the"))).toEqual([]);
+    await userEvent.clear(input);
+    fireEvent.change(input, { target: { value: "p".repeat(100) } });
+    expect(options()).toHaveLength(1);
+    fireEvent.change(input, { target: { value: "p".repeat(101) } });
+    expect(options()).toHaveLength(0);
+    fireEvent.change(input, { target: { value: `  ${"p".repeat(100)}  ` } }); // 100 once trimmed
+    expect(options()).toHaveLength(1);
+  });
+
+  it("shows the query trimmed", async () => {
+    const { input } = open({ shapes: BIG, onShapes: vi.fn() });
+    await userEvent.type(input, "  PENRG  ");
+    expect(labelOf(options()[0])).toBe('Search the 15,000 tags of Big OPC for "PENRG"');
+  });
+
+  it("is not there without large sources (no `shapes`, or an empty list: the page gives none to a person who may not open the page)", async () => {
+    for (const shapes of [undefined, []] as const) {
+      const { input, unmount } = open({ shapes, onShapes: vi.fn() });
+      await userEvent.type(input, "lvp");
+      expect(names().filter((n) => n?.startsWith("Search the"))).toEqual([]);
+      expect(options()).toHaveLength(2);
+      unmount();
+    }
+  });
+
+  it("Enter on it goes to the source's shapes page with the query, closes the card, hands the focus back first, and does not call onChoose", async () => {
+    const trigger = add(document.createElement("button"));
+    const onShapes = vi.fn();
+    const { input, onChoose, onClose } = open({ shapes: BIG, onShapes, trigger: { current: trigger } });
+    await userEvent.type(input, "PENRG{Enter}");
+    expect(onShapes).toHaveBeenCalledTimes(1);
+    expect(onShapes).toHaveBeenCalledWith("/sources/7/shapes?q=PENRG");
+    expect(onChoose).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(trigger).toHaveFocus();
+  });
+
+  it("the arrows reach it after the canvas matches, and a click on it does the same as Enter", async () => {
+    const onShapes = vi.fn();
+    const { input, onChoose } = open({ shapes: BIG, onShapes });
+    await userEvent.type(input, "lvp{ArrowDown}{ArrowDown}");
+    expect(options()[2]).toHaveAttribute("aria-selected", "true");
+    expect(input).toHaveAttribute("aria-activedescendant", options()[2].id);
+    await userEvent.type(input, "{ArrowDown}"); // wraps to the first
+    expect(options()[0]).toHaveAttribute("aria-selected", "true");
+    await userEvent.click(options()[2]);
+    expect(onShapes).toHaveBeenCalledWith("/sources/7/shapes?q=lvp");
+    expect(onChoose).not.toHaveBeenCalled();
+  });
+
+  it("Enter on a canvas match still chooses it, and goes nowhere else", async () => {
+    const onShapes = vi.fn();
+    const { input, onChoose } = open({ shapes: BIG, onShapes });
+    await userEvent.type(input, "lvp{Enter}");
+    expect(onChoose).toHaveBeenCalledWith(ENTRIES[1]);
+    expect(onShapes).not.toHaveBeenCalled();
+  });
+
+  // A shape key holds `#` (it would start a fragment), and a query may hold `&`, `=` or `%`: the address is built with URLSearchParams, never by joining strings.
+  it.each([
+    ["A#B", "/sources/7/shapes?q=A%23B"],
+    ["pdua#_pm#_penrg", "/sources/7/shapes?q=pdua%23_pm%23_penrg"],
+    ["a&b=c%d", "/sources/7/shapes?q=a%26b%3Dc%25d"],
+  ])("encodes the query %s in the address", async (typed, to) => {
+    const onShapes = vi.fn();
+    const { input } = open({ shapes: BIG, onShapes });
+    await userEvent.type(input, `${typed}{Enter}`);
+    expect(onShapes).toHaveBeenCalledWith(to);
+  });
+
+  it("a query with a space reads back as typed from the address", async () => {
+    const onShapes = vi.fn();
+    const { input } = open({ shapes: BIG, onShapes });
+    await userEvent.type(input, "PDU penrg{Enter}");
+    const [to] = onShapes.mock.lastCall as [string];
+    expect(to.startsWith("/sources/7/shapes?q=")).toBe(true);
+    expect(new URLSearchParams(to.split("?")[1]).get("q")).toBe("PDU penrg");
+  });
+});

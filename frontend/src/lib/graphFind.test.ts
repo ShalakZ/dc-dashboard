@@ -331,14 +331,14 @@ describe("findPlan", () => {
       expect(result.note).toContain("open groups were closed");
     });
 
-    it("KNOWN LIMIT: the budget counts points, not a source's own group count, so a closed source with more groups than the budget still opens for a group target (Expand all would refuse); change this on purpose, not by accident", () => {
+    it("(w36: the known limit of before, changed on purpose) a closed source with more groups than the budget is not opened for a group target either; Expand all refuses it the same way", () => {
       const wide = sized(Object.fromEntries(Array.from({ length: EXPAND_NODE_BUDGET + 100 }, (_v, i) => [`G${i}`, 1])));
       const entry = buildFindIndex(wide).find((e) => e.id === nodeId.cluster(1, "G5"))!;
       const result = findPlan(wide, closed(), entry);
-      expect([...result.open.sources]).toEqual([1]); // opened, drawing 700 groups
+      expect(result.open.sources.size).toBe(0); // 700 groups alone are more than the budget: nothing opens
       expect(result.open.clusters.size).toBe(0);
-      expect(result.targetId).toBe(entry.id);
-      expect(result.note).toBeNull(); // and no note: nothing is held back
+      expect(result.targetId).toBe(nodeId.source(1)); // the card is what the person is taken to
+      expect(result.note).toBe("Plant OPC has 700 groups, too many to draw; use Map by shape");
     });
 
     it("both at once: the open groups are closed and the target group is still too big", () => {
@@ -714,5 +714,124 @@ describe("buildFindIndex icons (w12c)", () => {
     ]);
     expect(byId(plain, nodeId.point(2))).toMatchObject({ label: "LVP01 kWh", context: "point in LVP01 · s1", text: expect.stringContaining("lvp01 kwh") });
     expect(plain.every((e) => typeof e.icon === "string" && e.icon.length > 0)).toBe(true);
+  });
+});
+
+describe("findPlan: a closed source whose groups alone are too many to draw (w36)", () => {
+  /** One source with n groups of two points each ("G0 0", "G0 1", ...); `over` changes the source (a `large`, a mapped share). */
+  function crowded(n: number, over: object = {}, mapped: (g: number) => boolean = () => false): GraphModel {
+    let next = 1000;
+    const clusters = Array.from({ length: n }, (_, g) => ({
+      key: `G${g}`, points: [0, 1].map((i) => point(next++, `G${g} ${i}`, mapped(g) ? { asset_id: 10 } : {})),
+    }));
+    return model({ sources: [source(1, { name: "Plant OPC", clusters, ...over })], unidentified: [], assets: [] });
+  }
+  const entryOf = (m: GraphModel, label: string) => {
+    const found = buildFindIndex(m).find((e) => e.label === label);
+    if (!found) throw new Error(`no entry ${label}`);
+    return found;
+  };
+  const SENTENCE = (n: string) => `Plant OPC has ${n} groups, too many to draw; use Map by shape`;
+  const withFilter = (over: Partial<GraphView> = {}): GraphView => ({ ...NO_VIEW, pageSize: PAGE_SIZE, unmappedOnly: true, ...over });
+
+  it("a group or a point of such a source opens nothing and targets the source card, with the number and where to go", () => {
+    const m = crowded(13851);
+    for (const label of ["G6000", "G6000 1"]) {
+      const open = closed();
+      const result = findPlan(m, open, entryOf(m, label));
+      expect(result.open).toBe(open); // the very same object: the page rebuilds nothing
+      expect(result.targetId).toBe(nodeId.source(1));
+      expect(result.note).toBe(SENTENCE("13,851"));
+      expect("view" in result).toBe(false);
+    }
+  });
+
+  it("adds `or the Points page` only for a person who may open it", () => {
+    const m = crowded(13851);
+    const entry = entryOf(m, "G6000 1");
+    expect(findPlan(m, closed(), entry, EXPAND_NODE_BUDGET, NO_VIEW, false).note).toBe(SENTENCE("13,851"));
+    expect(findPlan(m, closed(), entry, EXPAND_NODE_BUDGET, NO_VIEW, true).note).toBe(`${SENTENCE("13,851")} or the Points page`);
+    expect(findPlan(m, closed(), entry).note).toBe(SENTENCE("13,851")); // the default is the shorter sentence
+  });
+
+  it("exactly 600 groups is still opened (a group of it opens as before); 601 is not", () => {
+    const m600 = crowded(600);
+    const group = findPlan(m600, closed(), entryOf(m600, "G10"));
+    expect([...group.open.sources]).toEqual([1]);
+    expect(group.targetId).toBe(nodeId.cluster(1, "G10"));
+    expect(group.note).toBeNull();
+    const m601 = crowded(601);
+    const refused = findPlan(m601, closed(), entryOf(m601, "G10"));
+    expect(refused.open.sources.size).toBe(0);
+    expect(refused.targetId).toBe(nodeId.source(1));
+    expect(refused.note).toBe(SENTENCE("601"));
+  });
+
+  it("counts the Ungrouped group too", () => {
+    const m = crowded(600, { ungrouped: [point(90001, "Loose 0"), point(90002, "Loose 1")] });
+    expect(findPlan(m, closed(), entryOf(m, "Loose 0")).note).toBe(SENTENCE("601"));
+  });
+
+  it("a source that is already open is left as it is: the guard is for opening", () => {
+    const m = crowded(13851);
+    const result = findPlan(m, openOf([1]), entryOf(m, "G6000"));
+    expect(result.targetId).toBe(nodeId.cluster(1, "G6000"));
+    expect(result.note).toBeNull();
+  });
+
+  it("a source with `large` is guarded too (M6: the rule is for every source)", () => {
+    const m = crowded(700, { large: { points: 1400, mapped: 0, unmapped: 1400, rules_new: 0 } });
+    expect(findPlan(m, closed(), entryOf(m, "G5")).note).toBe(SENTENCE("700"));
+  });
+
+  it("counts the groups the Unmapped only filter lets through: 100 left of 700 opens as before", () => {
+    const m = crowded(700, {}, (g) => g >= 100); // groups 100.. are fully mapped, so hidden
+    const result = findPlan(m, closed(), entryOf(m, "G5"), EXPAND_NODE_BUDGET, withFilter());
+    expect([...result.open.sources]).toEqual([1]);
+    expect(result.note).toBeNull();
+  });
+
+  it("a target the filter hides in a visible source does not slip past: the plan would turn the filter off and draw every group, so the guard counts them all and the filter stays on", () => {
+    const m = crowded(700, {}, (g) => g >= 100); // groups 100.. are fully mapped, so hidden; G5 is on the canvas
+    for (const label of ["G500", "G500 0"]) { // a hidden group, and a mapped point in a hidden group
+      const open = closed();
+      const result = findPlan(m, open, entryOf(m, label), EXPAND_NODE_BUDGET, withFilter());
+      expect(result.open).toBe(open);
+      expect(result.targetId).toBe(nodeId.source(1));
+      expect(result.note).toBe(SENTENCE("700"));
+      expect("view" in result).toBe(false);
+    }
+  });
+
+  it("the same for a mapped point and for the twin of one inside a group the filter shows", () => {
+    const m = crowded(700, {}, (g) => g >= 100);
+    const group = m.sources[0].clusters[5]; // G5: two unmapped points; one becomes mapped, one its twin, and a third stays to be offered
+    const [mapped, twin] = group.points;
+    group.points = [{ ...mapped, asset_id: 10 }, { ...twin, same_tag_as: mapped.id }, point(99999, "G5 c")];
+    for (const label of [mapped.name, twin.name]) {
+      const result = findPlan(m, closed(), entryOf(m, label), EXPAND_NODE_BUDGET, withFilter());
+      expect(result.open.sources.size).toBe(0);
+      expect(result.targetId).toBe(nodeId.source(1));
+      expect(result.note).toBe(SENTENCE("700"));
+      expect("view" in result).toBe(false);
+    }
+    const offered = findPlan(m, closed(), entryOf(m, "G5 c"), EXPAND_NODE_BUDGET, withFilter()); // an offerable point does not hide: counted under the filter, 101 groups
+    expect([...offered.open.sources]).toEqual([1]);
+    expect(offered.note).toBeNull();
+  });
+
+  it("a source the filter hides is shown for the plan: the filter goes off, the note says so, then the sentence", () => {
+    const m = crowded(700, {}, () => true); // everything mapped: the source is hidden by the filter
+    const result = findPlan(m, closed(), entryOf(m, "G5"), EXPAND_NODE_BUDGET, withFilter());
+    expect(result.targetId).toBe(nodeId.source(1));
+    expect(result.view?.unmappedOnly).toBe(false);
+    expect(result.note).toBe(`Unmapped only is off so Plant OPC can be shown. ${SENTENCE("700")}`);
+    expect(result.open.sources.size).toBe(0);
+  });
+
+  it("the budget parameter is the limit: 5 groups against a budget of 4", () => {
+    const m = crowded(5);
+    expect(findPlan(m, closed(), entryOf(m, "G1"), 4).note).toBe(SENTENCE("5"));
+    expect(findPlan(m, closed(), entryOf(m, "G1"), 5).note).toBeNull();
   });
 });

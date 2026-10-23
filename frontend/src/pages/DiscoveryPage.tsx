@@ -49,7 +49,7 @@ import {
   type AssetNodeData, type ClusterNodeData, type Group, type GraphView, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
 import { cameraMs, keepInView, overlayMargin, unionRect } from "../lib/graphCamera";
-import { buildFindIndex, findMatches, findPlan, type FindEntry } from "../lib/graphFind";
+import { buildFindIndex, findMatches, findPlan, type FindEntry, type ShapesTarget } from "../lib/graphFind";
 import { alignGuides, type Rect } from "../lib/graphGuides";
 import { navIndex } from "../lib/graphNav";
 import {
@@ -57,8 +57,8 @@ import {
 } from "../lib/graphPrefs";
 import { reuseEdges, reuseNodes } from "../lib/graphReuse";
 import {
-  canCollapse, canExpand, changeNote, collapseAll, collapseTargets, EXPAND_NODE_BUDGET, expandAll, expandNote, expandTargets, graphCounts, graphSummary, selectionStates,
-  type Change,
+  canCollapse, canExpand, changeNote, collapseAll, collapseTargets, EXPAND_NODE_BUDGET, expandAll, expandNote, expandTargets, graphCounts, graphSummary, groupsOverBudget, selectionStates,
+  tooManyGroupsNote, type Change,
 } from "../lib/graphView";
 import { mappedRefs, mappedSourcesByAsset, mappingsWhat } from "../lib/mappedRefs";
 import { formatOfflineSince } from "../lib/sourceStatus";
@@ -482,10 +482,25 @@ function Canvas({ model }: { model: GraphModel }) {
     if (to) void setViewport({ ...view, ...to }, { duration: cameraMs(reducedMotion()) });
   }, [getNodes, getViewport, setViewport]);
 
+  // The one place every toggle goes through: the card's expand button, a click, Enter on a focused node (`navToggle`) and the menu's Expand.
+  // (w36) A closed source whose visible groups alone are more than the Expand all budget is not opened: thousands of nodes freeze the tab. Any source, `large` or not;
+  // it says why in a toast, with the same words as Find's note. The model, the view and the permission are read from refs, so this callback keeps its identity.
+  const canPointsNow = useRef(canPoints);
+  canPointsNow.current = canPoints;
+  const toastNow = useRef(toast);
+  toastNow.current = toast;
   const onToggle = useCallback((id: string) => {
     if (id.startsWith("src:")) {
       const sourceId = Number(id.slice("src:".length));
       const opens = !openNow.current.sources.has(sourceId);
+      if (opens) {
+        const source = modelRef.current.sources.find((s) => s.id === sourceId);
+        const tooMany = source ? groupsOverBudget(source, viewNow.current) : null;
+        if (source && tooMany !== null) {
+          toastNow.current.info(tooManyGroupsNote(source, tooMany, canPointsNow.current));
+          return;
+        }
+      }
       setOpen((prev) => ({ ...prev, sources: toggled(prev.sources, sourceId) }));
       if (opens) void panToOpened(id);
     } else {
@@ -1031,6 +1046,12 @@ function Canvas({ model }: { model: GraphModel }) {
   // ---- Find (Ctrl+K on the canvas), the right-click menus and the canvas's keys ----
   const findIndex = useMemo(() => buildFindIndex(model), [model]);
   const search = useCallback((query: string) => findMatches(findIndex, query), [findIndex]);
+  // (w36) The tags of a large source are not on the canvas, so Find offers to search them on its shapes page; only to a person who may open that page (its whole need).
+  const shapesTargets = useMemo<ShapesTarget[]>(
+    () => (canShapes ? model.sources.flatMap((s) => (s.large ? [{ id: s.id, name: s.name, points: s.large.points }] : [])) : []),
+    [model, canShapes],
+  );
+  const goToShapes = useCallback((to: string) => navigate(to), [navigate]);
   /** Ctrl+K (on the canvas, or on the bar outside the card): opens the card, or, when it is open, takes the focus back into its field. */
   const openFind = useCallback(() => {
     if (!findOpenNow.current) {
@@ -1068,7 +1089,7 @@ function Canvas({ model }: { model: GraphModel }) {
         toast.info(`Not seen lately is off so ${entry.label} can be shown.`);
       }
     }
-    const plan = findPlan(modelRef.current, openNow.current, entry, EXPAND_NODE_BUDGET, now); // the model, open set and view of the moment: a refresh may have come in while the card was open
+    const plan = findPlan(modelRef.current, openNow.current, entry, EXPAND_NODE_BUDGET, now, canPointsNow.current); // the model, open set and view of the moment: a refresh may have come in while the card was open
     if (plan.open !== openNow.current) setOpen(plan.open); // the very same object when nothing has to open: no rebuild
     if (plan.view) {
       // The jump needs a longer page, an unfolded asset or no filter: change those first (one batch with the open set), then wait for the paint as below.
@@ -1285,7 +1306,7 @@ function Canvas({ model }: { model: GraphModel }) {
             <Background />
             <GraphMiniMap />
             {GUIDES_ENABLED && <AlignGuides handleRef={guides} />}
-            <CanvasTools search={search} onChoose={onFind} open={findOpen} onClose={closeFind} triggerRef={findButton} cardId={findCardId} />
+            <CanvasTools search={search} onChoose={onFind} shapes={shapesTargets} onShapes={goToShapes} open={findOpen} onClose={closeFind} triggerRef={findButton} cardId={findCardId} />
           </ReactFlow>
           {canAccept && offer && (
             <div className="offer-bar" role="status">

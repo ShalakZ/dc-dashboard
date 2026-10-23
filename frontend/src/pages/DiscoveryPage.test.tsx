@@ -5339,3 +5339,141 @@ describe("DiscoveryPage with a large source (w36)", () => {
     expect(within(adminPanel).getByRole("link", { name: "Open the Points page" })).toHaveAttribute("href", "/sources/1/points");
   });
 });
+
+describe("DiscoveryPage a source too big to draw, and Find for a large source (w36)", () => {
+  /** A source of n groups of two points each, with no `large` (an older server, a mock): the client has nothing but its own model to go by. */
+  const crowded = (n: number, over: Partial<GraphSource> = {}) => srcOf(1, "Big OPC", {
+    connector_type: "opcua", point_count: n * 2,
+    clusters: Array.from({ length: n }, (_, g) => ({ key: `G${g}`, points: [kw(g * 2 + 1, `G${g} a`), kw(g * 2 + 2, `G${g} b`)] })), ...over,
+  });
+  const SENTENCE = (n: string) => `Big OPC has ${n} groups, too many to draw; use Map by shape`;
+  const nodeIds = (prefix: string) => [...document.querySelectorAll(`[data-id^="${prefix}"]`)].map((n) => n.getAttribute("data-id"));
+  function WhereNow() {
+    const at = useLocation();
+    return <output data-testid="where-now">{at.pathname + at.search}</output>;
+  }
+  const show = (role: string, sources: GraphSource[]) => {
+    mockFetch(routes(role, world(sources)));
+    const toasts = spyToasts();
+    const view = renderWithProviders(<><DiscoveryPage /><SignedIn /><WhereNow /></>, { route: "/discovery", path: "*", toasts: toasts.api });
+    return { ...view, toasts };
+  };
+  const enterOn = (id: string) => {
+    act(() => node(id).focus());
+    fireEvent.keyDown(node(id), { key: "Enter" });
+  };
+
+  describe("a toggle of such a source", () => {
+    it("the card's expand button opens nothing and toasts the sentence", async () => {
+      const { toasts } = show("operator", [crowded(13851)]);
+      await userEvent.click(await screen.findByRole("button", { name: "Expand Big OPC" }));
+      expect(nodeIds("cluster:")).toEqual([]);
+      expect(toasts.calls).toEqual([{ kind: "info", text: SENTENCE("13,851") }]);
+      expect(screen.getByRole("button", { name: "Expand Big OPC" })).toBeInTheDocument(); // still the closed card
+    });
+
+    it("Enter on the card does the same, and so does the menu's Expand", async () => {
+      const { toasts } = show("operator", [crowded(13851)]);
+      await screen.findByText("Big OPC");
+      enterOn("src:1");
+      expect(nodeIds("cluster:")).toEqual([]);
+      expect(toasts.calls).toEqual([{ kind: "info", text: SENTENCE("13,851") }]);
+      fireEvent.contextMenu(node("src:1"));
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Expand" }));
+      expect(nodeIds("cluster:")).toEqual([]);
+      expect(toasts.calls).toEqual([{ kind: "info", text: SENTENCE("13,851") }, { kind: "info", text: SENTENCE("13,851") }]);
+    });
+
+    it("adds `or the Points page` for a person who may open it (sources.edit) and not for one who may not", async () => {
+      const operator = show("operator", [crowded(700)]);
+      await userEvent.click(await screen.findByRole("button", { name: "Expand Big OPC" }));
+      expect(operator.toasts.calls).toEqual([{ kind: "info", text: SENTENCE("700") }]);
+      cleanup();
+      const admin = show("admin", [crowded(700)]);
+      await userEvent.click(await screen.findByRole("button", { name: "Expand Big OPC" }));
+      expect(admin.toasts.calls).toEqual([{ kind: "info", text: `${SENTENCE("700")} or the Points page` }]);
+    });
+
+    it("exactly 600 groups still opens: 600 group nodes, no toast", async () => {
+      const { toasts } = show("operator", [crowded(600)]);
+      await userEvent.click(await screen.findByRole("button", { name: "Expand Big OPC" }));
+      await waitFor(() => expect(nodeIds("cluster:")).toHaveLength(600));
+      expect(toasts.calls).toEqual([]);
+    });
+
+    it("a source that is open closes as before (the guard is for opening)", async () => {
+      const { toasts } = show("operator", [crowded(600)]);
+      await userEvent.click(await screen.findByRole("button", { name: "Expand Big OPC" }));
+      await waitFor(() => expect(nodeIds("cluster:")).toHaveLength(600));
+      // (the accessibility tree of 600 group nodes is slow to query: the button is found in the card)
+      fireEvent.click(node("src:1").querySelector('button[aria-label="Collapse Big OPC"]')!);
+      await waitFor(() => expect(nodeIds("cluster:")).toEqual([]));
+      expect(toasts.calls).toEqual([]);
+    });
+  });
+
+  describe("Find into such a source", () => {
+    it("a point of it opens nothing, the card is the target, and the note is the toast", async () => {
+      const { toasts } = show("operator", [crowded(13851)]);
+      await screen.findByText("Big OPC");
+      await userEvent.click(screen.getByRole("button", { name: "Find" }));
+      await userEvent.type(await screen.findByRole("combobox"), "G6000 a");
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(toasts.calls).toEqual([{ kind: "info", text: SENTENCE("13,851") }]));
+      expect(nodeIds("cluster:")).toEqual([]);
+      expect(nodeIds("point:")).toEqual([]);
+      await waitFor(() => expect(flow.setCenter).toHaveBeenCalled()); // the camera goes to the card, which is drawn
+    });
+
+    it("the note says `or the Points page` for a person who may open it", async () => {
+      const { toasts } = show("admin", [crowded(13851)]);
+      await screen.findByText("Big OPC");
+      await userEvent.click(screen.getByRole("button", { name: "Find" }));
+      await userEvent.type(await screen.findByRole("combobox"), "G6000 a{Enter}");
+      await waitFor(() => expect(toasts.calls).toEqual([{ kind: "info", text: `${SENTENCE("13,851")} or the Points page` }]));
+    });
+  });
+
+  describe("the Find option for a large source", () => {
+    const LARGE = { points: 15000, mapped: 2, unmapped: 14998, rules_new: 0 };
+    const bigSource = () => srcOf(1, "Big OPC", {
+      connector_type: "opcua", point_count: 15000, large: LARGE,
+      clusters: [{ key: "PDUA01", points: [kw(1, "PDUA01 a", { asset_id: 10, mapping_id: 501, mapped_metric: "active_power_kw" }), kw(2, "PDUA01 b", { asset_id: 10, mapping_id: 502, mapped_metric: "active_power_kw" })] }],
+    });
+    const OPTION = 'Search the 15,000 tags of Big OPC for "PENRG"';
+    const find = async (text: string) => {
+      await userEvent.click(await screen.findByRole("button", { name: "Find" }));
+      await userEvent.type(await screen.findByRole("combobox"), text);
+    };
+
+    it("is offered with discovery.view and Enter on it opens the source's shapes page with the query", async () => {
+      show("operator", [bigSource()]);
+      await find("PENRG");
+      const option = await screen.findByRole("option", { name: new RegExp(OPTION) });
+      expect(option).toHaveAttribute("aria-selected", "true"); // nothing on the canvas matches, so it is the one to Enter on
+      await userEvent.keyboard("{Enter}");
+      expect(screen.getByTestId("where-now")).toHaveTextContent("/sources/1/shapes?q=PENRG");
+    });
+
+    it("a # in the query reaches the page encoded", async () => {
+      show("operator", [bigSource()]);
+      await find("A#B{Enter}");
+      expect(screen.getByTestId("where-now")).toHaveTextContent("/sources/1/shapes?q=A%23B");
+    });
+
+    it("is not offered to a person who may not open the page, nor for a source without `large`", async () => {
+      show("viewer", [bigSource()]);
+      await accountKnown();
+      await find("PENRG");
+      expect(screen.queryByRole("option")).not.toBeInTheDocument();
+      cleanup();
+      show("operator", [bigSource()]);
+      await find("a"); // one character: no tag search yet
+      expect(screen.queryByRole("option", { name: /Search the/ })).not.toBeInTheDocument();
+      cleanup();
+      show("operator", [{ ...bigSource(), large: undefined }]);
+      await find("PENRG");
+      expect(screen.queryByRole("option", { name: /Search the/ })).not.toBeInTheDocument();
+    });
+  });
+});

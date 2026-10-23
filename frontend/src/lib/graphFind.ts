@@ -1,6 +1,6 @@
 import type { GraphModel, GraphSource } from "../api/types";
 import { NO_VIEW, drawnCount, groupVisible, groupsOf, isOfferable, nodeId, sourceVisible, visiblePoints, type GraphView, type Group, type OpenState } from "./graph";
-import { EXPAND_NODE_BUDGET } from "./graphView";
+import { EXPAND_NODE_BUDGET, groupsOverBudget, tooManyGroupsNote } from "./graphView";
 import type { IconName } from "../components/Icon";
 import { assetIcon } from "./assetIcons";
 import { clusterIcon, metricIcon, pointMetric, protocolIcon } from "./graphIcons";
@@ -125,6 +125,28 @@ export interface FindPlan {
 
 const count = (n: number) => n.toLocaleString("en-US");
 
+/** (w36) A large source the Find card can search the tags of: its id, its name and how many tags it holds (`large.points`). */
+export interface ShapesTarget { id: number; name: string; points: number }
+/** (w36) One extra option of the Find card: `id` cannot clash with a canvas node id; `to` is the address of the source's Map by shape page, searched for the query. */
+export interface ShapesOption { id: string; label: string; to: string }
+
+/** The shapes route answers 422 for a search shorter than 2 or longer than 100 characters; the option is not offered outside that. */
+export const SHAPES_QUERY_MIN = 2;
+export const SHAPES_QUERY_MAX = 100;
+
+/**
+ * (w36) The tags of a large source are not on the canvas (it holds only its mapped points), so Find cannot list them. For a query of 2 to 100 characters
+ * (trimmed, counted in characters) every target gets ONE option: `Search the 15,000 tags of Big OPC for "PENRG"`, which opens `/sources/<id>/shapes?q=PENRG`.
+ * The address is built with URLSearchParams: a shape key holds `#`, a query may hold `&`, `=` or `%`.
+ */
+export function shapesOptions(targets: readonly ShapesTarget[], query: string): ShapesOption[] {
+  const q = query.trim();
+  const length = [...q].length;
+  if (targets.length === 0 || length < SHAPES_QUERY_MIN || length > SHAPES_QUERY_MAX) return [];
+  const search = new URLSearchParams({ q }).toString();
+  return targets.map((t) => ({ id: `shapes:${t.id}`, label: `Search the ${count(t.points)} tags of ${t.name} for "${q}"`, to: `/sources/${t.id}/shapes?${search}` }));
+}
+
 /** The folded assets with the folded ancestors of asset node `id` taken out, or null when none of its ancestors is folded (the asset itself may stay folded: it is drawn). */
 function unfoldedAncestors(model: GraphModel, id: string, folded: ReadonlySet<number>): Set<number> | null {
   const asset = folded.size > 0 ? model.assets.find((a) => nodeId.asset(a.id) === id) : undefined;
@@ -152,8 +174,14 @@ function unfoldedAncestors(model: GraphModel, id: string, folded: ReadonlySet<nu
  * the filter lets through), and the cost is what the group then draws (its points plus the `more` node). A point too far down for the budget
  * shows the group on the page it has, and the note says to use Show 50 more. An asset inside folded assets opens its folded ancestors. A source,
  * group or point the "Unmapped only" filter hides turns the filter off. The new view comes back as `view`, and only when it differs.
+ *
+ * (w36) A CLOSED source whose visible groups alone are more than the budget is never opened, whatever the target: the plan targets the source card and
+ * says `<source> has 13,851 groups, too many to draw; use Map by shape` (`canPoints`: the person may open the Points page, so it adds ` or the Points page`).
+ * The filter changes only when the source card itself is hidden by it. The source's `large` does not matter: the rule is for every source.
  */
-export function findPlan(model: GraphModel, open: OpenState, entry: FindEntry, budget: number = EXPAND_NODE_BUDGET, view: GraphView = NO_VIEW): FindPlan {
+export function findPlan(
+  model: GraphModel, open: OpenState, entry: FindEntry, budget: number = EXPAND_NODE_BUDGET, view: GraphView = NO_VIEW, canPoints: boolean = false,
+): FindPlan {
   const same: FindPlan = { open, targetId: entry.id, note: null };
   if (entry.kind === "asset") {
     const unfolded = unfoldedAncestors(model, entry.id, view.assetsClosed);
@@ -184,8 +212,23 @@ export function findPlan(model: GraphModel, open: OpenState, entry: FindEntry, b
   const hidden = view.unmappedOnly && (!sourceVisible(source, view) || !groupVisible(group, view) || mappedPoint);
   const now: GraphView = hidden ? { ...view, unmappedOnly: false } : view;
 
+  if (!open.sources.has(source.id)) {
+    // (w36) The groups are counted under `now`, the view the plan below would draw with: a target the filter hides turns it off there, and then every group of the
+    // source is drawn. The card is what the person is taken to; the filter goes off for the plan only if it hides the card itself.
+    const cardHidden = view.unmappedOnly && !sourceVisible(source, view);
+    const tooMany = groupsOverBudget(source, now, budget);
+    if (tooMany !== null) {
+      const sentence = tooManyGroupsNote(source, tooMany, canPoints);
+      return {
+        open, targetId: nodeId.source(source.id),
+        note: cardHidden ? `Unmapped only is off so ${source.name} can be shown. ${sentence}` : sentence,
+        ...(cardHidden ? { view: now } : {}),
+      };
+    }
+  }
+
   const groups = groupsOf(source).filter((g) => groupVisible(g, now));
-  const idOf = (g: Group) => nodeId.cluster(source.id, g.key);
+  const idOf =(g: Group) => nodeId.cluster(source.id, g.key);
   const groupId = idOf(group);
   const sourceClosed = !open.sources.has(source.id);
   const openGroups = groups.filter((g) => open.clusters.has(idOf(g)));

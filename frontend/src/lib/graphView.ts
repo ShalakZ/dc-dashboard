@@ -1,4 +1,4 @@
-import type { GraphModel } from "../api/types";
+import type { GraphModel, GraphSource } from "../api/types";
 import {
   NO_VIEW, countNumber, descendantNodeIds, drawnCount, groupVisible, groupsOf, isOfferable, nodeId, sourceVisible, visiblePoints, type Group, type GraphView, type OpenState,
 } from "./graph";
@@ -9,7 +9,25 @@ import {
  */
 export const EXPAND_NODE_BUDGET = 600;
 
-const plural = (n: number, one: string, many: string) => `${countNumber(n)} ${n === 1 ? one : many}`;
+/**
+ * (w36) How many groups opening this source would draw (the ones the view lets through, the Ungrouped one included), when that alone is more than the
+ * budget: the number. Else null. Opening such a source is refused (a toggle) or not planned (Find): thousands of nodes freeze the page, and the groups are
+ * more than a person could read. Applies to every source, one with `large` too; `buildGraph` itself draws whatever it is given.
+ */
+export function groupsOverBudget(source: GraphSource, view: GraphView = NO_VIEW, budget: number = EXPAND_NODE_BUDGET): number | null {
+  const groups = groupsOf(source).filter((g) => groupVisible(g, view)).length;
+  return groups > budget ? groups : null;
+}
+
+/**
+ * (w36) The one sentence both guards say (a toast for a toggle, the note of a Find jump): `Plant has 13,851 groups, too many to draw; use Map by shape`, and
+ * ` or the Points page` for a person who may open that page (its whole need, `PAGE_NEED.sourcePoints`; Map by shape needs only what Discovery does).
+ */
+export function tooManyGroupsNote(source: GraphSource, groups: number, canPoints: boolean): string {
+  return `${source.name} has ${countNumber(groups)} groups, too many to draw; use Map by shape${canPoints ? " or the Points page" : ""}`;
+}
+
+const plural =(n: number, one: string, many: string) => `${countNumber(n)} ${n === 1 ? one : many}`;
 
 export interface GraphCounts {
   sources: number;
