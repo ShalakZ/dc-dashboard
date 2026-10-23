@@ -48,6 +48,7 @@ export function buildFindIndex(model: GraphModel): FindEntry[] {
     });
   }
   for (const source of model.sources) {
+    let twinNames: Map<number, string> | undefined; // built when the first twin of the source turns up
     for (const group of groupsOf(source)) {
       entries.push({
         id: nodeId.cluster(source.id, group.key), kind: "cluster", label: group.label,
@@ -55,7 +56,13 @@ export function buildFindIndex(model: GraphModel): FindEntry[] {
       });
       const context = `point in ${group.label} · ${source.name}`;
       for (const p of group.points) {
-        entries.push({ id: nodeId.point(p.id), kind: "point", label: p.name, context, text: `${p.name} ${p.address}`.toLowerCase(), icon: metricIcon(pointMetric(p)) });
+        // (w34) A twin (the same tag as a mapped point of its source; the same rule as `isOfferable`) says so first: two options of one name must differ, and the line is cut at its end.
+        let twinOf: string | undefined;
+        if (p.same_tag_as && p.asset_id === null) {
+          twinNames ??= new Map(groupsOf(source).flatMap((g) => g.points.map((q) => [q.id, q.name] as const)));
+          twinOf = twinNames.get(p.same_tag_as) ?? "another point";
+        }
+        entries.push({ id: nodeId.point(p.id), kind: "point", label: p.name, context: twinOf === undefined ? context : `already mapped as ${twinOf} · ${context}`, text: `${p.name} ${p.address}`.toLowerCase(), icon: metricIcon(pointMetric(p)) });
       }
     }
   }

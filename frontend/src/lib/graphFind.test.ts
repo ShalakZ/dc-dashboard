@@ -77,6 +77,17 @@ describe("buildFindIndex", () => {
     expect(byId(index, nodeId.cluster(1, "LVP02")).context).toBe("group in s1");
   });
 
+  it("a point that is the same tag as a mapped one says so first on its muted line, so two options of one name differ (w34)", () => {
+    const twinned = buildFindIndex(model({
+      sources: [source(1, { name: "s1", clusters: [{ key: "G", points: [point(1, "PM0_P", { asset_id: 10, mapping_id: 5 }), point(2, "PM0_P", { same_tag_as: 1 }), point(3, "PM0_Q", { same_tag_as: 99 })] }], ungrouped: [] })],
+      assets: [{ id: 10, parent_id: null, name: "Site", kind: "generic" }], unidentified: [],
+    }));
+    expect(byId(twinned, nodeId.point(1)).context).toBe("point in G · s1"); // the mapped point: as it was
+    expect(byId(twinned, nodeId.point(2)).context).toBe("already mapped as PM0_P · point in G · s1"); // the twin: the reason first, the name it is a twin of
+    expect(byId(twinned, nodeId.point(3)).context).toBe("already mapped as another point · point in G · s1"); // a twin of a point that is not in the source
+    expect(byId(twinned, nodeId.point(2)).text).toBe(byId(twinned, nodeId.point(1)).text.replace("a1", "a2")); // what a query is matched against is not touched
+  });
+
   it("indexes a model without sources or assets", () => {
     expect(buildFindIndex(model({ sources: [], assets: [], unidentified: [] }))).toEqual([]);
   });
