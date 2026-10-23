@@ -37,6 +37,12 @@ export function viewPoints(points: PointRow[], assetLabel: (assetId: number) => 
   return rows.map((row) => row.point);
 }
 
+/** How many rows the Points page draws at first, and how many each press of Show 200 more adds (w36: a source of 15,000 tags is 15,000 rows of DOM otherwise). */
+export const POINT_PAGE_SIZE = 200;
+
+/** The first `cap` rows; the same array when there are no more rows than that. The filter and the sort have already looked at every row. */
+export const firstRows = (rows: PointRow[], cap: number): PointRow[] => (rows.length > cap ? rows.slice(0, cap) : rows);
+
 /** The view after a click on a column header: same column flips the direction, a new column starts ascending. */
 export function sortBy(view: PointView, key: PointSortKey): PointView {
   if (view.sort === key) return { ...view, dir: view.dir === "asc" ? "desc" : "asc" };

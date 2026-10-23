@@ -1,12 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router";
+import { Link, useParams } from "react-router";
 import { api } from "../api/client";
 import { keys, useAssets, useInvalidate, usePoints, useSources } from "../api/queries";
 import type { PointRow } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { meets } from "../auth/need";
 import { assetLabels } from "../components/dashboard/AssetPicker";
+import { PAGE_NEED } from "../components/navItems";
 import { JobStatus } from "../components/JobStatus";
 import { MappingForm, type MappingBody } from "../components/MappingForm";
 import { Modal } from "../components/Modal";
@@ -15,9 +16,10 @@ import { RowActions } from "../components/RowActions";
 import { CTL_H, PageHeaderSkeleton, Skeleton, SkeletonRegion, TableSkeleton } from "../components/Skeleton";
 import { useAction } from "../hooks/useAction";
 import { useMappingActions } from "../hooks/useMappingActions";
-import { DEFAULT_POINT_VIEW, sortBy, viewPoints, type PointSortKey } from "../lib/points";
+import { DEFAULT_POINT_VIEW, firstRows, POINT_PAGE_SIZE, sortBy, viewPoints, type PointSortKey, type PointView } from "../lib/points";
 
 const NO_POINTS: PointRow[] = [];
+const number = (value: number) => value.toLocaleString("en-US");
 // Map, Edit and Unmap call /api/mappings (assets.edit), and the form picks the asset from the asset list (assets.view).
 const MAP_NEED = ["assets.edit", "assets.view"] as const;
 const COLUMNS: ReadonlyArray<readonly [PointSortKey, string]> = [
@@ -48,9 +50,15 @@ export function SourcePointsPage() {
   const [browseJob, setBrowseJob] = useState<number | null>(null);
   const [editing, setEditing] = useState<PointRow | null>(null);
   const [view, setView] = useState(DEFAULT_POINT_VIEW);
+  // w36: the filter and the sort look at EVERY point; only the first `cap` of what they keep are drawn. A new search, the Unmapped only tick or a sort starts again at one page.
+  const [cap, setCap] = useState(POINT_PAGE_SIZE);
+  const changeView = (next: PointView) => { setView(next); setCap(POINT_PAGE_SIZE); };
   const labels = useMemo(() => assetLabels(assets), [assets]);
   const assetName = useCallback((id: number) => labels.get(id) ?? `#${id}`, [labels]);
   const rows = useMemo(() => viewPoints(points, assetName, view), [points, assetName, view]);
+  const drawn = useMemo(() => firstRows(rows, cap), [rows, cap]);
+  const allDrawn = drawn.length === rows.length;
+  const canShapes = meets(PAGE_NEED.sourceShapes, can);
   const { run, error: actionError } = useAction();
 
   const browse = () => run(async () => {
@@ -97,7 +105,12 @@ export function SourcePointsPage() {
       <PageHeader
         title="Points"
         crumbs={[{ label: "Sources", to: "/sources" }, { label: sourceName }]}
-        actions={canBrowse ? <button className="primary" onClick={browse}>Browse points</button> : undefined}
+        actions={canBrowse || canShapes ? (
+          <>
+            {canShapes && <Link className="shape-link" to={`/sources/${sourceId}/shapes`}>Map by shape</Link>}
+            {canBrowse && <button className="primary" onClick={browse}>Browse points</button>}
+          </>
+        ) : undefined}
       />
       {canBrowse && browseJob !== null && (
         <div className="row job-line">
@@ -113,11 +126,11 @@ export function SourcePointsPage() {
       {points.length > 0 && (
         <div className="row toolbar">
           <label>
-            <input type="checkbox" checked={view.unmappedOnly} onChange={(e) => setView({ ...view, unmappedOnly: e.target.checked })} />
+            <input type="checkbox" checked={view.unmappedOnly} onChange={(e) => changeView({ ...view, unmappedOnly: e.target.checked })} />
             Unmapped only
           </label>
           <input ref={search} type="search" aria-label="Search points" placeholder="Search points" value={view.query}
-            onChange={(e) => setView({ ...view, query: e.target.value })} />
+            onChange={(e) => changeView({ ...view, query: e.target.value })} />
           <span className="muted">{`Showing ${rows.length} of ${points.length} point${points.length === 1 ? "" : "s"}`}</span>
         </div>
       )}
@@ -129,7 +142,7 @@ export function SourcePointsPage() {
               <tr>
                 {COLUMNS.map(([key, label]) => (
                   <th key={key} aria-sort={view.sort === key ? (view.dir === "asc" ? "ascending" : "descending") : undefined}>
-                    <button type="button" className="th-sort" onClick={() => setView(sortBy(view, key))}>
+                    <button type="button" className="th-sort" onClick={() => changeView(sortBy(view, key))}>
                       {label}
                       {view.sort === key && (
                         <svg className={`i sort-mark ${view.dir}`} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6" /></svg>
@@ -141,7 +154,7 @@ export function SourcePointsPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((p) => (
+              {drawn.map((p) => (
                 <tr key={p.id} data-point={p.id}>
                   <td><span className="cell-trunc" title={p.address}>{p.address}</span></td><td>{p.name}</td><td>{p.data_type}</td><td>{p.unit_hint ?? ""}</td>
                   <td>{p.mapping ? `${assetName(p.mapping.asset_id)} · ${p.mapping.metric} · every ${p.mapping.interval_seconds}s · ×${p.mapping.scale}` : <span className="muted st st-off plain">unmapped</span>}</td>
@@ -155,6 +168,16 @@ export function SourcePointsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      {rows.length > POINT_PAGE_SIZE && (
+        // The slot is there (tall as a button) whatever it says, and its button never leaves: once everything is drawn it stays as the words "All N shown", aria-disabled, so a person
+        // who pressed it with the keyboard keeps the focus (A5). The line is the one live region of the list: each press says how many rows are drawn now.
+        <div className="row points-cap">
+          <p className="muted" role="status">{allDrawn ? "" : `Showing ${number(drawn.length)} of ${number(rows.length)} points. Search to narrow them.`}</p>
+          <button type="button" aria-disabled={allDrawn || undefined} onClick={() => { if (!allDrawn) setCap(cap + POINT_PAGE_SIZE); }}>
+            {allDrawn ? `All ${number(rows.length)} shown` : `Show ${POINT_PAGE_SIZE} more`}
+          </button>
         </div>
       )}
       {editing && (

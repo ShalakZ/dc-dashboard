@@ -680,3 +680,175 @@ describe("SourcePointsPage controls follow the permissions of the role (a custom
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/mappings/2")).toBe(true));
   });
 });
+
+describe("SourcePointsPage draws 200 rows at a time (w36)", () => {
+  const page = () => renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points" });
+  const point = (id: number, address: string, name: string, extra: Record<string, unknown> = {}) =>
+    ({ id, address, name, data_type: "float", unit_hint: null, mapping: null, ...extra });
+  const mapped = { id: 5, asset_id: 4, metric: "energy_kwh", scale: 1, interval_seconds: 60, custom_unit: null };
+  /** `count` points; the 1,000th (when there is one) is called "Needle meter", and the first `mappedCount` are mapped. */
+  const many = (count: number, mappedCount = 0) => Array.from({ length: count }, (_, i) =>
+    point(i + 1, `3:${i + 1}`, i === 999 ? "Needle meter" : `Tag ${i + 1}`, i < mappedCount ? { mapping: mapped } : {}));
+  const withPoints = (list: unknown[]) => ({ ...routes, "GET /api/sources/2/points": { body: list } });
+  const drawn = () => document.querySelectorAll("tbody tr").length;
+  const capLine = (shown: string, of: string) => `Showing ${shown} of ${of} points. Search to narrow them.`;
+  const more = () => screen.getByRole("button", { name: "Show 200 more" });
+
+  it("draws the first 200 of 1,306 points, says so under the table, and keeps the toolbar line as it was", async () => {
+    mockFetch(withPoints(many(1306)));
+    page();
+    await screen.findByText("3:1");
+    expect(drawn()).toBe(200);
+    expect(screen.getByText(capLine("200", "1,306"))).toBeInTheDocument();
+    expect(screen.getByText("Showing 1306 of 1306 points")).toBeInTheDocument(); // the toolbar counts the filtered rows, not the drawn ones
+    expect(screen.getByText("3:200")).toBeInTheDocument();
+    expect(screen.queryByText("3:201")).not.toBeInTheDocument();
+  });
+
+  it("Show 200 more adds 200 rows at a time", async () => {
+    mockFetch(withPoints(many(1306)));
+    page();
+    await screen.findByText("3:1");
+    await userEvent.click(more());
+    expect(drawn()).toBe(400);
+    expect(screen.getByText(capLine("400", "1,306"))).toBeInTheDocument();
+    await userEvent.click(more());
+    expect(drawn()).toBe(600);
+    expect(screen.getByText("3:600")).toBeInTheDocument();
+    expect(screen.getByText("Showing 1306 of 1306 points")).toBeInTheDocument();
+  });
+
+  it("after the last press the button stays in place as All 1,306 shown, the line goes, and the focus stays on it", async () => {
+    mockFetch(withPoints(many(1306)));
+    page();
+    await screen.findByText("3:1");
+    for (let press = 0; press < 5; press++) await userEvent.click(more()); // 200 + 5 x 200 = 1,200 rows
+    expect(drawn()).toBe(1200);
+    expect(screen.getByText(capLine("1,200", "1,306"))).toBeInTheDocument();
+    await userEvent.click(more());
+    expect(drawn()).toBe(1306);
+    expect(screen.queryByText(/Search to narrow them/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show 200 more" })).not.toBeInTheDocument();
+    const done = screen.getByRole("button", { name: "All 1,306 shown" });
+    expect(done).toHaveAttribute("aria-disabled", "true");
+    expect(done).not.toBeDisabled(); // aria-disabled, never native disabled: a disabled button would drop the focus to <body>
+    expect(done).toHaveFocus();
+    await userEvent.click(done); // a click on it does nothing
+    await userEvent.keyboard("{Enter}");
+    expect(drawn()).toBe(1306);
+    expect(screen.getByRole("button", { name: "All 1,306 shown" })).toHaveFocus();
+    expect(document.body).not.toHaveFocus();
+  });
+
+  it("Search looks at every row (a tag that is row 1,000 is found) and puts the cap back to 200", async () => {
+    mockFetch(withPoints(many(1306)));
+    page();
+    await screen.findByText("3:1");
+    await userEvent.click(more());
+    expect(drawn()).toBe(400);
+    const search = screen.getByRole("searchbox", { name: "Search points" });
+    await userEvent.type(search, "needle");
+    expect(screen.getByText("3:1000")).toBeInTheDocument();
+    expect(drawn()).toBe(1);
+    expect(screen.getByText("Showing 1 of 1306 points")).toBeInTheDocument();
+    expect(screen.queryByText(/Search to narrow them/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Show 200 more|All .* shown/ })).not.toBeInTheDocument();
+    await userEvent.clear(search);
+    expect(drawn()).toBe(200); // not 400: a new search starts from 200 again
+    expect(screen.getByText(capLine("200", "1,306"))).toBeInTheDocument();
+  });
+
+  it("the Unmapped only tick and a sort put the cap back to 200, and the cap line counts the filtered rows", async () => {
+    mockFetch(withPoints(many(1306, 1000))); // 306 unmapped
+    page();
+    await screen.findByText("3:1");
+    await userEvent.click(more());
+    expect(drawn()).toBe(400);
+    await userEvent.click(screen.getByRole("checkbox", { name: "Unmapped only" }));
+    expect(drawn()).toBe(200);
+    expect(screen.getByText(capLine("200", "306"))).toBeInTheDocument();
+    expect(screen.getByText("Showing 306 of 1306 points")).toBeInTheDocument();
+    await userEvent.click(more());
+    expect(drawn()).toBe(306);
+    expect(screen.getByRole("button", { name: "All 306 shown" })).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "Name" }));
+    expect(drawn()).toBe(200);
+    expect(screen.getByText(capLine("200", "306"))).toBeInTheDocument();
+  });
+
+  it("sorts every row, not only the 200 drawn: the last name comes first when descending", async () => {
+    mockFetch(withPoints(many(1306)));
+    page();
+    await screen.findByText("3:1");
+    await userEvent.click(screen.getByRole("button", { name: "Name" }));
+    await userEvent.click(screen.getByRole("button", { name: "Name" }));
+    expect(screen.getByRole("columnheader", { name: "Name" })).toHaveAttribute("aria-sort", "descending");
+    const first = document.querySelector("tbody tr")!;
+    expect(within(first as HTMLElement).getAllByRole("cell")[1].textContent).toBe("Tag 1306"); // row 1,306 of the address order
+    expect(drawn()).toBe(200);
+  });
+
+  it("with 200 rows or fewer there is no cap line and no button; with 201 there are", async () => {
+    mockFetch(withPoints(many(200)));
+    const first = page();
+    await screen.findByText("3:200");
+    expect(drawn()).toBe(200);
+    expect(screen.queryByText(/Search to narrow them/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Show 200 more|shown/ })).not.toBeInTheDocument();
+    first.unmount();
+    mockFetch(withPoints(many(201)));
+    page();
+    await screen.findByText("3:1");
+    expect(drawn()).toBe(200);
+    expect(screen.getByText(capLine("200", "201"))).toBeInTheDocument();
+    await userEvent.click(more());
+    expect(drawn()).toBe(201);
+    expect(screen.getByRole("button", { name: "All 201 shown" })).toHaveFocus();
+  });
+
+  it("the row menu and the Map dialog work on a row drawn by Show 200 more", async () => {
+    mockFetch(withPoints(many(300)));
+    page();
+    await screen.findByText("3:1");
+    await userEvent.click(more());
+    await choose(screen.getByText("3:250").closest("tr")!, "Map");
+    expect(screen.getByRole("heading", { name: "Map 3:250" })).toBeInTheDocument();
+  });
+
+  describe("the Map by shape link in the header", () => {
+    const show = async (permissions: PermissionId[]) => {
+      mockFetch({ ...routes, "GET /api/me": { body: userFor("custom", { permissions: ["sources.edit", "sources.view", ...permissions] }) } });
+      renderWithProviders(<><SourcePointsPage /><SignedIn /></>, { route: "/sources/2/points", path: "/sources/:id/points" });
+      await screen.findByText("panel1/energy");
+      await accountKnown();
+    };
+
+    it("is there for a role that meets PAGE_NEED.sourceShapes (discovery.view), beside Browse points, and goes to the shapes page", async () => {
+      await show(["discovery.view"]);
+      const link = screen.getByRole("link", { name: "Map by shape" });
+      expect(link).toHaveAttribute("href", "/sources/2/shapes");
+      expect(screen.getByRole("button", { name: "Browse points" })).toBeInTheDocument();
+      expect(link.closest(".actions")).toBe(screen.getByRole("button", { name: "Browse points" }).closest(".actions"));
+    });
+
+    it("is not there without discovery.view", async () => {
+      await show([]);
+      expect(screen.queryByRole("link", { name: /Map by shape/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Browse points" })).toBeInTheDocument();
+    });
+
+    it("is the only control with that name: nothing else on the page, and Search points is still the search box", async () => {
+      await show(["discovery.view", "assets.edit", "assets.view"]);
+      expect(screen.getAllByText(/Map by shape/)).toHaveLength(1);
+      expect(screen.getByRole("searchbox", { name: "Search points" })).toBeInTheDocument();
+    });
+
+    it("an administrator sees it too", async () => {
+      mockFetch(routes);
+      renderWithProviders(<><SourcePointsPage /><SignedIn /></>, { route: "/sources/2/points", path: "/sources/:id/points" });
+      await screen.findByText("panel1/energy");
+      await accountKnown();
+      expect(screen.getByRole("link", { name: "Map by shape" })).toHaveAttribute("href", "/sources/2/shapes");
+    });
+  });
+});

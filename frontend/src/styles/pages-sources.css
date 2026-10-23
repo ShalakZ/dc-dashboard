@@ -69,6 +69,18 @@
   th[aria-sort] .th-sort { color: var(--accent-ink); }
   .th-sort svg.i { width: 14px; height: 14px; }
   .sort-mark.desc { transform: rotate(180deg); }
+  /* w36: under the table the page draws 200 rows at a time. The slot is one control high from the first frame (A2): the line saying "Showing 200 of 1,306 points" coming, changing
+     and going, and the button's words changing to "All 1,306 shown", move nothing. The line sits at the left and the button at the right, as Load more does on Events, so the button
+     does not jump when the line is empty; it waits with aria-disabled (never disabled: it holds the focus) and looks the way an idle button does. */
+  .points-cap { justify-content: space-between; min-height: var(--ctl-h); margin: 12px 0 0; }
+  .points-cap p { margin: 0; font-size: var(--fs-sm); }
+  .points-cap button { min-width: 9.5rem; }
+  .points-cap button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+  .points-cap button[aria-disabled="true"]:hover { background: var(--bg); }
+  /* w36: the header's Map by shape link, drawn as a button (the box of a base button, app.css) beside Browse points. app.css underlines a link on hover (a:hover), which out-ranks a plain
+     class, so the hover rule says text-decoration again. */
+  .shape-link { display: inline-flex; align-items: center; justify-content: center; min-height: var(--ctl-h); padding: 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); font-size: var(--fs-sm); font-weight: 500; line-height: 1.4; white-space: nowrap; text-decoration: none; }
+  .shape-link:hover { background: var(--surface); text-decoration: none; }
 
   /* Scans: the scope form card and the confirmation (the scan in view is the drawer, scans-drawer.css) */
   .scope-card { margin: 0 0 24px; padding: 18px 20px; border: 1px solid var(--border); border-radius: var(--radius); }

@@ -15,3 +15,26 @@ describe("the Sources page styles (w34 review)", () => {
     expect(body, "the whole message stays on screen: the owner pastes it back to the developers").not.toMatch(/line-clamp|overflow:\s*hidden|text-overflow|max-height|height/);
   });
 });
+
+describe("the Points page styles (w36)", () => {
+  const one = (selector: string) => {
+    const found = rules.filter((r) => r.selector === selector && r.at.join(" > ") === "@layer w6");
+    expect(found, `exactly one rule for ${selector}`).toHaveLength(1);
+    return found[0].body;
+  };
+
+  it("the line and button under the capped table have a slot of their own, so nothing moves when the line appears, changes or goes (A2)", () => {
+    expect(one(".points-cap")).toMatch(/min-height:\s*var\(--ctl-h\)/);
+    expect(one(".points-cap")).not.toMatch(/#[0-9a-f]{3,8}\b|rgb\(|hsl\(/i);
+  });
+
+  it("the button that has nothing left to show waits with aria-disabled, never native disabled", () => {
+    expect(one('.points-cap button[aria-disabled="true"]')).toMatch(/cursor:\s*not-allowed/);
+  });
+
+  it("the Map by shape link is drawn as a button of the header's height, with tokens only", () => {
+    const body = one(".shape-link");
+    expect(body).toMatch(/min-height:\s*var\(--ctl-h\)/);
+    expect(body).not.toMatch(/#[0-9a-f]{3,8}\b|rgb\(|hsl\(/i);
+  });
+});
