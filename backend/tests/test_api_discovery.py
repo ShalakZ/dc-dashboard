@@ -1,10 +1,13 @@
 import asyncio
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
+from fastapi.encoders import jsonable_encoder
 
+from dcdash.api.discovery import LARGE_SOURCE_POINTS, source_json
 from dcdash.core.asset_kinds import kind_key
-from helpers import listening, login_as, make_asset, make_mapping, make_source
+from helpers import listening, login_as, make_asset, make_mapping, make_point, make_source
 from test_moves_freshness import finished_at, make_finding, make_found, make_scan, statements
 from test_moves_load import PAIRS, new_source, old_source, owners_case, populate, populate_more
 
@@ -845,3 +848,150 @@ async def test_nothing_offline_costs_no_statement_from_the_offer_loader(client, 
     assert not any("AS pairs" in statement for statement in sql), sql
     await db.execute("UPDATE sources SET status = 'offline'")
     assert any("AS pairs" in statement for statement in await get_counted(client))
+
+
+# ---- a source over 1,000 points is a small answer (w36 T3a) ----
+
+TWIN_OLD = "ns=3;s=20410:Site.PDUA01_PM0_P"  # the same tag under two numbers, as test_api_stable_guard.py has them
+TWIN_NEW = "ns=3;s=20403:Site.PDUA01_PM0_P"
+TWIN_OTHER = "ns=3;s=20404:Site.PDUA01_PM0_Q"
+
+
+async def bulk_points(db, source: int, count: int) -> None:
+    """`count` unmapped points in one statement: address `a<n>`, name `Dev<n div 6> sig<n mod 6>` (groups of six). An `a<n>` address
+    is its own stable key, so these never make twins."""
+    await db.execute(
+        "INSERT INTO points (source_id, address, name) "
+        "SELECT $1::int, 'a' || i::text, 'Dev' || lpad((i / 6)::text, 5, '0') || ' sig' || (i % 6)::text "
+        "FROM generate_series(0, $2::int - 1) AS i",
+        source, count,
+    )
+
+
+async def point_ids(db, source: int, *addresses: str) -> list[int]:
+    return [await db.fetchval("SELECT id FROM points WHERE source_id = $1 AND address = $2", source, a) for a in addresses]
+
+
+async def map_each(db, point_ids_: list[int]) -> None:
+    for point_id in point_ids_:
+        await make_mapping(db, point_id, await make_asset(db, f"Meter {point_id}"))
+
+
+def drawn(src: dict) -> list[dict]:
+    return [p for c in src["clusters"] for p in c["points"]] + src["ungrouped"]
+
+
+async def graph_source(client, source: int) -> dict:
+    return next(s for s in (await graph_of(client))["sources"] if s["id"] == source)
+
+
+async def test_a_source_of_exactly_1000_points_is_answered_exactly_as_before(client, db):
+    assert LARGE_SOURCE_POINTS == 1000
+    await login_as(client, db, "admin")
+    config = {"endpoint": "opc.tcp://h:4840/"}
+    source = await make_source(db, "edge", "opcua", config)
+    await bulk_points(db, source, 1000)
+    await map_each(db, await point_ids(db, source, "a0", "a1", "a7", "a999"))
+    row = await db.fetchrow(
+        "SELECT id, name, connector_type, origin, enabled, status, last_error, secret FROM sources WHERE id = $1", source
+    )
+    stored = SimpleNamespace(**dict(row), config=config, identity=None, has_secret=row["secret"] is not None)
+    rows = [
+        SimpleNamespace(**dict(r))
+        for r in await db.fetch("SELECT id, address, name, unit_hint FROM points WHERE source_id = $1 ORDER BY name, id", source)
+    ]
+    mappings = {
+        r["point_id"]: SimpleNamespace(**dict(r)) for r in await db.fetch("SELECT id, point_id, asset_id, metric FROM mappings")
+    }
+    src = await graph_source(client, source)
+    assert set(src) == OLD_KEYS | NEW_KEYS and "large" not in src
+    assert src["point_count"] == 1000 and len(drawn(src)) == 1000
+    assert src == jsonable_encoder(source_json(stored, rows, mappings, None, None))  # value for value, not only the keys
+
+
+async def test_a_source_over_1000_points_is_trimmed_to_its_mapped_points_and_says_so_in_large(client, db):
+    await login_as(client, db, "admin")
+    small, _ = await seed_source(db, "small")
+    source = await make_source(db, "big", "opcua", {"endpoint": "opc.tcp://h:4840/"})
+    await bulk_points(db, source, 1001)
+    mapped = await point_ids(db, source, "a0", "a1", "a7")  # Dev00000 sig0 and sig1 (one group), Dev00001 sig1 (alone)
+    await map_each(db, mapped)
+    graph = await graph_of(client)
+    src = next(s for s in graph["sources"] if s["id"] == source)
+    assert set(src) == OLD_KEYS | NEW_KEYS | {"large"}
+    assert src["large"] == {"points": 1001, "mapped": 3, "unmapped": 998, "rules_new": 0}
+    assert src["point_count"] == 1001 and src["needs_credentials"] is False
+    assert [c["key"] for c in src["clusters"]] == ["Dev00000"]
+    assert sorted(p["id"] for p in drawn(src)) == sorted(mapped)
+    assert all(p["mapping_id"] is not None and p["same_tag_as"] is None for p in drawn(src))
+    other = next(s for s in graph["sources"] if s["id"] == small)  # a source of 6 points in the same answer is untouched
+    assert "large" not in other and other["point_count"] == 6 and len(drawn(other)) == 6
+
+
+@pytest.mark.parametrize("stable", [True, False])
+async def test_a_large_source_keeps_the_twin_of_a_mapped_point_only_when_its_addresses_are_stable(client, db, stable):
+    await login_as(client, db, "admin")
+    source = await make_source(
+        db, "scada", "opcua", {"endpoint": "opc.tcp://scada:4840/plantscada", "stable_addresses": stable}
+    )
+    await bulk_points(db, source, 1000)
+    old, new, other = [await make_point(db, source, a) for a in (TWIN_OLD, TWIN_NEW, TWIN_OTHER)]
+    await map_each(db, [old])
+    src = await graph_source(client, source)
+    if stable:
+        assert src["large"] == {"points": 1003, "mapped": 1, "unmapped": 1001, "rules_new": 0}  # the twin is not "unmapped"
+        points = {p["id"]: p for p in drawn(src)}
+        assert set(points) == {old, new} and points[new]["same_tag_as"] == old and points[old]["same_tag_as"] is None
+    else:
+        assert src["large"] == {"points": 1003, "mapped": 1, "unmapped": 1002, "rules_new": 0}
+        assert [p["id"] for p in drawn(src)] == [old] and other not in {p["id"] for p in drawn(src)}
+    assert src["point_count"] == 1003
+
+
+async def test_a_large_source_with_nothing_mapped_draws_nothing_and_never_needs_credentials(client, db):
+    await login_as(client, db, "admin")
+    source = await make_source(db, "bare", "opcua", {"endpoint": "opc.tcp://h:4840/", "stable_addresses": True})
+    await bulk_points(db, source, 1001)
+    await finding(db, source, "needs_credentials")  # the newest finding: with no points at all it would turn the flag on
+    src = await graph_source(client, source)
+    assert src["clusters"] == [] and src["ungrouped"] == []
+    assert src["large"] == {"points": 1001, "mapped": 0, "unmapped": 1001, "rules_new": 0}
+    assert src["point_count"] == 1001 and src["needs_credentials"] is False
+
+
+async def test_the_answer_for_15000_points_with_one_mapped_is_under_100_kb(client, db):
+    await login_as(client, db, "admin")
+    source = await make_source(db, "huge", "opcua", {"endpoint": "opc.tcp://h:4840/"})
+    await bulk_points(db, source, 15000)
+    await map_each(db, await point_ids(db, source, "a42"))
+    response = await client.get("/api/discovery/graph")
+    assert response.status_code == 200
+    assert len(response.content) < 100_000, len(response.content)
+    [src] = response.json()["sources"]
+    assert src["large"] == {"points": 15000, "mapped": 1, "unmapped": 14999, "rules_new": 0} and src["point_count"] == 15000
+    assert len(drawn(src)) == 1
+
+
+async def test_the_number_of_statements_does_not_grow_with_the_number_of_large_sources(client, db):
+    await login_as(client, db, "admin")
+    seeded = 0
+
+    async def large_source() -> None:
+        nonlocal seeded
+        seeded += 1
+        source = await make_source(db, f"large {seeded}", "opcua", {"endpoint": f"opc.tcp://h{seeded}:4840/", "stable_addresses": True})
+        await bulk_points(db, source, 1001)
+        await map_each(db, await point_ids(db, source, "a0"))
+
+    await seed_source(db, "small")
+    await client.get("/api/discovery/graph")  # one unmeasured request: a session touch is written once
+    plain = await get_counted(client)
+    assert not any(" ALL (" in statement for statement in plain), plain  # no large source: the points are read as they always were
+    await large_source()
+    await client.get("/api/discovery/graph")
+    one = await get_counted(client)
+    assert any(" ALL (" in statement for statement in one), one  # the large path really ran
+    await large_source()
+    await large_source()
+    three = await get_counted(client)
+    assert len(three) == len(one), (len(one), len(three))
