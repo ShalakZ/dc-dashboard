@@ -8,7 +8,7 @@ from typing import Any
 
 import asyncpg
 
-from dcdash.collector.browse import browse_source, connector_for
+from dcdash.collector.browse import browse_source_detailed, connector_for
 from dcdash.collector.identity import remember_safely
 from dcdash.collector.scan import run_scan
 from dcdash.collector.scheduler import mark_source
@@ -85,7 +85,8 @@ async def _test_source(
 async def _browse_source(
     pool: asyncpg.Pool, params: dict[str, Any], factory: ConnectorFactory, job_id: int, known: Iterable[str]
 ) -> dict[str, Any]:
-    return {"count": await browse_source(pool, params["source_id"], factory)}
+    result = await browse_source_detailed(pool, params["source_id"], factory)
+    return {"count": result.count, "matched_stored": result.matched_stored, "ambiguous": result.ambiguous}
 
 
 async def _scan(
