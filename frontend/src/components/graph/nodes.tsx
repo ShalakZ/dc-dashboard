@@ -242,7 +242,7 @@ function ClusterNode({ id, data }: NodeProps<Node<ClusterNodeData, "cluster">>) 
 function PointNode({ id, data }: NodeProps<Node<PointNodeData, "point">>) {
   const { point, twinOf, onMap, onNewAsset, onMenu } = data;
   // (w34) The same tag as a mapped point: that sentence takes the detail line (the node is no taller than an unmapped one, which has its Map row), and no Map / New asset is drawn.
-  const detail = twinOf !== undefined ? `Same tag as ${twinOf} (already mapped)` : [point.unit_hint, point.mapped_metric && `→ ${point.mapped_metric}`].filter(Boolean).join(" ");
+  const detail = twinOf !== undefined ? `Already mapped as ${twinOf}` : [point.unit_hint, point.mapped_metric && `→ ${point.mapped_metric}`].filter(Boolean).join(" ");
   return (
     <div className={onMenu ? "gnode gnode-point gnode-hasmenu" : "gnode gnode-point"}>
       <Handles>

@@ -617,9 +617,9 @@ describe("graph nodes", () => {
     const twin = { ...point, same_tag_as: 9 };
     renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point: twin, twinOf: "LVP01 kW (mapped)", onMap: vi.fn(), onNewAsset: vi.fn() });
     expect(screen.getByText("LVP01 kW")).toHaveClass("node-title");
-    const line = screen.getByText("Same tag as LVP01 kW (mapped) (already mapped)");
+    const line = screen.getByText("Already mapped as LVP01 kW (mapped)");
     expect(line).toHaveClass("muted", "gnode-twin"); // the class that keeps the line to one row (graph-nodes.css)
-    expect(line).toHaveAttribute("title", "Same tag as LVP01 kW (mapped) (already mapped)");
+    expect(line).toHaveAttribute("title", "Already mapped as LVP01 kW (mapped)");
     expect(screen.queryByText(/kW$/, { selector: ".muted" })).not.toBeInTheDocument(); // the unit hint gives way to the sentence
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });

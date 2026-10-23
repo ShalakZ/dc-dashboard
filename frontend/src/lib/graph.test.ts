@@ -1682,7 +1682,7 @@ describe("a point that is the same tag as a mapped point (w34)", () => {
   it("without the filter the twin is drawn, and says whose twin it is on screen (the node data) and to a screen reader", () => {
     const { nodes } = buildGraph(twinned(), openG);
     expect(nodes.find((n) => n.id === "point:2")?.data).toMatchObject({ twinOf: "p1" });
-    expect(nodes.find((n) => n.id === "point:2")?.ariaLabel).toBe("p2, point, same tag as p1, already mapped");
+    expect(nodes.find((n) => n.id === "point:2")?.ariaLabel).toBe("p2, point, already mapped as p1");
     expect(nodes.find((n) => n.id === "point:3")?.ariaLabel).toBe("p3, point, unmapped");
     expect("twinOf" in (nodes.find((n) => n.id === "point:3")!.data)).toBe(false);
     expect(nodes.find((n) => n.id === "point:1")?.ariaLabel).toBe("p1, point, mapped to Site");
@@ -1692,7 +1692,7 @@ describe("a point that is the same tag as a mapped point (w34)", () => {
     const m = model({ sources: [source(1, { clusters: [{ key: "G", points: [point(2, "p2", { same_tag_as: 99 })] }] })], unidentified: [] });
     const node = buildGraph(m, openG).nodes.find((n) => n.id === "point:2");
     expect(node?.data).toMatchObject({ twinOf: "another point" });
-    expect(node?.ariaLabel).toBe("p2, point, same tag as another point, already mapped");
+    expect(node?.ariaLabel).toBe("p2, point, already mapped as another point");
   });
 
   it("a twin keeps the row of any other point: nothing moves", () => {

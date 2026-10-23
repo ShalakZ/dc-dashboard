@@ -411,7 +411,7 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
             }
             add(pid, "point", X.point, cursor + SOURCE_H + (rows - 1) * ROW,
               { sourceId: source.id, clusterKey: group.key, point: p, ...(twinOf !== undefined ? { twinOf } : {}) } satisfies PointNodeData, clusterShift, {
-              ariaLabel: `${p.name}, point, ${twinOf !== undefined && p.asset_id === null ? `same tag as ${twinOf}, already mapped`
+              ariaLabel: `${p.name}, point, ${twinOf !== undefined && p.asset_id === null ? `already mapped as ${twinOf}`
                 : p.asset_id === null ? "unmapped" : assetNames.has(p.asset_id) ? `mapped to ${assetNames.get(p.asset_id)}` : "mapped"}`,
             });
             link(cid, pid, false, fanStyle); // a group's point edges are dashed (solid past FAN_DASH_LIMIT) but never flow: they are the bulk of a big graph's edges
