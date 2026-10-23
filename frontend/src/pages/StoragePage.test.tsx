@@ -18,10 +18,16 @@ const eventsOut = {
   retention_days: 90, max_rows: 100_000, factory: { retention_days: 90, max_rows: 100_000 },
   bounds: { retention_days: [7, 400], max_rows: [10_000, 1_000_000] }, kept: 3412, oldest: "2026-07-24T08:15:00Z",
 };
+// w35: the Data watchdog card asks for the two numbers of the rule that calls a meter stale or a counter not rising.
+const watchdogOut = {
+  stale_floor_minutes: 5, not_advancing_hours: 6, factory: { stale_floor_minutes: 5, not_advancing_hours: 6 },
+  bounds: { stale_floor_minutes: [2, 60], not_advancing_hours: [1, 72] },
+};
 const base = {
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: userFor("admin", { username: "a" }) },
   "GET /api/settings/events": { body: eventsOut },
+  "GET /api/settings/watchdog": { body: watchdogOut },
   "GET /api/site": { body: { timezone: "UTC", currency: null } },
 };
 const settings = { raw_retention_days: 30, compress_after_days: 7, rollup_1m_retention_days: 730, disk_capacity_gb: 100, warn_threshold_pct: 80 };
@@ -551,16 +557,18 @@ describe("StoragePage cards and data bars (W7j)", () => {
     await screen.findByLabelText(/raw retention/i);
   };
 
-  it("puts Rows per day and Retention and capacity side by side in one page grid under the tiles, each card with its icon, and the System events card (w32) under both", async () => {
+  it("puts Rows per day and Retention and capacity side by side in one page grid under the tiles, each card with its icon, and the System events card (w32) and the Data watchdog card (w35) under both", async () => {
     await open();
     const grid = document.querySelector(".storage-page > .page-grid")!;
     expect(document.querySelector(".storage-tiles")!.nextElementSibling).toBe(grid);
     expect([...grid.children].map((card) => card.tagName + "." + [...card.classList].join("."))).toEqual([
-      "SECTION.page-card.rows-day", "SECTION.page-card.retention-card", "SECTION.page-card.storage-events.span-all",
+      "SECTION.page-card.rows-day", "SECTION.page-card.retention-card", "SECTION.page-card.storage-events.span-all", "SECTION.page-card.storage-watchdog.span-all",
     ]);
-    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Rows per day", "Retention and capacity", "System events and the audit log"]);
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Rows per day", "Retention and capacity", "System events and the audit log", "Data watchdog"]);
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-    const [days, retention, events] = [...grid.children];
+    const [days, retention, events, watchdog] = [...grid.children];
+    expect(watchdog.querySelector(":scope > .page-card-head > svg.i")).toHaveAttribute("aria-hidden", "true");
+    expect(watchdog.querySelector(":scope > .page-card-head > svg.i")!.innerHTML).toBe(glyph("diagnostics"));
     expect(events.querySelector(":scope > .page-card-head > svg.i")).toHaveAttribute("aria-hidden", "true");
     expect(events.querySelector(":scope > .page-card-head > svg.i")!.innerHTML).toBe(glyph("events"));
     expect(days.querySelector(":scope > .page-card-head > svg.i")).toHaveAttribute("aria-hidden", "true");
@@ -695,7 +703,7 @@ describe("StoragePage while it loads (W7f)", () => {
     expect(region).toHaveAttribute("role", "status");
     expect(region.querySelectorAll(".tiles.storage-tiles > .tile")).toHaveLength(5);
     expect(region.querySelectorAll(".storage-tiles .tile > small")).toHaveLength(3); // three of the five real tiles carry a note
-    expect(region.querySelectorAll(".page-grid > .page-card")).toHaveLength(3); // the three cards (w32 added System events), drawn as the loaded page draws them
+    expect(region.querySelectorAll(".page-grid > .page-card")).toHaveLength(4); // the four cards (w32 added System events, w35 the Data watchdog), drawn as the loaded page draws them
     expect(region.querySelector(".form-card")).toBeNull();
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument(); // the tiles' tips and the form's buttons wait for the data
@@ -1003,7 +1011,7 @@ describe("StoragePage System events card (w32)", () => {
   const days = () => within(dialog()).getByLabelText("Keep events for (days)");
   const rows = () => within(dialog()).getByLabelText("Keep at most (events)");
   const openDialog = async () => {
-    await userEvent.click(screen.getByRole("button", { name: "Change..." }));
+    await userEvent.click(within(card()).getByRole("button", { name: "Change..." }));
     return dialog();
   };
   const fill = async (input: HTMLElement, value: string) => {
@@ -1043,7 +1051,7 @@ describe("StoragePage System events card (w32)", () => {
   it("has Change... only for a role with storage.edit", async () => {
     await show({}, ["storage.view"]);
     expect(screen.getByText(SENTENCE)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Change..." })).not.toBeInTheDocument();
+    expect(within(card()).queryByRole("button", { name: "Change..." })).not.toBeInTheDocument();
     expect(card().querySelectorAll(".row")).toHaveLength(0);
   });
 
@@ -1073,11 +1081,11 @@ describe("StoragePage System events card (w32)", () => {
     await openDialog();
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Change..." })).toHaveFocus();
+    expect(within(card()).getByRole("button", { name: "Change..." })).toHaveFocus();
     await openDialog();
     await userEvent.click(within(dialog()).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Change..." })).toHaveFocus();
+    expect(within(card()).getByRole("button", { name: "Change..." })).toHaveFocus();
     expect(eventsPuts(calls)).toHaveLength(0);
   });
 
@@ -1105,7 +1113,7 @@ describe("StoragePage System events card (w32)", () => {
     expect(eventsPuts(calls)[0].body).toEqual({ retention_days: 30, max_rows: 50000 });
     expect(urls[0]).toMatch(/\/api\/settings\/events$/);
     expect(await screen.findByText(/System events are kept 30 days or the newest 50,000/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Change..." })).toHaveFocus();
+    expect(within(card()).getByRole("button", { name: "Change..." })).toHaveFocus();
   });
 
   it("refuses a value outside its bounds or not a whole number before asking the server, in words, and keeps the dialog open", async () => {
@@ -1317,7 +1325,261 @@ describe("StoragePage System events card (w32)", () => {
     await show({ "GET /api/settings/events": { status: 500, body: { detail: "events are down" } } });
     expect(screen.getByLabelText(/raw retention/i)).toBeInTheDocument();
     expect(within(card()).getByRole("alert")).toHaveTextContent("How long system events are kept could not be read: events are down");
-    expect(screen.queryByRole("button", { name: "Change..." })).not.toBeInTheDocument();
+    expect(within(card()).queryByRole("button", { name: "Change..." })).not.toBeInTheDocument();
     expect(within(card()).getByText("The audit log is kept forever.")).toBeInTheDocument();
+  });
+});
+
+describe("StoragePage Data watchdog card (w35)", () => {
+  const TITLE = "Data watchdog";
+  const SENTENCE = "Meters are stale after 5 minutes without a good reading (or 3 polls, whichever is longer); energy counters are flagged after 6 hours without rising.";
+  const DIALOG = "Change when meters count as stale";
+  const card = () => screen.getByRole("heading", { name: TITLE }).closest(".page-card") as HTMLElement;
+  const puts = (calls: { method: string; path: string; body: unknown }[]) => calls.filter((c) => c.method === "PUT" && c.path === "/api/settings/watchdog");
+  const reads = (calls: { method: string; path: string }[]) => calls.filter((c) => c.method === "GET" && c.path === "/api/settings/watchdog");
+  const EDIT: PermissionId[] = ["storage.view", "storage.edit"];
+  /** The page up with its account known; `extra` replaces routes, `permissions` makes the account a custom role. */
+  const show = async (extra: object = {}, permissions?: PermissionId[]) => {
+    const calls = mockFetch(routes({ ...(permissions ? { "GET /api/me": { body: userFor("custom", { permissions }) } } : {}), ...extra }));
+    renderWithProviders(<><StoragePage /><SignedIn /></>, { route: "/storage", path: "/storage" });
+    await screen.findByRole("heading", { name: TITLE });
+    await accountKnown();
+    return calls;
+  };
+  /** A server that keeps what was saved; `refuse` may answer a PUT with an error instead. */
+  const keeping = (refuse?: (body: { stale_floor_minutes: number; not_advancing_hours: number }) => { status: number; body: object } | null) => {
+    let stored = { ...watchdogOut };
+    return {
+      "GET /api/settings/watchdog": () => ({ body: stored }),
+      "PUT /api/settings/watchdog": (req: { url: string; body: unknown }) => {
+        const body = req.body as { stale_floor_minutes: number; not_advancing_hours: number };
+        const refused = refuse?.(body);
+        if (refused) return refused;
+        stored = { ...stored, ...body };
+        return { body: stored };
+      },
+    };
+  };
+  const dialog = () => screen.getByRole("dialog", { name: DIALOG });
+  const minutes = () => within(dialog()).getByLabelText("Stale after (minutes)");
+  const hours = () => within(dialog()).getByLabelText("Counter not rising after (hours)");
+  const change = () => within(card()).getByRole("button", { name: "Change..." });
+  const openDialog = async () => {
+    await userEvent.click(change());
+    return dialog();
+  };
+  const fill = async (input: HTMLElement, value: string) => {
+    await userEvent.clear(input);
+    await userEvent.type(input, value);
+  };
+
+  it("says in one sentence when a meter is stale and when a counter is flagged, under a heading that no other card's heading contains", async () => {
+    await show();
+    expect(within(card()).getByText(SENTENCE)).toBeInTheDocument();
+    expect([...card().children].map((child) => child.tagName + "." + child.className.split(" ")[0])).toEqual(["DIV.page-card-head", "P.", "DIV.row"]);
+    const headings = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent ?? "");
+    for (const other of headings.filter((h) => h !== TITLE)) {
+      expect(other.includes(TITLE) || TITLE.includes(other), `${other} / ${TITLE}`).toBe(false);
+    }
+    expect(screen.queryByText(/^Change when meters count as stale$/)).not.toBeInTheDocument(); // the dialog's title is not on the page until it is opened
+  });
+
+  it("writes the numbers it is given, and one hour in the singular", async () => {
+    await show({ "GET /api/settings/watchdog": { body: { ...watchdogOut, stale_floor_minutes: 20, not_advancing_hours: 1 } } });
+    expect(within(card()).getByText("Meters are stale after 20 minutes without a good reading (or 3 polls, whichever is longer); energy counters are flagged after 1 hour without rising.")).toBeInTheDocument();
+  });
+
+  it("is read by storage.view alone: the sentence, and no Change... button, no row", async () => {
+    await show({}, ["storage.view"]);
+    expect(within(card()).getByText(SENTENCE)).toBeInTheDocument();
+    expect(within(card()).queryByRole("button", { name: "Change..." })).not.toBeInTheDocument();
+    expect(card().querySelectorAll(".row")).toHaveLength(0);
+  });
+
+  it("gives storage.edit a Change... button in each of the two cards, and the System events one is still its own", async () => {
+    await show({}, EDIT);
+    expect(screen.getAllByRole("button", { name: "Change..." })).toHaveLength(2);
+    const events = screen.getByRole("heading", { name: "System events and the audit log" }).closest(".page-card") as HTMLElement;
+    expect(within(events).getAllByRole("button", { name: "Change..." })).toHaveLength(1);
+    expect(within(card()).getAllByRole("button", { name: "Change..." })).toHaveLength(1);
+    expect(change()).toHaveAttribute("type", "button");
+  });
+
+  it("opens a small dialog with the two values, their bounds, the factory values and a ? tip beside each, and puts the focus on the first field", async () => {
+    await show({}, EDIT);
+    await openDialog();
+    await waitFor(() => expect(minutes()).toHaveFocus());
+    expect(minutes()).toHaveValue(5);
+    expect(minutes()).toHaveAttribute("min", "2");
+    expect(minutes()).toHaveAttribute("max", "60");
+    expect(hours()).toHaveValue(6);
+    expect(hours()).toHaveAttribute("min", "1");
+    expect(hours()).toHaveAttribute("max", "72");
+    expect(within(dialog()).getByText("From 2 to 60 minutes. Factory: 5.")).toBeInTheDocument();
+    expect(within(dialog()).getByText("From 1 to 72 hours. Factory: 6.")).toBeInTheDocument();
+    for (const field of [minutes(), hours()]) {
+      const wrapper = field.closest(".has-tip") as HTMLElement;
+      const tip = within(wrapper).getByRole("button", { name: "What does this mean?" });
+      expect(tip.closest("label"), "the tip is beside the label, never inside it").toBeNull();
+    }
+    expect(within(dialog()).getByRole("button", { name: "Save" })).toHaveAttribute("type", "submit");
+    expect(within(dialog()).getByRole("button", { name: "Cancel" })).toHaveAttribute("type", "button");
+    expect(dialog().querySelector("form")).toHaveClass("storage-events-dialog"); // the dialog's rules (hint, message slot, waiting buttons) are the System events dialog's
+  });
+
+  it("Escape closes the dialog and the focus goes back to its own Change...; so does Cancel; nothing is sent", async () => {
+    const calls = await show({}, EDIT);
+    await openDialog();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(change()).toHaveFocus();
+    await openDialog();
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(change()).toHaveFocus();
+    expect(puts(calls)).toHaveLength(0);
+  });
+
+  it("Escape on an open ? tip closes the tip only; the next Escape closes the dialog", async () => {
+    await show({}, EDIT);
+    await openDialog();
+    await userEvent.click(within(minutes().closest(".has-tip") as HTMLElement).getByRole("button", { name: "What does this mean?" }));
+    expect(screen.getByRole("note")).toHaveTextContent(/no good reading for this many minutes/);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("Save sends exactly the two values, closes the dialog, reads the setting again and the card shows the new sentence; the focus is back on Change...", async () => {
+    const calls = await show(keeping(), EDIT);
+    await openDialog();
+    await fill(minutes(), "10");
+    await fill(hours(), "12");
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(puts(calls)).toHaveLength(1);
+    expect(puts(calls)[0].body).toEqual({ stale_floor_minutes: 10, not_advancing_hours: 12 });
+    expect(await screen.findByText(/Meters are stale after 10 minutes without a good reading \(or 3 polls, whichever is longer\); energy counters are flagged after 12 hours/)).toBeInTheDocument();
+    expect(reads(calls)).toHaveLength(2); // after the save settles
+    expect(change()).toHaveFocus();
+  });
+
+  it("refuses a number outside its bounds, or not whole, before asking the server, in words, and keeps the dialog open", async () => {
+    const calls = await show({}, EDIT);
+    await openDialog();
+    await fill(minutes(), "1");
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Save" }));
+    expect(await within(dialog()).findByRole("alert")).toHaveTextContent("Minutes must be a whole number from 2 to 60.");
+    await fill(minutes(), "61");
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Save" }));
+    expect(await within(dialog()).findByRole("alert")).toHaveTextContent("Minutes must be a whole number from 2 to 60.");
+    await fill(minutes(), "5");
+    await fill(hours(), "73");
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Save" }));
+    expect(await within(dialog()).findByRole("alert")).toHaveTextContent("Hours must be a whole number from 1 to 72.");
+    await fill(hours(), "2.5");
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Save" }));
+    expect(await within(dialog()).findByRole("alert")).toHaveTextContent("Hours must be a whole number");
+    await userEvent.clear(hours());
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Save" }));
+    expect(await within(dialog()).findByRole("alert")).toHaveTextContent("Hours must be a whole number");
+    expect(puts(calls)).toHaveLength(0);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("takes the message back when a number is changed", async () => {
+    await show({}, EDIT);
+    await openDialog();
+    await fill(minutes(), "1");
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Save" }));
+    await within(dialog()).findByRole("alert");
+    await fill(minutes(), "7");
+    expect(within(dialog()).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows the server's 422 in words as an alert, keeps the dialog and the focus on Save, still reads the setting again; Cancel closes", async () => {
+    const calls = await show(keeping(() => ({ status: 422, body: { detail: [{ loc: ["body", "stale_floor_minutes"], msg: "Input should be greater than or equal to 2" }] } })), EDIT);
+    await openDialog();
+    await fill(minutes(), "9");
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Save" }));
+    const alert = await within(dialog()).findByRole("alert");
+    expect(alert).toHaveTextContent("stale_floor_minutes: Input should be greater than or equal to 2");
+    expect(alert.textContent).not.toMatch(/\[object/);
+    expect(within(dialog()).getAllByRole("alert")).toHaveLength(1);
+    expect(within(dialog()).getByRole("button", { name: "Save" })).toHaveFocus();
+    expect(puts(calls)).toHaveLength(1);
+    await waitFor(() => expect(reads(calls)).toHaveLength(2)); // settled, not only succeeded
+    await userEvent.click(within(dialog()).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("while the request runs the buttons wait with aria-disabled (the focus stays), a second click sends nothing, and Escape does not close", async () => {
+    const calls = await show(keeping(), EDIT);
+    const hold = holdFetch((method, path) => method === "PUT" && path === "/api/settings/watchdog");
+    await openDialog();
+    await fill(minutes(), "10");
+    const save = within(dialog()).getByRole("button", { name: "Save" });
+    await userEvent.click(save);
+    await waitFor(() => expect(save).toHaveAttribute("aria-disabled", "true"));
+    expect(save).toBeEnabled();
+    expect(save).toHaveFocus();
+    await userEvent.click(save);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    hold.release();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(puts(calls)).toHaveLength(1);
+  });
+
+  it("keeps the room for a refusal: the dialog's message slot is always there, empty until there is something to say", async () => {
+    await show({}, EDIT);
+    await openDialog();
+    const slot = dialog().querySelector(".storage-events-slot")!;
+    expect(slot).toBeEmptyDOMElement();
+    expect(slot.nextElementSibling).toHaveClass("row"); // directly above the buttons
+  });
+
+  describe("while it loads", () => {
+    it("draws the card with the page's other cards, as word pills of the sentence and the button, and nothing a screen reader can find", async () => {
+      mockFetch(routes());
+      const hold = holdFetch((_method, path) => path === "/api/settings/watchdog");
+      renderWithProviders(<><StoragePage /><SignedIn /></>, { route: "/storage", path: "/storage" });
+      await accountKnown();
+      const region = screen.getByText("Loading storage").parentElement!;
+      const watchdog = region.querySelector(".page-grid > .page-card.storage-watchdog.span-all")!;
+      expect(watchdog).toHaveAttribute("aria-hidden", "true");
+      expect(watchdog.querySelector(":scope > .page-card-head > .sk-block")).not.toBeNull();
+      expect(watchdog.querySelector(":scope > .page-card-head h2 .sk-line")).not.toBeNull();
+      expect([...watchdog.children].map((child) => child.tagName + "." + child.className.split(" ")[0])).toEqual(["DIV.page-card-head", "P.sk-words", "DIV.row"]);
+      expect(watchdog.children[1].querySelectorAll(".sk-line")).toHaveLength(SENTENCE.split(/\s+/).length);
+      expect((watchdog.querySelector(".row > .sk-block") as HTMLElement).style.height).toBe("34px");
+      expect(region.textContent, "a region holds no words but its label").toBe("Loading storage");
+      expect(screen.queryByRole("heading", { name: TITLE })).not.toBeInTheDocument();
+      hold.release();
+      expect(await screen.findByRole("heading", { name: TITLE })).toBeInTheDocument();
+      expect(document.querySelector(".sk-region")).toBeNull();
+    });
+
+    it("draws no button block for a role that cannot change it", async () => {
+      mockFetch(routes({ "GET /api/me": { body: userFor("custom", { permissions: ["storage.view"] }) } }));
+      const hold = holdFetch((_method, path) => path === "/api/settings/watchdog");
+      renderWithProviders(<><StoragePage /><SignedIn /></>, { route: "/storage", path: "/storage" });
+      await accountKnown();
+      const watchdog = document.querySelector(".sk-region .storage-watchdog")!;
+      expect([...watchdog.children].map((child) => child.tagName)).toEqual(["DIV", "P"]);
+      hold.release();
+      await screen.findByRole("heading", { name: TITLE });
+      expect([...card().children].map((child) => child.tagName)).toEqual(["DIV", "P"]);
+    });
+  });
+
+  it("a failing read of the setting does not take the page down: the card says so in an alert, with no Change... button", async () => {
+    await show({ "GET /api/settings/watchdog": { status: 500, body: { detail: "the watchdog is down" } } }, EDIT);
+    expect(screen.getByLabelText(/raw retention/i)).toBeInTheDocument();
+    expect(within(card()).getByRole("alert")).toHaveTextContent("The data watchdog settings could not be read: the watchdog is down");
+    expect(within(card()).queryByRole("button", { name: "Change..." })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Change..." })).toHaveLength(1); // the System events card still has its own
   });
 });

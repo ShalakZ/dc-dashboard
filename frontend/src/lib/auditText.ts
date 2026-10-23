@@ -443,6 +443,23 @@ function eventsRetention(c: Context): string {
   return `${base}: ${parts.join(", ")}`;
 }
 
+/**
+ * watchdog.changed (w35), in the style of events.retention_changed: the new numbers of the data watchdog with the old ones beside them ("stale after 10 minutes
+ * (was 5), counters flagged after 12 hours (was 6)"). The entry keeps only the numbers that changed; sides it cannot read fall back to the names of the changed
+ * fields, and an entry with no sides to the plain sentence.
+ */
+function watchdogChanged(c: Context): string {
+  const base = "Changed the data watchdog";
+  const noun = (n: number, word: string) => `${n.toLocaleString("en-US")} ${word}${n === 1 ? "" : "s"}`;
+  const was = (old: number | null) => (old !== null ? ` (was ${old.toLocaleString("en-US")})` : "");
+  const minutes = changedNumber(c.sides, "stale_floor_minutes");
+  const hours = changedNumber(c.sides, "not_advancing_hours");
+  const parts: string[] = [];
+  if (minutes) parts.push(`stale after ${noun(minutes.now, "minute")}${was(minutes.was)}`);
+  if (hours) parts.push(`counters flagged after ${noun(hours.now, "hour")}${was(hours.was)}`);
+  return parts.length === 0 ? withFields(base, c.fields) : `${base}: ${parts.join(", ")}`;
+}
+
 /** "QAR", or "not set" when the side is missing or empty. */
 function settingSide(side: Detail | undefined, key: string): string {
   return (side && text(get(side, key))) || "not set";
@@ -1007,6 +1024,9 @@ const RULES: Record<string, Rule> = {
     summary: (c) => userUpdate(c) ?? withFields(`Changed ${thing(c, "user", "user_id", "user")}`, c.fields),
     link: usersPage,
   },
+
+  // The Storage page holds the card that changes this. The entry keeps only the numbers that changed.
+  "watchdog.changed": { summary: watchdogChanged, link: storagePage },
 };
 
 function build(entry: AuditEntry): AuditView {

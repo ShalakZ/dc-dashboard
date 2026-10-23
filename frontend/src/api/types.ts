@@ -105,7 +105,15 @@ export interface Source {
   move_candidate?: SourceMoveCandidateForOld | SourceMoveTwo | null;
   /** The list endpoint only (w33): true while another server than the one this source used to talk to answers at its address (polling goes on). Left out by older answers: a missing value counts as false. */
   identity_different?: boolean;
+  /** The list endpoint only (w35): the data watchdog's verdict on this source's billing meters; null when the source has none. Left out by older servers: a missing value counts as null. */
+  meters?: SourceMeters | null;
 }
+/**
+ * The `meters` object of a source list row (GET /api/sources): `total` billing meters on the source, `stale` of them silent (a frozen source's counters included),
+ * `not_advancing` energy counters standing still (0 for a frozen source), `frozen` whether the source answers but all its counters stand still,
+ * `oldest_stale_age_seconds` the longest silence among the stale ones (null when no age is known).
+ */
+export interface SourceMeters { total: number; stale: number; not_advancing: number; frozen: boolean; oldest_stale_age_seconds: number | null }
 /**
  * The `history` object of a source list row (GET /api/sources): the part of the `history_status` row the Sources page shows. `supports_history` is the
  * connector class's flag (false = the backfill never asks this source for history). `state`: `never_run`, `idle` (caught up), `filling` (reading older
@@ -121,8 +129,17 @@ export interface CollectorStatus { alive: boolean; age_seconds: number | null }
 /**
  * GET /api/status (any signed-in user), the top bar's chip. `readings_fresh` is the server's verdict (each mapping judged against its
  * own poll interval; null when no mapped point has ever been read), `last_reading_age_seconds` only a caption.
+ *
+ * (w35) The meter fields come from the data watchdog and are all optional: an older server lacks them, and a server that could not compute the verdict
+ * in time sends null. A missing or null field changes nothing on screen. `meters` counts the billing meters judged, `meters_stale` the ones that stopped
+ * answering (the counters of a frozen source included), `meters_not_advancing` the energy counters that stand still, `meters_waiting` the ones with no
+ * reading yet; `oldest_stale_age_seconds` is the longest silence or standstill among the stale ones; `rollups_late` is not shown yet.
  */
-export interface LiveStatus { collector_alive: boolean; readings_fresh: boolean | null; last_reading_age_seconds: number | null }
+export interface LiveStatus {
+  collector_alive: boolean; readings_fresh: boolean | null; last_reading_age_seconds: number | null;
+  meters?: number | null; meters_stale?: number | null; meters_not_advancing?: number | null; meters_waiting?: number | null;
+  oldest_stale_age_seconds?: number | null; rollups_late?: boolean | null;
+}
 /** GET /api/secret-key/status: whether every stored source secret can be decrypted with the key in .env. */
 export interface SecretKeyStatus {
   ok: boolean;
@@ -424,6 +441,14 @@ export interface EventsSettings extends EventsRetention {
   bounds: { retention_days: [number, number]; max_rows: [number, number] };
   kept: number;
   oldest: string | null;
+}
+
+/** What PUT /api/settings/watchdog takes (and GET returns as its first two fields): minutes without a good reading before a meter is stale, hours an energy counter may stand still. */
+export interface WatchdogValues { stale_floor_minutes: number; not_advancing_hours: number }
+/** GET and PUT /api/settings/watchdog (storage.view / storage.edit). `bounds` are [min, max]. */
+export interface WatchdogSettings extends WatchdogValues {
+  factory: WatchdogValues;
+  bounds: { stale_floor_minutes: [number, number]; not_advancing_hours: [number, number] };
 }
 
 // ---- Phase 3: site info, tariffs, billing, dashboards ----

@@ -222,6 +222,7 @@ describe("the shell (W6 sidebar)", () => {
       const narrow = rules.filter((r) => r.at.some((a) => /max-width:\s*1179\.98px/.test(a)));
       const hiding = narrow.map((r) => r.selector).join(" | ");
       expect(hiding).toContain(".live .detail");
+      expect(hiding).toContain(".live .wide"); // w35: " of 48" of "3 of 48 meters stale" goes at the same width as the caption, so the longer word cannot widen the bar
       expect(hiding).toContain(".site-time .zone");
       expect(hiding).toContain(".who-role");
       // the role word is part of the profile button's name: clipped, not display: none

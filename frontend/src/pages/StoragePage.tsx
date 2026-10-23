@@ -9,8 +9,8 @@ import { PageHeader } from "../components/PageHeader";
 import { READ_ONLY_TEXT, ReadOnlyNote } from "../components/ReadOnlyNote";
 import { SaveButton } from "../components/SaveButton";
 import { CTL_H, PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
-import { eventsLoss, useEventsSettings, useRowsPerDay, useSaveEventsSettings, useSaveStorageSettings, useSetStorageDefault, useSite, useStorage, useStorageSettings } from "../api/queries";
-import type { EventsSettings, RowsPerDayRange, StorageSettings, StorageStats } from "../api/types";
+import { eventsLoss, useEventsSettings, useRowsPerDay, useSaveEventsSettings, useSaveStorageSettings, useSaveWatchdogSettings, useSetStorageDefault, useSite, useStorage, useStorageSettings, useWatchdogSettings } from "../api/queries";
+import type { EventsSettings, RowsPerDayRange, StorageSettings, StorageStats, WatchdogSettings, WatchdogValues } from "../api/types";
 import { storageLoss } from "../lib/impact";
 import { FIELD_HELP, TILE_HELP } from "../lib/storageHelp";
 
@@ -323,6 +323,104 @@ function EventsRetentionDialog({ current, onClose }: { current: EventsSettings; 
   );
 }
 
+/** What the Data watchdog card says: when a meter is stale (the minutes, or three of its own polls, whichever is longer) and when an energy counter is flagged as not rising. */
+export function watchdogText(w: WatchdogValues): string {
+  const noun = (n: number, word: string) => `${n.toLocaleString("en-US")} ${word}${n === 1 ? "" : "s"}`;
+  return `Meters are stale after ${noun(w.stale_floor_minutes, "minute")} without a good reading (or 3 polls, whichever is longer); energy counters are flagged after ${noun(w.not_advancing_hours, "hour")} without rising.`;
+}
+/** Typical numbers for the loading frame, whose sentence is drawn as grey word pills (only the length of each word is used), so it breaks into the lines the real one will. */
+const WATCHDOG_SAMPLE: WatchdogSettings = {
+  stale_floor_minutes: 5, not_advancing_hours: 6, factory: { stale_floor_minutes: 5, not_advancing_hours: 6 },
+  bounds: { stale_floor_minutes: [2, 60], not_advancing_hours: [1, 72] },
+};
+const WATCHDOG_MINUTES_HELP = "A meter is stale when it has had no good reading for this many minutes, or for three of its own polling intervals, whichever is longer. A shorter time finds a dead meter sooner, and may flag one that is only slow.";
+const WATCHDOG_HOURS_HELP = "An energy counter that has not risen for this many hours is flagged. A counter that reads almost no load is left alone, because it may truly stand still. A source whose counters and other points all stand still this long counts as stale.";
+
+/**
+ * The content of the Change... dialog of the Data watchdog card (inside the Modal, so `useModalBusy` reaches it): the two numbers with the server's bounds and one
+ * slot, always there, for what the save has to say. It is the System events dialog's shape without its question (saving these deletes nothing): the form carries the
+ * same `storage-events-dialog` class, so the hint line, the three-line slot and the waiting buttons are the same rules. The buttons wait with aria-disabled and a guard,
+ * never native `disabled`: the pressed one holds the focus.
+ */
+function WatchdogForm({ current, onClose }: { current: WatchdogSettings; onClose: () => void }) {
+  const save = useSaveWatchdogSettings();
+  const [minutes, setMinutes] = useState(String(current.stale_floor_minutes));
+  const [hours, setHours] = useState(String(current.not_advancing_hours));
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const inFlight = useRef(false);
+  const minutesHint = useId();
+  const hoursHint = useId();
+  useModalBusy(pending); // Escape must not close the dialog on a request that is still running
+  const { stale_floor_minutes: minuteBounds, not_advancing_hours: hourBounds } = current.bounds;
+
+  const edit = (set: (text: string) => void) => (event: ChangeEvent<HTMLInputElement>) => {
+    set(event.target.value);
+    setError(null);
+  };
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (inFlight.current) return;
+    const stale_floor_minutes = wholeIn(minutes, minuteBounds);
+    const not_advancing_hours = wholeIn(hours, hourBounds);
+    if (stale_floor_minutes === null || not_advancing_hours === null) {
+      setError(stale_floor_minutes === null ? inRange(minuteBounds, "Minutes") : inRange(hourBounds, "Hours"));
+      return;
+    }
+    inFlight.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      await save.mutateAsync({ stale_floor_minutes, not_advancing_hours });
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      inFlight.current = false;
+      setPending(false);
+    }
+  }
+  const cancel = () => { if (!inFlight.current) onClose(); };
+
+  return (
+    <form className="storage-events-dialog" onSubmit={submit} noValidate>
+      <p className="muted">A meter is stale after this many minutes without a good reading. An energy counter that has not risen for this many hours is flagged.</p>
+      <div className="has-tip">
+        <label>
+          Stale after (minutes)
+          <input type="number" step={1} min={minuteBounds[0]} max={minuteBounds[1]} value={minutes} aria-describedby={minutesHint} onChange={edit(setMinutes)} />
+        </label>
+        <InfoTip>{WATCHDOG_MINUTES_HELP}</InfoTip>
+        <small id={minutesHint} className="muted storage-events-hint">From {minuteBounds[0].toLocaleString("en-US")} to {minuteBounds[1].toLocaleString("en-US")} minutes. Factory: {current.factory.stale_floor_minutes.toLocaleString("en-US")}.</small>
+      </div>
+      <div className="has-tip">
+        <label>
+          Counter not rising after (hours)
+          <input type="number" step={1} min={hourBounds[0]} max={hourBounds[1]} value={hours} aria-describedby={hoursHint} onChange={edit(setHours)} />
+        </label>
+        <InfoTip>{WATCHDOG_HOURS_HELP}</InfoTip>
+        <small id={hoursHint} className="muted storage-events-hint">From {hourBounds[0].toLocaleString("en-US")} to {hourBounds[1].toLocaleString("en-US")} hours. Factory: {current.factory.not_advancing_hours.toLocaleString("en-US")}.</small>
+      </div>
+      {/* Always there and three lines tall (CSS), so a refusal arriving moves neither the fields nor the buttons. */}
+      <div className="storage-events-slot">
+        {error ? <p className="error" role="alert">{error}</p> : null}
+      </div>
+      <div className="row">
+        <button type="button" aria-disabled={pending || undefined} onClick={cancel}>Cancel</button>
+        <button type="submit" className="primary" aria-disabled={pending || undefined}>Save</button>
+      </div>
+    </form>
+  );
+}
+
+function WatchdogDialog({ current, onClose }: { current: WatchdogSettings; onClose: () => void }) {
+  return (
+    <Modal title="Change when meters count as stale" onClose={onClose}>
+      <WatchdogForm current={current} onClose={onClose} />
+    </Modal>
+  );
+}
+
 export function StoragePage() {
   const canEdit = useAuth().can("storage.edit"); // Save, Set as default and the Resets; without it the form is read-only
   const stats = useStorage();
@@ -332,6 +430,8 @@ export function StoragePage() {
   const save = useSaveStorageSettings();
   const makeDefault = useSetStorageDefault();
   const [changingEvents, setChangingEvents] = useState(false);
+  const watchdog = useWatchdogSettings(); // w35: when a billing meter counts as stale, and a counter as not rising
+  const [changingWatchdog, setChangingWatchdog] = useState(false);
   const [form, setForm] = useState<StorageSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -344,7 +444,7 @@ export function StoragePage() {
   }, [settings.data, form]);
   if (stats.isError) return <p className="error" role="alert">{stats.error.message}</p>;
   if (settings.isError) return <p className="error" role="alert">{settings.error.message}</p>;
-  if (stats.isPending || settings.isPending || events.isPending || site.isPending || !form) {
+  if (stats.isPending || settings.isPending || events.isPending || watchdog.isPending || site.isPending || !form) {
     // The page in its order: the five real tiles (an icon circle and a line each, three with their note line), then the two cards in the page
     // grid as the loaded page draws them (w32: and the System events card under both, spanning the grid). Rows per day: the range fields and the count, then the seven day rows with no header, as the real table
     // has none, then the UTC note under it. Retention and capacity: the disk note, the field grid, the buttons and the summary, whose paragraphs are word pills of
@@ -391,6 +491,10 @@ export function StoragePage() {
             <PageCardSkeleton className="storage-events span-all">
               <ParagraphSkeleton text={eventsKeptText(EVENTS_SAMPLE, "UTC")} />
               <ParagraphSkeleton text={AUDIT_KEPT} className="muted" />
+              {canEdit && <div className="row"><Skeleton variant="block" width={104} height={34} /></div>}
+            </PageCardSkeleton>
+            <PageCardSkeleton className="storage-watchdog span-all">
+              <ParagraphSkeleton text={watchdogText(WATCHDOG_SAMPLE)} />
               {canEdit && <div className="row"><Skeleton variant="block" width={104} height={34} /></div>}
             </PageCardSkeleton>
           </div>
@@ -513,8 +617,18 @@ export function StoragePage() {
           <p className="muted">{AUDIT_KEPT}</p>
           {canEdit && events.data && <div className="row"><button type="button" onClick={() => setChangingEvents(true)}>Change...</button></div>}
         </PageCard>
+        {/* w35: the same shape, under it. Its data is awaited with the rest of the page too (the loading frame draws it). */}
+        <PageCard className="storage-watchdog span-all" icon="diagnostics" title="Data watchdog">
+          {watchdog.isError ? (
+            <p className="error" role="alert">The data watchdog settings could not be read: {watchdog.error.message}</p>
+          ) : (
+            <p>{watchdogText(watchdog.data)}</p>
+          )}
+          {canEdit && watchdog.data && <div className="row"><button type="button" onClick={() => setChangingWatchdog(true)}>Change...</button></div>}
+        </PageCard>
       </div>
       {changingEvents && events.data && <EventsRetentionDialog current={events.data} onClose={() => setChangingEvents(false)} />}
+      {changingWatchdog && watchdog.data && <WatchdogDialog current={watchdog.data} onClose={() => setChangingWatchdog(false)} />}
       {needsConfirm && (
         <ConfirmDeleteDialog
           title={needsConfirm.deletesNow ? "Delete old readings?" : "Shorten retention?"}

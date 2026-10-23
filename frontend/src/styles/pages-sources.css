@@ -11,6 +11,10 @@
   /* w33: the warning under a status chip that another server answers at the source's address (identity_different). A block of its own under the chip, at most three short lines (the sentence is
      "Another server / answers at this / address" at 120px), in the warning ink (the .warning class); the full reason is its title. Only a row that has the warning draws it, so a row without one is as tall as before. */
   .cell-different { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; max-width: 120px; margin-top: 2px; overflow: hidden; overflow-wrap: anywhere; font-size: var(--fs-xs); font-weight: 400; }
+  /* w35: the data watchdog's word under the age in the Last reading cell ("2 of 12 meters stale", or "1 meter not rising"), Sources only. A block of its own at the right of the
+     cell, at most 120px and wrapping, so a long count never widens the column; the .warning or .muted class on it sets the ink. Only a row with trouble draws it, so a row
+     without one is as tall as before, and the loading skeleton draws nothing for it. */
+  .cell-meters { display: block; max-width: 120px; margin: 2px 0 0 auto; font-size: var(--fs-xs); font-weight: 400; text-align: right; white-space: normal; overflow-wrap: anywhere; }
   .cell-trunc { max-width: 360px; }
   .wrap-any { overflow-wrap: anywhere; }
   .nowrap, .table-wrap.dense td.num { white-space: nowrap; }

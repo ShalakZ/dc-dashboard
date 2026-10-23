@@ -25,6 +25,7 @@ import { useMovedToast } from "../hooks/useMovedToast";
 import { useNow } from "../hooks/useNow";
 import { ageNow, formatAge, formatSpan, secondsSince } from "../lib/age";
 import { historyLine } from "../lib/historyLine";
+import { metersLine } from "../lib/liveStatus";
 import { sourceDeletePath, sourceImpact, sourceLoss, sourceNote } from "../lib/impact";
 import { DIFFERENT_SERVER_ROW, differentServerWhy, offerOf, twoServersText } from "../lib/moves";
 import { formatSiteDateTime } from "../lib/siteTime";
@@ -271,6 +272,7 @@ export function SourcesPage() {
               {sources.map((s) => {
                 const status = sourceStatusText(s);
                 const history = historyLine(s, now);
+                const meters = metersLine(s.meters);
                 // The chip's tooltip dates an outage in the site zone; with no zone to read it in, it says nothing rather than a time in the browser's zone.
                 const offlineAt = s.status === "offline" && s.offline_since && timezone ? formatOfflineSince(s.offline_since, timezone) : null;
                 // (w33) Two new servers look like this one: the tooltip says why no move is offered, after the date when there is one.
@@ -291,7 +293,11 @@ export function SourcesPage() {
                       {s.identity_different === true && <span className="cell-different warning" title={differentServerWhy(s.enabled)}>{DIFFERENT_SERVER_ROW}</span>}
                     </td>
                     <td className="nowrap">{s.last_seen && site.data ? formatSiteDateTime(s.last_seen, site.data.timezone) : "—"}</td>
-                    <td className="num">{formatAge(ageNow(s.last_reading_age_seconds, sourcesAnsweredAt, now))}</td>
+                    <td className="num">
+                      {formatAge(ageNow(s.last_reading_age_seconds, sourcesAnsweredAt, now))}
+                      {/* (w35) The data watchdog's word under the age, only while it sees trouble: a row without any is as tall as before. Text, not a live region. */}
+                      {meters !== null && <span className={`cell-meters ${meters.stale ? "warning" : "muted"}`}>{meters.text}</span>}
+                    </td>
                     <td className="error">{s.last_error ?? ""}</td>
                     <td><JobStatus jobId={jobs[s.id] ?? null} /></td>
                     <td className="row-actions">

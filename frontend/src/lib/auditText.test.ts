@@ -20,7 +20,7 @@ const ALL_ACTIONS = [
   "playlist.created", "playlist.updated", "playlist.deleted",
   "display.created", "display.updated", "display.revoked", "display.deleted", "display.connected", "display.claim_blocked",
   "readings.imported", "import_profile.saved", "import_profile.deleted", "tags.mapped", "tags.unmapped", "history.fill_requested",
-  "events.retention_changed",
+  "events.retention_changed", "watchdog.changed",
 ];
 
 describe("humanise", () => {
@@ -886,7 +886,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(71);
+    expect(ALL_ACTIONS).toHaveLength(72);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }
@@ -1395,6 +1395,7 @@ describe("describeAudit: no sentence shows an id", () => {
     },
     "history.fill_requested": { source_id: SRC, name: "PM-1", start: "2026-10-01T00:00:00+00:00", end: "2026-10-05T00:00:00+00:00", before_first_reading: false, job_id: JOB },
     "events.retention_changed": { will_delete: 40, before: { retention_days: 90, max_rows: 100000 }, after: { retention_days: 30, max_rows: 50000 } },
+    "watchdog.changed": { before: { stale_floor_minutes: 5, not_advancing_hours: 6 }, after: { stale_floor_minutes: 10, not_advancing_hours: 12 } },
   };
 
   const present = {
@@ -1907,6 +1908,41 @@ describe("describeAudit: the system events retention (w32)", () => {
 
   it("leaves out 'was' when the old value is not in the entry", () => {
     expect(retention({ before: {}, after: { retention_days: 45 } }).summary).toBe(`${BASE}: 45 days`);
+  });
+});
+
+describe("describeAudit: the data watchdog (w35)", () => {
+  const watchdog = (detail: unknown) => describeAudit(entry("watchdog.changed", detail));
+  const BASE = "Changed the data watchdog";
+
+  it("says both new numbers with the old ones beside them, and links to the Storage page where the card is", () => {
+    const view = watchdog({ before: { stale_floor_minutes: 5, not_advancing_hours: 6 }, after: { stale_floor_minutes: 10, not_advancing_hours: 12 } });
+    expect(view.summary).toBe(`${BASE}: stale after 10 minutes (was 5), counters flagged after 12 hours (was 6)`);
+    expect(view.link).toEqual({ to: "/storage", label: "Open Storage" });
+    expect(view.changes).toEqual([
+      { field: "Stale floor minutes", before: "5", after: "10" },
+      { field: "Not advancing hours", before: "6", after: "12" },
+    ]);
+  });
+
+  it("names only the number that changed (the entry keeps only the changed fields)", () => {
+    expect(watchdog({ before: { stale_floor_minutes: 5 }, after: { stale_floor_minutes: 15 } }).summary).toBe(`${BASE}: stale after 15 minutes (was 5)`);
+    expect(watchdog({ before: { not_advancing_hours: 6 }, after: { not_advancing_hours: 24 } }).summary).toBe(`${BASE}: counters flagged after 24 hours (was 6)`);
+  });
+
+  it("says one hour in the singular", () => {
+    expect(watchdog({ before: { not_advancing_hours: 6 }, after: { not_advancing_hours: 1 } }).summary).toBe(`${BASE}: counters flagged after 1 hour (was 6)`);
+  });
+
+  it("reads a side it cannot trust as the changed field names, and an entry with no sides as the plain sentence", () => {
+    expect(watchdog({ before: { stale_floor_minutes: "five" }, after: { stale_floor_minutes: "ten" } }).summary).toBe(`${BASE}: stale floor minutes`);
+    expect(watchdog({ before: { stale_floor_minutes: 5 }, after: { stale_floor_minutes: -1 } }).summary).toBe(`${BASE}: stale floor minutes`);
+    expect(watchdog({}).summary).toBe(BASE);
+    expect(watchdog(null).summary).toBe(BASE);
+  });
+
+  it("leaves out 'was' when the old value is not in the entry", () => {
+    expect(watchdog({ before: {}, after: { stale_floor_minutes: 8 } }).summary).toBe(`${BASE}: stale after 8 minutes`);
   });
 });
 
