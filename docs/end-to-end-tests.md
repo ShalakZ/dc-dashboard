@@ -549,7 +549,8 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   back); **Map 48 points** works, the toast's **Undo** removes the assets and the mappings, and mapping again works; through the API the 48 assets and their
   `energy_kwh` mappings exist and Discovery says `1,306 points, 48 mapped`; a reader with `discovery.view` only sees read-only decisions, no **Review** button, a 403
   from the lines route and no link to the Points page; at 1024 x 768, sidebar expanded and minimised, the shapes page does not overflow and its bottom bar,
-  button and dialog are inside the window, and the large card's buttons are inside the card. Lookups use exact names where one is a part of another.
+  button and dialog are inside the window, and the large card's buttons are inside the card. Lookups use exact names where one is a part of another. The saved rules, the
+  unit checks and **Review again** are not checked here (the Map step saves rules, but nothing asserts on them); the backend and front end unit tests cover them.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
