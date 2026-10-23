@@ -13,6 +13,7 @@ import re
 from collections import Counter
 from collections.abc import Callable, ItemsView, Iterable, Sequence, ValuesView
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 # `[ns=<digits>;]s=<digits>:<rest>`: <rest> has a dot, no whitespace at all, and does not itself start with `<digits>:`.
 # Digits are ASCII only (`\d` would match other scripts' digits). Whole string (fullmatch): a leading or trailing space, a
@@ -26,6 +27,60 @@ def stable_address(address: str) -> str:
     """`address` without the position number in front of its tag; every other string comes back as it is."""
     found = _NUMBERED.fullmatch(address)
     return address if found is None else found[1] + found[2]
+
+
+def has_number_prefix(address: str) -> bool:
+    """True when `address` has the numbered form `stable_address` strips (the same regex, so `s=1:foo`, a digits-only id, a numeric
+    or GUID id and anything else `stable_address` leaves alone are not numbered)."""
+    return _NUMBERED.fullmatch(address) is not None
+
+
+def tag_name(address: str) -> str:
+    """The tag in a numbered address, without the number and the cluster: `ns=3;s=20403:Site.PDUA01_PM0_P` gives `PDUA01_PM0_P`.
+    An address that is not numbered comes back whole."""
+    found = _NUMBERED.fullmatch(address)
+    if found is None:
+        return address
+    return found[2].partition(".")[2] or found[2]
+
+
+# GUESSES, not facts (question 26 of the w34 brief asks the SCADA owners what their server announces): what AVEVA Plant SCADA's OPC
+# UA server calls itself is unknown. The endpoint path `/plantscada` is what the owner's briefing showed; the words are what a
+# product or application name would plausibly contain (Citect is the product's former name). A wrong guess costs one sentence in
+# the Test result, nothing else: the suggestion never switches the option on.
+_PLANT_SCADA_PATH = "plantscada"
+_PLANT_SCADA_WORDS = ("plant scada", "plantscada", "citect")
+_IDENTITY_KEYS = ("application_uri", "product_uri", "application_name")
+_SAMPLE_LIMIT = 200
+_NUMBERED_SHARE = (4, 5)  # at least 4 of every 5 sampled ids carry the number
+
+
+def looks_like_plant_scada(identity: dict[str, object] | None, endpoint: str, sample_addresses: Sequence[str]) -> bool:
+    """Whether a source looks like AVEVA Plant SCADA, so that Test may SUGGEST the option "Stable tag addresses".
+
+    Both must hold. (a) The endpoint path contains `plantscada`, or the identity's application URI, product URI or application name
+    contains `plant scada`, `plantscada` or `citect` (all case-insensitive; guesses, see above). (b) At least 80 percent of the first
+    200 `sample_addresses` have the numbered form. The caller passes the source's stored STRING ids only, so that the ids of another
+    kind (`i=`) on a mixed source do not dilute the share; the digits alone never count (`s=1:foo` is a normal id elsewhere).
+    """
+    try:
+        path = urlsplit(endpoint).path.lower() if isinstance(endpoint, str) else ""
+    except ValueError:
+        path = ""
+    named = _PLANT_SCADA_PATH in path
+    if not named and isinstance(identity, dict):
+        for key in _IDENTITY_KEYS:
+            text = identity.get(key)
+            if isinstance(text, str) and any(word in text.lower() for word in _PLANT_SCADA_WORDS):
+                named = True
+                break
+    if not named:
+        return False
+    sample = list(sample_addresses)[:_SAMPLE_LIMIT]
+    if not sample:
+        return False
+    numbered = sum(1 for address in sample if has_number_prefix(address))
+    return numbered * _NUMBERED_SHARE[1] >= len(sample) * _NUMBERED_SHARE[0]
 
 
 def identity_key(address: str) -> str:

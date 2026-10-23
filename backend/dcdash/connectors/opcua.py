@@ -7,7 +7,7 @@ import contextlib
 import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -32,7 +32,7 @@ from dcdash.connectors.base import (
 )
 from dcdash.connectors.identity import from_endpoints
 from dcdash.connectors.opcua_browse import browse_tree
-from dcdash.connectors.opcua_ids import read_plan, slice_size, stable_address
+from dcdash.connectors.opcua_ids import has_number_prefix, read_plan, slice_size, stable_address, tag_name
 
 if TYPE_CHECKING:
     from dcdash.diagnostics.check import CheckResult, Publish
@@ -70,6 +70,27 @@ class OpcUaConfig(BaseModel):
             ),
         },
     )
+
+
+@dataclass(frozen=True)
+class StableComparison:
+    """What `OpcUaConnector.compare_stable` found: the counts and the one sentence Test shows (empty when nothing could be compared)."""
+
+    message: str
+    total: int  # the numbered addresses that were read
+    same: int = 0  # both forms good and equal
+    different: int = 0  # both forms good, other values
+    stable_unknown: int = 0  # the numbered form good, the stable form Bad
+    numbered_dead: int = 0  # the numbered form Bad, the stable form good
+
+    @property
+    def doubts_the_option(self) -> bool:
+        """The stable form read differently, or not at all, where the numbered form works: the option is not to be recommended."""
+        return self.different > 0 or self.stable_unknown > 0
+
+
+def _tags(count: int) -> str:
+    return "tag" if count == 1 else "tags"
 
 
 def _reported_path(endpoint_url: object) -> str:
@@ -375,6 +396,60 @@ class OpcUaConnector(Connector):
             PointValue(address, ts, None, BAD, plan.refused[address]) if address in plan.refused else answers[address]
             for address in addresses
         ]
+
+    async def compare_stable(self, addresses: Sequence[str]) -> StableComparison:
+        """Test's evidence about "Stable tag addresses": one Value Read, in one session, of the numbered form of each address (as
+        stored, never stripped, whatever the option says) and of its stable form, and what the pairs show. Read-only; it changes
+        nothing, not even this connector's config. An address without a number is left out.
+
+        One sentence is returned, the most severe that applies, in this order: the two forms read different values; the stable
+        form is unknown to the server; the numbered form no longer works but the stable one does; the two forms read the same.
+        A tag whose two forms are both Bad is counted in the total only; when nothing at all could be compared the message is empty.
+        """
+        numbered = [a for a in dict.fromkeys(addresses) if has_number_prefix(a)]
+        if not numbered:
+            return StableComparison("", 0)
+        stable = [stable_address(a) for a in numbered]
+        ts = datetime.now(timezone.utc)
+        async with self._session() as client:
+            answers = await self._read_values(client, [*numbered, *stable])  # the slices of the poll apply
+        pairs = [
+            (_point_value(n, ts, answers[i]), _point_value(s, ts, answers[len(numbered) + i]))
+            for i, (n, s) in enumerate(zip(numbered, stable, strict=True))
+        ]
+        same = different = stable_unknown = numbered_dead = 0
+        example: str | None = None
+        for address, (n, s) in zip(numbered, pairs, strict=True):
+            if n.quality == GOOD and s.quality == GOOD:
+                if n.value == s.value:
+                    same += 1
+                else:
+                    different += 1
+                    example = example or f"{tag_name(address)}: {n.value:g} and {s.value:g}"
+            elif n.quality == GOOD:
+                stable_unknown += 1
+            elif s.quality == GOOD:
+                numbered_dead += 1
+        total = len(numbered)
+        tags = f"of {total} {_tags(total)}"
+        if different:
+            message = (
+                f"the numbered and the stable address read different values for {different} {tags}: "
+                f"do not use the option (e.g. {example})"
+            )
+        elif stable_unknown:
+            advice = "turn the option off" if self.config.stable_addresses else "do not turn the option on"
+            message = f"the stable address is unknown to this server for {stable_unknown} {tags}: {advice}"
+        elif numbered_dead:
+            message = (
+                f"the numbered address no longer works for {numbered_dead} {tags} but the stable one does: "
+                "the SCADA numbering may have changed"
+            )
+        elif same:
+            message = f"{same} {tags} read the same both ways"
+        else:
+            message = ""
+        return StableComparison(message, total, same, different, stable_unknown, numbered_dead)
 
     async def _read_values(self, client: Client, addresses: Sequence[str]) -> list[ua.DataValue]:
         """The Value of every node, one answer per address in the same order, in requests of at most `self._slice` nodes, one

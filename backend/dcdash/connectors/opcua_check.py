@@ -29,10 +29,10 @@ from cryptography.x509.oid import NameOID
 
 from dcdash.connectors.base import GOOD, url_host_port
 from dcdash.connectors.opcua import OpcUaConnector, ReportingClient, _point_value, _status_text, close_quietly
-from dcdash.connectors.opcua_ids import read_plan, slice_size, stable_address
+from dcdash.connectors.opcua_ids import has_number_prefix, read_plan, slice_size, stable_address
 from dcdash.core.audit import hidden_values
 from dcdash.diagnostics.check import Checker, CheckResult, Publish, StepFailed, StepOutcome
-from dcdash.diagnostics.hints import CLOCK_SKEW, hint_for
+from dcdash.diagnostics.hints import CLOCK_SKEW, NUMBERING_CHANGED, hint_for
 
 DEADLINE_SECONDS = 60.0
 MAX_CHUNK = 100  # nodes per Read request, whatever the server allows
@@ -170,13 +170,16 @@ def _validity_words(facts: dict[str, Any]) -> str:
     return f"valid until {facts['not_after'][:10]} ({facts['days_left']} days)"
 
 
-def _read_hints(kinds: list[tuple[str, str]]) -> str | None:
+def _read_hints(kinds: list[tuple[str, str]], *, numbering_changed: bool = False) -> str | None:
     """One line per hint text, newline apart ("BadSensorFailure, BadDeviceFailure: Ask ..."): the report prints each as a line of
-    its own, since two hints joined into one would be cut at the line limit. Statuses with the same hint share a line."""
+    its own, since two hints joined into one would be cut at the line limit. Statuses with the same hint share a line.
+    `numbering_changed`: BadNodeIdUnknown also gets the second hint about the number in front of the tag (w34 R8)."""
     lines: dict[str, list[str]] = {}
     for name, _address in kinds:
         if hint := hint_for(name, None, "read_points"):
             lines.setdefault(hint, []).append(name)
+        if numbering_changed and name == "BadNodeIdUnknown":
+            lines.setdefault(NUMBERING_CHANGED, []).append(name)
     return "\n".join(f"{', '.join(names)}: {hint}" for hint, names in lines.items()) or None
 
 
@@ -525,7 +528,11 @@ class OpcUaCheck:
             summary += "; bad: " + "; ".join(f"{name} {_clip(address, 40)}" for name, address in kinds)
             summary += f" (+{len(first) - len(kinds)} more kinds)" if len(first) > len(kinds) else ""
         detail["bad_status"] = sum(1 for row in bad if _status_name(row["status"]).startswith("Bad"))  # a Bad code, not "non-numeric"
-        return StepOutcome(_clip(summary), detail, _read_hints(kinds))
+        # R8: a numbered address that the server does not know, on a source that has not tried the stable form yet.
+        numbering_changed = not self.config.stable_addresses and any(
+            _status_name(row["status"]) == "BadNodeIdUnknown" and has_number_prefix(row["address"]) for row in bad
+        )
+        return StepOutcome(_clip(summary), detail, _read_hints(kinds, numbering_changed=numbering_changed))
 
     async def _read_optional(self, nodeids: list[ua.NodeId], attr: ua.AttributeIds) -> list[ua.DataValue | None]:
         """An attribute for each node, or Nones when the server cannot say: it is extra information, not the point of the step."""

@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Iterable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -13,6 +13,7 @@ from dcdash.collector.identity import remember_safely
 from dcdash.collector.scan import run_scan
 from dcdash.collector.scheduler import mark_source
 from dcdash.connectors.base import ConnectorFactory, create_connector
+from dcdash.connectors.opcua_ids import has_number_prefix, looks_like_plant_scada
 from dcdash.core import journal, pg
 from dcdash.core.audit import audit_pool, clip_error, scrub_strings, scrub_url_credentials
 from dcdash.core.config import get_settings
@@ -64,6 +65,50 @@ async def _learn_identity(pool: asyncpg.Pool, source_id: int, connector: Any) ->
         log.warning("could not learn the identity of source %s", source_id, exc_info=True)
 
 
+_COMPARE_ADDRESSES = """
+    SELECT p.address, EXISTS (SELECT 1 FROM mappings m WHERE m.point_id = p.id) AS mapped
+    FROM points p WHERE p.source_id = $1 AND p.address ~ '^(ns=[0-9]+;)?s='
+    ORDER BY mapped DESC, p.id LIMIT $2
+"""
+COMPARE_ADDRESSES = 10  # stored numbered addresses Test reads in both forms
+COMPARE_SAMPLE = 200  # stored string ids Test looks at to decide whether the source looks like Plant SCADA
+COMPARE_SECONDS = 10.0  # the most Test waits for the comparison; it adds nothing when it takes longer
+SUGGEST_STABLE = (
+    "This server looks like AVEVA Plant SCADA and its tag addresses carry a number that can change (a community answer says so, "
+    'not tested against your SCADA). Consider "Stable tag addresses" (Edit source).'
+)
+
+
+async def _stable_notes(pool: asyncpg.Pool, source_id: int, connector: Any) -> str:
+    """The sentences Test adds for an OPC UA source about "Stable tag addresses" (w34 R6, R7), or "" (a source of another kind, a
+    source without numbered addresses, anything that goes wrong: this never fails the Test).
+
+    The comparison reads up to 10 stored numbered addresses in both forms. The suggestion to try the option is made only while the
+    option is off and the source looks like AVEVA Plant SCADA, and not when the comparison found the stable form unreliable. Both are
+    guesses from a community answer (see `looks_like_plant_scada`, question 26 of the w34 brief), never a switch: the config is never
+    changed here.
+    """
+    try:
+        async with asyncio.timeout(COMPARE_SECONDS):
+            row = await pool.fetchrow("SELECT connector_type, identity FROM sources WHERE id = $1", source_id)  # after _learn_identity
+            compare = getattr(connector, "compare_stable", None)
+            if row is None or row["connector_type"] != "opcua" or compare is None:
+                return ""
+            stored = await pool.fetch(_COMPARE_ADDRESSES, source_id, COMPARE_SAMPLE)
+            sample = [r["address"] for r in stored]
+            numbered = [address for address in sample if has_number_prefix(address)][:COMPARE_ADDRESSES]
+            comparison = await compare(numbered) if numbered else None
+            identity = row["identity"] if isinstance(row["identity"], dict) else None
+            suggest = not connector.config.stable_addresses and looks_like_plant_scada(identity, connector.config.endpoint, sample)
+            if comparison is not None and comparison.doubts_the_option:
+                suggest = False
+            parts = [comparison.message if comparison is not None else "", SUGGEST_STABLE if suggest else ""]
+            return ". ".join(part for part in parts if part)
+    except Exception:  # noqa: BLE001 - see the docstring (TimeoutError included)
+        log.warning("could not compare the addresses of source %s", source_id, exc_info=True)
+        return ""
+
+
 async def _test_source(
     pool: asyncpg.Pool, params: dict[str, Any], factory: ConnectorFactory, job_id: int, known: Iterable[str]
 ) -> dict[str, Any]:
@@ -73,6 +118,8 @@ async def _test_source(
         check = await connector.test()
         if check.ok:
             await _learn_identity(pool, source_id, connector)
+            if notes := await _stable_notes(pool, source_id, connector):  # empty for a source that is not OPC UA with numbered tags
+                check = replace(check, message=". ".join(part for part in (check.message, notes) if part))
     finally:
         await connector.close()
     # A source that is never polled (`file`) keeps its status: "offline" or "online" would say something about a connection it does not have.

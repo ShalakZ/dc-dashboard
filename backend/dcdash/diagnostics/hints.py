@@ -150,6 +150,14 @@ _BY_CLASS: dict[str, str] = {
     ),
 }
 
+# A second hint for BadNodeIdUnknown, used only when the bad addresses carry the number AVEVA Plant SCADA's browse puts in front of a
+# tag and the source's option "Stable tag addresses" is off (w34 R8). The generic hint above stays as it is. The sentence says what
+# it rests on: a community answer, not documentation, and not tested against the owner's SCADA.
+NUMBERING_CHANGED = (
+    "The SCADA's tag numbering may have changed (a number in front of the tag from browsing; a community answer says it can, not "
+    'tested against your SCADA). Try "Stable tag addresses" on this source, then Test.'
+)
+
 _TIMEOUT_AT_NETWORK_STEP = (
     "No answer from that address and port: a firewall is probably dropping the traffic, the address or port is wrong, or the host "
     "is down. Ask the network team whether this machine may reach it, and confirm the endpoint URL with the SCADA team."
