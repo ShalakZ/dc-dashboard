@@ -396,7 +396,9 @@ test("3. in edit mode each text card has the grip, the title, Edit and Delete; a
   }
   await expect.poll(async () => {
     const moved = await boxOf(itemOf(page, PARAGRAPH_TITLE), "the paragraph's cell");
-    return { dx: Math.round(moved.x - (heading0.x + heading0.width + 10)), dy: Math.round(moved.y - heading0.y) };
+    // react-grid-layout rounds a cell's x to a whole pixel while the heading's width is a fraction: one pixel either way (and the -0 that Math.round gives for -0.3, which toEqual tells from 0) is the same place
+    const near = (d: number) => (Math.abs(d) <= 1 ? 0 : Math.round(d));
+    return { dx: near(moved.x - (heading0.x + heading0.width + 10)), dy: near(moved.y - heading0.y) };
   }, { message: "the paragraph stands right of the heading, on its row" }).toEqual({ dx: 0, dy: 0 });
 
   // Resize the heading from its south edge to ONE row (80 px): 90 px up.
