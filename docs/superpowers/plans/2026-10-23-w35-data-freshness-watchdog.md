@@ -80,10 +80,12 @@ A1 (this list), A2 (the chip and the Sources cell keep their size: reserved slot
 - [x] **T6 `readings.dropped` (R10a).**
 - [x] **T7 `frontend/e2e/w35.spec.ts` + the e2e doc bullet.**
 - [x] **T8 Docs and close-out.**
-- [ ] **Gates** (full backend, frontend, typecheck, build, e2e type check, vis-rebuild, golden "after" in 4 states = TOTAL hashes equal "before", bench, timing of the verdict on the 15,000-point copy), **whole-wave Opus review in a browser**, **one fix wave**, **scoped re-review (T1/T2 logic)**, gallery, merge order.
+- [x] **Gates** (full backend, frontend, typecheck, build, e2e type check, vis-rebuild, golden "after" in 4 states = TOTAL hashes equal "before", bench, timing of the verdict on the 15,000-point copy), **whole-wave Opus review in a browser**, **one fix wave**, **scoped re-review (T1/T2 logic)**, gallery, merge order.
 
 ## Review focus
 1. No figure moves (R2); NOTIFY payload and lock order unchanged; a frozen Good counter flapping BAD never resets `changed_at`; the speed gate holds. 2. Database clock only; R5 tests exist; a stack with no billing meter behaves exactly as before. 3. Nothing reads a stored verdict (chip and URL turn stale with the figures worker stopped). 4. False alarms and cost bounded (waiting meters, floor, 5 s cache, URL never a container healthcheck). 5. Public body and messages name no meter, source, address or value; with the token set, a missing or wrong token is 401.
 
 ## Execution log
-(filled by the controller)
+- 12:24 branch and workspace; 12:27 look stack from main, golden BEFORE (four TOTAL hashes equal the w30 reference); 12:45 plan review (0 Critical, 15 Important, 12 Minor) folded in; T1 a3fa61a (migration drill ALL PASS, review 1 Important a test, 35fbe7d); T2 b1f41de (review 2 Important, fixed 90b28de, scoped re-review 0 Important); T3 b0ae934 + a1f5592; T4 4859a8b + 668e3ef; T5 5c82bbb; T6 c235d57; T8 e4a2240; T7 436e7d6.
+- Gates: frontend typecheck, vitest (326 files, 12,079 tests), build, e2e type check clean at bfa380e; backend 9,793 passed, 1 skipped, 0 failed in six groups (22 PowerShell-from-WSL tests re-run alone, all passed); Playwright 496 passed in the serial chain up to w21, w22 to w35 one by one on the final build all passed (w22.spec.ts:364 got a 1 px tolerance); golden AFTER identical to BEFORE in all four states; speed gate by a same-database A/B (+0.8 percent for 1,000 rows, +9.9 percent for 15,000 points); the verdict about 30 ms for 1,334 judged meters of 13,405 points.
+- Whole-wave review A (code and docs) 0 Critical, 1 Important (the CHANGELOG), 5 Minor; B (browser and API) 0 Critical, 0 Important, 10 Minor; one fix wave (d63c640, a76ef3c, 2e3dbc8, 56859a2, f027667) and a scoped re-review of the backend part (0 Important). Close-out docs bfa380e.
