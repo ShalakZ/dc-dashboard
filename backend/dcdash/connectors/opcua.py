@@ -557,12 +557,3 @@ def _point_value(address: str, ts: datetime, dv: ua.DataValue) -> PointValue:
         return PointValue(address=address, ts=ts, value=float(value), quality=GOOD)
     kind = dv.Value.VariantType.name if dv.Value is not None else "no value"
     return PointValue(address=address, ts=ts, value=None, quality=BAD, status=f"Good, non-numeric ({kind})")
-
-
-async def _unit(var: Node) -> str | None:
-    for prop in await var.get_properties():
-        if (await prop.read_browse_name()).Name == "EngineeringUnits":
-            eu = await prop.read_value()
-            text = getattr(getattr(eu, "DisplayName", None), "Text", None)
-            return text or None
-    return None

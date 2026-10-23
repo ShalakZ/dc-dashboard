@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from asyncua import Client, Node, Server, ua
 
-from dcdash.connectors.base import PointDescriptor, create_connector
+from dcdash.connectors.base import ConnectorError, PointDescriptor, create_connector
 from dcdash.connectors.opcua_browse import BATCH, browse_tree
 from dcdash.simulator.scada import ScadaConfig, ScadaSim
 from tests.helpers import free_port, opcua_server
@@ -22,6 +22,7 @@ from tests.helpers import free_port, opcua_server
 OBJECTS = ua.NodeId(ua.ObjectIds.ObjectsFolder)
 GOOD = ua.StatusCode(ua.StatusCodes.Good)
 BAD = ua.StatusCode(ua.StatusCodes.BadNodeIdUnknown)
+NO_POINTS = ua.StatusCode(ua.StatusCodes.BadNoContinuationPoints)
 HAS_PROPERTY = ua.NodeId(ua.ObjectIds.HasProperty)
 OBJECT, VARIABLE, METHOD = ua.NodeClass.Object, ua.NodeClass.Variable, ua.NodeClass.Method
 DISPLAY, BROWSE_NAME, VALUE = ua.AttributeIds.DisplayName, ua.AttributeIds.BrowseName, ua.AttributeIds.Value
@@ -102,6 +103,10 @@ class FakeUa:
         self.bad_read: set[tuple[str, ua.AttributeIds]] = set()
         self.page = page
         self.refuse_over = refuse_over
+        self.max_points: int | None = None  # at most this many points open at a time: a page that needs another is BadNoContinuationPoints
+        self.refused = 0  # the pages that were refused for lack of a point
+        self.hide_class: set[str] = set()  # nodes whose reference says NodeClass 0 (Unspecified)
+        self.read_attributes: list[set[int]] = []  # the attributes of each Read request
         self.drop_last_browse_result = False
         self.next_error: Exception | None = None
         self.gate: asyncio.Event | None = None  # when set, a BrowseNext waits on it
@@ -151,12 +156,15 @@ class FakeUa:
     def _reference(self, key: str) -> ua.ReferenceDescription:
         # the reference's own DisplayName and BrowseName are deliberately wrong: a walker must read the attributes
         return ua.ReferenceDescription(
-            NodeId=_expanded(key), NodeClass_=self.cls[key], BrowseName=ua.QualifiedName("from the reference", 2),
+            NodeId=_expanded(key), NodeClass_=ua.NodeClass.Unspecified if key in self.hide_class else self.cls[key], BrowseName=ua.QualifiedName("from the reference", 2),
             DisplayName=ua.LocalizedText("from the reference"),
         )
 
     def _page(self, refs: list[ua.ReferenceDescription]) -> ua.BrowseResult:
         if self.page and len(refs) > self.page:
+            if self.max_points is not None and len(self.points) >= self.max_points:
+                self.refused += 1
+                return ua.BrowseResult(StatusCode_=NO_POINTS)  # no references at all, as a server with no point left answers
             self._count += 1
             point = f"point-{self._count}".encode()
             self.points[point] = refs[self.page :]
@@ -196,6 +204,7 @@ class FakeUa:
 
     async def read(self, params: ua.ReadParameters) -> list[ua.DataValue]:
         self.read_sizes.append(len(params.NodesToRead))
+        self.read_attributes.append({int(item.AttributeId) for item in params.NodesToRead})
         self._refuse(len(params.NodesToRead))
         answers = []
         for item in params.NodesToRead:
@@ -273,6 +282,7 @@ async def test_the_walk_asks_for_the_attributes_of_the_reported_variables_only_a
     answer = await _new_browse(fake.client())
     reads = fake.read_log
     assert not any(key in ("i=2253", "i=2259") for _, key in reads)
+    assert int(ua.AttributeIds.NodeClass) not in {attribute for attribute, _ in reads}  # the references say their class: no extra Read
     names = [key for attribute, key in reads if attribute == int(DISPLAY)]
     assert sorted(names) == sorted(d.address for d in answer) and len(names) == len(set(names))
     assert max(fake.read_sizes) <= BATCH and max(fake.browse_sizes) <= BATCH
@@ -417,6 +427,74 @@ async def test_a_walk_that_ends_well_releases_nothing():
     fake = _wide(page=None)
     await _new_browse(fake.client())
     assert fake.released == [] and fake.next_sizes == []
+
+
+# -- a server with few ContinuationPoints (w34 F3, I-1) ----------------------------------------------------------------------------
+def _folders(count: int = 6, children: int = 5, page: int | None = 2) -> FakeUa:
+    fake = FakeUa(page=page)
+    for f in range(count):
+        folder = fake.add("i=85", f"ns=2;s=F{f}", OBJECT)
+        for i in range(children):
+            fake.var(folder, f"ns=2;s=F{f}.{i}", f"F{f} {i}", "kW")
+    return fake
+
+
+@pytest.mark.parametrize("limit", [1, 2, 3])
+async def test_a_server_with_few_continuation_points_loses_no_folder(limit):
+    fake = _folders()
+    fake.max_points = limit
+    expected = await _outcome(_reference_browse(fake.client()))  # one point at a time: always enough
+    assert len(expected) == 30
+    fake.refused, fake.handed, fake.released = 0, [], []
+    assert await _new_browse(fake.client()) == expected
+    assert fake.refused > 0  # the refusal really happened: the folders past the limit came back empty at first
+    assert fake.points == {} and fake.released == []  # every point it handed out was given back by reading to the end
+
+
+async def test_a_server_with_no_point_left_for_a_single_folder_is_an_error_not_an_empty_folder():
+    fake = _folders(count=1)
+    fake.max_points = 0
+    with pytest.raises(ConnectorError) as caught:
+        await _new_browse(fake.client())
+    assert caught.value.status == "protocol_error"
+    assert caught.value.message == "the server has no continuation point left (BadNoContinuationPoints)"
+    assert fake.points == {} and fake.released == []
+
+
+async def test_a_refused_page_in_a_later_level_is_retried_in_smaller_batches_too():
+    fake = FakeUa(page=2)
+    top = fake.add("i=85", "ns=2;s=Top", OBJECT)
+    for f in range(4):
+        folder = fake.add(top, f"ns=2;s=G{f}", OBJECT)
+        for i in range(3):
+            fake.var(folder, f"ns=2;s=G{f}.{i}", f"G{f} {i}")
+    fake.max_points = 1
+    expected = await _outcome(_reference_browse(fake.client()))
+    assert len(expected) == 12
+    assert await _new_browse(fake.client()) == expected
+    assert fake.refused > 0 and fake.points == {} and fake.released == []
+
+
+# -- references that do not say their class (w34 F3, M-1) --------------------------------------------------------------------------
+async def test_references_without_a_node_class_are_resolved_by_one_read_per_level_and_the_answer_is_the_old_one():
+    fake = _model()
+    fake.hide_class = set(fake.cls)
+    expected = await _outcome(_reference_browse(fake.client()))
+    fake.read_log.clear()
+    fake.read_attributes.clear()
+    assert await _new_browse(fake.client()) == expected
+    class_reads = [i for i, attributes in enumerate(fake.read_attributes) if attributes == {int(ua.AttributeIds.NodeClass)}]
+    assert len(class_reads) == 4  # Site; its two folders; their children; the folder under both: one Read each, however many nodes
+    asked = [key for attribute, key in fake.read_log if attribute == int(ua.AttributeIds.NodeClass)]
+    assert len(asked) == len(set(asked)) and not any(key in ("i=2253", "i=2259") for key in asked)  # each once, no standard node
+
+
+async def test_a_bad_node_class_read_raises_as_the_old_walker_did():
+    fake = _model()
+    fake.hide_class = {"ns=2;s=A.kWh"}
+    fake.bad_read.add(("ns=2;s=A.kWh", ua.AttributeIds.NodeClass))
+    outcome = await _same_answer(fake.client())
+    assert outcome[0] == "raised" and outcome[2] == ua.StatusCodes.BadNodeIdUnknown
 
 
 # -- request sizes ----------------------------------------------------------------------------------------------------------------------

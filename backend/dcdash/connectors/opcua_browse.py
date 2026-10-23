@@ -15,17 +15,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import replace
 from typing import Any
 
 from asyncua import Client, ua
 from asyncua.ua.uaerrors import UaInvalidParameterError
 
-from dcdash.connectors.base import PointDescriptor
+from dcdash.connectors.base import ConnectorError, PointDescriptor
 
 BATCH = 200  # nodes per Browse and per Read request; a server that refuses that many is asked for half (see `_in_batches`)
 _UNITS = "EngineeringUnits"
 _HIERARCHICAL = ua.NodeId(ua.ObjectIds.HierarchicalReferences)
 _HAS_PROPERTY = ua.NodeId(ua.ObjectIds.HasProperty)
+_NO_POINTS = ua.StatusCodes.BadNoContinuationPoints
 
 
 async def browse_tree(client: Client, root: ua.NodeId, skip_standard: bool) -> list[PointDescriptor]:
@@ -116,7 +118,9 @@ class _Walk:
 
     def __init__(self, uaclient: Any) -> None:
         self._ua = uaclient
-        self._sizes = {"browse": BATCH, "read": BATCH}
+        # "points": the most parents of a folder level that fit the server's ContinuationPoints (learned, see `_browse_chunk`)
+        self._sizes = {"browse": BATCH, "read": BATCH, "points": BATCH}
+        self._classes: dict[str, ua.NodeClass] = {}  # the NodeClass read for references that did not say it, by node id
         self._open: dict[Any, None] = {}  # the points handed out and not yet answered, in the order they were handed out
 
     async def fetch_tree(self, root: ua.NodeId, skip_standard: bool) -> dict[str, list[ua.ReferenceDescription]]:
@@ -127,6 +131,7 @@ class _Walk:
         queued = {key for key, _ in level}
         while level:
             answers = await self.browse([nodeid for _, nodeid in level], _HIERARCHICAL, ua.NodeClass.Unspecified)
+            answers = await self._with_classes(answers, skip_standard)
             following: list[tuple[str, ua.NodeId]] = []
             for (key, _), refs in zip(level, answers, strict=True):
                 tree[key] = refs
@@ -140,15 +145,40 @@ class _Walk:
             level = following
         return tree
 
+    async def _with_classes(
+        self, answers: list[list[ua.ReferenceDescription]], skip_standard: bool
+    ) -> list[list[ua.ReferenceDescription]]:
+        """A server that leaves the NodeClass of a reference at 0 (Unspecified) cannot say what to open: the class of all such nodes of
+        a level is read in ONE batched Read (each node once, not the namespace 0 that is skipped anyway), as the former walker read it
+        for every child. A server that fills the class in, as the default simulator does, costs no request here."""
+        unknown: dict[str, ua.NodeId] = {}
+        for refs in answers:
+            for ref in refs:
+                key = ref.NodeId.to_string()
+                skipped = skip_standard and ref.NodeId.NamespaceIndex == 0
+                if ref.NodeClass == ua.NodeClass.Unspecified and key not in self._classes and not skipped:
+                    unknown.setdefault(key, ref.NodeId)
+        if not unknown:
+            return answers
+        for key, data_value in zip(unknown, await self.read(list(unknown.values()), ua.AttributeIds.NodeClass), strict=True):
+            self._classes[key] = ua.NodeClass(int(_content(data_value)))  # a Bad status raises here, as the former read of the class did
+        return [[self._resolved(ref) for ref in refs] for refs in answers]
+
+    def _resolved(self, ref: ua.ReferenceDescription) -> ua.ReferenceDescription:
+        node_class = self._classes.get(ref.NodeId.to_string())
+        return ref if node_class is None or ref.NodeClass != ua.NodeClass.Unspecified else replace(ref, NodeClass_=node_class)
+
     # -- Browse ---------------------------------------------------------------------------------------------------------------
     async def browse(self, nodeids: Sequence[ua.NodeId], reference: ua.NodeId, class_mask: ua.NodeClass) -> list[list[ua.ReferenceDescription]]:
         """The forward references of `reference` (and its subtypes) of every node, one list per node in the order asked, in requests
-        of up to `BATCH` nodes, with every ContinuationPoint followed. A node the server cannot browse has no references."""
+        of up to `BATCH` nodes, with every ContinuationPoint followed. A node the server cannot browse has no references, except
+        when it had no ContinuationPoint left for the node: that is asked again, in smaller batches (see `_browse_chunk`)."""
 
         async def send(chunk: Sequence[ua.NodeId]) -> list[list[ua.ReferenceDescription]]:
             return await self._browse_chunk(chunk, reference, class_mask)
 
-        return await self._in_batches("browse", nodeids, send)
+        # the folders of a level can need a point each; the properties of a variable hardly ever do, so they keep the full batch
+        return await self._in_batches("browse", nodeids, send, cap="points" if reference == _HIERARCHICAL else None)
 
     async def _browse_chunk(
         self, nodeids: Sequence[ua.NodeId], reference: ua.NodeId, class_mask: ua.NodeClass
@@ -167,8 +197,12 @@ class _Walk:
             params.NodesToBrowse.append(description)
         results = _same_count(await self._ua.browse(params), nodeids)
         references = [list(result.References) for result in results]  # a copy: a server in this process hands out its own lists
-        # A bad status for one node is "nothing under it" (what the former walker did: it read an empty list)
+        # A bad status for one node is "nothing under it" (what the former walker did: it read an empty list), except when the server
+        # had no ContinuationPoint left for it (a server allows only a few open at a time, the former walker held one): that answer
+        # carries no references although the node has some, and they are asked for again below.
+        refused = [i for i, result in enumerate(results) if result.StatusCode_.value == _NO_POINTS]
         waiting = {i: result.ContinuationPoint for i, result in enumerate(results) if result.ContinuationPoint}
+        granted = len(waiting)  # the points this server gave at once: what it can hold open
         self._open.update(dict.fromkeys(waiting.values()))
         while waiting:
             indexes = list(waiting)
@@ -185,6 +219,17 @@ class _Walk:
                 if answer.ContinuationPoint:
                     waiting[i] = answer.ContinuationPoint
             self._open.update(dict.fromkeys(waiting.values()))
+        if refused:
+            # Every point of this request is back now. One node alone that still finds none is a server that cannot be walked.
+            if len(nodeids) == 1:
+                raise ConnectorError("protocol_error", "the server has no continuation point left (BadNoContinuationPoints)")
+            self._sizes["points"] = min(self._sizes["points"], max(1, granted))
+            size = min(max(1, len(nodeids) // 2), self._sizes["points"])
+            for start in range(0, len(refused), size):
+                part = refused[start : start + size]
+                again = await self._browse_chunk([nodeids[i] for i in part], reference, class_mask)
+                for i, refs in zip(part, again, strict=True):
+                    references[i] = refs
         return references
 
     async def release(self) -> None:
@@ -216,13 +261,16 @@ class _Walk:
         return await self._in_batches("read", nodeids, send)
 
     # -- sizes ----------------------------------------------------------------------------------------------------------------
-    async def _in_batches(self, kind: str, items: Sequence[Any], send: Callable[[Sequence[Any]], Awaitable[list[Any]]]) -> list[Any]:
-        """`send` for consecutive chunks of at most the current size of `kind`, the answers joined in order. A server that refuses a
-        chunk as too many operations gets half the size from then on (the former walker never sent more than one node, so a limit of
-        the server was never met); a refusal of a single node is the server's answer and is raised."""
+    async def _in_batches(
+        self, kind: str, items: Sequence[Any], send: Callable[[Sequence[Any]], Awaitable[list[Any]]], cap: str | None = None
+    ) -> list[Any]:
+        """`send` for consecutive chunks of at most the current size of `kind` (and of `cap`, another learned size), the answers
+        joined in order. A server that refuses a chunk as too many operations gets half the size from then on (the former walker
+        never sent more than one node, so a limit of the server was never met); a refusal of a single node is the server's answer
+        and is raised."""
         answers: list[Any] = []
         while len(answers) < len(items):
-            chunk = items[len(answers) : len(answers) + self._sizes[kind]]
+            chunk = items[len(answers) : len(answers) + min(self._sizes[kind], self._sizes[cap or kind])]
             try:
                 answers.extend(await send(chunk))
             except ua.UaStatusCodeError as exc:
