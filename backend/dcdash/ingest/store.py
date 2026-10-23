@@ -84,6 +84,14 @@ _NEWER = "(EXCLUDED.good_at IS NOT NULL AND (point_latest.good_at IS NULL OR EXC
 # order (the lock order on point_latest); the strict < means a time that is not newer never replaces the stored one.
 # `inner_change` is not a column of point_latest, so the SET clause cannot read it from EXCLUDED: it reads the points that have it
 # from the batch itself, once, as a hashed set (`IN (SELECT ...)` over the CTE is not run again for every row).
+#
+# Two decisions about the SET clause below (w35 review T1, M-1 and M-2), both on purpose:
+# (a) Only the live poll keeps changed_at exact. A batch that straddles the stored ts (a backfill slice with late rows plus a newer
+#     row after a restart) may move changed_at later, once, by at most one slice. It never causes a false alarm: a later
+#     changed_at only delays a "not advancing" warning.
+# (b) The three columns sit inside the forward-only gate (WHERE point_latest.ts < EXCLUDED.ts) on purpose. So a late Good row of a
+#     batch whose newest row is not newer than the stored ts is dropped, and good_at stays older than the truth. That is
+#     conservative: the point reads as stale. Moving them outside the gate would change which rows RETURNING (and the NOTIFY) carry.
 _UPSERT_LATEST = f"""
     WITH batch AS MATERIALIZED (SELECT * FROM {_UNNEST_LATEST})
     INSERT INTO point_latest (point_id, ts, value, quality, good_at, good_value, changed_at)
@@ -95,7 +103,8 @@ _UPSERT_LATEST = f"""
             good_at = CASE WHEN {_NEWER} THEN EXCLUDED.good_at ELSE point_latest.good_at END,
             good_value = CASE WHEN {_NEWER} THEN EXCLUDED.good_value ELSE point_latest.good_value END,
             changed_at = CASE WHEN {_NEWER} THEN (
-                CASE WHEN point_latest.good_at IS NULL OR point_latest.changed_at IS NULL
+                CASE WHEN point_latest.good_at IS NULL  -- belt and braces: a hand-written row (a NULL good_value already differs)
+                          OR point_latest.changed_at IS NULL  -- belt and braces: a hand-written row (the back-fill sets all three)
                           OR EXCLUDED.good_value IS DISTINCT FROM point_latest.good_value
                           OR EXCLUDED.point_id IN (SELECT b.point_id FROM batch b WHERE b.inner_change)
                      THEN EXCLUDED.changed_at ELSE point_latest.changed_at END

@@ -459,6 +459,19 @@ async def test_a_change_inside_the_batch_that_ends_on_the_stored_value_is_still_
     assert await _fresh(db, a) == (at(20), 10.0, at(15))
 
 
+async def test_a_change_inside_the_batch_moves_changed_at_of_that_point_only(db):
+    # One flush holds many points. A counter that moved inside the flush must not reset the changed_at of the frozen ones next to it
+    # (else "not advancing" could never fire on a real site): inner_change belongs to its own point.
+    a, b = await _points(db, 2)
+    await _store(db, [(a, at(0), 10.0, GOOD), (b, at(0), 5.0, GOOD)])
+    await _store(
+        db,
+        [(a, at(10), 11.0, GOOD), (a, at(15), 10.0, GOOD), (b, at(10), 5.0, GOOD), (b, at(15), 5.0, GOOD)],
+    )
+    assert await _fresh(db, a) == (at(15), 10.0, at(15))  # went to 11 and back: the trailing run starts at its second row
+    assert await _fresh(db, b) == (at(15), 5.0, at(0))  # good_at moved, the value held, changed_at stayed
+
+
 async def test_a_batch_with_a_change_inside_it_and_a_bad_newest_row_takes_the_good_run(db):
     (a,) = await _points(db)
     await _store(db, [(a, at(0), 1.0, GOOD)])
@@ -490,6 +503,19 @@ async def test_the_notify_payload_rows_keep_exactly_four_items(db, database_url)
         payload = json.loads(await asyncio.wait_for(received.get(), 5))
     assert sorted(payload) == sorted([[a, at(5).timestamp(), 2.0, 0], [b, at(0).timestamp(), None, 1]])
     assert all(len(row) == 4 for row in payload)
+
+
+async def test_a_bad_only_point_with_the_lower_id_does_not_take_the_freshness_of_a_good_point(db):
+    # The eight arrays line up by position, in the order of the batch's newest rows (by point id): the first point has no Good
+    # row, the second has, and neither may read the other's good_at, good_value or changed_at.
+    bad, good = await _points(db, 2)
+    assert bad < good
+    await _store(db, [(bad, at(0), None, BAD), (good, at(0), 1.0, GOOD), (good, at(5), 2.0, GOOD)])
+    assert await _fresh(db, bad) == (None, None, None)
+    assert await _fresh(db, good) == (at(5), 2.0, at(5))
+    await _store(db, [(bad, at(10), None, BAD), (good, at(10), 2.0, GOOD)])  # the conflict path, same shape
+    assert await _fresh(db, bad) == (None, None, None)
+    assert await _fresh(db, good) == (at(10), 2.0, at(5))
 
 
 async def test_a_new_point_latest_row_written_by_hand_has_no_freshness_and_the_next_good_batch_starts_it(db):
