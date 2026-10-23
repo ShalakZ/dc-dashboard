@@ -18,7 +18,7 @@ import asyncpg
 from dcdash.connectors.base import BAD, GOOD
 from dcdash.core import journal
 from dcdash.core.pg import LATEST_CHANNEL
-from dcdash.ingest.kinds import READINGS_CONFLICT
+from dcdash.ingest.kinds import READINGS_CONFLICT, READINGS_DROPPED
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +26,7 @@ Row = tuple[int, datetime, float | None, int]  # point_id, ts, value, quality
 NOTIFY_CHUNK = 100
 SAMPLES = 5  # differing rows kept as evidence in a result and in the journal event
 CONFLICT_REPEAT_SECONDS = 600  # one readings.conflict event per source in this time; the calls in between are counted
+DROPPED_REPEAT_SECONDS = 600  # one readings.dropped event in this time; the drops in between are added up
 
 _UNNEST = "unnest($1::int[], $2::timestamptz[], $3::float8[], $4::smallint[]) AS t(point_id, ts, value, quality)"
 
@@ -354,3 +355,40 @@ async def journal_conflicts(pool: asyncpg.Pool, result: WriteResult, source_id: 
             del _held[source_id]
     except Exception as exc:
         log.warning("could not journal the reading conflicts: %s", exc)
+
+
+@dataclass
+class DroppedTally:
+    """Readings the writer's buffer threw away that no event has reported yet, and the flushes that failed meanwhile. It lives on
+    the `Writer` (not in a module global), so every writer counts its own drops and the seeder's never reaches the journal."""
+
+    dropped: int = 0
+    flushes_failed: int = 0
+
+
+async def journal_dropped(pool: asyncpg.Pool, tally: DroppedTally, max_buffer: int) -> None:
+    """Report the readings the buffer dropped: ONE `readings.dropped` event per DROPPED_REPEAT_SECONDS, however many flushes drop.
+    Call it after a flush that committed. What the gate holds back stays in `tally` and is reported by the next event, which is also
+    how a drop during a database outage is told after recovery; the tally is cleared only when the journal accepted the write.
+    The event has no source, and its message and detail hold counts only. Never raises, never waits for the journal write."""
+    try:
+        if tally.dropped <= 0:
+            tally.flushes_failed = 0  # an outage that dropped nothing is not news: do not carry it into a later drop
+            return
+        if not journal.allow((READINGS_DROPPED, None), DROPPED_REPEAT_SECONDS):
+            return
+        what = "1 reading was dropped" if tally.dropped == 1 else f"{tally.dropped:,} readings were dropped"
+        which = "it" if tally.dropped == 1 else "them"
+        if journal.record_soon(
+            pool,
+            "collector",
+            READINGS_DROPPED,
+            f"{what} because the database did not take {which} in time (the buffer holds {max_buffer:,})",
+            level="error",
+            source_id=None,
+            detail={"dropped": tally.dropped, "buffer": max_buffer, "flushes_failed": tally.flushes_failed},
+        ):
+            tally.dropped = 0
+            tally.flushes_failed = 0
+    except Exception as exc:
+        log.warning("could not journal the dropped readings: %s", exc)
