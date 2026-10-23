@@ -16,7 +16,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w35 (2026-10-23, MERGE_COMMIT)
+## w35 (2026-10-23, e4b6872)
 
 Data freshness watchdog (migration `0018`, no new permission). The top bar no longer asks "is any reading fresh?": it counts billing meters (an energy counter, else a kW meter, per asset, on enabled polled sources) that have had no good reading for more than three polls (at least 5 minutes) and says `3 of 48 meters stale` with how long the oldest has been silent. An energy counter that has not risen for 6 hours (and whose asset carries a load) shows as `N meters not rising`; a source whose counters and other points all stand still counts as stale. **Sources** shows the same per source, **Events** keeps one `data.stale` incident per source and closes it when readings return, and the writer says when it had to drop readings (`readings.dropped`). `GET /api/health/data` answers 503 for the company's own monitoring (optional token `DCDASH_HEALTH_TOKEN`; [Watching the data from outside](docs/operating.md)). Thresholds: **Storage**, **Data watchdog**. No figure, bill or closed month changes; the figures are recomputed once after the update (the engine changes).
 
