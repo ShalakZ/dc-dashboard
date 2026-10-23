@@ -21,3 +21,18 @@ HISTORY_CLOSED_MONTH = "history.closed_month"
 # already, differing, rejected, unknown rows), the closed months it wrote into and whether it was complete. Never a value. info
 # (warning when it stopped half-way).
 IMPORT_FINISHED = "import.finished"
+
+# data.stale (w35): ONE incident per source while its billing meters give no good reading (or its energy counters stand still although each
+# reads Good). Written by the figures worker (component `figures`) from the data freshness verdict, opened on the second evaluation in a row
+# that finds trouble. `detail` holds `state` (open | closed), `count` (evaluations that found it), `last_at`, `since`, once closed `closed_at`,
+# `duration_seconds` and `closed_by` (recovered | polling_stopped), and the numbers: `meters`, `stale`, `not_advancing`, `frozen`,
+# `oldest_stale_age_seconds`. The message counts and gives the oldest age, never a name, an address or a value. error when a meter is silent
+# or the source is frozen, warning when only counters have stopped rising. NOT in the collector's incident kinds: its reconcile never touches it.
+DATA_STALE = "data.stale"
+# data.recovered: the source that had a data.stale incident reports good readings again (the incident is closed `recovered`); the detail holds
+# `incident_id`, `stale_seconds` and `meters`. info. Nothing is written when the incident ends because the source is no longer judged.
+DATA_RECOVERED = "data.recovered"
+# readings.dropped: the writer's buffer was full and the oldest readings were thrown away (a database that stayed away too long). The detail holds
+# the counts `dropped` (since the last report), `buffer` (its limit) and `flushes_failed`, never a name or a value. Written after the next
+# successful commit, at most once per 10 minutes, with no source. error.
+READINGS_DROPPED = "readings.dropped"

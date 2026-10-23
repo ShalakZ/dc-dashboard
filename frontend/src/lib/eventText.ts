@@ -33,6 +33,9 @@ export const KIND_NAMES: Readonly<Record<string, string>> = {
   "history.closed_month": "Closed month touched",
   "import.finished": "File import",
   "source.identity_changed": "Server identity",
+  "data.stale": "Stale meters",
+  "data.recovered": "Meters reporting again",
+  "readings.dropped": "Readings dropped",
 };
 
 export const kindName = (kind: string): string => KIND_NAMES[kind] ?? kind;
@@ -136,6 +139,26 @@ function identityChanged(event: SystemEvent, detail: Detail): { headline: string
   return { headline: "A different server answers at this address", reason: sentences.length > 0 ? sentences.join(" ") : null };
 }
 
+/**
+ * data.stale (w35) in words, from the numbers the incident keeps (`meters`, `stale`, `not_advancing`, `frozen`; never the number of times it was found, never a name):
+ * `verb` is for the pinned line (`Plant OPC has stale meters since ...`), `counts` says how many. A source whose energy counters all stand still says so (they read Good, so
+ * "no good reading" would be false); one with only slow counters says they have not risen.
+ */
+function staleWords(detail: Detail): { verb: string; counts: string } {
+  const meters = num(detail.meters);
+  const stale = num(detail.stale);
+  const standing = num(detail.not_advancing);
+  if (detail.frozen === true) return { verb: "has stale meters", counts: "Every energy counter of this source stands still although each reads Good" };
+  if (stale !== null && stale > 0) {
+    const of = meters !== null && meters >= stale ? ` of ${n(meters)} ${meters === 1 ? "meter" : "meters"}` : stale === 1 ? " meter" : " meters";
+    return { verb: "has stale meters", counts: `${n(stale)}${of} ${stale === 1 ? "has" : "have"} no good reading` };
+  }
+  if (standing !== null && standing > 0) {
+    return { verb: "has energy counters that stopped rising", counts: `${n(standing)} energy ${standing === 1 ? "counter has" : "counters have"} not risen` };
+  }
+  return { verb: "has stale meters", counts: "Some meters have no good reading" };
+}
+
 /** What a Friendly row says: the headline, a plain reason under it, how many times it happened and how long it lasted (incidents only). */
 export interface EventText { headline: string; reason: string | null; count: string | null; span: string | null }
 
@@ -212,6 +235,16 @@ function headlineOf(event: SystemEvent, detail: Detail): { headline: string; rea
       return { headline: event.level === "warning" || event.level === "error" ? "A file import stopped half-way" : "A file import finished" };
     case "source.identity_changed":
       return identityChanged(event, detail);
+    case "data.stale": {
+      const { counts } = staleWords(detail);
+      return { headline: counts };
+    }
+    case "data.recovered":
+      return { headline: after("Meters reporting again", detail.stale_seconds) };
+    case "readings.dropped": {
+      const dropped = num(detail.dropped);
+      return { headline: dropped === null ? "Readings were dropped because the database did not take them in time" : `${n(dropped)} ${dropped === 1 ? "reading was" : "readings were"} dropped because the database did not take them in time` };
+    }
     default:
       return { headline: event.message || kind };
   }
@@ -225,7 +258,8 @@ export function describeEvent(event: SystemEvent): EventText {
   let count: string | null = base.count ?? null;
   let span: string | null = null;
   if (incident) {
-    count = event.kind === "points.bad" ? `${polls(incident.count)} with bad readings` : `failed ${times(incident.count)}`;
+    // (a data.stale incident counts evaluations, not failures: the number is not shown)
+    count = event.kind === "data.stale" ? null : event.kind === "points.bad" ? `${polls(incident.count)} with bad readings` : `failed ${times(incident.count)}`;
     const length = formatSpanLong(incident.duration_seconds);
     span =
       incident.state === "open" ? `ongoing, ${length}` : incident.closed_by === "polling_stopped" ? `stopped being read after ${length}` : `lasted ${length}`;
@@ -255,6 +289,13 @@ export function formatShortTime(iso: string, timezone: string): string {
 export function openLine(event: SystemEvent, timezone: string): string {
   const incident = event.incident;
   const name = sourceLabel(event) ?? "The system";
+  if (event.kind === "data.stale") {
+    // `Plant OPC has stale meters since 18 Oct 07:52 (2 h). 3 of 12 meters have no good reading.` (never "offline", never "failed N times")
+    const { verb, counts } = staleWords(isRecord(event.detail) ? event.detail : {});
+    const sinceStale = formatShortTime(incident?.first_at ?? event.ts, timezone);
+    const lengthStale = incident ? ` (${formatSpanLong(incident.duration_seconds)})` : "";
+    return `${name} ${verb} since ${sinceStale}${lengthStale}. ${counts}.`;
+  }
   const verb = event.kind === "points.bad" ? "has bad readings" : event.code && NOT_READ_CODES.has(event.code) ? "cannot be read" : "is offline";
   const since = formatShortTime(incident?.first_at ?? event.ts, timezone);
   const length = incident ? ` (${formatSpanLong(incident.duration_seconds)})` : "";

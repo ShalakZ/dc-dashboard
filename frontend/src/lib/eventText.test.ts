@@ -12,15 +12,16 @@ const incident = (extra: Partial<Incident> = {}): Incident => ({
   state: "open", count: 1204, first_at: "2026-10-18T04:52:00Z", last_at: "2026-10-22T08:00:00Z", closed_at: null, duration_seconds: 4 * 86400 + 2 * 3600, closed_by: null, ...extra,
 });
 
-// The 16 kinds the backend writes (core/journal.py, ingest/kinds.py and collector/identity.py) and the codes of source.offline; the parity test in the backend reads this file's text.
+// The 19 kinds the backend writes (core/journal.py, ingest/kinds.py and collector/identity.py) and the codes of source.offline; the parity test in the backend reads this file's text.
 const KINDS = [
   "collector.started", "source.offline", "source.online", "points.bad", "points.recovered", "job.finished", "check.finished", "clock.skew", "http.5xx",
   "figures.mismatch", "readings.conflict", "history.filled", "history.failed", "history.closed_month", "import.finished", "source.identity_changed",
+  "data.stale", "data.recovered", "readings.dropped",
 ];
 const CODES = ["unreachable", "auth_failed", "timeout", "protocol_error", "exception", "config_invalid", "secret_undecryptable", "needs_profile", "not_supported"];
 
 describe("eventText (w32): the one table of words", () => {
-  it("has a name and a sentence for each of the 16 kinds, and none of the sentences is the raw kind", () => {
+  it("has a name and a sentence for each of the 19 kinds, and none of the sentences is the raw kind", () => {
     expect(Object.keys(KIND_NAMES).sort()).toEqual([...KINDS].sort());
     for (const kind of KINDS) {
       expect(kindName(kind), kind).not.toBe(kind);
@@ -139,6 +140,59 @@ describe("eventText (w32): the one table of words", () => {
     expect(describeEvent(event({ kind: "history.closed_month", detail: { month: "2026-09" } })).headline).toBe("Readings were filled into 2026-09, a month that is closed");
     expect(describeEvent(event({ kind: "import.finished", level: "warning" })).headline).toBe("A file import stopped half-way");
     expect(describeEvent(event({ kind: "import.finished", level: "info" })).headline).toBe("A file import finished");
+  });
+
+  describe("data.stale, data.recovered and readings.dropped (w35)", () => {
+    const stale = (extra: Partial<SystemEvent> = {}) => event({
+      kind: "data.stale", level: "error", code: null, component: "figures", message: "3 of 12 meters have had no good reading for up to 2 h 10 min",
+      detail: { state: "open", count: 7, meters: 12, stale: 3, not_advancing: 0, frozen: false, oldest_stale_age_seconds: 7800 },
+      incident: incident({ count: 7, duration_seconds: 2 * 3600 }), ...extra,
+    });
+
+    it("is named in the Kind filter and says how many meters have no good reading, without the number of times it was found", () => {
+      expect(kindName("data.stale")).toBe("Stale meters");
+      const text = describeEvent(stale());
+      expect(text.headline).toBe("3 of 12 meters have no good reading");
+      expect(text.count).toBeNull();
+      expect(text.span).toBe("ongoing, 2 h");
+      expect(JSON.stringify(text)).not.toMatch(/fail|offline|times/i);
+      expect(describeEvent(stale({ incident: incident({ state: "closed", closed_by: "recovered", duration_seconds: 600 }) })).span).toBe("lasted 10 min");
+    });
+
+    it("says one meter in the singular and a source whose counters all stand still says they read Good", () => {
+      expect(describeEvent(stale({ detail: { meters: 1, stale: 1 } })).headline).toBe("1 of 1 meter has no good reading");
+      expect(describeEvent(stale({ detail: { stale: 2 } })).headline).toBe("2 meters have no good reading");
+      expect(describeEvent(stale({ level: "warning", detail: { meters: 12, stale: 0, not_advancing: 2 } })).headline).toBe("2 energy counters have not risen");
+      expect(describeEvent(stale({ level: "warning", detail: { not_advancing: 1 } })).headline).toBe("1 energy counter has not risen");
+      expect(describeEvent(stale({ detail: { meters: 6, stale: 4, frozen: true } })).headline).toBe("Every energy counter of this source stands still although each reads Good");
+      expect(describeEvent(stale({ detail: {} })).headline).toBe("Some meters have no good reading");
+      expect(() => describeEvent(stale({ detail: { stale: "many", meters: null, frozen: "yes" } }))).not.toThrow();
+      expect(() => describeEvent({ ...stale(), detail: null as unknown as Record<string, unknown> })).not.toThrow();
+    });
+
+    it("pins a stale source the way the page pins an incident, without 'offline' and without a number of failed reads", () => {
+      expect(openLine(stale(), "Asia/Qatar")).toBe("OPC UA server at 172.20.0.3:4840 has stale meters since 18 Oct 07:52 (2 h). 3 of 12 meters have no good reading.");
+      const slow = openLine(stale({ level: "warning", detail: { meters: 12, stale: 0, not_advancing: 2 } }), "Asia/Qatar");
+      expect(slow).toBe("OPC UA server at 172.20.0.3:4840 has energy counters that stopped rising since 18 Oct 07:52 (2 h). 2 energy counters have not risen.");
+      for (const line of [openLine(stale(), "Asia/Qatar"), slow, openLine(stale({ detail: {}, incident: null }), "Asia/Qatar")]) {
+        expect(line).not.toMatch(/offline|failed|\b7\b/);
+      }
+      expect(openLine(stale({ source_id: null, source_name: null }), "Asia/Qatar")).toMatch(/^The system has stale meters since /);
+    });
+
+    it("words a recovery and the readings the writer had to drop", () => {
+      expect(kindName("data.recovered")).toBe("Meters reporting again");
+      expect(describeEvent(event({ kind: "data.recovered", level: "info", code: null, detail: { incident_id: 5, stale_seconds: 7800, meters: 12 } })).headline).toBe(
+        "Meters reporting again after 2 h 10 min",
+      );
+      expect(describeEvent(event({ kind: "data.recovered", level: "info", code: null, detail: {} })).headline).toBe("Meters reporting again");
+      expect(kindName("readings.dropped")).toBe("Readings dropped");
+      expect(describeEvent(event({ kind: "readings.dropped", level: "error", code: null, source_id: null, source_name: null, detail: { dropped: 1204, buffer: 100000 } })).headline).toBe(
+        "1,204 readings were dropped because the database did not take them in time",
+      );
+      expect(describeEvent(event({ kind: "readings.dropped", detail: { dropped: 1 } })).headline).toMatch(/^1 reading was dropped/);
+      expect(describeEvent(event({ kind: "readings.dropped", detail: {} })).headline).toBe("Readings were dropped because the database did not take them in time");
+    });
   });
 
   describe("source.identity_changed (w33): another server answers, or the same server renewed its certificate", () => {
