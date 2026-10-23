@@ -11,9 +11,9 @@ import logging
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.core.settings_store import get_setting
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +44,10 @@ FACTORY = WatchdogSettings(stale_floor_minutes=5, not_advancing_hours=6)
 _FIELDS = tuple(WatchdogSettings.model_fields)
 
 
+# The marker lets the tests that count the statements of a request leave the verdict's out (the Sources list computes it, at most every 5 s).
+_READ = text("/* w35 watchdog */ SELECT value FROM settings WHERE key = :key")
+
+
 def parse(stored: Any) -> WatchdogSettings:
     """The stored JSON as settings, or the factory values when it is not an object, lacks a value or has one out of bounds."""
     if not isinstance(stored, dict):
@@ -57,8 +61,9 @@ def parse(stored: Any) -> WatchdogSettings:
 async def load(db: AsyncSession) -> WatchdogSettings:
     """The setting for the API and the verdict (SQLAlchemy session). Never fails on a stored value, whatever it holds."""
     try:
-        return parse(await get_setting(db, KEY, {}))
-    except (TypeError, ValueError):  # get_setting turns the stored JSON into a dict: a stored list or string cannot be
+        stored = (await db.execute(_READ, {"key": KEY})).scalar_one_or_none()
+        return parse(json.loads(stored) if isinstance(stored, str) else stored)
+    except (TypeError, ValueError):  # a stored text that is not JSON
         return FACTORY
 
 

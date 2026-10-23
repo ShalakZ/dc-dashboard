@@ -18,7 +18,8 @@ def statements():
     seen: list[str] = []
 
     def on(conn, cursor, statement, parameters, context, executemany):
-        seen.append(statement)
+        if "w35 watchdog" not in statement:  # the data freshness verdict is cached for 5 s: the first listing pays for it, the next does not
+            seen.append(statement)
 
     engine = get_engine().sync_engine
     event.listen(engine, "before_cursor_execute", on)

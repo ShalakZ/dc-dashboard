@@ -224,6 +224,7 @@ def judge(
 # incident, through the (source_id, ts) index of diag_events; `unreachable` is true when that start is older than the meter's limit.
 _METERS = text(
     f"""
+    /* w35 watchdog */
     WITH chosen AS (
         SELECT DISTINCT ON (m.asset_id) m.asset_id, m.point_id, m.metric, m.interval_seconds
         FROM mappings m
@@ -279,6 +280,7 @@ _METERS = text(
 # `mappings.point_id` is UNIQUE, so the join to the point's mapping yields one row per point. One statement for the site.
 _ACTIVITY = text(
     f"""
+    /* w35 watchdog */
     SELECT p.source_id,
            count(*) AS others,
            count(*) FILTER (WHERE l.changed_at >= now() - interval '1 second' * CAST(:window AS float8)) AS moving
