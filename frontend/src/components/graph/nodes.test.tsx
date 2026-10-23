@@ -613,6 +613,17 @@ describe("graph nodes", () => {
     expect(onNewAsset).toHaveBeenCalledWith("point:3");
   });
 
+  it("a point that is the same tag as a mapped one says whose, offers no Map and no New asset, and keeps its title (w34)", () => {
+    const twin = { ...point, same_tag_as: 9 };
+    renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point: twin, twinOf: "LVP01 kW (mapped)", onMap: vi.fn(), onNewAsset: vi.fn() });
+    expect(screen.getByText("LVP01 kW")).toHaveClass("node-title");
+    const line = screen.getByText("Same tag as LVP01 kW (mapped) (already mapped)");
+    expect(line).toHaveClass("muted", "gnode-twin"); // the class that keeps the line to one row (graph-nodes.css)
+    expect(line).toHaveAttribute("title", "Same tag as LVP01 kW (mapped) (already mapped)");
+    expect(screen.queryByText(/kW$/, { selector: ".muted" })).not.toBeInTheDocument(); // the unit hint gives way to the sentence
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
   it("a mapped point shows its metric", () => {
     renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point: { ...point, asset_id: 10, mapping_id: 1, mapped_metric: "active_power_kw" } });
     expect(screen.getByText(/active_power_kw/)).toBeInTheDocument();

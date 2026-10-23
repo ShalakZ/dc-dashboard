@@ -1,5 +1,5 @@
 import type { GraphModel, GraphSource } from "../api/types";
-import { NO_VIEW, drawnCount, groupVisible, groupsOf, nodeId, sourceVisible, visiblePoints, type GraphView, type Group, type OpenState } from "./graph";
+import { NO_VIEW, drawnCount, groupVisible, groupsOf, isOfferable, nodeId, sourceVisible, visiblePoints, type GraphView, type Group, type OpenState } from "./graph";
 import { EXPAND_NODE_BUDGET } from "./graphView";
 import type { IconName } from "../components/Icon";
 import { assetIcon } from "./assetIcons";
@@ -173,7 +173,7 @@ export function findPlan(model: GraphModel, open: OpenState, entry: FindEntry, b
   if (!source || !group) return same;
 
   // Hidden by the filter: the plan is worked out with the filter off (that is how the node will be drawn), and says so.
-  const mappedPoint = isPoint && group.points.some((p) => nodeId.point(p.id) === entry.id && p.asset_id !== null);
+  const mappedPoint = isPoint && group.points.some((p) => nodeId.point(p.id) === entry.id && !isOfferable(p)); // the filter hides it: mapped, or the twin of a mapped point (w34)
   const hidden = view.unmappedOnly && (!sourceVisible(source, view) || !groupVisible(group, view) || mappedPoint);
   const now: GraphView = hidden ? { ...view, unmappedOnly: false } : view;
 

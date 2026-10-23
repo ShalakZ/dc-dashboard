@@ -43,7 +43,7 @@ import { useValueTip } from "../hooks/useValueTip";
 import { afterPaint } from "../lib/afterPaint";
 import { dropPayload, mappableClusters, multiPointDrop, pickDropTarget, takenMetrics, type DropPayload } from "../lib/drop";
 import {
-  buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isNotSeen, isRemovable, layoutBatches, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, ownPlaces,
+  buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isNotSeen, isOfferable, isRemovable, layoutBatches, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, ownPlaces,
   PAGE_SIZE, pruneShown, removableNotSeen, removalDialogText, removalOutcome, seenLine, shiftedPlaces, sourceIdOfNode, visiblePoints,
   type AssetNodeData, type ClusterNodeData, type Group, type GraphView, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
@@ -227,7 +227,7 @@ function nodeData(
   }
   if (node.type === "cluster") {
     const cluster = node.data as ClusterNodeData;
-    const mappable = canAccept && !cluster.ungrouped && cluster.mappedCount < cluster.count;
+    const mappable = canAccept && !cluster.ungrouped && (cluster.offerable ?? cluster.count - cluster.mappedCount) > 0;
     return {
       ...cluster, onToggle, ...(mappable ? { onMap, onNewAsset, ...(formWait ? { formWait } : {}) } : {}),
       ...(canEdit && cluster.mappedCount > 0 ? { onMenu, onUnmap, onMove } : {}),
@@ -235,7 +235,7 @@ function nodeData(
   }
   if (node.type === "point") {
     const point = (node.data as PointNodeData).point;
-    if (canAccept && point.asset_id === null) return { ...node.data, onMap, ...(canForm ? { menuNewAsset: onNewAsset, ...(formWait ? { formWait } : {}) } : {}) };
+    if (canAccept && isOfferable(point)) return { ...node.data, onMap, ...(canForm ? { menuNewAsset: onNewAsset, ...(formWait ? { formWait } : {}) } : {}) };
     if (canEdit && point.mapping_id !== null) return { ...node.data, onMenu, onUnmap, onMove };
   }
   if (node.type === "asset") {
@@ -654,7 +654,7 @@ function Canvas({ model }: { model: GraphModel }) {
       const group = groupsOf(source).find((g) => g.points.some((p) => p.id === subject.pointId));
       if (group) {
         const at = group.points.findIndex((p) => p.id === subject.pointId);
-        for (const p of group.points.slice(at + 1)) if (p.asset_id === null) ids.push(nodeId.point(p.id));
+        for (const p of group.points.slice(at + 1)) if (isOfferable(p)) ids.push(nodeId.point(p.id));
         ids.push(nodeId.cluster(source.id, group.key));
       }
     } else if (subject.clusterId) {

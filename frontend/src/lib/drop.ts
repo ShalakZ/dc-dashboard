@@ -1,5 +1,5 @@
 import type { AcceptIn, Asset, GraphModel, GraphPoint, GraphSource, Metric } from "../api/types";
-import { UNGROUPED } from "./graph";
+import { UNGROUPED, isOfferable } from "./graph";
 
 /**
  * What a drag (or a button) offers to map: the points of one cluster, one point, or several picked points (`points`, W12a), and the
@@ -7,7 +7,7 @@ import { UNGROUPED } from "./graph";
  */
 export interface DropPayload {
   source: GraphSource;
-  /** Only points that are not mapped yet. */
+  /** Only points that can be offered: not mapped yet, and not the same tag as a mapped point (`isOfferable`). */
   points: GraphPoint[];
   label: string;
   kind: "cluster" | "point" | "points";
@@ -29,7 +29,7 @@ export function dropPayload(model: GraphModel, id: string): DropPayload | null {
     const source = model.sources.find((s) => s.id === Number(cluster[1]));
     const found = source?.clusters.find((c) => c.key === key);
     if (!source || !found) return null;
-    const points = found.points.filter((p) => p.asset_id === null);
+    const points = found.points.filter(isOfferable);
     return points.length > 0 ? { source, points, label: found.key, kind: "cluster" } : null;
   }
   const single = POINT_ID.exec(id);
@@ -39,7 +39,7 @@ export function dropPayload(model: GraphModel, id: string): DropPayload | null {
       const groups: GraphPoint[][] = [source.ungrouped, ...source.clusters.map((c) => c.points)];
       for (const points of groups) {
         const hit = points.find((p) => p.id === pointId);
-        if (hit) return hit.asset_id === null ? { source, points: [hit], label: hit.name, kind: "point" } : null;
+        if (hit) return isOfferable(hit) ? { source, points: [hit], label: hit.name, kind: "point" } : null;
       }
     }
   }
@@ -72,7 +72,7 @@ export function multiPointDrop(model: GraphModel, ids: readonly string[]): Multi
   const hits = [...wanted].map((id) => found.get(id));
   const held = hits.filter((hit): hit is { source: GraphSource; point: GraphPoint } => hit !== undefined);
   if (held.length < hits.length) return { refusal: "Some of the selected points are not in the graph any more. Refresh and try again." };
-  const mapped = held.filter((hit) => hit.point.asset_id !== null).length;
+  const mapped = held.filter((hit) => !isOfferable(hit.point)).length; // a twin counts: its tag is already mapped (w34)
   if (mapped > 0) {
     return { refusal: mapped === 1
       ? "1 of the selected points is already mapped. Unmap it first, or select only unmapped points."
@@ -229,7 +229,7 @@ export interface BulkGroup {
 export function bulkGroups(source: GraphSource): BulkGroup[] {
   const groups: BulkGroup[] = [];
   for (const cluster of source.clusters) {
-    const points = cluster.points.filter((p) => p.asset_id === null);
+    const points = cluster.points.filter(isOfferable);
     if (points.length === 0) continue;
     const rows = reviewRows(points, new Set<Metric>()).map((r) =>
       r.checked && r.metric === "custom" && (r.customUnit ?? "").trim() === "" ? { ...r, checked: false, note: "Needs a unit." } : r);

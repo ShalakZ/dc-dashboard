@@ -586,6 +586,20 @@ describe("DiscoveryPage mapping", () => {
     expect(screen.getByRole("button", { name: "Map LVP01 V to asset…" })).toBeInTheDocument();
   });
 
+  it("a point that is the same tag as a mapped one reads 'Same tag as ...', has no Map button, and its group offers only the points that are left (w34)", async () => {
+    const model = graph();
+    model.sources[0].clusters[0].points = [
+      point(1, "LVP01 kW", { asset_id: 11, mapping_id: 4, mapped_metric: "active_power_kw" }),
+      point(2, "LVP01 V", { same_tag_as: 1 }),
+    ];
+    await start("admin", model);
+    expect(screen.getByText("Same tag as LVP01 kW (already mapped)")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "LVP01 V, point, same tag as LVP01 kW, already mapped" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Map LVP01 V to asset…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Map LVP01 to asset…" })).not.toBeInTheDocument(); // nothing in the group can be offered
+    expect(screen.getByRole("button", { name: "Map LVP02 to asset…" })).toBeInTheDocument(); // a group with a plain unmapped point still does
+  });
+
   it("creating the mappings closes the dialog and shows the refreshed graph", async () => {
     let mapped = false;
     const model = () => {

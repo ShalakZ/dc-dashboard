@@ -577,6 +577,15 @@ describe("findPlan with a view", () => {
       expect(result.targetId).toBe(buildFindIndex(m).find((e) => e.label === "MIXED 0")!.id);
     });
 
+    it("a point that is the same tag as a mapped one is hidden by the filter too: the filter goes off (w34)", () => {
+      const twinned = mixed([["MIXED", 3, 1]]);
+      twinned.sources[0].clusters[0].points[1] = { ...twinned.sources[0].clusters[0].points[1], same_tag_as: twinned.sources[0].clusters[0].points[0].id };
+      const result = plan(twinned, "MIXED 1", closed(), filtered());
+      expect(result.view?.unmappedOnly).toBe(false);
+      expect(result.note).toBe("Unmapped only is off so MIXED 1 can be shown.");
+      expect("view" in plan(twinned, "MIXED 2", closed(), filtered())).toBe(false);
+    });
+
     it("a group the filter hides, the same", () => {
       const result = plan(m, "DONE", closed(), filtered());
       expect(result.view?.unmappedOnly).toBe(false);

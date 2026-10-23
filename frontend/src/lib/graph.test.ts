@@ -2,7 +2,7 @@ import type { Edge, Node } from "@xyflow/react";
 import type { GraphModel, RemoveSourcesResult } from "../api/types";
 import {
   BLOCK_GAP, DIFFERENT_SERVER, FAN_DASH_LIMIT, LIVE_EDGE_LIMIT, MAPPED_NOT_SEEN, MAX_LAYOUT_ID, NO_VIEW, PAGE_SIZE, SOURCE_H, UNGROUPED, buildGraph, certificateLine, childNodeIds, descendantNodeIds,
-  initialView, isDifferentServer, isMappedNotSeen, isNotSeen, isRemovable, layoutBatches, looksLikeLine, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, notSeenSentence, ownPlaces,
+  initialView, isDifferentServer, isMappedNotSeen, isNotSeen, isOfferable, isRemovable, layoutBatches, looksLikeLine, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, notSeenSentence, ownPlaces,
   removableNotSeen, removalDialogText, removalOutcome, seenCard, seenLine,
   serverLine, shiftedPlaces, sourceIdOfNode, sourceVisible, twoServers, type GraphView, type OpenState, type XY,
 } from "./graph";
@@ -1654,5 +1654,72 @@ describe("what the card and the panel say about a move offer, two candidates and
     const miss = { scan_id: 7, at: "2026-10-15T11:00:00Z", last_seen_scan_id: 5, last_seen_at: "2026-10-11T09:00:00Z" };
     const mapped = point(9, "M kW", { asset_id: 10, mapping_id: 3, mapped_metric: "active_power_kw" });
     expect(seenCard(source(1, { not_seen: miss, ungrouped: [mapped], status: "offline" }), "Not seen in scan #7")).toEqual({ line: MAPPED_NOT_SEEN, title: `Not seen in scan #7. ${MAPPED_NOT_SEEN}` });
+  });
+});
+
+describe("a point that is the same tag as a mapped point (w34)", () => {
+  const mappedTo = (id: number, assetId: number) => point(id, `p${id}`, { asset_id: assetId, mapping_id: id, mapped_metric: "voltage_v" });
+  /** Source 1, group G: p1 mapped, p2 its twin (the same tag, not mapped), p3 plainly unmapped. */
+  const twinned = () => model({ sources: [source(1, { clusters: [{ key: "G", points: [mappedTo(1, 10), point(2, "p2", { same_tag_as: 1 }), point(3, "p3")] }] })], unidentified: [] });
+  const G = nodeId.cluster(1, "G");
+  const openG: OpenState = { sources: new Set([1]), clusters: new Set([G]) };
+  const filtered: GraphView = { ...NO_VIEW, unmappedOnly: true };
+
+  it("isOfferable: not mapped and not a twin; a null, an absent or a zero same_tag_as is no twin", () => {
+    expect(isOfferable(point(1, "a"))).toBe(true);
+    expect(isOfferable(point(1, "a", { same_tag_as: null }))).toBe(true);
+    expect(isOfferable(point(1, "a", { same_tag_as: 7 }))).toBe(false);
+    expect(isOfferable(point(1, "a", { asset_id: 10 }))).toBe(false);
+    expect(isOfferable(point(1, "a", { asset_id: 10, same_tag_as: 7 }))).toBe(false);
+  });
+
+  it("Unmapped only draws the plain unmapped point and hides the twin (and the mapped one)", () => {
+    const { nodes } = buildGraph(twinned(), openG, { view: filtered });
+    expect(ids(nodes.filter((n) => n.type === "point"))).toEqual(["point:3"]);
+    expect(nodes.find((n) => n.id === G)?.data).toMatchObject({ count: 3, mappedCount: 1, visibleCount: 1, offerable: 1 });
+  });
+
+  it("without the filter the twin is drawn, and says whose twin it is on screen (the node data) and to a screen reader", () => {
+    const { nodes } = buildGraph(twinned(), openG);
+    expect(nodes.find((n) => n.id === "point:2")?.data).toMatchObject({ twinOf: "p1" });
+    expect(nodes.find((n) => n.id === "point:2")?.ariaLabel).toBe("p2, point, same tag as p1, already mapped");
+    expect(nodes.find((n) => n.id === "point:3")?.ariaLabel).toBe("p3, point, unmapped");
+    expect("twinOf" in (nodes.find((n) => n.id === "point:3")!.data)).toBe(false);
+    expect(nodes.find((n) => n.id === "point:1")?.ariaLabel).toBe("p1, point, mapped to Site");
+  });
+
+  it("a twin whose mapped point is not in the source still draws, naming another point", () => {
+    const m = model({ sources: [source(1, { clusters: [{ key: "G", points: [point(2, "p2", { same_tag_as: 99 })] }] })], unidentified: [] });
+    const node = buildGraph(m, openG).nodes.find((n) => n.id === "point:2");
+    expect(node?.data).toMatchObject({ twinOf: "another point" });
+    expect(node?.ariaLabel).toBe("p2, point, same tag as another point, already mapped");
+  });
+
+  it("a twin keeps the row of any other point: nothing moves", () => {
+    const plain = model({ sources: [source(1, { clusters: [{ key: "G", points: [mappedTo(1, 10), point(2, "p2"), point(3, "p3")] }] })], unidentified: [] });
+    const at = (m: GraphModel) => buildGraph(m, openG).nodes.map((n) => [n.id, n.position]);
+    expect(at(twinned())).toEqual(at(plain));
+  });
+
+  it("a group and a source whose only unmapped points are twins are hidden by the filter", () => {
+    const only = model({ sources: [source(1, { clusters: [{ key: "G", points: [mappedTo(1, 10), point(2, "p2", { same_tag_as: 1 })] }] })], unidentified: [] });
+    expect(buildGraph(only, openG, { view: filtered }).nodes.some((n) => n.id === G)).toBe(false);
+    expect(sourceVisible(only.sources[0], filtered)).toBe(false);
+    expect(sourceVisible(twinned().sources[0], filtered)).toBe(true);
+  });
+
+  it("the group's offerable count is what the Map buttons read", () => {
+    const only = model({ sources: [source(1, { clusters: [{ key: "G", points: [mappedTo(1, 10), point(2, "p2", { same_tag_as: 1 })] }] })], unidentified: [] });
+    expect(buildGraph(only, openG).nodes.find((n) => n.id === G)?.data).toMatchObject({ count: 2, mappedCount: 1, offerable: 0 });
+  });
+});
+
+describe("a mapped point that carries same_tag_as is a mapped point, on screen and to a screen reader (w34)", () => {
+  it("no twin wording on a point with an asset", () => {
+    const odd = point(2, "p2", { asset_id: 10, mapping_id: 2, mapped_metric: "voltage_v", same_tag_as: 1 });
+    const m = model({ sources: [source(1, { clusters: [{ key: "G", points: [odd] }] })], unidentified: [] });
+    const node = buildGraph(m, { sources: new Set([1]), clusters: new Set([nodeId.cluster(1, "G")]) }).nodes.find((n) => n.id === "point:2");
+    expect(node?.ariaLabel).toBe("p2, point, mapped to Site");
+    expect("twinOf" in node!.data).toBe(false);
   });
 });

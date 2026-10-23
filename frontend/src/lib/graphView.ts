@@ -1,6 +1,6 @@
 import type { GraphModel } from "../api/types";
 import {
-  NO_VIEW, descendantNodeIds, drawnCount, groupVisible, groupsOf, nodeId, sourceVisible, visiblePoints, type Group, type GraphView, type OpenState,
+  NO_VIEW, descendantNodeIds, drawnCount, groupVisible, groupsOf, isOfferable, nodeId, sourceVisible, visiblePoints, type Group, type GraphView, type OpenState,
 } from "./graph";
 
 /**
@@ -18,7 +18,7 @@ export interface GraphCounts {
   mapped: number;
   /** Sources that need credentials. */
   needing: number;
-  /** The points the "Unmapped only" filter leaves: `points - mapped`. */
+  /** The points the "Unmapped only" filter leaves: the ones that can still be offered (`isOfferable`; a twin of a mapped point is not one, w34). */
   unmapped: number;
 }
 
@@ -31,14 +31,16 @@ export function graphCounts(model: GraphModel, _view: GraphView = NO_VIEW): Grap
   let points = 0;
   let mapped = 0;
   let needing = 0;
+  let unmapped = 0;
   for (const source of model.sources) {
     if (source.needs_credentials) needing++;
     for (const p of [...source.ungrouped, ...source.clusters.flatMap((c) => c.points)]) {
       points++;
       if (p.asset_id !== null) mapped++;
+      if (isOfferable(p)) unmapped++;
     }
   }
-  return { sources: model.sources.length, points, mapped, needing, unmapped: points - mapped };
+  return { sources: model.sources.length, points, mapped, needing, unmapped };
 }
 
 /**
