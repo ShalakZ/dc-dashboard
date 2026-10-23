@@ -20,19 +20,21 @@ The rule, per meter:
   "No load" = the same asset's `active_power_kw` twin has a fresh Good reading at or below 0.05 kW: a de-energised circuit may
   stand still legitimately.
 * frozen source: at least two counters that are not stale, not waiting and not "no load", ALL not advancing, while the source's
-  other mapped points (voltage, power, ...) with a Good reading exist and not one of them has changed in that time. A server
-  serving cached Good values looks like this. A frozen source counts at the stale level (its considered counters are added to
-  the stale count); a lone not-advancing counter, or a source whose other points still move, stays soft.
+  other mapped points (voltage, power, ...) with a LIVE Good reading exist (one that is not stale by the same limit: a point that
+  has been dead for days is neither evidence nor movement) and not one of them has changed in that time. A server serving cached
+  Good values looks like this. A frozen source counts at the stale level (its considered counters are added to the stale count);
+  a lone not-advancing counter, or a source whose other points still move, stays soft.
 """
 import asyncio
 import logging
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, fields
+from types import MappingProxyType
 from typing import Any, NamedTuple
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dcdash.core import journal
 from dcdash.core.db import get_sessionmaker
@@ -47,6 +49,7 @@ NO_LOAD_KW = 0.05  # a counter whose power twin reads at or below this (after th
 
 CACHE_SECONDS = 5.0  # a verdict is reused for this long per process
 WAIT_SECONDS = 2.0  # how long a caller waits for the shared computation (the URL answers 503 after that)
+COMPUTE_SECONDS = 30  # the shared computation itself is cut off after this long: a hung query ends as a failure cached for 5 s
 
 
 @dataclass(frozen=True)
@@ -56,7 +59,7 @@ class MeterRow:
     point_id: int
     source_id: int
     counter: bool  # an energy_kwh counter (else an active_power_kw meter)
-    interval_seconds: int  # the shortest polling interval among its mappings
+    interval_seconds: int  # the polling interval of its mapping (a point has exactly one)
     read: bool  # a point_latest row exists
     good_age: float | None  # seconds since the newest Good reading; None = none on record (or no row)
     changed_age: float | None  # seconds since the Good value last changed; None = unknown
@@ -90,7 +93,8 @@ class SourceVerdict:
 
 @dataclass(frozen=True)
 class Verdict:
-    """The rule over the whole site. `sources` holds every source that has a billing meter."""
+    """The rule over the whole site. `sources` holds every source that has a billing meter. A verdict is shared by every caller
+    for 5 seconds, so `sources` is READ-ONLY (a mapping proxy over a copy): no caller can change the answer of the others."""
 
     meters: int
     waiting: int
@@ -98,7 +102,11 @@ class Verdict:
     not_advancing: int
     frozen_sources: int
     oldest_stale_age_seconds: float | None
-    sources: dict[int, SourceVerdict]
+    sources: Mapping[int, SourceVerdict]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.sources, MappingProxyType):
+            object.__setattr__(self, "sources", MappingProxyType(dict(self.sources)))
 
     def as_dict(self) -> dict[str, Any]:
         """The site numbers, JSON-ready (no per-source detail)."""
@@ -206,10 +214,14 @@ def judge(
 
 # Each asset's meter is chosen among ALL its mappings first (its counter, else its power) and the source condition is applied to the
 # choice afterwards: an asset whose counter sits on a disabled source and whose kW twin on an enabled one has NO meter, exactly as
-# in `load_meters`. `quiet` lists the assets whose power twin is on a polled source, has a Good reading fresher than max(3 intervals,
-# floor) and reads NO_LOAD_KW or less after its own scale. `mappings.point_id` is UNIQUE (0001), so a point is mapped to one asset
-# and is at most one meter; a test pins that premise. At most one active_power_kw mapping per asset, so `quiet` has one row per asset.
-# `unreachable` runs its subquery only for a point without a row (CASE), through the (source_id, ts) index of diag_events.
+# in `load_meters`. `quiet` lists the assets whose power twin is on a polled source, has a Good reading no older than max(3 intervals,
+# floor) (the same "not stale" as `judge`: an age equal to the limit is still fresh) and reads NO_LOAD_KW or less after its own scale.
+# `mappings.point_id` is UNIQUE (0001), so a point is mapped to one asset and is at most one meter; a test pins that premise. At most
+# one active_power_kw mapping per asset, so `quiet` has one row per asset.
+# The limits are computed in float8: an interval of up to 2 147 483 647 s (the column is int4 and the API sets no upper bound) times 3
+# would overflow int4 and fail the verdict of the whole site.
+# `offline` finds, once per source that has a meter without a row (never per meter), the start of its oldest open `source.offline`
+# incident, through the (source_id, ts) index of diag_events; `unreachable` is true when that start is older than the meter's limit.
 _METERS = text(
     f"""
     WITH chosen AS (
@@ -225,44 +237,58 @@ _METERS = text(
         JOIN sources s ON s.id = p.source_id
         JOIN point_latest l ON l.point_id = m.point_id
         WHERE m.metric = 'active_power_kw' AND {POLL_SET}
-          AND l.good_at > now() - interval '1 second' * greatest(CAST(:k AS integer) * m.interval_seconds, CAST(:floor AS float8))
+          AND l.good_at >= now() - interval '1 second' * greatest(CAST(:k AS float8) * m.interval_seconds, CAST(:floor AS float8))
           AND abs(l.good_value * m.scale) <= CAST(:quiet_kw AS float8)
+    ), unread_sources AS (
+        SELECT DISTINCT p.source_id
+        FROM chosen c
+        JOIN points p ON p.id = c.point_id
+        WHERE NOT EXISTS (SELECT 1 FROM point_latest l WHERE l.point_id = c.point_id)
+    ), offline AS (
+        SELECT u.source_id, o.since
+        FROM unread_sources u
+        CROSS JOIN LATERAL (
+            SELECT min(e.ts) AS since FROM diag_events e
+            WHERE e.source_id = u.source_id AND e.kind = :offline AND e.detail->>'state' = 'open'
+        ) o
+        WHERE o.since IS NOT NULL
     )
     SELECT c.point_id, p.source_id, c.metric = 'energy_kwh' AS counter, c.interval_seconds,
            (c.metric = 'energy_kwh' AND q.asset_id IS NOT NULL) AS no_load,
            (l.point_id IS NOT NULL) AS read,
            CAST(extract(epoch FROM now() - l.good_at) AS float8) AS good_age,
            CAST(extract(epoch FROM now() - l.changed_at) AS float8) AS changed_age,
-           CASE WHEN l.point_id IS NULL THEN EXISTS (
-                    SELECT 1 FROM diag_events e
-                    WHERE e.source_id = p.source_id AND e.kind = :offline AND e.detail->>'state' = 'open'
-                      AND e.ts < now() - interval '1 second'
-                                 * greatest(CAST(:k AS integer) * c.interval_seconds, CAST(:floor AS float8)))
-                ELSE false END AS unreachable
+           (l.point_id IS NULL AND o.since IS NOT NULL
+            AND o.since < now() - interval '1 second' * greatest(CAST(:k AS float8) * c.interval_seconds, CAST(:floor AS float8))
+           ) AS unreachable
     FROM chosen c
     JOIN points p ON p.id = c.point_id
     JOIN sources s ON s.id = p.source_id
     LEFT JOIN quiet q ON q.asset_id = c.asset_id
     LEFT JOIN point_latest l ON l.point_id = c.point_id
+    LEFT JOIN offline o ON o.source_id = p.source_id
     WHERE {POLL_SET}
     ORDER BY c.point_id
     """
 )
 
-# The other mapped points of each polled source that have a Good reading (a point with an energy_kwh mapping is a billing counter,
-# whichever asset it belongs to), and how many of them changed within the window. One statement for the site.
+# The other mapped points of each polled source that have a LIVE Good reading (not older than max(3 x the point's own interval,
+# floor), the limit `judge` uses: a point dead for days is neither evidence that the source is frozen nor movement; a point with an
+# energy_kwh mapping is a billing counter, whichever asset it belongs to), and how many of them changed within the window (an age
+# equal to the window counts as changed, as in `judge`, where a counter that changed exactly one window ago is not standing still).
+# `mappings.point_id` is UNIQUE, so the join to the point's mapping yields one row per point. One statement for the site.
 _ACTIVITY = text(
     f"""
     SELECT p.source_id,
            count(*) AS others,
-           count(*) FILTER (WHERE l.changed_at > now() - interval '1 second' * CAST(:window AS float8)) AS moving
+           count(*) FILTER (WHERE l.changed_at >= now() - interval '1 second' * CAST(:window AS float8)) AS moving
     FROM points p
     JOIN sources s ON s.id = p.source_id
-    JOIN point_latest l ON l.point_id = p.id AND l.good_at IS NOT NULL
+    JOIN mappings m ON m.point_id = p.id AND m.metric <> 'energy_kwh'
+    JOIN assets a ON a.id = m.asset_id
+    JOIN point_latest l ON l.point_id = p.id
     WHERE {POLL_SET}
-      AND EXISTS (SELECT 1 FROM mappings m JOIN assets a ON a.id = m.asset_id WHERE m.point_id = p.id)
-      AND NOT EXISTS (
-          SELECT 1 FROM mappings m JOIN assets a ON a.id = m.asset_id WHERE m.point_id = p.id AND m.metric = 'energy_kwh')
+      AND l.good_at >= now() - interval '1 second' * greatest(CAST(:k AS float8) * m.interval_seconds, CAST(:floor AS float8))
     GROUP BY p.source_id
     """
 )
@@ -276,7 +302,8 @@ def _age(value: Any) -> float | None:
 async def read_meters(db: AsyncSession, floor_seconds: float, not_advancing_seconds: float) -> MeterRead:
     """Every billing meter of the site with its ages, and the activity of each source's other points: two statements for
     the whole site, never `readings`, never one query per source. Both see the same `now()` when `db` holds one transaction."""
-    params = {"k": STALE_AFTER_INTERVALS, "floor": float(floor_seconds), "quiet_kw": NO_LOAD_KW, "offline": journal.SOURCE_OFFLINE}
+    k, floor = float(STALE_AFTER_INTERVALS), float(floor_seconds)
+    params = {"k": k, "floor": floor, "quiet_kw": NO_LOAD_KW, "offline": journal.SOURCE_OFFLINE}
     rows = [
         MeterRow(
             point_id=r.point_id,
@@ -293,12 +320,12 @@ async def read_meters(db: AsyncSession, floor_seconds: float, not_advancing_seco
     ]
     activity = {
         int(r.source_id): (int(r.others), int(r.moving))
-        for r in await db.execute(_ACTIVITY, {"window": float(not_advancing_seconds)})
+        for r in await db.execute(_ACTIVITY, {"window": float(not_advancing_seconds), "k": k, "floor": floor})
     }
     return MeterRead(rows, activity)
 
 
-async def compute_verdict(session_factory: Callable[[], Any]) -> Verdict:
+async def compute_verdict(session_factory: async_sessionmaker[AsyncSession]) -> Verdict:
     """The verdict now, with no reuse: the settings and the meters are read in one transaction of a session of its own, then
     `judge` runs. `session_factory` is an `async_sessionmaker` (the figures worker passes its own)."""
     async with session_factory() as session:
@@ -342,9 +369,20 @@ def _finish(task: asyncio.Task[Verdict]) -> None:
     _entry = _Entry(_clock(), None if error is not None else task.result(), error)
 
 
+async def _compute_shared() -> Verdict:
+    """The body of the shared task. The engine lookup is inside it (a bad database URL is a failure of the computation, cached
+    like any other, not an error in the caller), and the whole computation has an upper bound of its own: a caller must not cancel
+    the shared task, but nothing else stops a query that hangs on a half-open connection, and a task that never ends would keep
+    every later caller waiting for good. `TimeoutError` ends the task, `_finish` remembers it for CACHE_SECONDS, and the next call
+    after that starts a new task. (Read from the module at call time, so a test can shorten the bound.)"""
+    async with asyncio.timeout(COMPUTE_SECONDS):
+        return await compute_verdict(get_sessionmaker())
+
+
 def _start() -> asyncio.Task[Verdict]:
+    # Tasks belong to the running loop: the production code and the tests use one loop, so a task is never awaited from another.
     global _task
-    task = asyncio.ensure_future(compute_verdict(get_sessionmaker()))
+    task = asyncio.create_task(_compute_shared())
     _task = task
     _running.add(task)
     task.add_done_callback(_running.discard)
@@ -360,7 +398,8 @@ async def get_verdict(timeout: float = WAIT_SECONDS) -> Verdict:
     if entry is not None and _clock() - entry.at < CACHE_SECONDS:
         if entry.error is not None:
             raise VerdictUnavailable("the last attempt to compute the verdict failed") from entry.error
-        assert entry.verdict is not None
+        if entry.verdict is None:  # not reachable: an entry holds a verdict or an error
+            raise VerdictUnavailable("the last attempt to compute the verdict left no answer")
         return entry.verdict
     task = _task or _start()
     done, _ = await asyncio.wait({task}, timeout=timeout)

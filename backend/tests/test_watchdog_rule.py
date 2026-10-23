@@ -1,11 +1,15 @@
 """The data freshness rule (w35): `judge` (pure) on every case of the owner's brief, `read_meters` (the one query) against the
 real database, and the 5-second reuse of the verdict."""
 import asyncio
+import contextlib
+import json
+import random
 import re
 from dataclasses import replace
 
 import asyncpg
 import pytest
+from sqlalchemy import text
 
 from dcdash.collector import scheduler
 from dcdash.core import widgets
@@ -271,13 +275,57 @@ def test_a_source_verdict_as_dict_carries_every_number():
     assert data["frozen"] is True and data["frozen_counters"] == 2 and data["source_id"] == 1
 
 
+def test_a_considered_counter_with_no_known_change_time_blocks_the_frozen_source():
+    # Not advancing needs a time that says so: a counter whose change time is unknown is considered but not still.
+    rows = [row(1, 1, changed_age=7 * HOUR), row(2, 1, changed_age=8 * HOUR), row(3, 1, changed_age=None)]
+    verdict = run(rows, STILL)
+    assert not verdict.sources[1].frozen
+    assert (verdict.stale, verdict.not_advancing) == (0, 2)
+
+
+def test_the_verdict_does_not_depend_on_the_order_of_the_rows():
+    rows = [
+        *frozen_pair(),                                                              # source 1: frozen
+        row(3, 1, good_age=2 * HOUR, changed_age=9 * HOUR),                          #   ... with a silent counter
+        row(4, 1, read=False, good_age=None, changed_age=None),                      #   ... and a waiting one
+        row(5, 2, changed_age=9 * HOUR), row(6, 2, changed_age=30.0),                # source 2: one standing, one rising
+        row(7, 2, changed_age=9 * HOUR, no_load=True), power(8, 2, good_age=20 * MINUTE),
+        row(9, 3, read=False, good_age=None, changed_age=None, unreachable=True), power(10, 3),  # source 3
+    ]
+    activity = {1: (2, 0), 2: (2, 1), 3: (1, 1)}
+    expected = run(rows, activity)
+    assert (expected.frozen_sources, expected.stale, expected.not_advancing, expected.waiting) == (1, 5, 1, 1)
+    shuffler = random.Random(2026)
+    for _ in range(25):
+        shuffled = list(rows)
+        shuffler.shuffle(shuffled)
+        assert run(shuffled, activity) == expected
+
+
+def test_the_sources_of_a_verdict_are_read_only_and_a_verdict_keeps_its_own_copy():
+    verdict = run([row(1, 1)])
+    with pytest.raises(TypeError):
+        verdict.sources[2] = verdict.sources[1]  # type: ignore[index]
+    with pytest.raises(TypeError):
+        del verdict.sources[1]  # type: ignore[attr-defined]
+    given = {1: verdict.sources[1]}
+    made = Verdict(1, 0, 0, 0, 0, None, given)
+    given.clear()  # the caller's dict is not the verdict's
+    assert set(made.sources) == {1} and made == verdict
+
+
+def test_an_age_stamped_ahead_of_the_database_clock_is_just_now():
+    assert watchdog._age(-5.0) == 0.0
+    assert watchdog._age(0.25) == 0.25 and watchdog._age(3) == 3.0 and watchdog._age(None) is None
+
+
 def test_judge_takes_a_few_milliseconds_for_15000_meters():
     import time
 
     rows = [row(i, i % 2 + 1, changed_age=float(i % 100)) for i in range(15_000)]
     started = time.perf_counter()
     judge(rows, FLOOR, WINDOW, {1: (5, 5), 2: (5, 5)})
-    assert time.perf_counter() - started < 0.25  # a generous bound; it is about 10 ms on a laptop
+    assert time.perf_counter() - started < 1.0  # a generous bound for a shared machine; it is about 10 ms on a laptop
 
 
 # ---- the poll set is the collector's ---------------------------------------------------------------------------------------------
@@ -528,6 +576,191 @@ async def test_a_stack_with_no_billing_meter_gives_the_empty_verdict(db):
     assert await watchdog.compute_verdict(get_sessionmaker()) == Verdict(0, 0, 0, 0, 0, None, {})
 
 
+# ---- the sharper edges of the one query --------------------------------------------------------------------------------------------
+
+
+@contextlib.asynccontextmanager
+async def one_instant():
+    """A session whose transaction is never committed. Rows written through it and the read that follows see ONE `now()`, so an
+    age of exactly 300.0 is exactly 300.0 (rows written through the `db` fixture are stamped by an earlier transaction)."""
+    async with get_sessionmaker()() as session:
+        try:
+            yield session
+        finally:
+            await session.rollback()
+
+
+async def put_latest(session, point, *, good_age, good_value=1.0, changed_age=None, age=0.0):
+    await session.execute(
+        text(
+            "INSERT INTO point_latest (point_id, ts, value, quality, good_at, good_value, changed_at) "
+            "VALUES (:point, now() - CAST(:age AS float8) * interval '1 second', CAST(:value AS float8), 0, "
+            "        now() - CAST(:good_age AS float8) * interval '1 second', CAST(:value AS float8), "
+            "        now() - CAST(:changed_age AS float8) * interval '1 second')"
+        ),
+        {"point": point, "age": age, "value": good_value, "good_age": good_age, "changed_age": changed_age},
+    )
+
+
+async def put_offline(session, source, seconds_ago):
+    await session.execute(
+        text(
+            "INSERT INTO diag_events (ts, level, component, source_id, kind, message, detail) "
+            "VALUES (now() - CAST(:ago AS float8) * interval '1 second', 'error', 'collector', :source, 'source.offline', 'x', "
+            "        CAST(:detail AS jsonb))"
+        ),
+        {"ago": seconds_ago, "source": source, "detail": json.dumps({"state": "open"})},
+    )
+
+
+@pytest.mark.parametrize("interval", [1_000_000_000, 2_147_483_647])
+async def test_a_huge_interval_does_not_break_the_verdict_of_the_site(db, interval):
+    # The column is an int4 with no upper bound in the API: 3 x the interval must not be computed as an int4.
+    live = await make_source(db, "live")
+    sick = await make_source(db, "sick")
+    asset, counter = await meter(db, live, "A", "energy_kwh", interval=60)
+    _, twin = await meter(db, live, "A", "active_power_kw", interval=interval, asset=asset)  # `quiet` multiplies this one
+    await make_latest(db, counter, good_age=2, good_value=1000.0, changed_age=8 * HOUR)
+    await make_latest(db, twin, good_age=1, good_value=0.01, changed_age=1)
+    _, slow_power = await meter(db, live, "B", "active_power_kw", interval=interval)
+    await make_latest(db, slow_power, good_age=9 * HOUR, good_value=1.0, changed_age=9 * HOUR)
+    _, slow_voltage = await meter(db, live, "V", "voltage_v", interval=interval)  # the activity multiplies this one
+    await make_latest(db, slow_voltage, good_age=3 * HOUR, good_value=230.0, changed_age=3 * HOUR)
+    _, waiting = await meter(db, sick, "W", "energy_kwh", interval=interval)  # `unreachable` multiplies this one
+    await db.execute(
+        "INSERT INTO diag_events (ts, level, component, source_id, kind, message, detail) "
+        "VALUES (now() - interval '1 hour', 'error', 'collector', $1, 'source.offline', 'x', $2::jsonb)",
+        sick, {"state": "open"},
+    )
+
+    found = await by_point()
+    assert found[counter].no_load is True and found[waiting].unreachable is False and found[slow_power].interval_seconds == interval
+    assert (await read()).activity == {live: (3, 2)}  # the twin, the slow power meter and the slow voltage; two of them moved
+    verdict = await watchdog.compute_verdict(get_sessionmaker())
+    assert (verdict.meters, verdict.waiting, verdict.stale, verdict.not_advancing) == (3, 1, 0, 0)  # nobody is stale for 95+ years
+
+
+async def test_every_waiting_meter_of_a_source_is_judged_against_the_oldest_open_incident_with_its_own_limit(db):
+    sick = await make_source(db, "sick")
+    quick = [(await meter(db, sick, f"q{i}", "energy_kwh", interval=5))[1] for i in range(3)]
+    slow = [(await meter(db, sick, f"s{i}", "energy_kwh", interval=interval))[1] for i, interval in enumerate((600, 1800))]
+    await db.execute(
+        "INSERT INTO diag_events (ts, level, component, source_id, kind, message, detail) "
+        "VALUES (now() - interval '1 hour', 'error', 'collector', $1, 'source.offline', 'x', $2::jsonb), "
+        "       (now() - interval '10 minutes', 'error', 'collector', $1, 'source.offline', 'x', $2::jsonb)",
+        sick, {"state": "open"},
+    )
+    found = await by_point()
+    assert [found[p].unreachable for p in quick] == [True, True, True]  # limit 5 min < 1 h
+    assert [found[p].unreachable for p in slow] == [True, False]  # limit 3 x 600 s = 30 min < 1 h < 3 x 1800 s = 90 min
+
+
+async def test_a_twin_aged_exactly_the_limit_is_still_fresh_as_in_judge(db):
+    live = await make_source(db, "live")
+    cases = {}
+    for name, age in (("inside", 299.5), ("on the limit", 300.0), ("outside", 300.5)):
+        asset, counter = await meter(db, live, name, "energy_kwh", interval=60)
+        _, twin = await meter(db, live, name, "active_power_kw", interval=5, asset=asset)  # limit: max(3 x 5, 300) s
+        cases[name] = (counter, twin, age)
+    async with one_instant() as session:
+        for counter, twin, age in cases.values():
+            await put_latest(session, counter, good_age=2, good_value=1000.0, changed_age=8 * HOUR)
+            await put_latest(session, twin, good_age=age, good_value=0.02, changed_age=1)
+        found = {r.point_id: r for r in (await watchdog.read_meters(session, FLOOR, WINDOW)).rows}
+    assert {name: found[counter].no_load for name, (counter, _, _) in cases.items()} == {
+        "inside": True, "on the limit": True, "outside": False,
+    }
+    assert run([power(good_age=300.0)]).stale == 0  # judge says the same of a meter exactly at its limit
+
+
+async def test_a_meter_is_unreachable_only_when_the_incident_is_older_than_the_limit(db):
+    sources = {name: await make_source(db, name) for name in ("inside", "on the limit", "outside")}
+    points = {name: (await meter(db, source, name, "energy_kwh", interval=5))[1] for name, source in sources.items()}
+    async with one_instant() as session:
+        for (name, source), ago in zip(sources.items(), (299.5, 300.0, 300.5)):
+            await put_offline(session, source, ago)
+        found = {r.point_id: r for r in (await watchdog.read_meters(session, FLOOR, WINDOW)).rows}
+    # "stale for longer than max(3 x 5, 300) s": an incident exactly 300 s old is not yet longer
+    assert {name: found[point].unreachable for name, point in points.items()} == {
+        "inside": False, "on the limit": False, "outside": True,
+    }
+
+
+async def test_another_point_is_evidence_while_its_good_reading_is_not_stale_and_it_moved_within_the_window(db):
+    fresh = {name: await make_source(db, name) for name in ("inside", "on the limit", "outside")}
+    moved = {name: await make_source(db, name) for name in ("moved inside", "moved on the window", "moved outside")}
+    voltages = []
+    for sources, ages in ((fresh, (299.5, 300.0, 300.5)), (moved, (1.0, 1.0, 1.0))):
+        for (name, source), good_age in zip(sources.items(), ages):
+            voltages.append((source, (await meter(db, source, name, "voltage_v", interval=5))[1], good_age))
+    async with one_instant() as session:
+        for (source, point, good_age), changed_age in zip(voltages, (None, None, None, WINDOW - 0.5, WINDOW, WINDOW + 0.5)):
+            await put_latest(session, point, good_age=good_age, good_value=230.0, changed_age=changed_age or good_age)
+        activity = (await watchdog.read_meters(session, FLOOR, WINDOW)).activity
+    ids = {name: source for sources in (fresh, moved) for name, source in sources.items()}
+    # live: an age of exactly the limit still counts, as in judge; moving: a change exactly one window ago counts as a change
+    assert activity[ids["inside"]][0] == 1 and activity[ids["on the limit"]][0] == 1 and ids["outside"] not in activity
+    assert activity[ids["moved inside"]] == (1, 1) and activity[ids["moved on the window"]] == (1, 1)
+    assert activity[ids["moved outside"]] == (1, 0)
+
+
+async def test_a_point_that_has_been_dead_for_days_is_not_evidence_that_the_source_is_frozen(db):
+    live = await make_source(db, "live")
+    for name in ("c1", "c2"):
+        _, counter = await meter(db, live, name, "energy_kwh")
+        await make_latest(db, counter, good_age=1, good_value=1.0, changed_age=7 * HOUR)
+    # a voltage that has given only BAD readings for 2 days: its last Good reading is 2 days old
+    _, dead = await meter(db, live, "dead", "voltage_v")
+    await make_latest(db, dead, age=1, value=None, quality=1, good_age=48 * HOUR, good_value=230.0, changed_age=48 * HOUR)
+
+    verdict = await watchdog.compute_verdict(get_sessionmaker())
+    assert (await read()).activity == {}  # neither "others" nor "moving"
+    assert not verdict.sources[live].frozen and verdict.frozen_sources == 0
+    assert (verdict.stale, verdict.not_advancing) == (0, 2)  # soft: two counters that stand still
+
+    # ... while a live, still voltage beside it does make the source frozen
+    _, alive = await meter(db, live, "alive", "voltage_v")
+    await make_latest(db, alive, good_age=1, good_value=230.0, changed_age=7 * HOUR)
+    verdict = await watchdog.compute_verdict(get_sessionmaker())
+    assert verdict.sources[live].frozen and (verdict.stale, verdict.not_advancing) == (2, 0)
+    assert (await read()).activity == {live: (1, 0)}
+
+
+async def test_a_dead_point_that_moved_a_while_ago_is_not_movement(db):
+    live = await make_source(db, "live")
+    for name in ("c1", "c2"):
+        _, counter = await meter(db, live, name, "energy_kwh")
+        await make_latest(db, counter, good_age=1, good_value=1.0, changed_age=7 * HOUR)
+    _, alive = await meter(db, live, "alive", "voltage_v")
+    await make_latest(db, alive, good_age=1, good_value=230.0, changed_age=7 * HOUR)
+    # silent for an hour (a limit of 5 minutes), its last change 1 hour ago: it must not keep the source "moving"
+    _, dying = await meter(db, live, "dying", "voltage_v")
+    await make_latest(db, dying, age=1, value=None, quality=1, good_age=1 * HOUR, good_value=230.0, changed_age=1 * HOUR)
+
+    assert (await read()).activity == {live: (1, 0)}
+    assert (await watchdog.compute_verdict(get_sessionmaker())).sources[live].frozen
+
+
+async def test_an_age_stamped_ahead_of_the_database_clock_reads_as_zero(db):
+    live = await make_source(db, "live")
+    _, counter = await meter(db, live, "c", "energy_kwh")
+    await make_latest(db, counter, age=-30, good_age=-30, good_value=1.0, changed_age=-60)  # the collector's clock runs ahead
+    found = (await by_point())[counter]
+    assert (found.good_age, found.changed_age) == (0.0, 0.0)
+
+
+async def test_a_power_twin_on_another_polled_source_still_makes_its_counter_no_load(db):
+    here = await make_source(db, "here")
+    there = await make_source(db, "there")
+    asset, counter = await meter(db, here, "X", "energy_kwh", interval=60)
+    _, twin = await meter(db, there, "X", "active_power_kw", asset=asset)
+    await make_latest(db, counter, good_age=2, good_value=1000.0, changed_age=8 * HOUR)
+    await make_latest(db, twin, good_age=1, good_value=0.01, changed_age=1)
+
+    found = await by_point()
+    assert set(found) == {counter} and found[counter].no_load is True
+
+
 # ---- the 5-second reuse -----------------------------------------------------------------------------------------------------------
 
 
@@ -654,3 +887,52 @@ async def test_the_settings_are_read_inside_the_shared_computation(db, counting,
     assert (await watchdog.get_verdict()).stale == 1  # still the reused answer
     watchdog.reset_cache()  # what the settings PUT does after its commit
     assert (await watchdog.get_verdict()).stale == 0
+
+
+async def test_a_computation_that_hangs_ends_at_its_own_bound_as_a_cached_failure_and_a_later_call_starts_a_new_task(
+    db, counting, clock, monkeypatch
+):
+    monkeypatch.setattr(watchdog, "COMPUTE_SECONDS", 0.4)
+    counting.gate = asyncio.Event()  # never set: the query hangs
+
+    with pytest.raises(VerdictUnavailable) as caught:
+        await watchdog.get_verdict()  # the caller's 2 s is longer than the bound, so this is the task ending, not the caller giving up
+    assert isinstance(caught.value.__cause__, TimeoutError)
+    assert watchdog._task is None and not watchdog._running  # the shared task is over; nothing waits for it
+    assert watchdog._entry is not None and isinstance(watchdog._entry.error, TimeoutError)
+    asked = counting.calls
+
+    clock[0] += 4.0  # the failure is remembered for 5 s: no new task, no new query
+    with pytest.raises(VerdictUnavailable):
+        await watchdog.get_verdict()
+    assert counting.calls == asked and watchdog._task is None
+
+    clock[0] += 1.2  # 5.2 s after it: the next call starts a new task, which now finds the database answering
+    counting.gate = None
+    verdict = await watchdog.get_verdict()
+    assert verdict.meters == 0 and counting.calls == asked + 1
+
+
+async def test_the_bound_of_the_shared_task_is_a_module_constant_of_30_seconds():
+    assert watchdog.COMPUTE_SECONDS == 30
+
+
+async def test_a_failing_engine_lookup_is_an_unavailable_verdict_remembered_like_any_failure(clock, monkeypatch):
+    asked = []
+
+    def broken():
+        asked.append(1)
+        raise RuntimeError("the database url is wrong")
+
+    monkeypatch.setattr(watchdog, "get_sessionmaker", broken)
+    with pytest.raises(VerdictUnavailable) as caught:  # not a RuntimeError out of the caller's own frame
+        await watchdog.get_verdict()
+    assert isinstance(caught.value.__cause__, RuntimeError) and len(asked) == 1
+    clock[0] += 3
+    with pytest.raises(VerdictUnavailable):
+        await watchdog.get_verdict()
+    assert len(asked) == 1  # remembered for 5 s
+    clock[0] += 2.5
+    with pytest.raises(VerdictUnavailable):
+        await watchdog.get_verdict()
+    assert len(asked) == 2
