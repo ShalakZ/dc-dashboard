@@ -1723,3 +1723,35 @@ describe("a mapped point that carries same_tag_as is a mapped point, on screen a
     expect("twinOf" in node!.data).toBe(false);
   });
 });
+
+// (w36) A large source (over 1,000 points) holds only its mapped points and their twins; `large` carries the truth the model no longer does.
+describe("a large source: removable, and visible under Unmapped only (w36)", () => {
+  const large = (over: object = {}) => ({ points: 15000, mapped: 0, unmapped: 15000, rules_new: 0, ...over });
+  const mappedPoint = point(9, "M kW", { asset_id: 10, mapping_id: 3, mapped_metric: "active_power_kw" });
+  const onlyUnmapped: GraphView = { ...NO_VIEW, unmappedOnly: true };
+
+  it("isRemovable: a large source with nothing mapped is removable, one with `large.mapped` above zero is not, even if the model draws no mapped point", () => {
+    expect(isRemovable(source(1, { large: large() }))).toBe(true);
+    expect(isRemovable(source(1, { large: large({ mapped: 800, unmapped: 14200 }) }))).toBe(false);
+    expect(isRemovable(source(1, { large: large({ mapped: 1, unmapped: 14999 }), clusters: [{ key: "A", points: [] }] }))).toBe(false);
+    expect(isRemovable(source(1, { origin: "manual", large: large() }))).toBe(false); // the other rules stand
+  });
+
+  it("isRemovable: the drawn mapped point still keeps it", () => {
+    expect(isRemovable(source(1, { large: large({ mapped: 1, unmapped: 14999 }), clusters: [{ key: "A", points: [mappedPoint] }] }))).toBe(false);
+  });
+
+  it("sourceVisible under Unmapped only: stays visible while `large.unmapped` is above zero, though the model holds nothing to offer", () => {
+    const drawsOnlyMapped = (extra: object) => source(1, { clusters: [{ key: "A", points: [mappedPoint] }], ...extra });
+    expect(sourceVisible(drawsOnlyMapped({ large: large({ mapped: 800, unmapped: 14200 }) }), onlyUnmapped)).toBe(true);
+    expect(sourceVisible(drawsOnlyMapped({ large: large({ mapped: 15000, unmapped: 0 }) }), onlyUnmapped)).toBe(false);
+    // without `large` the same model is a source with nothing left to map: hidden, as always
+    expect(sourceVisible(drawsOnlyMapped({}), onlyUnmapped)).toBe(false);
+  });
+
+  it("sourceVisible: a large source with nothing mapped (no group drawn at all) stays; the filter off shows it; Not seen lately still hides one that is not marked", () => {
+    expect(sourceVisible(source(1, { large: large() }), onlyUnmapped)).toBe(true);
+    expect(sourceVisible(source(1, { large: large({ mapped: 800, unmapped: 14200 }) }), NO_VIEW)).toBe(true);
+    expect(sourceVisible(source(1, { large: large() }), { ...onlyUnmapped, notSeenOnly: true })).toBe(false);
+  });
+});

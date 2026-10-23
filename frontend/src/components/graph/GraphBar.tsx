@@ -1,4 +1,5 @@
 import { useRef, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { countNumber } from "../../lib/graph";
 import type { ActionState, GraphCounts } from "../../lib/graphView";
 import { Icon, type IconName } from "../Icon";
 import { BarMenu, type BarMenuItem } from "./BarMenu";
@@ -122,7 +123,8 @@ export function GraphBar({
     return items;
   };
 
-  const pointsNum = unmappedOnly ? `${counts.unmapped} of ${counts.points}` : String(counts.points);
+  // (w36) Thousands separators, as in the summary sentence (a large source adds its 15,000 points): each chip's title is a piece of that sentence.
+  const pointsNum = unmappedOnly ? `${countNumber(counts.unmapped)} of ${countNumber(counts.points)}` : countNumber(counts.points);
   // The chips come in two families for the stylesheet's width tiers: "wide" when the credentials chip is drawn or a count has four digits (those need the
   // room, so their words go early); everything else keeps its words until the bar is nearly out of room. Read from the counts, never from the "N of M"
   // text, so turning Unmapped only on or off never moves the tier.
@@ -133,10 +135,10 @@ export function GraphBar({
       {/* The one announcer of this area: React leaves the text alone when the numbers do not change, so it speaks only when they do. */}
       <p className="graph-summary" aria-live="polite" aria-atomic="true" title={summary}>{summary}</p>
       <div className={`gbar-chips${wide ? " gbar-chips-wide" : ""}${notSeen?.filtered ? " gbar-chips-filtered" : ""}`}>
-        <Chip icon="sources" num={String(counts.sources)} word={plural(counts.sources, "source", "sources")} />
+        <Chip icon="sources" num={countNumber(counts.sources)} word={plural(counts.sources, "source", "sources")} />
         <Chip icon="readings" num={pointsNum} word={plural(counts.points, "point", "points")} />
-        <Chip icon="link" num={String(counts.mapped)} word="mapped" />
-        {counts.needing > 0 && <Chip icon="alert" tone="warn" num={String(counts.needing)} word={plural(counts.needing, "needs credentials", "need credentials")} />}
+        <Chip icon="link" num={countNumber(counts.mapped)} word="mapped" />
+        {counts.needing > 0 && <Chip icon="alert" tone="warn" num={countNumber(counts.needing)} word={plural(counts.needing, "needs credentials", "need credentials")} />}
         {/* (w33) While the Not seen lately filter is on: the count above stays the whole graph's, so say why fewer cards are drawn. Three forms by the bar's width (discovery-tidy.css): `Only not seen lately (2)`,
             `not seen (2)`, and icon and number; the whole sentence is in the title. One run of text on one line, so the words read in order. */}
         {notSeen?.filtered && (

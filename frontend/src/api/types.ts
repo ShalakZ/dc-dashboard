@@ -307,6 +307,8 @@ export interface GraphSource {
   name_hint?: string | null;
   /** (w33) On a new unmapped source: it looks like an old mapped one that stopped answering (`offer`), or several old ones could be it (`two`). */
   move_candidate?: SourceMoveCandidateForNew | SourceMoveTwo | null;
+  /** (w36) The server sets this only for a source over 1,000 points, which then holds only its mapped points and the twins of mapped points; `unmapped` leaves out twins. Absent or null = a source drawn whole. */
+  large?: { points: number; mapped: number; unmapped: number; rules_new: number } | null;
 }
 export interface NotSeen { scan_id: number; at: string; last_seen_scan_id: number; last_seen_at: string }
 export interface SourceIdentity {

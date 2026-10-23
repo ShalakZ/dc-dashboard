@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useLocation } from "react-router";
 import type { Asset, GraphModel, GraphPoint, GraphSource } from "../api/types";
 import { AddConnectionLine } from "../components/graph/nodes";
 import { resetUndoForTests, type MappedInfo } from "../hooks/useMappingActions";
@@ -5224,5 +5225,117 @@ describe("DiscoveryPage the move offer, two candidates and a different server (w
       expect(reads()).toBeGreaterThan(before);
       expect(toasts.calls).toEqual([]);
     });
+  });
+});
+
+// ---- w36: a source over 1,000 points arrives with `large` and holds only its mapped points; the card, the counts, the filter and the menu read `large` and nothing else ----
+
+describe("DiscoveryPage with a large source (w36)", () => {
+  const LARGE = { points: 15000, mapped: 4, unmapped: 14990, rules_new: 0 };
+  const onSite = (id: number, name: string) => kw(id, name, { asset_id: 10, mapping_id: id + 500, mapped_metric: "active_power_kw" });
+  /** What the server sends for a 15,000-point source: its four mapped points in two groups, nothing else. */
+  const bigSource = (over: Partial<GraphSource> = {}) => srcOf(1, "Big OPC", {
+    connector_type: "opcua", point_count: 15000, large: LARGE,
+    clusters: [{ key: "PDUA01", points: [onSite(1, "PDUA01 a"), onSite(2, "PDUA01 b")] }, { key: "PDUA02", points: [onSite(3, "PDUA02 a"), onSite(4, "PDUA02 b")] }], ...over,
+  });
+  function Where() {
+    return <output data-testid="where">{useLocation().pathname}</output>;
+  }
+  // The page stays mounted at any path ("*"), so a click that navigates shows in the probe instead of an empty screen.
+  const show = (role: string, sources: GraphSource[] = [bigSource()]) => {
+    mockFetch(routes(role, world(sources)));
+    return renderWithProviders(<><DiscoveryPage /><SignedIn /><Where /></>, { route: "/discovery", path: "*" });
+  };
+  const MAP = "Map by shape for Big OPC";
+  const summary = () => (document.querySelector(".graph-summary") as HTMLElement).textContent;
+  const nodeIds = (prefix: string) => [...document.querySelectorAll(`[data-id^="${prefix}"]`)].map((n) => n.getAttribute("data-id"));
+
+  it("the card says `15,000 points, 800 mapped`-style words, and the summary line and the chips count the source by `large` with thousands separators", async () => {
+    show("operator");
+    expect(await screen.findByText("15,000 points, 4 mapped")).toHaveClass("gsrc-words");
+    expect(summary()).toBe("1 source, 15,000 points, 4 mapped");
+    expect([...document.querySelectorAll(".gbar-chip-num")].map((n) => n.textContent)).toEqual(["1", "15,000", "4"]);
+  });
+
+  it("Enter on the card opens its mapped groups only: the card plus two groups, no point, no more", async () => {
+    show("operator");
+    await screen.findByText("Big OPC");
+    expect(nodeIds("src:")).toEqual(["src:1"]);
+    act(() => node("src:1").focus());
+    fireEvent.keyDown(node("src:1"), { key: "Enter" });
+    await waitFor(() => expect(nodeIds("cluster:")).toEqual(["cluster:1:PDUA01", "cluster:1:PDUA02"]));
+    expect(nodeIds("point:")).toEqual([]);
+    expect(nodeIds("more:")).toEqual([]);
+    expect(nodeIds("src:").length + nodeIds("cluster:").length).toBe(3); // the card and its mapped groups: nothing the 15,000 points could add
+  });
+
+  it("Map by shape is on the card for a person who may open the page (discovery.view) and is not for one who may not", async () => {
+    const view = show("operator");
+    expect(await within(await screen.findByTestId("flow")).findByRole("button", { name: MAP })).toHaveAttribute("type", "button");
+    view.unmount();
+    show("viewer");
+    await accountKnown();
+    await screen.findByText("Big OPC");
+    expect(screen.queryByRole("button", { name: MAP })).not.toBeInTheDocument();
+    expect(screen.getByText("15,000 points, 4 mapped")).toBeInTheDocument(); // the words stay
+  });
+
+  it("a click on it goes to the source's shapes page, and Enter and Space on the focused button do the same without opening the card or its panel", async () => {
+    show("operator");
+    const button = await screen.findByRole("button", { name: MAP });
+    await userEvent.click(button);
+    expect(screen.getByTestId("where")).toHaveTextContent("/sources/1/shapes");
+    cleanup();
+    for (const key of ["{Enter}", " "]) {
+      show("operator");
+      const again = await screen.findByRole("button", { name: MAP });
+      act(() => again.focus());
+      await userEvent.keyboard(key);
+      expect(screen.getByTestId("where")).toHaveTextContent("/sources/1/shapes");
+      expect(nodeIds("cluster:")).toEqual([]);
+      expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it("a source without `large` has no such button, whatever its point_count says", async () => {
+    show("operator", [bigSource({ large: undefined })]);
+    await screen.findByText("Big OPC");
+    expect(screen.queryByRole("button", { name: MAP })).not.toBeInTheDocument();
+    expect(screen.getByText("4 of 15000 mapped")).toBeInTheDocument();
+  });
+
+  it("Unmapped only: a large source stays (it still has `large.unmapped` tags to map) while a source with every point mapped goes; the line leads with how many that leaves", async () => {
+    show("operator", [bigSource(), mappedSource(2, "Small")]);
+    await screen.findByText("Big OPC");
+    expect(summary()).toBe("2 sources, 15,001 points, 5 mapped");
+    await userEvent.click(screen.getByRole("switch", { name: "Unmapped only" }));
+    expect(summary()).toBe("Showing 14,990 of 15,001 points, 2 sources, 5 mapped");
+    expect(node("src:1")).not.toBeNull();
+    expect(node("src:2")).toBeNull();
+  });
+
+  it("offers no Create assets and no Remove for it: no Source actions button, even when the model happens to hold an unmapped point; the same source without `large` does offer them", async () => {
+    const withLoose = { clusters: [{ key: "PDUA01", points: [onSite(1, "PDUA01 a"), kw(5, "PDUA01 loose")] }] };
+    show("admin", [bigSource(withLoose)]);
+    await screen.findByText("Big OPC");
+    expect(screen.queryByRole("button", { name: "Source actions for Big OPC" })).not.toBeInTheDocument();
+    cleanup();
+    show("admin", [bigSource({ ...withLoose, large: undefined })]);
+    expect(await screen.findByRole("button", { name: "Source actions for Big OPC" })).toBeInTheDocument();
+  });
+
+  it("the panel says the counts and links to Map by shape for discovery.view, and to the Points page only with sources.edit", async () => {
+    show("operator");
+    await userEvent.click(await screen.findByRole("button", { name: "Details for Big OPC" }));
+    const panel = await screen.findByRole("complementary", { name: "Source details" });
+    expect(within(panel).getByText(/15,000 points, 4 mapped/)).toBeInTheDocument();
+    expect(within(panel).getByRole("link", { name: "Map by shape" })).toHaveAttribute("href", "/sources/1/shapes");
+    expect(within(panel).queryByRole("link", { name: "Open the Points page" })).not.toBeInTheDocument();
+    cleanup();
+    show("admin");
+    await userEvent.click(await screen.findByRole("button", { name: "Details for Big OPC" }));
+    const adminPanel = await screen.findByRole("complementary", { name: "Source details" });
+    expect(within(adminPanel).getByRole("link", { name: "Open the Points page" })).toHaveAttribute("href", "/sources/1/points");
   });
 });

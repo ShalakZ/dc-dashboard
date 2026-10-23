@@ -1,11 +1,12 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Link } from "react-router";
 import { api } from "../../api/client";
 import { keys } from "../../api/queries";
 import type { GraphSource } from "../../api/types";
 import { useAction } from "../../hooks/useAction";
 import {
-  certificateLine, DIFFERENT_SERVER, isDifferentServer, isMappedNotSeen, looksLikeSentence, MAPPED_NOT_SEEN, moveOfferFor, notSeenSentence, serverLine, twoServersLine,
+  certificateLine, countNumber, DIFFERENT_SERVER, isDifferentServer, isMappedNotSeen, looksLikeSentence, MAPPED_NOT_SEEN, moveOfferFor, notSeenSentence, serverLine, twoServersLine,
 } from "../../lib/graph";
 import { useJob } from "../../hooks/useJob";
 import { JobStatus } from "../JobStatus";
@@ -20,11 +21,15 @@ interface Props {
   looks?: string;
   /** (w33) Open the move dialog for the old source this one looks like (the page gives it only to a person who may edit sources, and only while there is an offer). */
   onMoveSource?: () => void;
+  /** (w36) The page's answer to `meets(PAGE_NEED.sourceShapes, can)`: a large source then links to Map by shape. Absent = false. */
+  canShapes?: boolean;
+  /** (w36) `meets(PAGE_NEED.sourcePoints, can)`: a large source then also links to its Points page (a link takes its target page's whole need). Absent = false. */
+  canPoints?: boolean;
   onClose: () => void;
 }
 
 /** Facts about one source, and, for someone who may edit sources, the way to give it credentials (or browse it again). Never shows a stored secret. */
-export function SourcePanel({ source, canEdit, seen, looks, onMoveSource, onClose }: Props) {
+export function SourcePanel({ source, canEdit, seen, looks, onMoveSource, canShapes = false, canPoints = false, onClose }: Props) {
   const queryClient = useQueryClient();
   const { run, busy, error } = useAction();
   const heading = useRef<HTMLHeadingElement>(null);
@@ -79,7 +84,16 @@ export function SourcePanel({ source, canEdit, seen, looks, onMoveSource, onClos
         <span className="spacer" />
         <button className="quiet" onClick={onClose}>Close</button>
       </div>
-      <p className="muted">{source.connector_type} · {source.origin} · {source.status} · {source.point_count} points</p>
+      {/* (w36) A large source holds only its mapped points on the canvas; what it really has is the server's `large`. */}
+      <p className="muted">
+        {source.connector_type} · {source.origin} · {source.status} · {source.large ? `${countNumber(source.large.points)} ${source.large.points === 1 ? "point" : "points"}, ${countNumber(source.large.mapped)} mapped` : `${source.point_count} points`}
+      </p>
+      {source.large && (canShapes || canPoints) && (
+        <div className="row">
+          {canShapes && <Link to={`/sources/${source.id}/shapes`}>Map by shape</Link>}
+          {canPoints && <Link to={`/sources/${source.id}/points`}>Open the Points page</Link>}
+        </div>
+      )}
       <p className="muted gsrc-fact">{notSeenSentence(source, seen)}</p>
       {isMappedNotSeen(source) && <p className="muted">{MAPPED_NOT_SEEN}</p>}
       {server && <p className="muted gsrc-fact">{server}</p>}

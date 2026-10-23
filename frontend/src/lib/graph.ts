@@ -45,6 +45,8 @@ export type NodeActions = {
   onRemove?: (nodeId: string) => void;
   /** (w33) Open the move dialog for a new source that looks like an old one that stopped answering: given only with sources.edit and only while the source has an offer (`moveOfferFor`). */
   onMoveSource?: (nodeId: string) => void;
+  /** (w36) Open the Map by shape page of a large source (`/sources/:id/shapes`): given only to a person who meets `PAGE_NEED.sourceShapes`, and only for a source with `large`. */
+  onShapes?: (nodeId: string) => void;
   /** W12a: a mapped point or group, for a role with assets.edit: the small menu button on the node calls this with its own element, and the page opens the node's menu next to it (a menu inside the node would leak its keys into the canvas). */
   onMenu?: (button: HTMLElement) => void;
   /** W12a: the menu items "Unmap…" and "Move to another asset…" (a group: "this group"), given only to a role with assets.edit and only while something on the node is mapped. */
@@ -179,10 +181,12 @@ export function groupVisible(group: Group, view: GraphView): boolean {
 /**
  * A source is hidden by "Unmapped only" when it has at least one point and every point is mapped. A source with no points stays (it may need credentials).
  * (w33) "Not seen lately" hides every source that is not marked not seen; the two filters add up.
+ * (w36) A large source holds only its mapped points and their twins, so what is left to map is `large.unmapped`, not what the model draws: above zero it stays.
  */
 export function sourceVisible(source: GraphSource, view: GraphView): boolean {
   if (view.notSeenOnly && !isNotSeen(source)) return false;
   if (!view.unmappedOnly) return true;
+  if (source.large && source.large.unmapped > 0) return true;
   const groups = groupsOf(source);
   const total = groups.reduce((n, g) => n + g.points.length, 0);
   return total === 0 || groups.some((g) => g.points.some(isOfferable));
@@ -623,8 +627,10 @@ const pointsOf = (source: GraphSource): GraphPoint[] => [...source.ungrouped, ..
 /**
  * Whether Remove and Clear unmapped may offer this source: it was found by a scan (never one added by hand) and no point of it is mapped. A point
  * with an asset counts as mapped even if its mapping id were missing. The server decides again on its own data, whatever this says.
+ * (w36) A large source draws only its mapped points, so `large.mapped` is what says whether something is mapped.
  */
 export function isRemovable(source: GraphSource): boolean {
+  if (source.large && source.large.mapped > 0) return false;
   return source.origin === "discovered" && !pointsOf(source).some((p) => p.mapping_id !== null || p.asset_id !== null);
 }
 
@@ -668,7 +674,8 @@ export const moveOfferFor = (source: GraphSource): SourceMoveCandidateForNew | n
 /** (w33) True when several old sources could be this one: nothing is offered, the address is edited by hand (`twoServersText`). */
 export const twoServers = (source: GraphSource): boolean => source.move_candidate?.kind === "two";
 
-const countNumber = (n: number) => n.toLocaleString("en-US");
+/** A number a person reads, with thousands separators (`15,000`). */
+export const countNumber = (n: number) => n.toLocaleString("en-US");
 
 const mappingsWord = (n: number) => `${countNumber(n)} ${n === 1 ? "mapping" : "mappings"}`;
 

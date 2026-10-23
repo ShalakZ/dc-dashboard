@@ -4,7 +4,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FocusEvent } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { api } from "../api/client";
 import { keys, useAssetKinds, useAssets, useGraph, useInvalidate, useRemoveDiscoveredSources, useSite, useTidyLayout } from "../api/queries";
 import type { Asset, GraphModel, GraphSource } from "../api/types";
@@ -12,6 +12,7 @@ import { useAppearance } from "../auth/AppearanceProvider";
 import { useAuth } from "../auth/AuthProvider";
 import { meets } from "../auth/need";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { PAGE_NEED } from "../components/navItems";
 import { AlignGuides, type AlignGuidesHandle } from "../components/graph/AlignGuides";
 import { BulkCreateDialog } from "../components/graph/BulkCreateDialog";
 import { CanvasTools } from "../components/graph/CanvasTools";
@@ -133,6 +134,8 @@ const toggled = <T,>(set: ReadonlySet<T>, value: T): Set<T> => {
 type Callbacks = {
   onToggle: (id: string) => void; onSelect: (id: string) => void; onMap: (id: string) => void; onNewAsset: (id: string) => void;
   onCreateAssets: (id: string) => void; onRemove: (id: string) => void; onMoveSource: (id: string) => void;
+  /** (w36) Map by shape on a large source's card: opens `/sources/:id/shapes`. */
+  onShapes: (id: string) => void;
   onMenu: (button: HTMLElement) => void; onUnmap: (id: string) => void; onMove: (id: string) => void; onUnmapSource: (id: string, sourceId: number) => void;
   onAdd: (id: string) => void;
   /** W12b: the `more` node's button, and the fold of an asset's sub-assets (the latter is given to every role). */
@@ -170,8 +173,11 @@ const NEEDS_FORM = ["assets.edit", "assets.view"] as const;
 const NEVER_VALID = () => false;
 
 /** What the page's permissions give the nodes (see `nodeData`). `formWait`: the asset list the New asset form needs is not read yet. */
-/** `canMove`: sources.edit, the right to move an old source to the address where a scan found its device (w33): the Move... button of a new source that has an offer. */
-interface NodeGates { canAccept: boolean; canRemove: boolean; canEdit: boolean; canForm: boolean; formWait: boolean; canMove: boolean }
+/**
+ * `canMove`: sources.edit, the right to move an old source to the address where a scan found its device (w33): the Move... button of a new source that has an offer.
+ * `canShapes` (w36): the page's whole need, `meets(PAGE_NEED.sourceShapes, can)`: the Map by shape button of a large source.
+ */
+interface NodeGates { canAccept: boolean; canRemove: boolean; canEdit: boolean; canForm: boolean; formWait: boolean; canMove: boolean; canShapes: boolean }
 
 /** What the page works out about a source once per graph, so a toggle or a drag does not do it again for every node. */
 interface SourceFacts { seen: string; groups: number; removable: boolean; looks?: string }
@@ -201,13 +207,14 @@ function looksOf(source: GraphSource, siteZone: string | undefined): string | un
  * the menu-only New asset… (`menuNewAsset`); the group's New asset… button is given by `canAccept` alone, as before (what it opens depends on `canForm`).
  *
  * (w33) A source that has an offer (`moveOfferFor`) gets `onMoveSource` for a person with sources.edit (`canMove`): the Move... button beside Details.
+ * (w36) A source with `large` (the server's field, never a count of ours) gets `onShapes` for a person who meets the shapes page's need (`canShapes`): the Map by shape button beside them.
  *
  * W12b: the `more` node gets `onMore` and EVERY asset node gets `onToggleAssets` (the fold only changes the view, so no permission is needed; the node draws
  * the button only when the asset has sub-assets).
  */
 function nodeData(
-  node: Node, { canAccept, canRemove, canEdit, canForm, formWait, canMove }: NodeGates, facts: ReadonlyMap<number, SourceFacts>, mappedBy: ReadonlyMap<number, MappedSource[]>,
-  { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets }: Callbacks,
+  node: Node, { canAccept, canRemove, canEdit, canForm, formWait, canMove, canShapes }: NodeGates, facts: ReadonlyMap<number, SourceFacts>, mappedBy: ReadonlyMap<number, MappedSource[]>,
+  { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onShapes, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets }: Callbacks,
 ): Node["data"] {
   if (node.type === "more") return { ...node.data, onMore };
   if (node.type === "source") {
@@ -220,6 +227,7 @@ function nodeData(
       ...(creates ? { onCreateAssets, groups: fact.groups } : {}),
       ...(removes ? { onRemove } : {}),
       ...(canMove && moveOfferFor(data.source) !== null ? { onMoveSource } : {}),
+      ...(canShapes && data.source.large ? { onShapes } : {}),
       // (W12c) The node draws no Create assets and no Remove: they are items of the menu its Source actions button opens (the right-click menu's own).
       // A source with neither has nothing to put in it that Details and the fold do not already do, so it gets no button.
       ...(creates || removes ? { onMenu } : {}),
@@ -251,6 +259,9 @@ function Canvas({ model }: { model: GraphModel }) {
   const canLayout = can("discovery.edit"); // the shared layout
   const canRemove = canLayout; // Remove and Clear unmapped ride on the same permission (it is the remove route's)
   const canEditSource = can("sources.edit"); // the source panel's credentials and Browse again
+  const canShapes = meets(PAGE_NEED.sourceShapes, can); // (w36) a link to a page takes that page's whole need: the Map by shape button of a large source and its panel link
+  const canPoints = meets(PAGE_NEED.sourcePoints, can); // (w36) the panel's link to the Points page of a large source
+  const navigate = useNavigate();
   const invalidate = useInvalidate();
   const toast = useToast();
   const movedToast = useMovedToast(); // (w33) "Moved ... 12 mappings kept." with an Undo for 10 seconds: the one toast of a finished move
@@ -511,6 +522,11 @@ function Canvas({ model }: { model: GraphModel }) {
     afterMove.current = moving?.oldId ?? null;
     setMoving(null);
   }, [moving]);
+  // (w36) Map by shape on a large source's card: the page of its tag shapes. The card is a plain button, so Enter and Space press it like a click.
+  const onShapes = useCallback((id: string) => {
+    const source = sourceOf(id);
+    if (source?.large) navigate(`/sources/${source.id}/shapes`);
+  }, [sourceOf, navigate]);
   const removable = useMemo(() => model.sources.filter(isRemovable), [model]);
   const clearUnmapped = () => {
     if (removable.length > 0) setRemoval({ sources: removable.map((s) => ({ id: s.id, name: s.name })), fromNode: false });
@@ -527,7 +543,8 @@ function Canvas({ model }: { model: GraphModel }) {
   // assets (a role that may not accept has none) and whether it is removable. `asOf` moves with each read of the graph: the "ago" is as old as the data.
   const asOf = useMemo(() => new Date(), [model]);
   const facts = useMemo(() => new Map<number, SourceFacts>(model.sources.map((s) => [s.id, {
-    seen: seenLine(s, asOf, timezone), groups: canAccept ? mappableClusters(s).length : 0, removable: isRemovable(s), looks: looksOf(s, siteZone),
+    // (w36) A large source draws only its mapped points: no group of it is offered for Create assets, whatever the model holds.
+    seen: seenLine(s, asOf, timezone), groups: canAccept && !s.large ? mappableClusters(s).length : 0, removable: isRemovable(s), looks: looksOf(s, siteZone),
   }])), [model, asOf, timezone, siteZone, canAccept]);
 
   // ---- Unmap and move (W12a): the module's confirmation, Move dialog, toasts and Undo; the page names the mappings and where the focus goes afterwards ----
@@ -725,12 +742,12 @@ function Canvas({ model }: { model: GraphModel }) {
     const built = buildGraph(model, open, { moved: moved.current, ignoreSaved: tidyRuns > 0, animate: !reduced, view });
     const nodes: Node[] = built.nodes.map((n) => ({
       ...n,
-      data: nodeData(n, { canAccept, canRemove, canEdit: canEditAssets, canForm, formWait, canMove: canEditSource }, facts, mappedBy, {
-        onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets,
+      data: nodeData(n, { canAccept, canRemove, canEdit: canEditAssets, canForm, formWait, canMove: canEditSource, canShapes }, facts, mappedBy, {
+        onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onShapes, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets,
       }),
     }));
     return { nodes, edges: built.edges };
-  }, [model, open, view, tidyRuns, reduced, canAccept, canRemove, canEditAssets, canForm, formWait, canEditSource, facts, mappedBy, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets]);
+  }, [model, open, view, tidyRuns, reduced, canAccept, canRemove, canEditAssets, canForm, formWait, canEditSource, canShapes, facts, mappedBy, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onShapes, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(seeded.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(seeded.edges);
   useEffect(() => {
@@ -1285,6 +1302,7 @@ function Canvas({ model }: { model: GraphModel }) {
         {selected && (
           <SourcePanel
             key={selected.id} source={selected} canEdit={canEditSource} seen={facts.get(selected.id)?.seen ?? ""} looks={facts.get(selected.id)?.looks} onClose={closePanel}
+            canShapes={canShapes} canPoints={canPoints}
             onMoveSource={canEditSource && moveOfferFor(selected) !== null ? () => onMoveSource(nodeId.source(selected.id)) : undefined}
           />
         )}

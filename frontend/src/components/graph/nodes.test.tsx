@@ -1047,3 +1047,102 @@ describe("graph nodes", () => {
     });
   });
 });
+
+// (w36) A source over 1,000 points arrives with `large` and is a small card: the words say what it really holds, and a Map by shape button joins Details (and Move...) in the same 20px row.
+describe("the card of a large source (w36)", () => {
+  const large = { points: 15000, mapped: 800, unmapped: 14000, rules_new: 0 };
+  const big: GraphSource = { ...source, needs_credentials: false, point_count: 15000, large };
+  const lines = () => Array.from(document.querySelectorAll(".gsrc-body > *")).map((line) => line.className.split(" ")[0]);
+  const SIX = ["gsrc-head", "gsrc-sub", "gsrc-status", "gsrc-mapped", "gsrc-actions", "gsrc-seen"];
+  const SEEN = "Seen in scan #8, 2 min ago";
+  const MAP = "Map by shape for Plant OPC";
+
+  it("says `15,000 points, 800 mapped` in the words line, with thousands separators, and the bar is the mapped share of the real points", () => {
+    renderNode("source", "src:1", { source: big, expanded: false });
+    const words = screen.getByText("15,000 points, 800 mapped");
+    expect(words).toHaveClass("gsrc-words");
+    expect(screen.queryByText(/of .* mapped/)).not.toBeInTheDocument();
+    expect(document.querySelector(".gsrc-fill")).toHaveStyle({ width: "5%" }); // 800 of 15,000 is 5.3%
+  });
+
+  it("the plural rule of its neighbours: one point is `1 point`, and the words never come from point_count or from the points it draws", () => {
+    const one: GraphSource = {
+      ...big, point_count: 99, large: { points: 1, mapped: 1, unmapped: 0, rules_new: 0 },
+      clusters: [{ key: "G", points: [point, { ...point, id: 4 }, { ...point, id: 5 }] }],
+    };
+    renderNode("source", "src:1", { source: one, expanded: false });
+    expect(screen.getByText("1 point, 1 mapped")).toHaveClass("gsrc-words");
+  });
+
+  it("a source without `large` says `N of M mapped` as before, whatever its point_count", () => {
+    renderNode("source", "src:1", { source: { ...source, point_count: 15000 }, expanded: false });
+    expect(screen.getByText("0 of 15000 mapped")).toHaveClass("gsrc-words");
+    cleanup();
+    renderNode("source", "src:1", { source: { ...source, point_count: 15000, large: null }, expanded: false });
+    expect(screen.getByText("0 of 15000 mapped")).toHaveClass("gsrc-words");
+  });
+
+  it("Map by shape stands in the button row beside Details, after it, with no new line: the card keeps its six lines", () => {
+    renderNode("source", "src:1", { source: big, expanded: false, onSelect: vi.fn(), onShapes: vi.fn(), seen: SEEN });
+    expect(lines()).toEqual(SIX);
+    const row = document.querySelector(".gsrc-actions") as HTMLElement;
+    const buttons = Array.from(row.querySelectorAll("button"));
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Details for Plant OPC", MAP]);
+    expect(buttons[1]).toHaveTextContent("Map by shape");
+    expect(buttons[1]).toHaveAttribute("type", "button");
+    expect(buttons[1]).toHaveClass("nodrag");
+    expect(document.querySelector(".gnode")!.className).toBe("gnode gnode-source discovered");
+  });
+
+  it("with Move... too, the order is Details, Move..., Map by shape: three buttons in the one row", () => {
+    const offer = {
+      kind: "offer" as const, from_source_id: 2, from_name: "Old", from_endpoint: "opc.tcp://h:1/", from_since: null, mappings: 3, assets: 1,
+      match: { kind: "same_server" as const, evidence: "uri" as const, value: "u", addresses: 3, missing_addresses: 0, needs_tick: false },
+    };
+    renderNode("source", "src:1", { source: { ...big, move_candidate: offer }, expanded: false, onSelect: vi.fn(), onMoveSource: vi.fn(), onShapes: vi.fn(), seen: SEEN });
+    const row = document.querySelector(".gsrc-actions") as HTMLElement;
+    expect(Array.from(row.querySelectorAll("button")).map((b) => b.textContent)).toEqual(["Details", "Move...", "Map by shape"]);
+    expect(lines()).toEqual(SIX);
+  });
+
+  it("a click reports the node id, takes no drag and never selects the node", async () => {
+    const onShapes = vi.fn();
+    const onSelect = vi.fn();
+    renderNode("source", "src:1", { source: big, expanded: false, onSelect, onShapes });
+    await userEvent.click(screen.getByRole("button", { name: MAP }));
+    expect(onShapes).toHaveBeenCalledTimes(1);
+    expect(onShapes).toHaveBeenCalledWith("src:1");
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("Enter and Space on the button press it, and the keyboard order is the fold, Details, then Map by shape", async () => {
+    const onShapes = vi.fn();
+    renderNode("source", "src:1", { source: big, expanded: false, onToggle: vi.fn(), onSelect: vi.fn(), onShapes });
+    const order: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      await userEvent.tab();
+      order.push(document.activeElement?.getAttribute("aria-label") ?? "");
+    }
+    expect(order).toEqual(["Expand Plant OPC", "Details for Plant OPC", MAP]);
+    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard(" ");
+    expect(onShapes).toHaveBeenCalledTimes(2);
+  });
+
+  it("no callback (no discovery.view), no button: the card still says the counts", () => {
+    renderNode("source", "src:1", { source: big, expanded: false, onSelect: vi.fn() });
+    expect(screen.queryByRole("button", { name: /Map by shape/ })).not.toBeInTheDocument();
+    expect(screen.getByText("15,000 points, 800 mapped")).toBeInTheDocument();
+  });
+
+  it("the callback on a source without `large` draws no button (the client switches only on `large`)", () => {
+    renderNode("source", "src:1", { source: { ...source, point_count: 15000 }, expanded: false, onSelect: vi.fn(), onShapes: vi.fn() });
+    expect(screen.queryByRole("button", { name: /Map by shape/ })).not.toBeInTheDocument();
+  });
+
+  it("the button row is drawn for Map by shape even when the page gave no Details", () => {
+    renderNode("source", "src:1", { source: big, expanded: false, onShapes: vi.fn() });
+    expect(document.querySelector(".gsrc-actions")).not.toBeNull();
+    expect(screen.getByRole("button", { name: MAP })).toBeInTheDocument();
+  });
+});

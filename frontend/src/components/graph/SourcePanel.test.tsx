@@ -379,3 +379,58 @@ describe("SourcePanel look (W6)", () => {
     expect(screen.getByRole("button", { name: "Save and browse" })).toHaveClass("primary");
   });
 });
+
+// (w36) A large source (the server sent `large`) is described by it: 15,000 points, 800 mapped. The panel links to Map by shape for a person who may open that page (the page decides, as with Move...),
+// and to the Points page only for one who may open that one: a link takes its target page's whole need.
+describe("SourcePanel for a large source (w36)", () => {
+  const large = { points: 15000, mapped: 800, unmapped: 14000, rules_new: 0 };
+  const big = (over: Partial<GraphSource> = {}) => source({ point_count: 15000, large, ...over });
+  const panel = () => screen.getByRole("complementary", { name: "Source details" });
+  const render = (s: GraphSource, props: { canShapes?: boolean; canPoints?: boolean } = {}) => {
+    mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+    return renderWithProviders(<SourcePanel source={s} canEdit={false} seen="Seen" onClose={() => {}} {...props} />, { route: "/discovery", path: "/discovery" });
+  };
+
+  it("says `15,000 points, 800 mapped` in place of the bare count", () => {
+    render(big());
+    expect(within(panel()).getByText("opcua · discovered · unknown · 15,000 points, 800 mapped")).toHaveClass("muted");
+  });
+
+  it("a source without `large` keeps its line, whatever its point_count", () => {
+    render(source({ point_count: 12 }), { canShapes: true, canPoints: true });
+    expect(within(panel()).getByText("opcua · discovered · unknown · 12 points")).toBeInTheDocument();
+    expect(within(panel()).queryByRole("link", { name: "Map by shape" })).not.toBeInTheDocument();
+    expect(within(panel()).queryByRole("link", { name: "Open the Points page" })).not.toBeInTheDocument();
+  });
+
+  it("Map by shape is a link to the source's page for a person who meets PAGE_NEED.sourceShapes, and absent otherwise", () => {
+    const view = render(big(), { canShapes: true });
+    expect(within(panel()).getByRole("link", { name: "Map by shape" })).toHaveAttribute("href", "/sources/5/shapes");
+    view.unmount();
+    render(big());
+    expect(within(panel()).queryByRole("link", { name: "Map by shape" })).not.toBeInTheDocument();
+  });
+
+  it("the Points page link needs its own permission (sources.edit), whatever the shapes link needs", () => {
+    const view = render(big(), { canShapes: true, canPoints: true });
+    expect(within(panel()).getByRole("link", { name: "Open the Points page" })).toHaveAttribute("href", "/sources/5/points");
+    view.unmount();
+    render(big(), { canShapes: true, canPoints: false });
+    expect(within(panel()).getByRole("link", { name: "Map by shape" })).toBeInTheDocument();
+    expect(within(panel()).queryByRole("link", { name: "Open the Points page" })).not.toBeInTheDocument();
+  });
+
+  it("the two links stand in one row, in this order, and Tab reaches them right after Close", async () => {
+    render(big(), { canShapes: true, canPoints: true });
+    const shapes = within(panel()).getByRole("link", { name: "Map by shape" });
+    expect(shapes.parentElement).toHaveClass("row");
+    expect(shapes.parentElement).toContainElement(within(panel()).getByRole("link", { name: "Open the Points page" }));
+    expect(Array.from(shapes.parentElement!.querySelectorAll("a")).map((a) => a.textContent)).toEqual(["Map by shape", "Open the Points page"]);
+    await userEvent.tab(); // the heading has the focus first (tabIndex -1): Close, then the links
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+    await userEvent.tab();
+    expect(shapes).toHaveFocus();
+    await userEvent.tab();
+    expect(within(panel()).getByRole("link", { name: "Open the Points page" })).toHaveFocus();
+  });
+});
