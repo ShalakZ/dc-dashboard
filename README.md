@@ -113,6 +113,7 @@ name the old README sections; this is where each one is now:
 | Screens | [docs/screens.md](docs/screens.md) | Every screen of the web app, who can open it, and the audit log |
 | Assets and kinds | [docs/assets-and-kinds.md](docs/assets-and-kinds.md) | Asset kinds and their icons, moving assets in the Assets Tree |
 | Sources and discovery | [docs/sources-and-discovery.md](docs/sources-and-discovery.md) | The protocols (simulator, OPC UA, Modbus TCP) and finding sources on a network |
+| Large OPC UA servers | [docs/opc-ua-at-scale.md](docs/opc-ua-at-scale.md) | "Stable tag addresses" for Plant SCADA, reads in slices, the browse of 15,000 tags, mapping intervals, the SCADA-shaped test server |
 | Devices that move or disappear | [docs/devices-that-move.md](docs/devices-that-move.md) | What a scan does when a device is gone, "Not seen" and Remove not seen, moving a source to its new address with Undo |
 | Storage | [docs/storage.md](docs/storage.md) | The storage tiers, retention and the Storage page |
 | Dashboards and billing | [docs/dashboards-and-billing.md](docs/dashboards-and-billing.md) | Dashboards and widgets, tariffs, the billing rules and the cost report |

@@ -153,6 +153,18 @@ other answer than 200 as `protocol_error`.
 
 **Size.** Send at most 200 addresses in a request and split a longer list into several requests; the simulator connector does. Convert
 a large answer off the event loop (`asyncio.to_thread` above 2,000 items), because the collector's live polls share the loop.
+The OPC UA connector is the worked example of the rule when the server has a limit of its own: it asks the server for its
+`MaxNodesPerRead` once, sends slices of the smaller of that and 200 (`opcua_ids.slice_size`, which the connection check uses too with
+a cap of 100), and when a slice is refused with `BadTooManyOperations` it sends the same addresses again as two halves, remembers the
+smaller size on the connector for the rest of its life and never goes below 10; `read()` still returns one answer per address, under
+the caller's own strings, in the caller's order ([Large OPC UA servers](opc-ua-at-scale.md#reads-in-slices)).
+
+**An address with an unstable part.** If the addresses your server shows can carry a part that changes (OPC UA from AVEVA Plant SCADA
+puts a position number in front of the tag), do not strip it in one place and compare it in another. Offer the stable form through ONE
+function, `opcua_ids.stable_address`, and let every place that compares addresses (the read, the browse, tag lists, file imports, the
+connection check, Discovery and the mapping refusals) take its key from `opcua_ids.address_key_for`, so they always agree on which
+stored point a value belongs to (moving a source to a new address compares stored addresses as they are). Make it a choice of the person who sets up the source, never automatic, and refuse a second mapping of
+the same stable address.
 
 ## Testing it
 

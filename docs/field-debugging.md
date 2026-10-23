@@ -46,7 +46,7 @@ On Diagnostics (and as **Check connection** on a row of the Sources page, for op
 | Secure channel and session | The secure channel opens and the login is accepted | `BadSecurityChecksFailed` / `BadCertificateUntrusted`: the server does not trust our certificate, give them the thumbprint. `BadIdentityTokenRejected` / `BadUserAccessDenied`: the account or password |
 | Server time | The server clock against ours | skew over a few minutes breaks OPC UA. Compare with the **browser clock vs container clock** line of the report first: a drifting Docker/WSL2 clock after the host slept is a LOCAL cause |
 | Namespaces | The server's namespace table | wrong namespace index in a node id |
-| Read the mapped points | One read of every mapped point: value, status, timestamps | `BadNodeIdUnknown`: wrong node id or namespace index; ask the SCADA team |
+| Read the mapped points | One read of every mapped point: value, status, timestamps | `BadNodeIdUnknown`: wrong node id or namespace index; ask the SCADA team. When the bad addresses carry a number in front of the tag (`ns=3;s=20403:Site.Tag`), a second hint follows: `The SCADA's tag numbering may have changed (a number in front of the tag from browsing; a community answer says it can, not tested against your SCADA). Try "Stable tag addresses" on this source, then Test.` ([Large OPC UA servers](opc-ua-at-scale.md#stable-tag-addresses)) |
 | Read timing | Five reads, min/avg/max | slow answers: overloaded server or gateway |
 
 The check only reads (DNS, TCP, endpoint discovery, session, Read); it opens one session, never writes to the SCADA, and refuses to start twice at once or within five seconds of the last one.
