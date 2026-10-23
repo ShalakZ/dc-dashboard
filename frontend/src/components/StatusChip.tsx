@@ -1,5 +1,5 @@
 import { useStatus } from "../api/queries";
-import { statusView, type StatusView } from "../lib/liveStatus";
+import { grouped, statusView, type StatusView } from "../lib/liveStatus";
 
 /**
  * The word of the stale-meters state, `3 of 48 meters stale`, written as `StatusView.word` has it. The parts a narrow window drops (the `.wide` spans, hidden
@@ -8,7 +8,7 @@ import { statusView, type StatusView } from "../lib/liveStatus";
  */
 function StaleMeters({ stale, total }: { stale: number; total: number | null }) {
   const plural = (total ?? stale) !== 1;
-  return <>{stale}{total !== null && <span className="wide"> of {total}</span>} meter{plural && <span className={stale === 1 ? "wide" : undefined}>s</span>} stale</>;
+  return <>{grouped(stale)}{total !== null && <span className="wide"> of {grouped(total)}</span>} meter{plural && <span className={stale === 1 ? "wide" : undefined}>s</span>} stale</>;
 }
 
 const wordOf = (view: StatusView) => (view.staleMeters ? <StaleMeters {...view.staleMeters} /> : view.word);

@@ -61,6 +61,13 @@ describe("StatusChip", () => {
       expect([...container.querySelectorAll(".live .wide")].map((n) => n.textContent)).toEqual([" of 12", "s"]);
     });
 
+    it("groups the thousands in the whole word and in the part a narrow window drops", async () => {
+      mockFetch({ "GET /api/status": { body: watched({ meters: 1334, meters_stale: 1334 }) } });
+      const { container } = mount();
+      expect(await screen.findByRole("status")).toHaveTextContent(/^1,334 of 1,334 meters stale$/);
+      expect([...container.querySelectorAll(".live .wide")].map((n) => n.textContent)).toEqual([" of 1,334"]);
+    });
+
     it("keeps the plural s when more than one meter is stale, so the narrow word reads '3 meters stale'", async () => {
       mockFetch({ "GET /api/status": { body: watched({}) } });
       const { container } = mount();

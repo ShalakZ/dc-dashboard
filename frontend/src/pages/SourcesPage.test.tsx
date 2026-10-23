@@ -1709,6 +1709,11 @@ describe("SourcesPage, the data watchdog's line under the age (w35)", () => {
     expect(cell.querySelector("[aria-live], [role=status], [role=alert]")).toBeNull(); // text, not a live region
   });
 
+  it("groups the thousands of the line", async () => {
+    await show([{ meters: meters({ total: 12345, stale: 12000 }) }]);
+    expect(within(cellOf("sim")).getByText("12,000 of 12,345 meters stale")).toBeInTheDocument();
+  });
+
   it("says '1 of 1 meter stale' for a source with a single meter", async () => {
     await show([{ meters: meters({ total: 1, stale: 1 }) }]);
     expect(within(cellOf("sim")).getByText("1 of 1 meter stale")).toBeInTheDocument();

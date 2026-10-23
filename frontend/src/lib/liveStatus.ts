@@ -18,14 +18,17 @@ export interface StatusView { state: "live" | "stale" | "offline" | "waiting"; w
 /** A count the server sent: a whole number of one or more, else null (missing, null, zero, a fraction or not a number). */
 const positive = (value: number | null | undefined): number | null => (typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null);
 
-/** `3 of 48 meters stale`; `1 of 1 meter stale`; without a usable total, `3 meters stale`. */
+/** A count with its thousands grouped (`1,334`), as every other w35 text writes it. */
+export const grouped = (count: number): string => count.toLocaleString("en-US");
+
+/** `3 of 48 meters stale`; `1 of 1 meter stale`; `1,204 of 1,334 meters stale`; without a usable total, `3 meters stale`. */
 export function staleMetersWord(stale: number, total: number | null): string {
   const noun = (total ?? stale) === 1 ? "meter" : "meters";
-  return total === null ? `${stale} ${noun} stale` : `${stale} of ${total} ${noun} stale`;
+  return total === null ? `${grouped(stale)} ${noun} stale` : `${grouped(stale)} of ${grouped(total)} ${noun} stale`;
 }
 
-/** `2 meters not rising`; `1 meter not rising`. */
-export const notRisingWord = (count: number): string => `${count} ${count === 1 ? "meter" : "meters"} not rising`;
+/** `2 meters not rising`; `1 meter not rising`; `1,204 meters not rising`. */
+export const notRisingWord = (count: number): string => `${grouped(count)} ${count === 1 ? "meter" : "meters"} not rising`;
 
 /**
  * The second line of a source's Last reading cell on the Sources page, only while the watchdog sees trouble: stale meters first (a frozen source's counters

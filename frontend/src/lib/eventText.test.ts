@@ -170,6 +170,81 @@ describe("eventText (w32): the one table of words", () => {
       expect(() => describeEvent({ ...stale(), detail: null as unknown as Record<string, unknown> })).not.toThrow();
     });
 
+    describe("says every count the incident keeps (silent meters, frozen counters, counters not rising), in the past once it is closed", () => {
+      const closed = incident({ state: "closed", closed_by: "recovered", duration_seconds: 7800 });
+      const words = (detail: Record<string, unknown>) => ({
+        open: describeEvent(stale({ detail })).headline,
+        shut: describeEvent(stale({ detail, incident: closed })).headline,
+        line: openLine(stale({ detail }), "Asia/Qatar"),
+      });
+
+      it("silent meters only", () => {
+        const w = words({ meters: 12, stale: 3, not_advancing: 0, frozen: false });
+        expect(w.open).toBe("3 of 12 meters have no good reading");
+        expect(w.shut).toBe("3 of 12 meters had no good reading");
+        expect(words({ meters: 1, stale: 1 }).shut).toBe("1 of 1 meter had no good reading");
+      });
+
+      it("counters that have not risen only", () => {
+        const w = words({ meters: 12, stale: 0, not_advancing: 2, frozen: false });
+        expect(w.open).toBe("2 energy counters have not risen");
+        expect(w.shut).toBe("2 energy counters had not risen");
+        expect(words({ not_advancing: 1 }).shut).toBe("1 energy counter had not risen");
+        expect(w.line).toBe("OPC UA server at 172.20.0.3:4840 has energy counters that stopped rising since 18 Oct 07:52 (2 h). 2 energy counters have not risen.");
+      });
+
+      it("a frozen source only (the old rows, which do not say how many counters are frozen, are this too)", () => {
+        for (const detail of [{ meters: 4, stale: 4, frozen: true, frozen_counters: 4 }, { meters: 4, stale: 4, frozen: true }]) {
+          const w = words(detail);
+          expect(w.open).toBe("Every energy counter of this source stands still although each reads Good");
+          expect(w.shut).toBe("Every energy counter of this source stood still although each read Good");
+        }
+      });
+
+      it("a frozen source that also has silent meters says both (stale less the frozen counters, or the silent count when it is kept)", () => {
+        for (const detail of [{ meters: 12, stale: 6, frozen: true, frozen_counters: 4 }, { meters: 12, stale: 6, frozen: true, silent: 2 }]) {
+          const w = words(detail);
+          expect(w.open).toBe("2 of 12 meters have no good reading; every energy counter of this source stands still although each reads Good");
+          expect(w.shut).toBe("2 of 12 meters had no good reading; every energy counter of this source stood still although each read Good");
+          expect(w.line).toBe(
+            "OPC UA server at 172.20.0.3:4840 has stale meters since 18 Oct 07:52 (2 h). 2 of 12 meters have no good reading; every energy counter of this source stands still although each reads Good.",
+          );
+        }
+        expect(words({ meters: 4, stale: 4, frozen: true, frozen_counters: 4 }).open).not.toMatch(/no good reading/); // every stale meter is a frozen counter: no silent part
+      });
+
+      it("silent meters and counters that have not risen say both, in the order the backend message has", () => {
+        const w = words({ meters: 667, stale: 44, not_advancing: 19, frozen: false });
+        expect(w.open).toBe("44 of 667 meters have no good reading; 19 energy counters have not risen");
+        expect(w.shut).toBe("44 of 667 meters had no good reading; 19 energy counters had not risen");
+        expect(w.line).toBe("OPC UA server at 172.20.0.3:4840 has stale meters since 18 Oct 07:52 (2 h). 44 of 667 meters have no good reading; 19 energy counters have not risen.");
+      });
+
+      it("all three parts", () => {
+        const w = words({ meters: 20, stale: 6, not_advancing: 3, frozen: true, frozen_counters: 4 });
+        expect(w.open).toBe("2 of 20 meters have no good reading; every energy counter of this source stands still although each reads Good; 3 energy counters have not risen");
+        expect(w.shut).toBe("2 of 20 meters had no good reading; every energy counter of this source stood still although each read Good; 3 energy counters had not risen");
+      });
+
+      it("leaves a zero part out, groups thousands and never says 'times', 'failed' or 'offline'", () => {
+        const w = words({ meters: 1334, stale: 1204, not_advancing: 0, frozen: false });
+        expect(w.open).toBe("1,204 of 1,334 meters have no good reading");
+        expect(words({ meters: 5000, stale: 0, not_advancing: 1204 }).open).toBe("1,204 energy counters have not risen");
+        for (const line of [w.open, w.shut, w.line, words({ meters: 667, stale: 44, not_advancing: 19 }).shut]) expect(line).not.toMatch(/fail|offline|times/i);
+      });
+
+      it("does not throw on an old row with keys missing or of the wrong type, and says the plain fallback in the right tense", () => {
+        const w = words({});
+        expect(w.open).toBe("Some meters have no good reading");
+        expect(w.shut).toBe("Some meters had no good reading");
+        expect(words({ meters: 12, stale: 0, not_advancing: 0, frozen: false }).open).toBe("Some meters have no good reading");
+        for (const detail of [{ stale: "many", meters: null, frozen: "yes", not_advancing: "x", silent: "y", frozen_counters: [] }, { frozen: true }, { frozen: true, stale: 2, frozen_counters: 5 }]) {
+          expect(() => words(detail)).not.toThrow();
+        }
+        expect(() => describeEvent({ ...stale({ incident: closed }), detail: undefined as unknown as Record<string, unknown> })).not.toThrow();
+      });
+    });
+
     it("pins a stale source the way the page pins an incident, without 'offline' and without a number of failed reads", () => {
       expect(openLine(stale(), "Asia/Qatar")).toBe("OPC UA server at 172.20.0.3:4840 has stale meters since 18 Oct 07:52 (2 h). 3 of 12 meters have no good reading.");
       const slow = openLine(stale({ level: "warning", detail: { meters: 12, stale: 0, not_advancing: 2 } }), "Asia/Qatar");

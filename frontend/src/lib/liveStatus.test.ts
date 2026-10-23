@@ -78,6 +78,12 @@ describe("statusView with the meter fields (w35)", () => {
     expect(statusView(status({ meters: 1, meters_stale: 1, oldest_stale_age_seconds: 600 }))?.word).toBe("1 of 1 meter stale");
   });
 
+  it("groups the thousands of the stale word, and keeps the plain numbers for the chip to group in its narrow part", () => {
+    expect(statusView(status({ meters: 1334, meters_stale: 1334, oldest_stale_age_seconds: 600 }))).toMatchObject({
+      word: "1,334 of 1,334 meters stale", staleMeters: { stale: 1334, total: 1334 },
+    });
+  });
+
   it("puts the stale meters before the stale word, also while the other readings are fresh, stale or not there at all", () => {
     for (const readings_fresh of [true, false, null]) {
       expect(statusView(status({ readings_fresh, meters: 10, meters_stale: 2, oldest_stale_age_seconds: 90 })), String(readings_fresh)).toMatchObject({ state: "stale", word: "2 of 10 meters stale", detail: "oldest 1 min ago" });
@@ -139,6 +145,14 @@ describe("the words of the watchdog (w35)", () => {
     expect(staleMetersWord(2, null)).toBe("2 meters stale");
     expect(notRisingWord(1)).toBe("1 meter not rising");
     expect(notRisingWord(2)).toBe("2 meters not rising");
+  });
+
+  it("groups the thousands of every count with a comma, as the other w35 texts do", () => {
+    expect(staleMetersWord(91, 1334)).toBe("91 of 1,334 meters stale");
+    expect(staleMetersWord(12000, 12345)).toBe("12,000 of 12,345 meters stale");
+    expect(staleMetersWord(1204, null)).toBe("1,204 meters stale");
+    expect(notRisingWord(1204)).toBe("1,204 meters not rising");
+    expect(metersLine({ total: 12345, stale: 12000, not_advancing: 0, frozen: false, oldest_stale_age_seconds: null })?.text).toBe("12,000 of 12,345 meters stale");
   });
 
   describe("metersLine (the Sources page)", () => {

@@ -140,23 +140,35 @@ function identityChanged(event: SystemEvent, detail: Detail): { headline: string
 }
 
 /**
- * data.stale (w35) in words, from the numbers the incident keeps (`meters`, `stale`, `not_advancing`, `frozen`; never the number of times it was found, never a name):
- * `verb` is for the pinned line (`Plant OPC has stale meters since ...`), `counts` says how many. A source whose energy counters all stand still says so (they read Good, so
- * "no good reading" would be false); one with only slow counters says they have not risen.
+ * data.stale (w35) in words, from ALL the numbers the incident keeps (`meters`, `stale`, `not_advancing`, `frozen`, and `frozen_counters` or `silent` when the row has them; never
+ * the number of times it was found, never a name): `verb` is for the pinned line (`Plant OPC has stale meters since ...`), `counts` says how many, one part for each count above zero
+ * (the meters with no good reading, the energy counters that all stand still although they read Good, the counters that have not risen), joined with "; " as the backend message is.
+ * A closed incident speaks in the past (`had no good reading`, `had not risen`). A part whose count the row does not hold is left out.
  */
-function staleWords(detail: Detail): { verb: string; counts: string } {
+function staleWords(detail: Detail, closed = false): { verb: string; counts: string } {
   const meters = num(detail.meters);
   const stale = num(detail.stale);
   const standing = num(detail.not_advancing);
-  if (detail.frozen === true) return { verb: "has stale meters", counts: "Every energy counter of this source stands still although each reads Good" };
-  if (stale !== null && stale > 0) {
-    const of = meters !== null && meters >= stale ? ` of ${n(meters)} ${meters === 1 ? "meter" : "meters"}` : stale === 1 ? " meter" : " meters";
-    return { verb: "has stale meters", counts: `${n(stale)}${of} ${stale === 1 ? "has" : "have"} no good reading` };
+  const frozen = detail.frozen === true;
+  // The silent meters are `stale` less the counters of a frozen source (they are counted inside `stale`); a row that kept neither `silent` nor `frozen_counters`
+  // (older rows) cannot say how many of a frozen source's stale meters are silent, so it leaves that part out.
+  const frozenCounters = num(detail.frozen_counters);
+  const silent = num(detail.silent) ?? (!frozen ? stale : stale !== null && frozenCounters !== null ? stale - frozenCounters : null);
+  const parts: string[] = [];
+  if (silent !== null && silent > 0) {
+    const of = meters !== null && meters >= silent ? ` of ${n(meters)} ${meters === 1 ? "meter" : "meters"}` : silent === 1 ? " meter" : " meters";
+    parts.push(`${n(silent)}${of} ${closed ? "had" : silent === 1 ? "has" : "have"} no good reading`);
+  }
+  if (frozen) {
+    parts.push(closed ? "every energy counter of this source stood still although each read Good" : "every energy counter of this source stands still although each reads Good");
   }
   if (standing !== null && standing > 0) {
-    return { verb: "has energy counters that stopped rising", counts: `${n(standing)} energy ${standing === 1 ? "counter has" : "counters have"} not risen` };
+    parts.push(`${n(standing)} energy ${standing === 1 ? "counter" : "counters"} ${closed ? "had" : standing === 1 ? "has" : "have"} not risen`);
   }
-  return { verb: "has stale meters", counts: "Some meters have no good reading" };
+  if (parts.length === 0) return { verb: "has stale meters", counts: closed ? "Some meters had no good reading" : "Some meters have no good reading" };
+  const sentence = parts.join("; ");
+  const onlySlow = !frozen && !(silent !== null && silent > 0);
+  return { verb: onlySlow ? "has energy counters that stopped rising" : "has stale meters", counts: sentence.charAt(0).toUpperCase() + sentence.slice(1) };
 }
 
 /** What a Friendly row says: the headline, a plain reason under it, how many times it happened and how long it lasted (incidents only). */
@@ -236,7 +248,7 @@ function headlineOf(event: SystemEvent, detail: Detail): { headline: string; rea
     case "source.identity_changed":
       return identityChanged(event, detail);
     case "data.stale": {
-      const { counts } = staleWords(detail);
+      const { counts } = staleWords(detail, event.incident?.state === "closed");
       return { headline: counts };
     }
     case "data.recovered":
