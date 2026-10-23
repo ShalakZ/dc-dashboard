@@ -460,5 +460,18 @@ export default defineConfig({
       dependencies: ["w33"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // Map by shape (w36). It needs the SCADA-shaped OPC UA test server of the stack's simulator at `opc.tcp://simulator:4850/plantscada` (`SIM_SCADA_PORT: "4850"` in the stack's override file; the default of 24 meters
+    // per feed is 1,306 tags) and SKIPS, with a sentence, only when nothing listens there (the connection test says `unreachable`); it FAILS when the server answers but the browse does not. It MAKES ITS OWN DATA through the
+    // API (`W36 <run> ...`: the asset `W36 <run> hall` and the OPC UA source `W36 <run> scada`, switched off, so nothing polls it; the account and role of case 5 start `w36-`) and removes it all in afterAll, also after a
+    // failed case; it needs no scratch stack of its own beyond that simulator. Cases (serial; 1440 x 900, the look at 1024 x 768 last): the source is added and browsed (the graph calls it large, the Points page draws 200 of
+    // 1,306 rows and Search reaches the rest); Discovery's card reads `1,306 points, 0 mapped`, Enter on it draws next to nothing and Find `PENRG` offers the search of the source's tags; the shapes page puts
+    // `PDUA#_PM0_PENRG` under Suggested for billing, **Map as energy counter** with the PDUB tick and the hall gives a Review of 48 mappings (keyboard, focus, Escape), **Map 48 points**, the toast's Undo, and the same Map once
+    // more; the result through the API (48 assets, 48 energy_kwh mappings) and on Discovery; a reader (`discovery.view` only) has read-only decisions and no Review button; the look at 1024 x 768 with the sidebar expanded and minimised.
+    {
+      name: "w36",
+      testMatch: "w36.spec.ts",
+      dependencies: ["w35"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

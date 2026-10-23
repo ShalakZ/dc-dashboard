@@ -539,13 +539,17 @@ order below, each depending on the one before; all but `journey` use a 1600×100
 - `w36.spec.ts` (its own project, last in the list, after `w35`; 1440 x 900, and 1024 x 768) checks Map by shape on a large source. It needs the SCADA-shaped
   test server in the vis stack's simulator: `SIM_SCADA_PORT: "4850"` in the stack's override file (the default of 24 meters per feed is 1,306 tags;
   [Large OPC UA servers](opc-ua-at-scale.md#rehearsing-it-on-the-scada-shaped-test-server)). It SKIPS, with a sentence, only when port 4850 does not
-  answer (a skipped w36 in the summary line means that), and FAILS when the port answers but the browse does not. It makes its own data (`W36 <run> ...`)
-  and removes the source and the assets in `afterAll`. Cases (serial): the OPC UA source (security none) is added and browsed; Discovery shows
-  `1,306 points` and **Map by shape**, and Enter on the card leaves the node count small; Find `PENRG` offers the search option; on the shapes page
-  `PDUA#_PM0_PENRG` sits under **Suggested for billing**; **Map as energy counter**, the tick for the PDUB twin and the parent `W36 <run> hall` give a
-  Review of 48 mappings with a sample on `PDUA01`; **Map 48 points** works, the toast's **Undo** removes them, and mapping again works; the assets exist
-  with `energy_kwh` mappings; a reader without `discovery.accept` sees no **Review** button; the Points page shows `Showing 200 of 1,306 points` and
-  **Search points** narrows it. Lookups use exact names where one is a part of another.
+  answer (the connection test of the new source says `unreachable`; a skipped w36 in the summary line means that), and FAILS when the port answers but the
+  browse does not. It makes its own data (`W36 <run> ...`: the asset `W36 <run> hall` and the OPC UA source, security none, switched off) and removes it all in
+  `afterAll`. Cases (serial): the source is added and browsed, the graph calls it large, and the Points page draws 200 of `1,306` rows (`Showing 200 of 1,306
+  points`) while **Search points** reaches a tag that is not among them; Discovery's card reads `1,306 points, 0 mapped` and has **Map by shape**, Enter on the
+  card leaves the node count small, and Find `PENRG` (Ctrl+K on the canvas) ends with `Search the 1,306 tags of ... for "PENRG"`, which opens the shapes page with
+  the box filled; on the shapes page `PDUA#_PM0_PENRG` sits under **Suggested for billing**; **Map as energy counter**, the tick for the PDUB twin and the parent
+  `W36 <run> hall` give **Review 48 mappings...** with a sample on `PDUA01` and no blocking check (focus inside the dialog, Tab wraps, Escape gives the focus
+  back); **Map 48 points** works, the toast's **Undo** removes the assets and the mappings, and mapping again works; through the API the 48 assets and their
+  `energy_kwh` mappings exist and Discovery says `1,306 points, 48 mapped`; a reader with `discovery.view` only sees read-only decisions, no **Review** button, a 403
+  from the lines route and no link to the Points page; at 1024 x 768, sidebar expanded and minimised, the shapes page does not overflow and its bottom bar,
+  button and dialog are inside the window, and the large card's buttons are inside the card. Lookups use exact names where one is a part of another.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
