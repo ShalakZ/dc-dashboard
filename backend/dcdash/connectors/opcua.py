@@ -397,10 +397,13 @@ class OpcUaConnector(Connector):
             for address in addresses
         ]
 
-    async def compare_stable(self, addresses: Sequence[str]) -> StableComparison:
+    async def compare_stable(self, addresses: Sequence[str], client: Client | None = None) -> StableComparison:
         """Test's evidence about "Stable tag addresses": one Value Read, in one session, of the numbered form of each address (as
         stored, never stripped, whatever the option says) and of its stable form, and what the pairs show. Read-only; it changes
         nothing, not even this connector's config. An address without a number is left out.
+
+        `client`: a session that is already open (the connection check's); the comparison then uses it and opens none. Both forms
+        are read in the same request either way, so a tag that ticks cannot show up as a difference.
 
         One sentence is returned, the most severe that applies, in this order: the two forms read different values; the stable
         form is unknown to the server; the numbered form no longer works but the stable one does; the two forms read the same.
@@ -411,8 +414,8 @@ class OpcUaConnector(Connector):
             return StableComparison("", 0)
         stable = [stable_address(a) for a in numbered]
         ts = datetime.now(timezone.utc)
-        async with self._session() as client:
-            answers = await self._read_values(client, [*numbered, *stable])  # the slices of the poll apply
+        async with (self._session() if client is None else contextlib.nullcontext(client)) as session:
+            answers = await self._read_values(session, [*numbered, *stable])  # the slices of the poll apply
         pairs = [
             (_point_value(n, ts, answers[i]), _point_value(s, ts, answers[len(numbered) + i]))
             for i, (n, s) in enumerate(zip(numbered, stable, strict=True))
@@ -425,7 +428,8 @@ class OpcUaConnector(Connector):
                     same += 1
                 else:
                     different += 1
-                    example = example or f"{tag_name(address)}: {n.value:g} and {s.value:g}"
+                    # ten digits: a kWh counter of 3116496.25 must not print as 3.1165e+06 (and two of them not alike)
+                    example = example or f"{tag_name(address)}: {n.value:.10g} and {s.value:.10g}"
             elif n.quality == GOOD:
                 stable_unknown += 1
             elif s.quality == GOOD:

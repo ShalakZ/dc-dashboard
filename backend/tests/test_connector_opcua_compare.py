@@ -5,10 +5,11 @@ whose server is not needed. Everything here is a guess from a community answer: 
 
 import contextlib
 import itertools
+import re
 from contextlib import asynccontextmanager
 
 import pytest
-from asyncua import ua
+from asyncua import Client, ua
 
 from dcdash.collector.jobs import SUGGEST_STABLE, run_pending_jobs
 from dcdash.connectors.base import ConnectionCheck, create_connector
@@ -159,7 +160,7 @@ async def test_a_server_that_answers_an_old_number_with_another_tag_says_the_val
         result = await c.compare_stable(numbered)
         assert result.message == (
             "the numbered and the stable address read different values for 10 of 10 tags: do not use the option "
-            f"(e.g. {tags[0]}: {sim.value_of(holders[0]):g} and {sim.value_of(tags[0]):g})"
+            f"(e.g. {tags[0]}: {sim.value_of(holders[0]):.10g} and {sim.value_of(tags[0]):.10g})"
         )
         assert result.different == 10 and result.doubts_the_option
         assert holders[0] != tags[0]
@@ -273,11 +274,14 @@ async def test_the_most_severe_finding_is_the_one_sentence_different_values_then
     assert (await c.compare_stable(NUMBERED[8:])).message == "2 of 2 tags read the same both ways"
 
 
-async def test_values_are_compared_as_numbers_and_printed_with_g(monkeypatch):
+async def test_values_are_compared_as_numbers_and_printed_with_ten_digits(monkeypatch):
     numbered = NUMBERED[0]
     patch_session(monkeypatch, {numbered: 44.9, stable_address(numbered): 61.2})
     result = await fake_connector().compare_stable([numbered])
     assert result.message.endswith("(e.g. TAG0: 44.9 and 61.2)")
+    # a kWh counter: two readings that differ in the sixth digit must not print alike (:g would give 3.1165e+06 for both)
+    patch_session(monkeypatch, {numbered: 3116496.25, stable_address(numbered): 3116497.5})
+    assert (await fake_connector().compare_stable([numbered])).message.endswith("(e.g. TAG0: 3116496.25 and 3116497.5)")
     patch_session(monkeypatch, {numbered: 3116496.25, stable_address(numbered): 3116496.25})
     assert (await fake_connector().compare_stable([numbered])).message == "1 of 1 tag read the same both ways"
 
@@ -343,6 +347,194 @@ async def test_with_the_option_on_the_old_numbers_are_not_the_reason_so_no_hint_
         generic = f"BadNodeIdUnknown: {hint_for('BadNodeIdUnknown', None, 'read_points')}"
         assert await read_points_hint(sim, [gone], stable_addresses=True) == [generic]
         assert await read_points_hint(sim, [gone]) == [generic, f"BadNodeIdUnknown: {NUMBERING_CHANGED}"]
+
+
+# ---- the check: the comparison with the option on, the suggestion with it off (R6, R7) ----------------------------------------------
+
+GENERIC_UNKNOWN = f"BadNodeIdUnknown: {hint_for('BadNodeIdUnknown', None, 'read_points')}"
+
+
+async def numbered_of(sim: ScadaSim, count: int) -> tuple[list[str], list[str]]:
+    by_name = {p.name: p.address for p in await connector(sim).browse()}
+    return sim.tags[:count], [by_name[tag] for tag in sim.tags[:count]]
+
+
+async def read_points_step(sim: ScadaSim, addresses: list[str], **extra):
+    result = await connector(sim, **extra).check(addresses)
+    assert result.ok, [(s.id, s.error) for s in result.steps]
+    return next(step for step in result.steps if step.id == "read_points")
+
+
+def spy_value_reads(monkeypatch) -> list[list[str]]:
+    """The node ids of every Value Read the client sends, in order."""
+    reads: list[list[str]] = []
+    original = Client.read_attributes
+
+    async def wrapper(self, nodes, attr=ua.AttributeIds.Value):
+        nodes = list(nodes)
+        if attr == ua.AttributeIds.Value:
+            reads.append([node.nodeid.to_string() for node in nodes])
+        return await original(self, nodes, attr)
+
+    monkeypatch.setattr(Client, "read_attributes", wrapper)
+    return reads
+
+
+def spy_comparisons(monkeypatch, answer: StableComparison | Exception | None = None) -> list[tuple[list[str], object]]:
+    """Replaces `compare_stable`: records (addresses, client) and answers `answer` (raises it when it is an exception); with no
+    answer the real one runs."""
+    calls: list[tuple[list[str], object]] = []
+    original = OpcUaConnector.compare_stable
+
+    async def fake(self, addresses, client=None):
+        calls.append((list(addresses), client))
+        if isinstance(answer, Exception):
+            raise answer
+        return answer if answer is not None else await original(self, addresses, client)
+
+    monkeypatch.setattr(OpcUaConnector, "compare_stable", fake)
+    return calls
+
+
+async def test_with_the_option_on_the_check_puts_the_comparison_in_the_detail_and_the_summary_stays():
+    async with scada(pdus=2) as sim:
+        _tags, numbered = await numbered_of(sim, 10)
+        off = await read_points_step(sim, numbered)
+        on = await read_points_step(sim, numbered, stable_addresses=True)
+        assert on.summary == off.summary and "stable" not in on.summary
+        assert on.detail["requests"] == off.detail["requests"] == 3  # the extra Read is not counted: the summary does not change
+        assert on.detail["stable_comparison"] == SAME and on.hint is None
+        assert "stable_comparison" not in off.detail
+
+
+async def test_the_extra_read_is_one_request_of_both_forms_in_the_session_the_check_already_has(monkeypatch):
+    async with scada(pdus=2) as sim:
+        _tags, numbered = await numbered_of(sim, 10)
+        reads = spy_value_reads(monkeypatch)
+        sessions: list[int] = []
+        opened = OpcUaConnector._session
+        monkeypatch.setattr(OpcUaConnector, "_session", lambda self: (sessions.append(1), opened(self))[1])
+        await read_points_step(sim, numbered, stable_addresses=True)
+        stable = [stable_address(address) for address in numbered]
+        assert [read for read in reads if len(read) == 20] == [[*numbered, *stable]]  # both forms at ONE instant: a live tag cannot tick between
+        assert stable in reads  # the read of the step itself sent the stable form
+        assert sessions == []  # no session of its own
+
+
+async def test_the_comparison_takes_at_most_ten_numbered_addresses_of_the_ones_that_were_read(monkeypatch):
+    async with scada(pdus=2) as sim:
+        _tags, numbered = await numbered_of(sim, 13)
+        plain = sim.stable_id(sim.tags[20])
+        calls = spy_comparisons(monkeypatch)
+        step = await read_points_step(sim, [plain, *numbered], stable_addresses=True)
+        assert [addresses for addresses, _client in calls] == [numbered[:10]]  # the plain one is not numbered; the 11th numbered is left out
+        assert step.detail["stable_comparison"] == SAME  # "10 of 10 tags"
+
+
+async def test_a_pair_of_stored_strings_for_one_tag_is_not_compared_it_was_not_read(monkeypatch):
+    async with scada(pdus=2) as sim:
+        _tags, numbered = await numbered_of(sim, 4)
+        twin = re.sub(r";s=\d+:", ";s=99999:", numbered[0])  # the same tag under another number
+        assert twin != numbered[0] and stable_address(twin) == stable_address(numbered[0])
+        calls = spy_comparisons(monkeypatch)
+        step = await read_points_step(sim, [numbered[0], twin, *numbered[1:]], stable_addresses=True)
+        assert [addresses for addresses, _client in calls] == [numbered[1:]]
+        assert step.detail["bad"] == 2 and step.detail["stable_comparison"] == "3 of 3 tags read the same both ways"
+
+
+async def test_a_server_that_answers_an_old_number_with_another_tag_is_a_finding_in_the_detail_and_a_hint_line():
+    async with scada(pdus=2) as sim:
+        tags, numbered = await numbered_of(sim, 10)
+        sim.restructure("by_index")
+        holders = sim.extra_tags + sim.tags
+        step = await read_points_step(sim, numbered, stable_addresses=True)
+        finding = (
+            "the numbered and the stable address read different values for 10 of 10 tags: do not use the option "
+            f"(e.g. {tags[0]}: {sim.value_of(holders[0]):.10g} and {sim.value_of(tags[0]):.10g})"
+        )
+        assert step.detail["stable_comparison"] == finding
+        assert step.hint == finding  # a line of its own, no status name in front
+        assert step.summary.endswith("10 good, 0 bad")  # the stable form reads fine: the summary says nothing new
+
+
+async def test_numbers_that_no_longer_work_are_good_news_for_the_option_so_detail_only_and_no_hint():
+    async with scada(pdus=2) as sim:
+        _tags, numbered = await numbered_of(sim, 10)
+        sim.restructure("bad")
+        step = await read_points_step(sim, numbered, stable_addresses=True)
+        assert step.detail["stable_comparison"] == DEAD and step.hint is None
+
+
+async def test_an_unknown_stable_address_is_a_hint_line_after_the_status_hints(monkeypatch):
+    async with scada(pdus=2) as sim:
+        _tags, numbered = await numbered_of(sim, 3)
+        gone = "ns=3;s=20999:Site.NoSuchTag"
+        spy_comparisons(monkeypatch, StableComparison(UNKNOWN_ON, 3, stable_unknown=3))
+        step = await read_points_step(sim, [*numbered, gone], stable_addresses=True)
+        assert step.detail["stable_comparison"] == UNKNOWN_ON
+        assert step.hint.split("\n") == [GENERIC_UNKNOWN, UNKNOWN_ON]  # the option is on: no "try the option" hint beside them
+
+
+async def test_an_empty_comparison_adds_nothing(monkeypatch):
+    async with scada(pdus=2) as sim:
+        _tags, numbered = await numbered_of(sim, 3)
+        spy_comparisons(monkeypatch, StableComparison("", 3))  # both forms Bad for every tag
+        step = await read_points_step(sim, numbered, stable_addresses=True)
+        assert "stable_comparison" not in step.detail and step.hint is None
+
+
+@pytest.mark.parametrize("failure", [ua.UaStatusCodeError(ua.StatusCodes.BadTooManyOperations), RuntimeError("odd"), TimeoutError()])
+async def test_a_comparison_that_fails_leaves_the_step_as_it_was(monkeypatch, failure):
+    async with scada(pdus=2) as sim:
+        _tags, numbered = await numbered_of(sim, 3)
+        plain = await read_points_step(sim, numbered, stable_addresses=True)
+        spy_comparisons(monkeypatch, failure)
+        step = await read_points_step(sim, numbered, stable_addresses=True)
+        assert step.summary == plain.summary and step.hint is None
+        assert {key: value for key, value in step.detail.items() if key != "stable_comparison"} == {
+            key: value for key, value in plain.detail.items() if key != "stable_comparison"
+        }
+        assert "stable_comparison" not in step.detail
+
+
+async def test_nothing_numbered_or_the_option_off_means_no_comparison_and_no_extra_read(monkeypatch):
+    async with scada(pdus=2) as sim:
+        _tags, numbered = await numbered_of(sim, 10)
+        plain = [sim.stable_id(tag) for tag in sim.tags[:5]]
+        calls = spy_comparisons(monkeypatch)
+        reads = spy_value_reads(monkeypatch)
+        on = await read_points_step(sim, plain, stable_addresses=True)
+        off = await read_points_step(sim, numbered)
+        assert calls == [] and "stable_comparison" not in on.detail and "stable_comparison" not in off.detail
+        assert [read for read in reads if len(read) == 20] == []  # the option off: the reads of the check are what they were
+
+
+async def test_the_suggestion_is_a_hint_line_while_the_option_is_off_and_the_source_looks_like_plant_scada():
+    async with scada(pdus=2) as sim:  # its endpoint path is /plantscada
+        _tags, numbered = await numbered_of(sim, 10)
+        assert (await read_points_step(sim, numbered)).hint == SUGGEST_STABLE  # a line of its own
+        assert (await read_points_step(sim, numbered, stable_addresses=True)).hint is None  # the option is on already
+        mixed = [*numbered[:3], *(sim.stable_id(tag) for tag in sim.tags[10:17])]  # 3 of 10 numbered: not Plant SCADA's numbering
+        assert (await read_points_step(sim, mixed)).hint is None
+        sim.restructure("by_index")  # the numbered ids now read other tags, silently: the check cannot know without the extra Read
+        step = await read_points_step(sim, numbered)
+        assert step.hint == SUGGEST_STABLE and "stable_comparison" not in step.detail
+
+
+async def test_the_suggestion_makes_way_for_the_numbering_hint_which_already_says_it():
+    async with scada(pdus=2) as sim:
+        _tags, numbered = await numbered_of(sim, 10)
+        sim.restructure("bad")
+        step = await read_points_step(sim, numbered)
+        assert step.hint.split("\n") == [GENERIC_UNKNOWN, f"BadNodeIdUnknown: {NUMBERING_CHANGED}"]  # not the suggestion as well
+
+
+def test_extra_hint_lines_follow_the_status_hints_as_lines_of_their_own():
+    kinds = [("BadNodeIdUnknown", NUMBERED[0])]
+    generic = _read_hints(kinds)
+    assert _read_hints(kinds, notes=["a note"]) == f"{generic}\na note"
+    assert _read_hints([], notes=["a note", "another"]) == "a note\nanother"
+    assert _read_hints([]) is None and _read_hints([], notes=[]) is None
 
 
 # ---- the Test job -------------------------------------------------------------------------------------------------------------

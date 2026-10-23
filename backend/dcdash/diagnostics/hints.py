@@ -158,6 +158,14 @@ NUMBERING_CHANGED = (
     'tested against your SCADA). Try "Stable tag addresses" on this source, then Test.'
 )
 
+# The suggestion (w34 R6) that Test, the connection check's read_points hint and the report's SOURCE HEALTH line all make, in these
+# words, for an OPC UA source that looks like AVEVA Plant SCADA while its option "Stable tag addresses" is off. It is a guess from a
+# community answer and says so.
+SUGGEST_STABLE = (
+    "This server looks like AVEVA Plant SCADA and its tag addresses carry a number that can change (a community answer says so, "
+    'not tested against your SCADA). Consider "Stable tag addresses" (Edit source).'
+)
+
 _TIMEOUT_AT_NETWORK_STEP = (
     "No answer from that address and port: a firewall is probably dropping the traffic, the address or port is wrong, or the host "
     "is down. Ask the network team whether this machine may reach it, and confirm the endpoint URL with the SCADA team."

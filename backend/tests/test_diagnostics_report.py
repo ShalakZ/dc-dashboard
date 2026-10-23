@@ -18,6 +18,7 @@ from dcdash.core.audit import SENSITIVE_KEYS
 from dcdash.core.config import Settings
 from dcdash.core.db import get_sessionmaker
 from dcdash.diagnostics import report
+from dcdash.diagnostics.hints import SUGGEST_STABLE
 from dcdash.diagnostics.redact import Masker, finalize, scrub, verify_paste
 from dcdash.diagnostics.report import (
     AuditEntry, CheckInfo, CheckStep, DnsLookup, Environment, Event, HistoryInfo, PointRow, PointsInfo, PolicyJob, ReportData,
@@ -1605,3 +1606,99 @@ async def test_a_database_without_the_history_table_still_gives_the_health_secti
     assert not isinstance(data.points, Unavailable) and not isinstance(data.journal, Unavailable)  # the other sections never noticed
     lines = lines_of(render(data, "summary", ident), "SOURCE HEALTH")
     assert any(line.startswith(f'#{ids["a"]} "Main SCADA": ') for line in lines)
+
+
+# --- the suggestion of "Stable tag addresses" in SOURCE HEALTH (w34 R6) ---------------------------------------------------------
+
+SUGGESTION_LINE = "   suggestion: " + SUGGEST_STABLE
+NUMBERED_IDS = [f"ns=3;s={20000 + n}:Site.TAG{n}" for n in range(10)]
+
+
+def test_a_source_that_looks_like_plant_scada_gets_the_suggestion_as_one_line_under_its_health_line():
+    for detail in ("summary", "full"):
+        lines = health_lines(SourceHealth(3, 120, 3, 2.0, suggest_stable=True), detail)
+        assert len(lines) == 2 and lines[0].startswith('#3 "Main SCADA": ') and lines[1] == SUGGESTION_LINE
+        assert len(lines[1]) <= report.LINE_LIMIT and "not tested against your SCADA" in lines[1]
+    first, second, third = health_lines(SourceHealth(3, 120, 3, 2.0, history(), suggest_stable=True))
+    assert first.startswith("#3 ") and second == SUGGESTION_LINE and third.startswith("   history: ")  # before the history line
+    assert health_lines(SourceHealth(3, 120, 3, 2.0, suggest_stable=False)) == health_lines(SourceHealth(3, 120, 3, 2.0))  # off by default
+
+
+def test_the_suggestion_line_is_scrubbed_like_every_text_of_the_report_and_a_tight_report_drops_it():
+    (_, line) = health_lines(SourceHealth(3, 120, 3, 2.0, suggest_stable=True), "full", lambda s: s.replace("AVEVA", "[hidden]"))
+    assert "AVEVA" not in line and line.startswith("   suggestion: This server looks like [hidden] Plant SCADA")
+    data = ReportData(
+        generated_at=NOW, sources=(source(3), source(4, "Spare")),
+        health=(SourceHealth(3, 120, 3, 2.0, suggest_stable=True), SourceHealth(4, 0, 0, None, history("backing_off", last_error="no route"))),
+    )
+    caps = {n: p[0] for n, p in report.CAPS.items()}
+    roomy = report._assemble(data, "summary", ident, {**caps, "health_sources": 1, "history_lines": 1}, None, {}, False)
+    tight = report._assemble(data, "summary", ident, {**caps, "health_sources": 1, "history_lines": 0}, None, {}, False)
+    assert SUGGESTION_LINE in lines_of(roomy, "SOURCE HEALTH") and SUGGESTION_LINE not in lines_of(tight, "SOURCE HEALTH")
+    assert any(line.startswith("   history: backing off") for line in lines_of(tight, "SOURCE HEALTH"))  # the trouble stays
+    assert any(line.startswith('#3 "Main SCADA"') for line in lines_of(tight, "SOURCE HEALTH"))
+
+
+async def plant_source(db, name, *, addresses=NUMBERED_IDS, endpoint="opc.tcp://10.0.0.5:4840/plantscada", kind="opcua", **config) -> int:
+    source_id = await make_source(db, name, kind, {"endpoint": endpoint, **config})
+    for address in addresses:
+        await make_point(db, source_id, address)
+    return source_id
+
+
+async def test_gather_marks_the_opc_ua_sources_that_look_like_plant_scada_and_have_not_tried_the_option(db, session):
+    yes = await plant_source(db, "Plant")
+    on = await plant_source(db, "Already on", stable_addresses=True)
+    plain = await plant_source(db, "Plain ids", addresses=[f"ns=3;s=Site.TAG{n}" for n in range(10)])
+    unnamed = await plant_source(db, "Unnamed", endpoint="opc.tcp://10.0.0.5:4840/")
+    named = await plant_source(db, "Announces itself", endpoint="opc.tcp://10.0.0.6:4840/")
+    await db.execute("UPDATE sources SET identity = $2 WHERE id = $1", named, {"application_name": "AVEVA Plant SCADA OPC UA Server"})
+    empty = await plant_source(db, "No points", addresses=[])
+    modbus = await plant_source(db, "Modbus", kind="modbus", endpoint="plantscada")
+    data = await gather(session, detail="summary")
+    suggested = {h.source_id for h in data.health if h.suggest_stable}
+    assert suggested == {yes, named}
+    assert {on, plain, unnamed, empty, modbus}.isdisjoint(suggested)
+    lines = lines_of(render(data, "summary", ident), "SOURCE HEALTH")
+    assert lines.count(SUGGESTION_LINE) == 2
+    for source_id in (yes, named):
+        assert lines[[i for i, line in enumerate(lines) if line.startswith(f"#{source_id} ")][0] + 1] == SUGGESTION_LINE
+    assert [h.suggest_stable for h in (await gather(session, detail="full", source_id=yes)).health] == [True]
+    assert [h.suggest_stable for h in (await gather(session, detail="full", source_id=on)).health] == [False]
+
+
+async def test_the_sample_is_the_one_test_uses_mapped_addresses_first_then_by_id_and_only_string_ids(db, session):
+    source_id = await make_source(db, "Big", "opcua", {"endpoint": "opc.tcp://10.0.0.5:4840/plantscada"})
+    asset = await make_asset(db, "Plant")
+    insert = "INSERT INTO points (source_id, address, name) SELECT $1, $2 || n, $2 || n FROM generate_series(1, $3) AS n"
+    await db.execute(insert, source_id, "ns=3;s=Site.PLAIN", 300)  # 300 stable ids, unmapped, the lowest point ids
+    await db.execute(insert, source_id, "ns=2;i=", 500)  # ids of another kind never dilute the share
+    await db.execute("INSERT INTO points (source_id, address, name) SELECT $1, 'ns=3;s=' || (20000 + n) || ':Site.M' || n, 'm' || n FROM generate_series(1, 160) AS n", source_id)
+    await db.execute(
+        "INSERT INTO mappings (point_id, asset_id, metric, interval_seconds, scale) "
+        "SELECT id, $2, 'metric' || id, 5, 1.0 FROM points WHERE source_id = $1 AND address LIKE '%:Site.M%'",
+        source_id, asset,
+    )
+    data = await gather(session, detail="summary")
+    # mapped first: 160 numbered + the 40 lowest ids (stable) = 80 percent of 200; by id alone the sample would be all stable ids
+    assert [h.suggest_stable for h in data.health] == [True]
+
+
+async def test_a_failing_suggestion_read_leaves_the_health_lines_and_says_nothing(db, session, monkeypatch):
+    yes = await plant_source(db, "Plant")
+
+    async def broken(db_, *args):
+        raise RuntimeError("secret message: Zq9-secret-pw")
+
+    monkeypatch.setattr(report, "_stable_suggestions", broken)
+    data = await gather(session, detail="summary")
+    assert [(h.source_id, h.suggest_stable) for h in data.health] == [(yes, False)]
+    assert "Zq9-secret-pw" not in repr(data) and await session.scalar(select(1)) == 1  # the transaction is usable
+    assert SUGGESTION_LINE not in lines_of(render(data, "summary", ident), "SOURCE HEALTH")
+
+
+async def test_the_suggestion_survives_a_history_that_could_not_be_read(db, session):
+    yes = await plant_source(db, "Plant")
+    await session.execute(text("ALTER TABLE history_status RENAME TO history_status_away"))  # undone with the session's transaction
+    data = await gather(session, detail="summary")
+    assert data.history_unavailable is not None and [(h.source_id, h.suggest_stable) for h in data.health] == [(yes, True)]

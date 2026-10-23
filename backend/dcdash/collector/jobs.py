@@ -19,6 +19,7 @@ from dcdash.core.audit import audit_pool, clip_error, scrub_strings, scrub_url_c
 from dcdash.core.config import get_settings
 from dcdash.core.crypto import decrypt
 from dcdash.diagnostics.check import CheckResult
+from dcdash.diagnostics.hints import SUGGEST_STABLE  # the one sentence of the suggestion: Test, the check and the report share it
 from dcdash.ingest import rollups
 from dcdash.ingest.backfill import Backfill, FillRefused, LeaseHeld
 from dcdash.ingest.settings import HistorySettings
@@ -73,10 +74,6 @@ _COMPARE_ADDRESSES = """
 COMPARE_ADDRESSES = 10  # stored numbered addresses Test reads in both forms
 COMPARE_SAMPLE = 200  # stored string ids Test looks at to decide whether the source looks like Plant SCADA
 COMPARE_SECONDS = 10.0  # the most Test waits for the comparison; it adds nothing when it takes longer
-SUGGEST_STABLE = (
-    "This server looks like AVEVA Plant SCADA and its tag addresses carry a number that can change (a community answer says so, "
-    'not tested against your SCADA). Consider "Stable tag addresses" (Edit source).'
-)
 
 
 async def _stable_notes(pool: asyncpg.Pool, source_id: int, connector: Any) -> str:

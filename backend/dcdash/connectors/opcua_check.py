@@ -15,8 +15,10 @@ import asyncio
 import contextlib
 import ipaddress
 import math
+import re
 import socket
 import time
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -28,11 +30,12 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.x509.oid import NameOID
 
 from dcdash.connectors.base import GOOD, url_host_port
-from dcdash.connectors.opcua import OpcUaConnector, ReportingClient, _point_value, _status_text, close_quietly
-from dcdash.connectors.opcua_ids import has_number_prefix, read_plan, slice_size, stable_address
+from dcdash.connectors.identity import from_endpoints
+from dcdash.connectors.opcua import OpcUaConnector, ReportingClient, StableComparison, _point_value, _status_text, close_quietly
+from dcdash.connectors.opcua_ids import has_number_prefix, looks_like_plant_scada, read_plan, slice_size, stable_address
 from dcdash.core.audit import hidden_values
 from dcdash.diagnostics.check import Checker, CheckResult, Publish, StepFailed, StepOutcome
-from dcdash.diagnostics.hints import CLOCK_SKEW, NUMBERING_CHANGED, hint_for
+from dcdash.diagnostics.hints import CLOCK_SKEW, NUMBERING_CHANGED, SUGGEST_STABLE, hint_for
 
 DEADLINE_SECONDS = 60.0
 MAX_CHUNK = 100  # nodes per Read request, whatever the server allows
@@ -41,6 +44,7 @@ TIMING_PAUSE = 0.2  # seconds between the timing reads
 TIMING_NODES = 10
 MAX_POINT_LINES = 20  # points listed in the detail of read_points, bad ones first
 MAX_BAD_KINDS = 3  # distinct bad statuses read_points names in its summary and gives a hint line each
+COMPARE_ADDRESSES = 10  # numbered addresses read_points compares with their stable form (the count Test uses, collector/jobs.py)
 SKEW_WARN_SECONDS = 60.0
 SKEW_FAIL_SECONDS = 300.0
 CERT_WARN_DAYS = 30
@@ -50,6 +54,7 @@ _SERVER_TIME = ua.NodeId(ua.ObjectIds.Server_ServerStatus_CurrentTime)
 _NAMESPACES = ua.NodeId(ua.ObjectIds.Server_NamespaceArray)
 _MAX_NODES_PER_READ = ua.NodeId(ua.ObjectIds.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead)
 _STANDARD_NAMESPACE = "http://opcfoundation.org/UA/"
+_STRING_ID = re.compile(r"(ns=[0-9]+;)?s=")  # the string ids of the stored addresses: the ones whose numbering looks_like_plant_scada judges
 
 _CERT_FILE_HINT = (
     "The client certificate does not exist at that path inside the collector. Create the certificate and key as docs/sources-and-discovery.md "
@@ -170,17 +175,18 @@ def _validity_words(facts: dict[str, Any]) -> str:
     return f"valid until {facts['not_after'][:10]} ({facts['days_left']} days)"
 
 
-def _read_hints(kinds: list[tuple[str, str]], *, numbering_changed: bool = False) -> str | None:
+def _read_hints(kinds: list[tuple[str, str]], *, numbering_changed: bool = False, notes: Sequence[str] = ()) -> str | None:
     """One line per hint text, newline apart ("BadSensorFailure, BadDeviceFailure: Ask ..."): the report prints each as a line of
     its own, since two hints joined into one would be cut at the line limit. Statuses with the same hint share a line.
-    `numbering_changed`: BadNodeIdUnknown also gets the second hint about the number in front of the tag (w34 R8)."""
+    `numbering_changed`: BadNodeIdUnknown also gets the second hint about the number in front of the tag (w34 R8).
+    `notes`: lines that belong to no status (the stable-address comparison, the suggestion of the option), after the others."""
     lines: dict[str, list[str]] = {}
     for name, _address in kinds:
         if hint := hint_for(name, None, "read_points"):
             lines.setdefault(hint, []).append(name)
         if numbering_changed and name == "BadNodeIdUnknown":
             lines.setdefault(NUMBERING_CHANGED, []).append(name)
-    return "\n".join(f"{', '.join(names)}: {hint}" for hint, names in lines.items()) or None
+    return "\n".join([*(f"{', '.join(names)}: {hint}" for hint, names in lines.items()), *notes]) or None
 
 
 # -- the check --------------------------------------------------------------------------------------------------------------
@@ -510,6 +516,9 @@ class OpcUaCheck:
                     now = _local_now()
                     for (address, nodeid), data_value, data_type, level in zip(batch, values, types, levels, strict=True):
                         rows.append(self._point_row(address, nodeid, now, data_value, data_type, level))
+                # R7: with the option on, the step also shows what the numbered form of a few addresses reads (one more Read, not
+                # counted in `requests`: the summary is what it was). It is extra information, like the data types.
+                comparison = await self._compare_stable(valid) if self.config.stable_addresses else None
         except TimeoutError:
             raise StepFailed(f"no answer within {budget:g} s", error_class="TimeoutError") from None
         bad = [row for row in rows if not row["good"]]
@@ -532,7 +541,36 @@ class OpcUaCheck:
         numbering_changed = not self.config.stable_addresses and any(
             _status_name(row["status"]) == "BadNodeIdUnknown" and has_number_prefix(row["address"]) for row in bad
         )
-        return StepOutcome(_clip(summary), detail, _read_hints(kinds, numbering_changed=numbering_changed))
+        notes: list[str] = []  # hint lines that belong to no status
+        if comparison is not None and comparison.message:
+            detail["stable_comparison"] = comparison.message
+            if comparison.doubts_the_option:  # the stable form reads other values, or nothing: the only findings that are a problem
+                notes.append(comparison.message)
+        elif self._suggest_stable() and not numbering_changed:  # R6; the R8 hint above already says "try the option"
+            notes.append(SUGGEST_STABLE)
+        return StepOutcome(_clip(summary), detail, _read_hints(kinds, numbering_changed=numbering_changed, notes=notes))
+
+    async def _compare_stable(self, valid: list[tuple[str, ua.NodeId]]) -> StableComparison | None:
+        """The numbered-versus-stable comparison of the first `COMPARE_ADDRESSES` numbered addresses the step read, in the session of
+        the check (`OpcUaConnector.compare_stable`: both forms in one request, so a tag that ticks cannot look like a difference),
+        or None when there is nothing to compare or it could not be read. `valid` leaves out the twins the read refused."""
+        numbered = [address for address, _nodeid in valid if has_number_prefix(address)][:COMPARE_ADDRESSES]
+        if not numbered:
+            return None
+        try:
+            async with asyncio.timeout(self.config.timeout_seconds):  # its own bound: a slow comparison must not fail the step
+                return await self.connector.compare_stable(numbered, client=self._session_client())
+        except Exception:  # noqa: BLE001 - extra information, like the data types: a failure leaves the step as it is
+            return None
+
+    def _suggest_stable(self) -> bool:
+        """R6: the option is off and the source looks like AVEVA Plant SCADA (the endpoint, or what the endpoints step heard the
+        server call itself, and the mapped string ids it carries). The check reads nothing extra for this, so unlike Test it has no
+        comparison to hold it back."""
+        if self.config.stable_addresses:
+            return False
+        identity = from_endpoints(self.endpoints)
+        return looks_like_plant_scada(identity, self.config.endpoint, [a for a in self.points if _STRING_ID.match(a)])
 
     async def _read_optional(self, nodeids: list[ua.NodeId], attr: ua.AttributeIds) -> list[ua.DataValue | None]:
         """An attribute for each node, or Nones when the server cannot say: it is extra information, not the point of the step."""
