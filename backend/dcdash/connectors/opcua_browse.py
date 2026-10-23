@@ -172,7 +172,8 @@ class _Walk:
     async def browse(self, nodeids: Sequence[ua.NodeId], reference: ua.NodeId, class_mask: ua.NodeClass) -> list[list[ua.ReferenceDescription]]:
         """The forward references of `reference` (and its subtypes) of every node, one list per node in the order asked, in requests
         of up to `BATCH` nodes, with every ContinuationPoint followed. A node the server cannot browse has no references, except
-        when it had no ContinuationPoint left for the node: that is asked again, in smaller batches (see `_browse_chunk`)."""
+        when it had no ContinuationPoint left for the node, or lost a later page of it: that is asked again, in smaller batches or on
+        its own (see `_browse_chunk`)."""
 
         async def send(chunk: Sequence[ua.NodeId]) -> list[list[ua.ReferenceDescription]]:
             return await self._browse_chunk(chunk, reference, class_mask)
@@ -200,9 +201,10 @@ class _Walk:
         # A bad status for one node is "nothing under it" (what the former walker did: it read an empty list), except when the server
         # had no ContinuationPoint left for it (a server allows only a few open at a time, the former walker held one): that answer
         # carries no references although the node has some, and they are asked for again below.
-        refused = [i for i, result in enumerate(results) if result.StatusCode_.value == _NO_POINTS]
+        refused = [i for i, result in enumerate(results) if _status(result) == _NO_POINTS]
         waiting = {i: result.ContinuationPoint for i, result in enumerate(results) if result.ContinuationPoint}
         granted = len(waiting)  # the points this server gave at once: what it can hold open
+        lost: dict[int, int] = {}  # the nodes whose next page the server answered with a Bad status, and which one
         self._open.update(dict.fromkeys(waiting.values()))
         while waiting:
             indexes = list(waiting)
@@ -215,14 +217,22 @@ class _Walk:
                 self._open.pop(point, None)
             waiting = {}
             for i, answer in zip(indexes, answers, strict=True):
+                if answer.StatusCode_.is_bad():
+                    # A page the server lost (BadContinuationPointInvalid, BadNoContinuationPoints): nothing in this answer is kept and
+                    # the node is not read to its end, so what it collected is dropped and it is browsed again below.
+                    lost[i] = _status(answer)
+                    continue
                 references[i].extend(answer.References)
                 if answer.ContinuationPoint:
                     waiting[i] = answer.ContinuationPoint
             self._open.update(dict.fromkeys(waiting.values()))
+        # Every point of this request is back now. One node alone that still finds none, or loses a page, is a server that cannot be
+        # walked: an empty or a short folder would be taken for the real one.
+        if len(nodeids) == 1 and refused:
+            raise ConnectorError("protocol_error", "the server has no continuation point left (BadNoContinuationPoints)")
+        if len(nodeids) == 1 and lost:
+            raise ConnectorError("protocol_error", f"the server lost a continuation point ({_status_name(lost[0])})")
         if refused:
-            # Every point of this request is back now. One node alone that still finds none is a server that cannot be walked.
-            if len(nodeids) == 1:
-                raise ConnectorError("protocol_error", "the server has no continuation point left (BadNoContinuationPoints)")
             self._sizes["points"] = min(self._sizes["points"], max(1, granted))
             size = min(max(1, len(nodeids) // 2), self._sizes["points"])
             for start in range(0, len(refused), size):
@@ -230,6 +240,8 @@ class _Walk:
                 again = await self._browse_chunk([nodeids[i] for i in part], reference, class_mask)
                 for i, refs in zip(part, again, strict=True):
                     references[i] = refs
+        for i in lost:  # each on its own, from its first page: the references it had collected are replaced, none is listed twice
+            references[i] = (await self._browse_chunk([nodeids[i]], reference, class_mask))[0]
         return references
 
     async def release(self) -> None:
@@ -278,6 +290,15 @@ class _Walk:
                     raise
                 self._sizes[kind] = max(1, len(chunk) // 2)
         return answers
+
+
+def _status(result: ua.BrowseResult) -> int:
+    """The status code proper of an answer: the high 16 bits. The low 16 carry info bits and flags (a server may set them)."""
+    return result.StatusCode_.value & 0xFFFF0000
+
+
+def _status_name(code: int) -> str:
+    return ua.StatusCode(code).name
 
 
 def _same_count(answers: Sequence[Any] | None, asked: Sequence[Any]) -> Sequence[Any]:

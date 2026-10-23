@@ -105,6 +105,9 @@ class FakeUa:
         self.refuse_over = refuse_over
         self.max_points: int | None = None  # at most this many points open at a time: a page that needs another is BadNoContinuationPoints
         self.refused = 0  # the pages that were refused for lack of a point
+        self.no_points_status = NO_POINTS  # what a refused page answers with (a test can set info bits on it)
+        self.bad_next: dict[str, list[ua.StatusCode | None]] = {}  # per node: how its next BrowseNext answers go (None: a normal page)
+        self._owner: dict[bytes, str] = {}  # the node a point belongs to
         self.hide_class: set[str] = set()  # nodes whose reference says NodeClass 0 (Unspecified)
         self.read_attributes: list[set[int]] = []  # the attributes of each Read request
         self.drop_last_browse_result = False
@@ -160,13 +163,14 @@ class FakeUa:
             DisplayName=ua.LocalizedText("from the reference"),
         )
 
-    def _page(self, refs: list[ua.ReferenceDescription]) -> ua.BrowseResult:
+    def _page(self, refs: list[ua.ReferenceDescription], owner: str) -> ua.BrowseResult:
         if self.page and len(refs) > self.page:
             if self.max_points is not None and len(self.points) >= self.max_points:
                 self.refused += 1
-                return ua.BrowseResult(StatusCode_=NO_POINTS)  # no references at all, as a server with no point left answers
+                return ua.BrowseResult(StatusCode_=self.no_points_status)  # no references at all, as a server with no point left answers
             self._count += 1
             point = f"point-{self._count}".encode()
+            self._owner[point] = owner
             self.points[point] = refs[self.page :]
             self.handed.append(point)
             return ua.BrowseResult(StatusCode_=GOOD, ContinuationPoint_=point, References=refs[: self.page])
@@ -184,7 +188,7 @@ class FakeUa:
             keys = self.props.get(key, []) if description.ReferenceTypeId == HAS_PROPERTY else self.children.get(key, [])
             if description.NodeClassMask:
                 keys = [k for k in keys if int(self.cls[k]) & int(description.NodeClassMask)]
-            results.append(self._page([self._reference(k) for k in keys]))
+            results.append(self._page([self._reference(k) for k in keys], key))
         return results[:-1] if self.drop_last_browse_result else results
 
     async def browse_next(self, params: ua.BrowseNextParameters) -> list[ua.BrowseResult]:
@@ -200,7 +204,14 @@ class FakeUa:
             await self.gate.wait()
         if self.next_error is not None:
             raise self.next_error
-        return [self._page(self.points.pop(point)) for point in points]
+        answers = []
+        for point in points:
+            refs, owner = self.points.pop(point), self._owner[point]  # the server forgets the point once it has answered it
+            script = self.bad_next.get(owner)
+            step = script.pop(0) if script else None  # None: this answer is a normal page
+            # a page the server lost: a Bad status and no references, no new point (what BadContinuationPointInvalid looks like)
+            answers.append(self._page(refs, owner) if step is None else ua.BrowseResult(StatusCode_=step))
+        return answers
 
     async def read(self, params: ua.ReadParameters) -> list[ua.DataValue]:
         self.read_sizes.append(len(params.NodesToRead))
@@ -473,6 +484,67 @@ async def test_a_refused_page_in_a_later_level_is_retried_in_smaller_batches_too
     assert len(expected) == 12
     assert await _new_browse(fake.client()) == expected
     assert fake.refused > 0 and fake.points == {} and fake.released == []
+
+
+@pytest.mark.parametrize("limit", [1, 2])
+async def test_a_refused_page_is_recognised_by_its_status_code_whatever_its_info_bits(limit):
+    fake = _folders()
+    fake.no_points_status = ua.StatusCode(ua.StatusCodes.BadNoContinuationPoints | 0x0400)  # the info type bit of a DataValue status
+    fake.max_points = limit
+    expected = await _outcome(_reference_browse(fake.client()))
+    fake.refused, fake.handed, fake.released = 0, [], []
+    assert await _new_browse(fake.client()) == expected
+    assert fake.refused > 0 and fake.points == {} and fake.released == []
+
+
+# -- a BrowseNext the server answers with a Bad status (w34 F4) -------------------------------------------------------------------
+INVALID = ua.StatusCode(ua.StatusCodes.BadContinuationPointInvalid)
+
+
+@pytest.mark.parametrize("status", [INVALID, NO_POINTS, ua.StatusCode(ua.StatusCodes.BadContinuationPointInvalid | 0x0400)], ids=["invalid", "no points", "info bit"])
+@pytest.mark.parametrize("lost", ["ns=2;s=One", "ns=2;s=Two"])
+async def test_a_page_the_server_lost_is_browsed_again_on_its_own_and_nothing_is_listed_twice(status, lost):
+    fake = _wide(page=2, first=5, second=5)  # both folders have a second and a third page: one BrowseNext carries both points
+    expected = await _outcome(_reference_browse(fake.client()))
+    assert len(expected) == 10
+    fake.bad_next[lost] = [status]  # the first BrowseNext answer of that folder is Bad and carries no references and no new point
+    fake.handed, fake.next_sizes, fake.browse_sizes = [], [], []
+    answer = await _new_browse(fake.client())
+    assert answer == expected  # every child once, in the order of the reference walker
+    assert len({d.address for d in answer}) == len(answer)
+    assert fake.bad_next[lost] == []  # the failure really happened
+    assert fake.browse_sizes[:3] == [1, 2, 1]  # Objects; the two folders; the lost one again alone
+    assert fake.points == {} and fake.released == []
+
+
+async def test_the_pages_a_node_had_collected_before_its_page_was_lost_are_replaced_not_extended():
+    fake = _wide(page=2, first=7, second=1)  # One: pages of 2, 2, 2 and 1
+    expected = await _outcome(_reference_browse(fake.client()))
+    fake.bad_next["ns=2;s=One"] = [None, INVALID]  # its second page arrives, its third is lost: four children are already collected
+    answer = await _new_browse(fake.client())
+    assert answer == expected and len(answer) == 8
+    assert fake.bad_next["ns=2;s=One"] == []  # the failure really happened
+    assert fake.points == {} and fake.released == []
+
+
+async def test_a_page_lost_again_on_the_second_try_is_a_typed_error_and_no_point_is_leaked():
+    fake = _wide(page=2, first=5, second=5)
+    fake.bad_next["ns=2;s=One"] = [INVALID, INVALID]  # lost in the level's BrowseNext, and lost again when browsed alone
+    with pytest.raises(ConnectorError) as caught:
+        await _new_browse(fake.client())
+    assert caught.value.status == "protocol_error"
+    assert "BadContinuationPointInvalid" in caught.value.message
+    assert fake.points == {} and fake.released == []
+
+
+async def test_a_page_lost_when_the_folder_was_browsed_alone_is_a_typed_error_not_a_short_folder():
+    fake = _folders(count=1)  # one parent in the request: there is no smaller request to try
+    fake.bad_next["ns=2;s=F0"] = [NO_POINTS]
+    with pytest.raises(ConnectorError) as caught:
+        await _new_browse(fake.client())
+    assert caught.value.status == "protocol_error"
+    assert "BadNoContinuationPoints" in caught.value.message
+    assert fake.points == {} and fake.released == []
 
 
 # -- references that do not say their class (w34 F3, M-1) --------------------------------------------------------------------------
