@@ -16,6 +16,10 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w37 (2026-10-24, MERGE)
+
+Discovery with hundreds of mapped assets (front end only: no migration, no new permission, no backend or figure change; nothing to do on upgrade). A parent with more than 50 sub-assets is drawn as one box (`400 sub-assets`, `400 mapped`, **Show 50**): each press draws 50 more, Find goes straight to any of them, folding the parent works as before. On the owner's shape (414 assets, 400 under one room) Discovery draws 17 nodes and 24 edges instead of 416 and 822 (page elements 710, was 9,087); with the CPU slowed four times a click answers in 14 to 20 ms (was 41 to 59). Fit View leaves the minimap's corner free. Reviews: plan 1 Critical / 6 Important, whole wave in a browser 0 / 1, re-review 0 / 0.
+
 ## w36 (2026-10-24, 4a99b50)
 
 Discovery at scale (no migration, no new permission, no figure change, no recompute). A source over 1,000 points is a small card on Discovery that draws only what is mapped, with **Map by shape**: a page that groups its tags into a few dozen shapes (digits become `#`; the shapes, the billing label and the asset name are guesses, and the page says so), billing rows first, one decision per row. **Review** shows samples and checks (collisions, renumbered tags, units, 1,000 at a time, meters missing a tag), then goes through the tag list: dry run, Map, Undo for 24 hours. Find offers to search a large source's tags, a source with too many groups is not opened, the Points page draws 200 rows, decisions are remembered as saved rules. At 30,000 tags the graph answer fell from 8.0 MB to 16 KB and the Points Map dialog from 4.3 s to 0.1 s; 400 energy counters take 5 actions.

@@ -58,6 +58,33 @@ describe("useCanvasMenu", () => {
     expect(result.current.menu?.returnFocus()).toBe(node);
   });
 
+  describe("a 'show more' node (a group's Show 50 more, the summary of an asset's sub-assets) is no focus stop: the focus returns to its button (w37)", () => {
+    const withMore = () => {
+      const made = setup();
+      made.canvas.insertAdjacentHTML("beforeend", `
+        <div class="react-flow__node" data-id="more:asset:20"><div class="gnode-more-assets"><button type="button" class="show">Show 50</button></div></div>
+        <div class="react-flow__node" data-id="more:cluster:1:G"><div class="gnode-more"><button type="button" class="show">Show 50 more</button></div></div>
+        <div class="react-flow__node" data-id="more:asset:21"><div class="gnode-more-assets"></div></div>`);
+      return { ...made, button: (id: string) => made.canvas.querySelector<HTMLElement>(`[data-id="${id}"] button`)! };
+    };
+
+    it.each(["more:asset:20", "more:cluster:1:G"])("openNode on %s returns the focus to the button inside it, and Escape's focus() lands there", (id) => {
+      const { canvas, button } = withMore();
+      const { result } = mount(canvas);
+      act(() => result.current.openNode(id, click()));
+      expect(result.current.menu?.returnFocus()).toBe(button(id));
+      result.current.menu?.returnFocus()?.focus();
+      expect(document.activeElement).toBe(button(id));
+    });
+
+    it("with no button left it falls back to the canvas, never to a wrapper that cannot take the focus", () => {
+      const { canvas } = withMore();
+      const { result } = mount(canvas);
+      act(() => result.current.openNode("more:asset:21", click()));
+      expect(result.current.menu?.returnFocus()).toBe(canvas);
+    });
+  });
+
   it("a contextmenu with zero coordinates (the keyboard's, in some browsers) is anchored to the node's box", () => {
     const { canvas } = setup();
     const { result } = mount(canvas);

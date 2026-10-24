@@ -126,6 +126,32 @@ A source of 1,000 points or fewer is drawn exactly as before. The server decides
 
 For any source, large or not, the page also refuses to open what would draw more than 600 groups: pressing its arrow or Enter shows `Plant has 13,851 groups, too many to draw; use Map by shape` (adding ` or the Points page` for a person who can open it), and Find takes you to the card with the same note instead of opening it.
 
+## After mapping: hundreds of assets on Discovery
+
+An asset that has **more than 50 sub-assets** is drawn with one box under it instead of all of them:
+
+- The box reads `400 sub-assets`, a muted line `400 mapped` (the points mapped to those sub-assets and to everything under them) and the button **Show 50**. Each press draws the next 50 (**Show 50 more**; the last press says what is left, such as **Show 30 more**), and when the last page is drawn the box is gone. The first sub-asset just drawn takes the keyboard focus.
+- A mapped point that belongs to a hidden sub-asset keeps its line: it ends on the box, labelled `N mapped` when several points share it. Nothing is lost, and the counts above the canvas (sources, points, mapped) still count everything.
+- The pages are for this visit only; nothing is saved. Folding the parent (the arrow on it, or **Collapse this branch**) forgets them: unfolding shows the box with nothing drawn. **Expand all** and **Collapse all** do not change the pages.
+- **Find** (Ctrl+K) goes straight to any sub-asset: it draws as many pages as it takes (the next multiple of 50), then jumps to it and flashes it. When drawing that many would pass the 600-node budget, it takes you to the box and says so: `... too far down to draw at once: use Show 50 to go on.` (once a page of that parent is drawn, the button and the note say `Show 50 more`). Nothing is unfolded below that box, so the folds you saved there stay as they are. A sub-asset made under such a parent with **New sub-asset...** is drawn and focused at once, and the ones that were drawn stay drawn.
+- A drop needs a drawn asset: a group or point dropped on the box is a plain move, not a mapping. To map onto a hidden sub-asset, use Find or **Show 50** first. The box itself cannot be dragged, selected or mapped; it follows its parent when the parent is moved and is never saved in the layout. A right-click on it gives the canvas menu.
+- The top level (assets with no parent) is never cut into pages: hundreds of top-level assets are all drawn (it is a backlog item). A graph in which no asset has more than 50 sub-assets looks exactly as before.
+
+Measured on this machine (headless Chromium, 1440 x 900, the 414-asset shape of the owner; "4x" = the CPU slowed four times):
+
+| What | Before | After |
+|---|---|---|
+| Drawn at rest: nodes, edges, page elements | 416, 822, 9,087 | 17, 24, 710 |
+| Discovery to the first node | 0.86 s (4x: 1.46 s) | 0.85 s (4x: 1.05 s) |
+| Settled (4x) | 1.41 s | 0.81 s |
+| Main thread busy during a 3 s pan (4x) | 2.2 s | 0.5 to 1.2 s |
+| Click on an asset (4x) | 41 to 59 ms | 14 to 20 ms |
+| Right-click menu (4x) | 57 to 68 ms | 14 to 21 ms |
+| Show 50 to the first new sub-asset painted | not there | 62 ms (4x: 124 ms) |
+| The same graph with all 400 sub-assets and all 400 points drawn (817 nodes): the pan | 33 ms p95 at 4x | 33 ms p95 at 4x |
+
+The box removes the nodes while the pages are closed; a graph with every page open costs what it always cost.
+
 ## Find
 
 **Find** (Ctrl+K on the canvas) lists matches on the canvas as before. A large source's tags are not on the canvas, so for a query of 2 to 100 characters Find ends its list with one more option for each large source: `Search the 15,000 tags of <source> for "PENRG"`. Choosing it opens that source's shapes page with the search filled in, for a person with `discovery.view`.

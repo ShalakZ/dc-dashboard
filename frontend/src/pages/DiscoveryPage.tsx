@@ -32,7 +32,7 @@ import { CanvasSkeleton, GraphBarSpace } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { useAction } from "../hooks/useAction";
 import { useCanvasKeys } from "../hooks/useCanvasKeys";
-import { useCanvasMenu } from "../hooks/useCanvasMenu";
+import { focusTargetOf, useCanvasMenu } from "../hooks/useCanvasMenu";
 import { useConfirm } from "../hooks/useConfirm";
 import { useCreateAsset } from "../hooks/useCreateAsset";
 import { useGraphHighlight } from "../hooks/useGraphHighlight";
@@ -44,12 +44,12 @@ import { useValueTip } from "../hooks/useValueTip";
 import { afterPaint, framesUntil } from "../lib/afterPaint";
 import { dropPayload, mappableClusters, multiPointDrop, pickDropTarget, takenMetrics, type DropPayload } from "../lib/drop";
 import {
-  buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isNotSeen, isOfferable, isRemovable, layoutBatches, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, ownPlaces,
-  PAGE_SIZE, pruneShown, removableNotSeen, removalDialogText, removalOutcome, seenLine, shiftedPlaces, sourceIdOfNode, visiblePoints,
+  ASSET_PAGE, buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isNotSeen, isOfferable, isRemovable, layoutBatches, looksLikeSentence, moreNodeIds, moveOfferFor, nodeId, notSeenCount, ownPlaces,
+  PAGE_SIZE, pruneAssetsShown, pruneShown, removableNotSeen, removalDialogText, removalOutcome, seenLine, shiftedPlaces, sourceIdOfNode, visiblePoints,
   type AssetNodeData, type ClusterNodeData, type Group, type GraphView, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
-import { cameraMs, keepInView, overlayMargin, unionRect } from "../lib/graphCamera";
-import { buildFindIndex, findMatches, findPlan, type FindEntry, type ShapesTarget } from "../lib/graphFind";
+import { cameraMs, fitPadding, keepInView, overlayMargin, unionRect } from "../lib/graphCamera";
+import { buildFindIndex, findMatches, findPlan, pagesForNewAsset, tooFarNote, type FindEntry, type ShapesTarget } from "../lib/graphFind";
 import { alignGuides, type Rect } from "../lib/graphGuides";
 import { navIndex } from "../lib/graphNav";
 import {
@@ -85,6 +85,15 @@ const isMeasured = (n: Node) => n.measured?.width !== undefined && n.measured?.h
 const overlayMarginOf = (area: HTMLElement) => overlayMargin(
   area.getBoundingClientRect(), area.querySelector(".graph-minimap")?.getBoundingClientRect() ?? null, area.querySelector(".graph-tools")?.getBoundingClientRect() ?? null,
 );
+/**
+ * (w37) The options of one Fit View press (the Controls' button, the canvas menu): the glide, and a padding that keeps the fitted graph out of the minimap (`fitPadding`; none
+ * when it is not drawn). Measured when the button is pressed, like `overlayMarginOf`: the summary node of the last asset ends the rightmost column, so a plain fit
+ * parked its button under the minimap.
+ */
+const fitOptionsNow = (area: HTMLElement | null) => {
+  const padding = area ? fitPadding(area.getBoundingClientRect(), area.querySelector(".graph-minimap")?.getBoundingClientRect() ?? null) : undefined;
+  return { ...(padding ? { padding } : {}), duration: cameraMs(reducedMotion()) };
+};
 const nap =(ms: number) => new Promise<void>((resolve) => { window.setTimeout(resolve, ms); });
 /**
  * What a screen reader is told when a node takes the focus. The library's own sentence says Enter or Space selects it and the arrows move a SELECTED node, which
@@ -101,11 +110,6 @@ const FLASH_MS = 1500;
 const SNAP_GRID_XY: [number, number] = [SNAP_GRID, SNAP_GRID];
 const NO_IDS: readonly string[] = [];
 const selectorId = (id: string) => id.replace(/["\\]/g, "\\$&");
-/** What takes the focus for a node: its wrapper, or, for the "show more" node (its wrapper is not a stop), its button. Null when the node is not on the canvas. */
-function focusTargetOf(root: HTMLElement | null, id: string): HTMLElement | null {
-  const wrapper = root?.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectorId(id)}"]`) ?? null;
-  return id.startsWith("more:") ? wrapper?.querySelector<HTMLElement>(".gnode-more button") ?? null : wrapper;
-}
 
 /**
  * What a drag works from, taken ONCE when it starts (the callbacks must not read the maps they are changing): which nodes are dragged, where every
@@ -141,6 +145,8 @@ type Callbacks = {
   onAdd: (id: string) => void;
   /** W12b: the `more` node's button, and the fold of an asset's sub-assets (the latter is given to every role). */
   onMore: (clusterId: string) => void; onToggleAssets: (id: string) => void;
+  /** (w37) The summary node's Show 50: draws the next page of an asset's sub-assets (given to every role: it only changes the view). */
+  onMoreAssets: (summaryId: string) => void;
 };
 
 /** The group a group node stands for. A group key may hold colons, so the id is matched whole, group by group. */
@@ -212,12 +218,14 @@ function looksOf(source: GraphSource, siteZone: string | undefined): string | un
  *
  * W12b: the `more` node gets `onMore` and EVERY asset node gets `onToggleAssets` (the fold only changes the view, so no permission is needed; the node draws
  * the button only when the asset has sub-assets).
+ * (w37) The summary of an asset's sub-assets (`moreAssets`) gets `onMoreAssets`, to every role for the same reason; it has no other action (a right-click on it is the canvas's menu).
  */
 function nodeData(
   node: Node, { canAccept, canRemove, canEdit, canForm, formWait, canMove, canShapes }: NodeGates, facts: ReadonlyMap<number, SourceFacts>, mappedBy: ReadonlyMap<number, MappedSource[]>,
-  { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onShapes, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets }: Callbacks,
+  { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onShapes, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets, onMoreAssets }: Callbacks,
 ): Node["data"] {
   if (node.type === "more") return { ...node.data, onMore };
+  if (node.type === "moreAssets") return { ...node.data, onMoreAssets };
   if (node.type === "source") {
     const data = node.data as SourceNodeData;
     const fact = facts.get(data.source.id);
@@ -274,6 +282,8 @@ function Canvas({ model }: { model: GraphModel }) {
   // ---- The view (W12b): the filter and the folded assets are remembered per browser, the pages only for this visit (a closed group starts again at one page) ----
   const [unmappedOnly, setUnmappedOnlyState] = useState(readUnmappedOnly);
   const [shown, setShown] = useState<ReadonlyMap<string, number>>(() => new Map());
+  // (w37) How many sub-assets of a parent with more than ASSET_PAGE of them are drawn (parent id -> count; none = the summary alone). Session only, like a group's pages.
+  const [assetsShown, setAssetsShown] = useState<ReadonlyMap<number, number>>(() => new Map());
   const [assetsClosed, setAssetsClosedState] = useState<ReadonlySet<number>>(() => {
     const known = new Set(model.assets.map((a) => a.id));
     return new Set([...readAssetsClosed()].filter((id) => known.has(id)));
@@ -284,7 +294,10 @@ function Canvas({ model }: { model: GraphModel }) {
   const notSeenTotal = useMemo(() => notSeenCount(model.sources), [model]);
   const notSeenOnly = notSeenOn && notSeenTotal > 0;
   useEffect(() => { if (notSeenTotal === 0) setNotSeenOn(false); }, [notSeenTotal]); // forgotten with the last mark, so a later scan that marks a source does not bring the filter back by itself
-  const view = useMemo<GraphView>(() => ({ unmappedOnly, notSeenOnly, shown, assetsClosed, pageSize: PAGE_SIZE }), [unmappedOnly, notSeenOnly, shown, assetsClosed]);
+  const view = useMemo<GraphView>(
+    () => ({ unmappedOnly, notSeenOnly, shown, assetsClosed, pageSize: PAGE_SIZE, assetPageSize: ASSET_PAGE, assetsShown }),
+    [unmappedOnly, notSeenOnly, shown, assetsClosed, assetsShown],
+  );
   // The folds are set at once by their setter (two quick presses must not both start from the old set); it is up here because a new sub-asset opens its parent (`onAdd`).
   // It keeps only ids the model knows, and reads the model of the moment (`modelRef`, below) because a graph read may have come in since the render.
   const assetsClosedNow = useRef(assetsClosed);
@@ -334,6 +347,9 @@ function Canvas({ model }: { model: GraphModel }) {
   const [flashId, setFlashId] = useState<string | null>(null);
   const flashTimer = useRef<number | undefined>(undefined);
   const fitOptions = useMemo(() => ({ duration: cameraMs(reduced) }), [reduced]);
+  // (w37) The Controls' fit-view button calls `fitView(fitViewOptions)` and THEN `onFitView` (@xyflow/react 12.12, Controls: `index.js` 4609-4612); `fitView` only queues the fit and keeps the
+  // options of the LAST call (`index.js` 1218-1225, read when the queue is run, 3392-3404). So this second call is the one that counts: the same fit with the minimap's padding, measured now.
+  const onControlsFit = useCallback(() => { void fitView(fitOptionsNow(canvas.current)); }, [fitView]);
   const [ask, askDialog] = useConfirm();
   const { dark } = useAppearance();
   // `createdAsset`: the Review that follows the New asset form carries the name of the asset the form made (it says Cancel keeps it).
@@ -465,6 +481,8 @@ function Canvas({ model }: { model: GraphModel }) {
   }, []);
   // A group that is no longer open goes back to one page: its entry is dropped (the same map comes back when nothing is, so nothing renders).
   useEffect(() => { setShown((current) => pruneShown(current, open)); }, [open]);
+  // (w37) The same for an asset that is folded (by its chevron or by Collapse this branch): it forgets its pages and starts at the summary when it is opened again.
+  useEffect(() => { setAssetsShown((current) => pruneAssetsShown(current, assetsClosed)); }, [assetsClosed]);
 
   /**
    * After a source has opened: pan, never zoom, just enough to bring the source and its groups inside the canvas with a margin. Waits until the new
@@ -654,6 +672,23 @@ function Canvas({ model }: { model: GraphModel }) {
     setShown((current) => new Map(current).set(clusterId, Math.min(visible.length, drawn + PAGE_SIZE)));
     void goToNode(nodeId.point(visible[drawn].id));
   }, [goToNode]);
+  /**
+   * (w37) "Show 50" of a summary node: the page of its parent's sub-assets grows by a page (never past its sub-assets). The summary, whose button had the focus, goes when the last
+   * page is shown, so the focus moves on at once, as the group's "Show 50 more" does: to the first sub-asset just drawn.
+   */
+  const onMoreAssets = useCallback((summaryId: string) => {
+    const parentId = Number(summaryId.slice("more:asset:".length));
+    // The walk's own rule for a sub-asset, in the model's order. This indexes the FULL list, while `buildGraph` pages `fresh` (the children the walk had not already drawn, graph.ts):
+    // under a parent cycle (pathological data) the two can differ by the number it skipped, and the jump below can land on a neighbour. Normal trees have no such child.
+    const kids = modelRef.current.assets.filter((a) => a.parent_id === parentId && a.id !== parentId);
+    const drawn = viewNow.current.assetsShown?.get(parentId) ?? 0;
+    if (drawn >= kids.length) {
+      void goToNode(nodeId.asset(parentId)); // (a stale press: nothing is left to draw)
+      return;
+    }
+    setAssetsShown((current) => new Map(current).set(parentId, Math.min(kids.length, drawn + ASSET_PAGE)));
+    void goToNode(nodeId.asset(kids[drawn].id));
+  }, [goToNode]);
   /** The fold of an asset's sub-assets: kept per browser. Its button (or the node, for Enter) stays where it is, so the focus does not move. */
   const onToggleAssets = useCallback((id: string) => {
     keepFocus();
@@ -747,11 +782,22 @@ function Canvas({ model }: { model: GraphModel }) {
   const onNewAssetCreated = async (asset: Asset) => {
     const payload = newAsset?.payload;
     setNewAsset(null);
-    if (!payload) return;
+    if (!payload && asset.parent_id === null) return; // (a root asset is never behind a summary)
     const found = await framesUntil(() => modelRef.current.assets.some((a) => a.id === asset.id), { stop: () => !mounted.current });
     if (!mounted.current) return;
-    if (found) openReview(payload, { kind: "existing", assetId: asset.id }, asset.name);
-    else toast.error("The asset was created, but the graph could not be refreshed. Use Map… to map to it.");
+    if (!found) {
+      if (payload) toast.error("The asset was created, but the graph could not be refreshed. Use Map… to map to it.");
+      return;
+    }
+    // (w37) A new sub-asset can land behind its parent's summary (or, as the 51st, turn 50 drawn ones into a summary): the pages that hold it back are extended, as Find does,
+    // so it is drawn, and its parent keeps every sub-asset it drew before as well (the old ones move a place down when the new one sorts before them). Over the budget the
+    // summary is where the person is taken, with the same words as Find's. A Review that opens takes the focus itself.
+    const pages = pagesForNewAsset(modelRef.current, viewNow.current, asset.id);
+    const paged = pages.assetsShown !== viewNow.current.assetsShown;
+    if (paged) setAssetsShown(pages.assetsShown);
+    if (pages.stoppedAt !== null) toast.info(tooFarNote(modelRef.current, viewNow.current, pages.stoppedAt, asset.name));
+    if (payload) openReview(payload, { kind: "existing", assetId: asset.id }, asset.name);
+    else if (paged || pages.stoppedAt !== null) void goToNode(pages.stoppedAt === null ? nodeId.asset(asset.id) : nodeId.moreAssets(pages.stoppedAt));
   };
 
   const seeded = useMemo(() => {
@@ -759,11 +805,11 @@ function Canvas({ model }: { model: GraphModel }) {
     const nodes: Node[] = built.nodes.map((n) => ({
       ...n,
       data: nodeData(n, { canAccept, canRemove, canEdit: canEditAssets, canForm, formWait, canMove: canEditSource, canShapes }, facts, mappedBy, {
-        onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onShapes, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets,
+        onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onShapes, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets, onMoreAssets,
       }),
     }));
     return { nodes, edges: built.edges };
-  }, [model, open, view, tidyRuns, reduced, canAccept, canRemove, canEditAssets, canForm, formWait, canEditSource, canShapes, facts, mappedBy, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onShapes, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets]);
+  }, [model, open, view, tidyRuns, reduced, canAccept, canRemove, canEditAssets, canForm, formWait, canEditSource, canShapes, facts, mappedBy, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onShapes, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets, onMoreAssets]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(seeded.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(seeded.edges);
   useEffect(() => {
@@ -1096,6 +1142,7 @@ function Canvas({ model }: { model: GraphModel }) {
       // The jump needs a longer page, an unfolded asset or no filter: change those first (one batch with the open set), then wait for the paint as below.
       setShown(plan.view.shown);
       if (plan.view.assetsClosed !== now.assetsClosed) setAssetsClosed(plan.view.assetsClosed);
+      if (plan.view.assetsShown && plan.view.assetsShown !== now.assetsShown) setAssetsShown(plan.view.assetsShown); // (w37) the pages of the parents that hold the asset back
       if (plan.view.unmappedOnly !== now.unmappedOnly) setUnmappedOnly(plan.view.unmappedOnly);
     }
     if (plan.note) toast.info(plan.note);
@@ -1106,7 +1153,7 @@ function Canvas({ model }: { model: GraphModel }) {
     const { x, y, w, h } = rectOf(target);
     await setCenter(x + w / 2, y + h / 2, { zoom: Math.min(1, Math.max(0.75, getZoom())), duration: cameraMs(reducedMotion()) });
     if (!mounted.current) return;
-    const element = canvas.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectorId(plan.targetId)}"]`);
+    const element = focusTargetOf(canvas.current, plan.targetId); // (w37) a summary node is no stop of its own: its button takes the focus
     if (!element) return;
     window.clearTimeout(flashTimer.current);
     setFlashId(plan.targetId); // (the outline holds under reduced motion too; the CSS drops only the pulse)
@@ -1190,7 +1237,8 @@ function Canvas({ model }: { model: GraphModel }) {
     // W12a, after the rest: what takes a mapping off an asset or moves it (only with assets.edit: the callbacks are not given otherwise).
     if (d.onUnmap) items.push({ label: group ? "Unmap this group…" : "Unmap…", tone: "danger", onSelect: () => d.onUnmap?.(node.id) });
     if (d.onMove) items.push({ label: group ? "Move this group's mappings…" : "Move to another asset…", onSelect: () => d.onMove?.(node.id) });
-    for (const m of d.mapped ?? []) items.push({ label: `Unmap everything from ${m.sourceName}…`, tone: "danger", onSelect: () => d.onUnmapSource?.(node.id, m.sourceId) });
+    // (only an asset node's `mapped` is a list of sources: the summary node's `mapped` (w37) is a count of points, and iterating it threw)
+    for (const m of (node.type === "asset" ? d.mapped : undefined) ?? []) items.push({ label: `Unmap everything from ${m.sourceName}…`, tone: "danger", onSelect: () => d.onUnmapSource?.(node.id, m.sourceId) });
     // W12b, last: the branch of THIS node (whatever is selected), for a node that opens or closes; an asset with sub-assets also folds them.
     // A group has no branch items: its branch is itself, so they would do what its Expand or Collapse does.
     const hasChildren = (d.children ?? 0) > 0;
@@ -1213,7 +1261,7 @@ function Canvas({ model }: { model: GraphModel }) {
     { label: "Expand all", disabled: !expandable, onSelect: onExpandAll },
     { label: "Collapse all", disabled: !collapsible, onSelect: onCollapseAll },
     { label: "Tidy layout", disabled: tidying, onSelect: () => void onTidy() },
-    { label: "Fit view", onSelect: () => void fitView({ duration: cameraMs(reducedMotion()) }) },
+    { label: "Fit view", onSelect: () => void fitView(fitOptionsNow(canvas.current)) },
   ];
   /** W12b: what the selected nodes (a box selection, a Ctrl-click) can open or close; a disabled one says why. */
   const selectionActions = (): RowAction[] => [
@@ -1303,7 +1351,7 @@ function Canvas({ model }: { model: GraphModel }) {
             fitViewOptions={opening}
             minZoom={0.2} // the opening view holds 0.75 through fitViewOptions; this floor is what lets Fit View (and the wheel) show a tall graph whole
           >
-            <Controls fitViewOptions={fitOptions} />
+            <Controls fitViewOptions={fitOptions} onFitView={onControlsFit} />
             <Background />
             <GraphMiniMap />
             {GUIDES_ENABLED && <AlignGuides handleRef={guides} />}

@@ -42,6 +42,7 @@ describe("GraphMiniMap", () => {
     ["cluster", "var(--text-2)"],
     ["point", "var(--border-strong)"],
     ["asset", "var(--text)"],
+    ["moreAssets", "var(--text)"], // (w37) the summary of a parent with many sub-assets stands in the assets column in the asset's colour
     ["unidentified", "var(--field-border)"],
     ["something-new", "var(--border-strong)"],
     [undefined, "var(--border-strong)"],

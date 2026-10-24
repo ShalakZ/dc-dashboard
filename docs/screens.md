@@ -105,7 +105,8 @@ lacks says "No access".
   (targets and ports), the figures in words and the findings, and Esc, the x or a click outside closes it, and **Scan again** on a
   result previews and confirms a new scan of the same scope. Discovery (its title carries the Discovery icon, and one line under it
   says `Dashed means discovered, solid means assets. Drag a group onto an asset to map it.`) shows what was
-  found as a graph to map by drag and drop or with the buttons on its nodes, says when a scan last found each source, and lets an
+  found as a graph to map by drag and drop or with the buttons on its nodes (a parent with more than 50 sub-assets is drawn as one
+  `N sub-assets` box with **Show 50**), says when a scan last found each source, and lets an
   admin remove discovered sources that have nothing mapped, one by one (**Remove from Discovery…** in the source's `⋯` menu) or all at
   once (**Clear unmapped** in the bar's **More Discovery actions** menu). A discovered source that the newest scan of the same range
   did not find is drawn quieter (a lighter ground and a lighter dashed edge) and its last line reads `Not seen in scan #7 (last seen in

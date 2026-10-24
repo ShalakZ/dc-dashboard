@@ -41,6 +41,15 @@ const keyOf = (target: MenuTarget) => (target.kind === "node" ? `node:${target.i
 const escapeId = (id: string) => id.replace(/["\\]/g, "\\$&");
 
 /**
+ * What takes the focus for node `id` on the canvas `root`: its wrapper, or, for the "show more" node of a group and the summary of an asset's sub-assets (w37; their wrappers
+ * are not a focus stop), the button inside it. Null when the node is not on the canvas (or has no button). The page's jumps and this menu's return share it.
+ */
+export function focusTargetOf(root: HTMLElement | null, id: string): HTMLElement | null {
+  const wrapper = root?.querySelector<HTMLElement>(`${NODE}[data-id="${escapeId(id)}"]`) ?? null;
+  return id.startsWith("more:") ? wrapper?.querySelector<HTMLElement>(".gnode-more button, .gnode-more-assets button") ?? null : wrapper;
+}
+
+/**
  * The state of the Discovery canvas's context menu: ONE menu, keyed by what it is about, opened by a right-click on a node, on the empty
  * canvas or on a box selection, or from the keyboard (ContextMenu, Shift+F10). It holds no items: the page builds them from the node's own
  * `data` callbacks, so a menu is gated exactly like the buttons on the node.
@@ -107,8 +116,9 @@ export function useCanvasMenu({ model, canvas }: { model: unknown; canvas: RefOb
   const openNode = useCallback((id: string, event: PointerLike) => {
     event.preventDefault();
     const element = nodeElement(id);
-    show({ kind: "node", id }, point(event, element), "pointer", () => nodeElement(id));
-  }, [nodeElement, show]);
+    // A "show more" node's wrapper cannot take the focus (it would leave it on <body>): its button does, and the canvas when the button has gone.
+    show({ kind: "node", id }, point(event, element), "pointer", () => (id.startsWith("more:") ? focusTargetOf(canvas.current, id) ?? canvas.current : nodeElement(id)));
+  }, [canvas, nodeElement, show]);
 
   const openPane = useCallback((event: PointerLike) => {
     event.preventDefault();

@@ -15,10 +15,16 @@ export const nodeId = {
   unidentified: (host: string, port: number) => `unid:${host}:${port}`,
   /** W12b: the "Show 50 more" control at the end of an open group's points. It has no place of its own (it is never saved to the layout). */
   more: (clusterId: string) => `more:${clusterId}`,
+  /** (w37) The summary node of an asset with more than `ASSET_PAGE` sub-assets: "400 sub-assets" and the button that draws the next 50. Like `more`, it has no place of its own (`isMoreId`). */
+  moreAssets: (parentId: number) => `more:asset:${parentId}`,
 };
 
 /** W12b: an open group draws this many points at first; "Show 50 more" adds this many again. */
 export const PAGE_SIZE = 50;
+/** (w37) An asset with MORE sub-assets than this is drawn as one summary node that shows them this many at a time (`GraphView.assetPageSize`); with this many or fewer they are all drawn. */
+export const ASSET_PAGE = 50;
+/** (w37) The summary node takes this many rows in the asset column (its three fixed lines are taller than a plain asset's one row); an asset keeps one. */
+export const SUMMARY_ROWS = 2;
 /**
  * W12b: a group that draws more points than this draws the edges from the group to its points SOLID. A dashed edge costs the browser one dash per few
  * pixels of its length, and these edges are as long as the list is tall, so the cost grows with the square of the points: measured, a drag stays at
@@ -62,6 +68,8 @@ export type NodeActions = {
   onMore?: (clusterId: string) => void;
   /** W12b: an asset node with sub-assets: hide or show them (given to every role: it only changes the view). */
   onToggleAssets?: (nodeId: string) => void;
+  /** (w37) The summary node's button: draw the next page of an asset's sub-assets (the argument is the summary's node id, `nodeId.moreAssets`). */
+  onMoreAssets?: (summaryId: string) => void;
 };
 /** One source that has mappings on an asset, as the asset node's menu lists it (W12a). */
 export type MappedSource = { sourceId: number; sourceName: string; count: number };
@@ -86,6 +94,11 @@ export type ClusterNodeData = NodeActions & {
 export type PointNodeData = NodeActions & { sourceId: number; clusterKey: string; point: GraphPoint; twinOf?: string };
 /** W12b: the "Show 50 more (70 left)" control at the end of a paged group's points. `step` is how many the next press adds (the page, or what is left). */
 export type MoreNodeData = NodeActions & { clusterId: string; label: string; left: number; step: number };
+/**
+ * (w37) The summary node of an asset with more than `ASSET_PAGE` sub-assets. `left` = sub-assets not drawn, `step` = how many the next press adds, `shown` = how many are drawn,
+ * `mapped` = points mapped to the hidden sub-assets and everything under them (over the whole model), `navParent` = the node id of the asset it belongs to (the arrow keys' parent).
+ */
+export type MoreAssetsNodeData = NodeActions & { parentId: number; parentName: string; left: number; step: number; shown: number; mapped: number; navParent: string };
 export type AssetNodeData = NodeActions & {
   /** W12b: `children` = how many sub-assets it has; `collapsed` = they are hidden; `mappedInside` = points mapped to it or anything under it (a collapsed asset only); `navParent` = the node id of the asset this one was reached from in the walk (null for a walk root). */
   children?: number; collapsed?: boolean; mappedInside?: number; navParent?: string | null;
@@ -153,6 +166,13 @@ export interface GraphView {
   assetsClosed: ReadonlySet<number>;
   /** An open group with more visible points than this draws this many and a `more` node. `Infinity` = never page (the old behaviour). */
   pageSize: number;
+  /**
+   * (w37) An asset that is not folded and has MORE sub-assets than this draws the first `assetsShown` of them and then one summary node (`nodeId.moreAssets`) for the rest.
+   * Optional, so every caller that builds a view by hand keeps its graph; absent = `Infinity` (never summarise).
+   */
+  assetPageSize?: number;
+  /** (w37) Asset id -> how many of its sub-assets are drawn (absent = none). Only read for an asset that gets a summary. Session only; `pruneAssetsShown` drops the entries of folded assets. */
+  assetsShown?: ReadonlyMap<number, number>;
 }
 export const NO_VIEW: GraphView = Object.freeze({ unmappedOnly: false, shown: new Map<string, number>(), assetsClosed: new Set<number>(), pageSize: Infinity });
 
@@ -202,11 +222,48 @@ export function pruneShown(shown: ReadonlyMap<string, number>, open: OpenState):
   return kept.size === shown.size ? shown : kept;
 }
 
+/** (w37) The asset pages of assets that are still unfolded (a folded asset starts again at none drawn). New map when something drops; the one passed in is never changed, and is returned when nothing does. */
+export function pruneAssetsShown(shown: ReadonlyMap<number, number>, assetsClosed: ReadonlySet<number>): ReadonlyMap<number, number> {
+  const kept = new Map<number, number>();
+  for (const [parentId, n] of shown) if (!assetsClosed.has(parentId)) kept.set(parentId, n);
+  return kept.size === shown.size ? shown : kept;
+}
+
+/**
+ * (w37) The summary node ids of an asset and of everything under it (every depth, cycle safe, the asset's own first): one for each asset with MORE than `ASSET_PAGE` sub-assets
+ * by the walk's rule (a parent that is set, is not the asset itself and is in the model). Model-based like a source's `more` ids: the caller keeps the ones that are on the canvas.
+ */
+function moreAssetNodeIds(model: GraphModel, id: string): string[] {
+  const start = model.assets.find((a) => nodeId.asset(a.id) === id);
+  if (!start) return [];
+  const ids = new Set(model.assets.map((a) => a.id));
+  const childrenOf = new Map<number, number[]>();
+  for (const a of model.assets) {
+    if (a.parent_id === null || a.parent_id === a.id || !ids.has(a.parent_id)) continue;
+    const siblings = childrenOf.get(a.parent_id);
+    if (siblings) siblings.push(a.id);
+    else childrenOf.set(a.parent_id, [a.id]);
+  }
+  const found: string[] = [];
+  const seen = new Set<number>();
+  const stack = [start.id];
+  while (stack.length > 0) {
+    const next = stack.pop()!;
+    if (seen.has(next)) continue;
+    seen.add(next);
+    const below = childrenOf.get(next) ?? [];
+    if (below.length > ASSET_PAGE) found.push(nodeId.moreAssets(next));
+    for (let i = below.length - 1; i >= 0; i--) stack.push(below[i]);
+  }
+  return found;
+}
+
 /**
  * The `more` node ids a drag takes along: a source's groups' (every group, drawn or not: the caller keeps the ones that are on the canvas) or one
- * group's. They are NOT in `descendantNodeIds`: that list also feeds the places that are saved, and a `more` node never has a place of its own.
+ * group's, or (w37) an asset's own summary and those of everything under it. They are NOT in `descendantNodeIds`: that list also feeds the places that are saved, and a `more` node never has a place of its own.
  */
 export function moreNodeIds(model: GraphModel, id: string): string[] {
+  if (id.startsWith("asset:")) return moreAssetNodeIds(model, id);
   if (id.startsWith("src:")) {
     const source = model.sources.find((s) => nodeId.source(s.id) === id);
     return source ? groupsOf(source).map((g) => nodeId.more(nodeId.cluster(source.id, g.key))) : [];
@@ -219,14 +276,15 @@ export function moreNodeIds(model: GraphModel, id: string): string[] {
 }
 
 /**
- * Number of mapped points per DRAWN asset: `visibleOf` turns the asset a point is mapped to into the asset that stands for it on the canvas (itself,
- * or the closed asset that hides it), and the counts are summed by that target BEFORE any edge is built, so two points under one closed asset make
- * one edge labelled "2 mapped". Points mapped to an asset that is not in the model are ignored.
+ * Number of mapped points per DRAWN node: `targetOf` turns the asset a point is mapped to into the node that stands for it on the canvas (the asset itself,
+ * the closed asset that hides it, or the summary node that hides it), and the counts are summed by that target BEFORE any edge is built, so two points under
+ * one closed asset make one edge labelled "2 mapped". Points mapped to an asset that is not in the model are ignored.
+ * The key is the node id (a string) for the edges; the whole-model count behind a folded asset's and a summary's "mapped" line keys by asset id (a number, `(id) => id`).
  */
-function countMapped(points: Iterable<GraphPoint>, assetIds: ReadonlySet<number>, visibleOf: (assetId: number) => number, into = new Map<number, number>()) {
+function countMapped<K>(points: Iterable<GraphPoint>, assetIds: ReadonlySet<number>, targetOf: (assetId: number) => K, into = new Map<K, number>()) {
   for (const p of points) {
     if (p.asset_id === null || !assetIds.has(p.asset_id)) continue;
-    const target = visibleOf(p.asset_id);
+    const target = targetOf(p.asset_id);
     into.set(target, (into.get(target) ?? 0) + 1);
   }
   return into;
@@ -308,10 +366,9 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
     if (flow) { edge.animated = true; flowing.push(edge); }
     edges.push(edge);
   };
-  /** One edge per mapped asset (`counts` is keyed by the DRAWN asset, see `countMapped`); a count label when several points share it. */
-  const mappedLinks = (from: string, counts: ReadonlyMap<number, number>, flow: boolean) => {
-    for (const [assetId, n] of counts) {
-      const target = nodeId.asset(assetId);
+  /** One edge per mapped target (`counts` is keyed by the node id of the DRAWN asset or summary, see `countMapped`); a count label when several points share it. */
+  const mappedLinks = (from: string, counts: ReadonlyMap<string, number>, flow: boolean) => {
+    for (const [target, n] of counts) {
       const edge: Edge = { id: `m:${from}>${target}`, source: from, target, ...(n > 1 ? { label: `${n} mapped` } : {}) };
       if (flow) { edge.animated = true; edge.style = LIVE_SOLID; flowing.push(edge); }
       edges.push(edge);
@@ -322,6 +379,8 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
   // drawn: depth-first from the roots; an orphan, a self-parent or a member of a cycle is treated as a root. At a closed asset the walk goes on
   // through its subtree WITHOUT drawing it: every asset in there is marked visited (so none is drawn, or taken for the head of a cycle) and is
   // recorded under the closed asset that hides it. A closed asset inside a closed one is never reached by the walk, so the outermost one stands for all.
+  // (w37) An open asset with more sub-assets than `view.assetPageSize` draws the first `assetsShown` of them and then ONE summary node; the others, and
+  // everything under them, are marked visited the same way and recorded under the summary that stands for them. The set of roots is never cut into pages.
   const childrenOf = new Map<number, Pick<Asset, "id" | "parent_id" | "name" | "kind">[]>();
   const roots: GraphModel["assets"] = [];
   const parentLinks: [number, number][] = [];
@@ -337,34 +396,65 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
   }
   const visited = new Set<number>();
   const representative = new Map<number, number>();
-  /** The assets to draw, in the order of the walk; `parent` = the asset the walk came from (null for a walk root: a root, an orphan, a self-parent, the head of a cycle). */
-  const plan: { asset: GraphModel["assets"][number]; depth: number; parent: number | null }[] = [];
-  const fold = (closedId: number) => {
-    const pending = [...(childrenOf.get(closedId) ?? [])];
+  /** (w37) Every asset a summary node hides (the hidden sub-assets and everything under them) -> the asset whose summary stands for it. */
+  const summarisedUnder = new Map<number, number>();
+  const assetPage = view.assetPageSize ?? Infinity;
+  type PlannedAsset = { kind: "asset"; asset: GraphModel["assets"][number]; depth: number; parent: number | null };
+  /** (w37) `parent` = the asset the summary belongs to, `depth` = the depth of the sub-assets it stands for, `left` = how many it hides, `shown` = how many are drawn. */
+  type PlannedSummary = { kind: "summary"; parent: GraphModel["assets"][number]; depth: number; left: number; shown: number };
+  /**
+   * What to draw in the asset column, in the order of the walk. An asset: `parent` = the asset the walk came from (null for a walk root: a root, an orphan,
+   * a self-parent, the head of a cycle). A summary comes right after the last drawn sub-assets of its parent and their subtrees.
+   */
+  const plan: (PlannedAsset | PlannedSummary)[] = [];
+  /** Marks `first` and everything under them visited and hands each to `record`: none is drawn, or taken for the head of a cycle. */
+  const hide = (first: readonly Pick<Asset, "id">[], record: (hiddenId: number) => void) => {
+    const pending = [...first];
     while (pending.length > 0) {
       const hidden = pending.pop()!;
       if (visited.has(hidden.id)) continue;
       visited.add(hidden.id);
-      representative.set(hidden.id, closedId);
+      record(hidden.id);
       for (const child of childrenOf.get(hidden.id) ?? []) pending.push(child);
     }
   };
+  const fold = (closedId: number) => hide(childrenOf.get(closedId) ?? [], (hiddenId) => representative.set(hiddenId, closedId));
   const walk = (root: GraphModel["assets"][number]) => {
-    const stack: { asset: GraphModel["assets"][number]; depth: number; parent: number | null }[] = [{ asset: root, depth: 0, parent: null }];
+    const stack: (PlannedAsset | PlannedSummary)[] = [{ kind: "asset", asset: root, depth: 0, parent: null }];
     while (stack.length > 0) {
-      const { asset, depth, parent } = stack.pop()!;
+      const item = stack.pop()!;
+      if (item.kind === "summary") { plan.push(item); continue; } // it was pushed before the sub-assets, so it comes out after the last of them and their subtrees
+      const { asset, depth } = item;
       if (visited.has(asset.id)) continue;
       visited.add(asset.id);
-      plan.push({ asset, depth, parent });
+      plan.push(item);
       if (view.assetsClosed.has(asset.id)) { fold(asset.id); continue; }
       const children = childrenOf.get(asset.id) ?? [];
-      for (let i = children.length - 1; i >= 0; i--) stack.push({ asset: children[i], depth: depth + 1, parent: asset.id });
+      let drawn: readonly (typeof children)[number][] = children;
+      const shown = view.assetsShown?.get(asset.id) ?? 0;
+      if (children.length > assetPage && shown < children.length) {
+        // The sub-assets the walk has already drawn (the head of a cycle) are not counted in `left`: they are on the canvas already.
+        const fresh = children.filter((child) => !visited.has(child.id));
+        drawn = fresh.slice(0, shown);
+        const hidden = fresh.slice(shown);
+        if (hidden.length > 0) {
+          stack.push({ kind: "summary", parent: asset, depth: depth + 1, left: hidden.length, shown: drawn.length });
+          hide(hidden, (hiddenId) => summarisedUnder.set(hiddenId, asset.id));
+        }
+      }
+      for (let i = drawn.length - 1; i >= 0; i--) stack.push({ kind: "asset", asset: drawn[i], depth: depth + 1, parent: asset.id });
     }
   };
   roots.forEach(walk);
   model.assets.forEach((asset) => { if (!visited.has(asset.id)) walk(asset); }); // pure parent cycles have no root
-  /** The asset a mapping is drawn to: the asset itself, or the closed asset that hides it. */
-  const visibleOf = (assetId: number): number => representative.get(assetId) ?? assetId;
+  const drawnPlan = plan.filter((item): item is PlannedAsset => item.kind === "asset");
+  /** The node a mapping is drawn to: the asset itself, the closed asset that hides it, or the summary node that hides it. */
+  const targetOf = (assetId: number): string => {
+    const folded = representative.get(assetId);
+    if (folded !== undefined) return nodeId.asset(folded);
+    const summarised = summarisedUnder.get(assetId);
+    return summarised !== undefined ? nodeId.moreAssets(summarised) : nodeId.asset(assetId);
+  };
 
   // Discovered side: sources in order, each in a block that grows with what is open under it. A source the filter hides takes no room.
   let cursor = 0;
@@ -419,7 +509,7 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
                 : p.asset_id === null ? "unmapped" : assetNames.has(p.asset_id) ? `mapped to ${assetNames.get(p.asset_id)}` : "mapped"}`,
             });
             link(cid, pid, false, fanStyle); // a group's point edges are dashed (solid past FAN_DASH_LIMIT) but never flow: they are the bulk of a big graph's edges
-            if (!filtering && p.asset_id !== null && assetIds.has(p.asset_id)) mappedLinks(pid, new Map([[visibleOf(p.asset_id), 1]]), flow);
+            if (!filtering && p.asset_id !== null && assetIds.has(p.asset_id)) mappedLinks(pid, new Map([[targetOf(p.asset_id), 1]]), flow);
             rows++;
           }
           if (drawn < visible.length) {
@@ -429,14 +519,14 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
               clusterId: cid, label: group.label, left, step: Math.min(view.pageSize, left),
             } satisfies MoreNodeData, clusterShift, { draggable: false, selectable: false, focusable: false });
             rows++;
-            if (!filtering) mappedLinks(cid, countMapped(visible.slice(drawn), assetIds, visibleOf), flow);
+            if (!filtering) mappedLinks(cid, countMapped(visible.slice(drawn), assetIds, targetOf), flow);
           }
         } else if (!filtering) {
-          mappedLinks(cid, countMapped(group.points, assetIds, visibleOf), flow);
+          mappedLinks(cid, countMapped(group.points, assetIds, targetOf), flow);
         }
       }
     } else if (!filtering) {
-      mappedLinks(sid, countMapped(allGroups.flatMap((g) => g.points), assetIds, visibleOf), flow);
+      mappedLinks(sid, countMapped(allGroups.flatMap((g) => g.points), assetIds, targetOf), flow);
     }
     cursor += SOURCE_H + (rows - 1) * ROW + BLOCK_GAP;
   }
@@ -448,18 +538,32 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
     });
   });
 
-  // Assets: the planned walk, one row per DRAWN asset. A closed asset counts the points mapped to it or to anything it hides, over the WHOLE model.
+  // Assets: the planned walk, one row per DRAWN asset and SUMMARY_ROWS per summary node. A closed asset counts the points mapped to it or to anything it hides, over the WHOLE model;
+  // so does a summary node (the points mapped to the sub-assets it hides and everything under them), also while the filter draws no mapped edge.
   const mappedAll = new Map<number, number>();
-  if (view.assetsClosed.size > 0) for (const source of model.sources) for (const g of groupsOf(source)) countMapped(g.points, assetIds, (id) => id, mappedAll);
+  if (view.assetsClosed.size > 0 || summarisedUnder.size > 0) for (const source of model.sources) for (const g of groupsOf(source)) countMapped(g.points, assetIds, (id) => id, mappedAll);
   const inside = new Map<number, number>();
   const collapsedAsset = (id: number) => view.assetsClosed.has(id) && (childrenOf.get(id)?.length ?? 0) > 0;
-  for (const { asset } of plan) if (collapsedAsset(asset.id)) inside.set(asset.id, mappedAll.get(asset.id) ?? 0);
+  for (const { asset } of drawnPlan) if (collapsedAsset(asset.id)) inside.set(asset.id, mappedAll.get(asset.id) ?? 0);
   for (const [hidden, closedId] of representative) {
     const sum = inside.get(closedId);
     if (sum !== undefined) inside.set(closedId, sum + (mappedAll.get(hidden) ?? 0));
   }
+  const mappedHidden = new Map<number, number>();
+  for (const [hidden, parentId] of summarisedUnder) mappedHidden.set(parentId, (mappedHidden.get(parentId) ?? 0) + (mappedAll.get(hidden) ?? 0));
   const shifts = new Map<number, XY>();
-  plan.forEach(({ asset, depth, parent }, index) => {
+  let row = 0;
+  for (const item of plan) {
+    if (item.kind === "summary") {
+      const parentId = item.parent.id;
+      add(nodeId.moreAssets(parentId), "moreAssets", X.asset + item.depth * ASSET_INDENT, row * ROW, {
+        parentId, parentName: item.parent.name, left: item.left, step: Math.min(assetPage, item.left), shown: item.shown, mapped: mappedHidden.get(parentId) ?? 0,
+        navParent: nodeId.asset(parentId),
+      } satisfies MoreAssetsNodeData, shifts.get(parentId), { draggable: false, selectable: false, focusable: false });
+      row += SUMMARY_ROWS;
+      continue;
+    }
+    const { asset, depth, parent } = item;
     const kids = childrenOf.get(asset.id)?.length ?? 0;
     const collapsed = collapsedAsset(asset.id);
     const mappedInside = collapsed ? inside.get(asset.id) ?? 0 : 0;
@@ -467,15 +571,19 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
     if (kids > 0) parts.push(countOf(kids, "sub-asset"));
     if (mappedInside > 0) parts.push(`${mappedInside} mapped inside`);
     if (kids > 0) parts.push(collapsed ? "closed" : "open");
-    const shift = add(nodeId.asset(asset.id), "asset", X.asset + depth * ASSET_INDENT, index * ROW, {
+    const shift = add(nodeId.asset(asset.id), "asset", X.asset + depth * ASSET_INDENT, row * ROW, {
       asset, depth, children: kids, collapsed, ...(mappedInside > 0 ? { mappedInside } : {}), navParent: parent === null ? null : nodeId.asset(parent),
     } satisfies AssetNodeData, parent === null ? undefined : shifts.get(parent), { ariaLabel: parts.join(", ") });
     shifts.set(asset.id, shift);
-  });
-  // The hierarchy edges join DRAWN assets only: a hidden asset has no node to end an edge on.
-  const drawnAssets = new Set(plan.map((p) => p.asset.id));
+    row++;
+  }
+  // The hierarchy edges join DRAWN assets only: a hidden asset has no node to end an edge on. A summary node ends one edge from its parent.
+  const drawnAssets = new Set(drawnPlan.map((p) => p.asset.id));
   for (const [parent, child] of parentLinks) {
     if (drawnAssets.has(parent) && drawnAssets.has(child)) edges.push({ id: `a:${parent}>${child}`, source: nodeId.asset(parent), target: nodeId.asset(child) });
+  }
+  for (const item of plan) {
+    if (item.kind === "summary") edges.push({ id: `a:${item.parent.id}>${nodeId.moreAssets(item.parent.id)}`, source: nodeId.asset(item.parent.id), target: nodeId.moreAssets(item.parent.id) });
   }
 
   // Too many flowing edges and none flow: each goes back to what it would be without `animate` (a solid link loses its 8 2 dashes).

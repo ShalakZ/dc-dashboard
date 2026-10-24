@@ -831,7 +831,7 @@ describe("graph nodes", () => {
     const button = () => screen.getByRole("button", { name: "Show 50 more points of LVP01, 70 left" });
 
     it("is a node type, with no edge handles", () => {
-      expect(Object.keys(nodeTypes).sort()).toEqual(["asset", "cluster", "more", "point", "source", "unidentified"]);
+      expect(Object.keys(nodeTypes).sort()).toEqual(["asset", "cluster", "more", "moreAssets", "point", "source", "unidentified"]);
       renderNode("more", "more:cluster:1:LVP01", more);
       expect(document.querySelector("[data-handle]")).toBeNull();
     });
@@ -874,6 +874,119 @@ describe("graph nodes", () => {
       renderNode("more", "more:cluster:1:LVP01", more);
       await userEvent.click(button());
       expect(button()).toBeInTheDocument();
+    });
+  });
+
+  describe("the sub-assets summary node (w37)", () => {
+    // (the page gives every summary its callback; a node draws its button only with one)
+    const summary = { parentId: 4, parentName: "Room 3", left: 400, step: 50, shown: 0, mapped: 400, navParent: "asset:4", onMoreAssets: vi.fn() };
+    const first = () => screen.getByRole("button", { name: "Show 50 of the sub-assets under Room 3, 400 left" });
+
+    it("says how many sub-assets it stands for, how many points are mapped to them, and offers Show 50 (first page)", () => {
+      renderNode("moreAssets", "more:asset:4", summary);
+      expect(screen.getByText("400 sub-assets")).toHaveClass("node-title", "gma-title");
+      expect(screen.getByText("400 mapped")).toHaveClass("gma-mapped");
+      expect(first()).toHaveTextContent(/^Show 50$/);
+      expect(first()).toHaveClass("gma-button");
+      expect(document.querySelector(".gnode")).toHaveClass("gnode", "gnode-more-assets");
+    });
+
+    it("is not a gnode-more (that class strips the frame of the Show more button of a group)", () => {
+      renderNode("moreAssets", "more:asset:4", summary);
+      expect(document.querySelector(".gnode-more")).toBeNull();
+    });
+
+    it("draws the sub-assets icon inside the title: one icon, decoration only", () => {
+      renderNode("moreAssets", "more:asset:4", summary);
+      const icon = document.querySelector(".gicon") as HTMLElement;
+      expect(document.querySelectorAll(".gicon")).toHaveLength(1);
+      expect(icon).toHaveAttribute("data-icon", "assets");
+      expect(icon).toHaveAttribute("aria-hidden", "true");
+      expect(icon.querySelector("svg.i")).not.toBeNull();
+      expect(icon.parentElement).toBe(screen.getByText("400 sub-assets"));
+    });
+
+    it("after a page it says `350 more sub-assets` and the button `Show 50 more`, with the count left in its name", () => {
+      renderNode("moreAssets", "more:asset:4", { ...summary, left: 350, shown: 50 });
+      expect(screen.getByText("350 more sub-assets")).toBeInTheDocument();
+      const button = screen.getByRole("button", { name: "Show 50 more of the sub-assets under Room 3, 350 left" });
+      expect(button).toHaveTextContent(/^Show 50 more$/);
+    });
+
+    it("the last page shows its own size: `Show 30 more` and `30 more sub-assets`", () => {
+      renderNode("moreAssets", "more:asset:4", { ...summary, left: 30, step: 30, shown: 400 });
+      expect(screen.getByText("30 more sub-assets")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Show 30 more of the sub-assets under Room 3, 30 left" })).toHaveTextContent(/^Show 30 more$/);
+    });
+
+    it("one left is `1 sub-asset` (singular) and `Show 1 more`", () => {
+      renderNode("moreAssets", "more:asset:4", { ...summary, left: 1, step: 1, shown: 400 });
+      expect(screen.getByText("1 sub-asset")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Show 1 more of the sub-assets under Room 3, 1 left" })).toHaveTextContent(/^Show 1 more$/);
+    });
+
+    it("counts of a thousand or more get their separator, in the words and in the name", () => {
+      renderNode("moreAssets", "more:asset:4", { ...summary, left: 5000, mapped: 4800 });
+      expect(screen.getByText("5,000 sub-assets")).toBeInTheDocument();
+      expect(screen.getByText("4,800 mapped")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Show 50 of the sub-assets under Room 3, 5,000 left" })).toBeInTheDocument();
+    });
+
+    it("has exactly one handle, the target on the left: no source handle, no add handle (nothing leaves it)", () => {
+      renderNode("moreAssets", "more:asset:4", summary);
+      const handles = document.querySelectorAll("[data-handle]");
+      expect(handles).toHaveLength(1);
+      expect(handles[0]).toHaveAttribute("data-handle", "target");
+      expect(handles[0]).toHaveAttribute("data-start", "false");
+      expect(handles[0]).toHaveAttribute("data-end", "false");
+    });
+
+    it("has fixed lines: the title, the muted mapped line and the button, in that order, and no `mapped` line at 0 (its slot is the node's, not an element)", () => {
+      renderNode("moreAssets", "more:asset:4", summary);
+      const lines = Array.from(document.querySelector(".gnode-more-assets")!.children).filter((el) => !el.hasAttribute("data-handle")).map((el) => el.className.split(" "));
+      expect(lines.map((names) => names.find((n) => n.startsWith("gma-")))).toEqual(["gma-title", "gma-mapped", "gma-button"]);
+      expect(document.querySelectorAll("button")).toHaveLength(1);
+      cleanup();
+      renderNode("moreAssets", "more:asset:4", { ...summary, mapped: 0 });
+      expect(document.querySelector(".gma-mapped")).toBeNull();
+      expect(screen.queryByText(/mapped/)).not.toBeInTheDocument();
+      expect(document.querySelector(".gma-title")).not.toBeNull();
+      expect(document.querySelector(".gma-button")).not.toBeNull();
+    });
+
+    it("is ONE button: a type=button that neither drags nor takes the node's keys, and no live region", () => {
+      renderNode("moreAssets", "more:asset:4", summary);
+      expect(screen.getAllByRole("button")).toHaveLength(1);
+      expect(first()).toHaveAttribute("type", "button");
+      expect(first()).toHaveClass("nodrag", "nokey");
+      expect(document.querySelector("[aria-live], [role='status'], [role='alert']")).toBeNull();
+    });
+
+    it("a click reports the summary's node id and does not also select the node", async () => {
+      const onMoreAssets = vi.fn();
+      const reachedNode = vi.fn();
+      const Node = nodeTypes.moreAssets as unknown as (props: { id: string; data: object }) => React.ReactElement;
+      render(<div onClick={reachedNode}><Node id="more:asset:4" data={{ ...summary, onMoreAssets }} /></div>);
+      await userEvent.click(first());
+      expect(onMoreAssets).toHaveBeenCalledTimes(1);
+      expect(onMoreAssets).toHaveBeenCalledWith("more:asset:4");
+      expect(reachedNode).not.toHaveBeenCalled();
+    });
+
+    it("Enter and Space press it like any button (they are the button's own, not the node's)", async () => {
+      const onMoreAssets = vi.fn();
+      renderNode("moreAssets", "more:asset:4", { ...summary, onMoreAssets });
+      await userEvent.tab();
+      expect(first()).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+      await userEvent.keyboard(" ");
+      expect(onMoreAssets).toHaveBeenCalledTimes(2);
+    });
+
+    it("a node whose page gave no onMoreAssets draws no button at all (words only)", () => {
+      renderNode("moreAssets", "more:asset:4", { ...summary, onMoreAssets: undefined });
+      expect(screen.queryByRole("button")).not.toBeInTheDocument();
+      expect(screen.getByText("400 sub-assets")).toBeInTheDocument();
     });
   });
 
@@ -1029,6 +1142,7 @@ describe("graph nodes", () => {
         ["source", { source, expanded: false }, "source"], ["cluster", { ...cluster, expanded: true }, "label"], ["point", data, "point"],
         ["asset", { asset: rack, depth: 0 }, "asset"], ["unidentified", { host: "10.0.0.9", port: 8080 }, "host"],
         ["more", { clusterId: "cluster:1:LVP01", label: "LVP01", left: 70, step: 50 }, "label"],
+        ["moreAssets", { parentId: 4, parentName: "Room 3", left: 400, step: 50, shown: 0, mapped: 400, navParent: "asset:4" }, "parentName"],
       ];
       expect(kinds.map(([type]) => type).sort()).toEqual(Object.keys(nodeTypes).sort());
       for (const [type, plain, key] of kinds) {

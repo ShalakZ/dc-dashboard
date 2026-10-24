@@ -23,7 +23,8 @@ export interface NavIndex {
 
 const rootKey = (column: Column) => `root:${column}`;
 
-const columnOf = (node: Node): Column => (node.type === "asset" ? "assets" : "discovered");
+/** (w37) The summary of an asset with many sub-assets (`moreAssets`) stands in the assets column, under its asset. */
+const columnOf = (node: Node): Column => (node.type === "asset" || node.type === "moreAssets" ? "assets" : "discovered");
 
 /** The id of the node a node hangs under, from its data. It may name a node that is not drawn. */
 function parentOf(node: Node): string | null {
@@ -36,6 +37,7 @@ function parentOf(node: Node): string | null {
     case "more":
       return typeof data.clusterId === "string" ? data.clusterId : null;
     case "asset":
+    case "moreAssets":
       return typeof data.navParent === "string" ? data.navParent : null;
     default:
       return null;
@@ -61,13 +63,13 @@ export function navIndex(nodes: readonly Node[]): NavIndex {
     list.push(node.id);
   };
 
-  // The "show more" node is the last child of its group wherever it was drawn, so it goes in after everything else.
+  // The "show more" node is the last child of its group wherever it was drawn, so it goes in after everything else; so does the summary of an asset's sub-assets (w37).
   const seen = new Set<string>();
   const late: Node[] = [];
   for (const node of nodes) {
     if (seen.has(node.id)) continue;
     seen.add(node.id);
-    if (node.type === "more") late.push(node);
+    if (node.type === "more" || node.type === "moreAssets") late.push(node);
     else add(node);
   }
   for (const node of late) add(node);

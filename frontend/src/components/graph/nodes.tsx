@@ -4,7 +4,7 @@ import type { GraphSource } from "../../api/types";
 import { Icon, type IconName } from "../Icon";
 import { countNumber, isNotSeen, moveOfferFor, seenCard } from "../../lib/graph";
 import type {
-  AssetNodeData, ClusterNodeData, MoreNodeData, NodeActions, PointNodeData, SourceNodeData, UnidentifiedNodeData,
+  AssetNodeData, ClusterNodeData, MoreAssetsNodeData, MoreNodeData, NodeActions, PointNodeData, SourceNodeData, UnidentifiedNodeData,
 } from "../../lib/graph";
 import { assetIcon } from "../../lib/assetIcons";
 import { clusterIcon, metricIcon, pointMetric, protocolIcon } from "../../lib/graphIcons";
@@ -63,9 +63,9 @@ function NodeIcon({ name, className }: { name: IconName; className?: string }) {
  * W12c: a node's title line, the icon first. The icon stands INSIDE the title (a flex line: icon, then the words, which wrap beside it), so no node gets a row it did not have
  * and the title stays the element a test or a spec finds by its text and its class (`node-title`).
  */
-function Title({ icon, children }: { icon: IconName; children: ReactNode }) {
+function Title({ icon, children, className }: { icon: IconName; children: ReactNode; className?: string }) {
   return (
-    <div className="node-title gtitle">
+    <div className={className ? `node-title gtitle ${className}` : "node-title gtitle"}>
       <NodeIcon name={icon} />
       {children}
     </div>
@@ -320,6 +320,34 @@ function MoreNode({ data }: NodeProps<Node<MoreNodeData, "more">>) {
   );
 }
 
+/**
+ * (w37) The summary of an asset with more sub-assets than a page ("400 sub-assets", "Show 50"): it stands in the assets column under its parent, one edge in from the left (a target
+ * handle, nothing else: no edge leaves it and it has no "+"). THREE lines of FIXED height (the stylesheet sets each in px and lays them in a three-row grid), so a changed word never
+ * moves the button between two presses: the title with the assets icon, the muted `N mapped` line (not drawn at 0; its row stays), and the one button. The frame stays (unlike `gnode-more`,
+ * whose doubled-class rule strips it, so this node must not carry that class). The wrapper is no focus stop: the button is, named for the parent, and `nokey` leaves Enter and Space to it.
+ * There is no live region: the page's toast and the focus move say what changed.
+ */
+function MoreAssetsNode({ id, data }: NodeProps<Node<MoreAssetsNodeData, "moreAssets">>) {
+  const { parentName, left, step, shown, mapped, onMoreAssets } = data;
+  const title = `${countNumber(left)}${shown > 0 && left !== 1 ? " more" : ""} ${left === 1 ? "sub-asset" : "sub-assets"}`;
+  const label = shown === 0 ? `Show ${step}` : `Show ${step} more`;
+  return (
+    <div className="gnode gnode-more-assets">
+      <Handle type="target" position={Position.Left} isConnectableStart={false} isConnectableEnd={false} />
+      <Title icon="assets" className="gma-title">{title}</Title>
+      {mapped > 0 && <div className="gma-mapped muted">{`${countNumber(mapped)} mapped`}</div>}
+      {onMoreAssets && (
+        <button
+          type="button" className="nodrag nokey gma-button" onClick={press(() => onMoreAssets(id))}
+          aria-label={`${label} of the sub-assets under ${parentName}, ${countNumber(left)} left`}
+        >
+          {label}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function UnidentifiedNode({ data }: NodeProps<Node<UnidentifiedNodeData, "unidentified">>) {
   return (
     <div className="gnode gnode-unidentified">
@@ -349,4 +377,5 @@ export const nodeTypes = {
   asset: memoNode(AssetNode),
   unidentified: memoNode(UnidentifiedNode),
   more: memoNode(MoreNode),
+  moreAssets: memoNode(MoreAssetsNode),
 };

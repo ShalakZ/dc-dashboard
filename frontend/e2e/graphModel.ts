@@ -252,3 +252,92 @@ export const PAGED_SHAPES: readonly Shape[] = [{ groups: 3, pointsPerGroup: 0, g
  * edges flow (the group to point edges never do): exactly the page's limit of flowing ones.
  */
 export const LIVE_SHAPES: readonly Shape[] = [{ groups: 100, pointsPerGroup: 2 }];
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// (w37) The owner's shape: Discovery with hundreds of mapped assets.
+
+/** What the server adds to a source of more than 1,000 points (backend `large_of`): the graph then sends only its mapped points and says how many there are in all. */
+export interface ApiLarge { points: number; mapped: number; unmapped: number; rules_new: number }
+export type ApiLargeSource = ApiSource & { large: ApiLarge };
+
+/**
+ * The ids of `familyModel` (assets from 9,037,100, points from 12,700,000, mappings from 12,900,000: far from every other helper's).
+ * `small` is the 60-point simulator and comes FIRST, as on the owner's stack; `large` is the 15,000-tag shape simulator.
+ */
+export const FAMILY = {
+  small: BASE + 37_001,
+  large: BASE + 37_002,
+  mv2: BASE + 37_100,
+  room1: BASE + 37_101,
+  room2: BASE + 37_102,
+  room3: BASE + 37_103,
+} as const;
+export const FAMILY_NAMES = { small: "W37 Small", large: "W37 Large", mv2: "MV2", room1: "Room 1", room2: "Room 2", room3: "Room 3" } as const;
+/** The ten racks (1 to 5 under Room 1, 6 to 10 under Room 2). */
+export const familyRack = (n: number): number => BASE + 37_110 + n;
+const familyRackName = (n: number): string => `Rack ${n <= 5 ? 1 : 2}.${n <= 5 ? n : n - 5}`;
+/**
+ * The 400 PDUs under Room 3 as the owner's data names them: `PDUA01` ... `PDUA99`, `PDUA100` ... `PDUA200`, `PDUB01` ... `PDUB99`, `PDUB100` ... `PDUB200` (two digits up to 99, three after).
+ * `familyPdu(n)` and `familyPduName(n)` are the n-th child of Room 3 (n from 1 to 400) in the order the server lists a parent's children (`sort_order, name, id`; every sort order is 0 here), and the
+ * model sends them in that order. The order is a plain code-point compare of the names, an APPROXIMATION of the database collation: `PDUA01` ... `PDUA09`, `PDUA10`, `PDUA100` ... `PDUA109`, `PDUA11`,
+ * `PDUA110` ... and so on, so the first page of 50 ends at `PDUA136` and the last PDU is `PDUB99`. Nothing may name a PDU by its number: ask for the n-th and read its name from here.
+ */
+const PDU_NAMES: readonly string[] = ["A", "B"]
+  .flatMap((hall) => Array.from({ length: 200 }, (_, index) => `PDU${hall}${String(index + 1).padStart(2, "0")}`))
+  .sort(); // no comparator: UTF-16 code-unit order, which is the code-point order for these ASCII names
+export const familyPdu = (n: number): number => BASE + 37_200 + n;
+export const familyPduName = (n: number): string => {
+  const name = PDU_NAMES[n - 1];
+  if (name === undefined) throw new Error(`Room 3 has 400 PDUs: there is no number ${n}`);
+  return name;
+};
+/** The ten groups of the small source, one per meter: `MTR01` ... `MTR10` (the tenth has nothing mapped). */
+export const familyGroup = (n: number): string => `MTR${String(n).padStart(2, "0")}`;
+/** The id of the summary node the page draws under the asset `parentId` (src/lib/graph.ts `nodeId.moreAssets`). */
+export const summaryId = (parentId: number): string => `more:asset:${parentId}`;
+
+const FAMILY_METERS: readonly (readonly [Metric, string])[] = [
+  ["active_power_kw", "kW"], ["energy_kwh", "kWh"], ["voltage_v", "V"], ["current_a", "A"], ["power_factor", "PF"], ["frequency_hz", "Hz"],
+];
+
+/**
+ * The owner's shape as the graph route sends it: one root `MV2`; under it `Room 1`, `Room 2` and `Room 3`; five racks under each of the first two; 400 PDUs under `Room 3`.
+ * Two sources: the small one (ten groups of six points; groups 1 to 9 are mapped, six metrics each, onto racks 1 to 9; `MTR10` has nothing mapped, so a drop of it can open the Review)
+ * and the large one (`large` says 15,000 points, 400 mapped; the graph holds only those 400, in the Ungrouped bag, each mapped to its PDU as the energy counter). The assets come in the
+ * server's order (sort order, name, id), which puts the PDUs before the racks and the rooms.
+ */
+export function familyModel(): ApiGraphModel {
+  const asset = (id: number, parent: number | null, name: string): ApiAsset => ({ id, parent_id: parent, name, kind: "generic", icon: null, kind_icon: "generic" });
+  const rackParent = (n: number): number => (n <= 5 ? FAMILY.room1 : FAMILY.room2);
+  const assets: ApiAsset[] = [asset(FAMILY.mv2, null, FAMILY_NAMES.mv2)];
+  for (let n = 1; n <= 400; n++) assets.push(asset(familyPdu(n), FAMILY.room3, familyPduName(n)));
+  for (let n = 1; n <= 10; n++) assets.push(asset(familyRack(n), rackParent(n), familyRackName(n)));
+  assets.push(asset(FAMILY.room1, FAMILY.mv2, FAMILY_NAMES.room1), asset(FAMILY.room2, FAMILY.mv2, FAMILY_NAMES.room2), asset(FAMILY.room3, FAMILY.mv2, FAMILY_NAMES.room3));
+
+  const small = withCount(source({
+    id: FAMILY.small, name: FAMILY_NAMES.small, connector_type: "simulator", origin: "manual", status: "online", config: { url: "sim://w37" },
+    clusters: Array.from({ length: 10 }, (_, index): ApiCluster => {
+      const g = index + 1;
+      return {
+        key: familyGroup(g),
+        points: FAMILY_METERS.map(([metric, unit], m) => point({
+          id: BASE + 3_800_000 + g * 10 + m, name: `${familyGroup(g)} ${unit}`, metric,
+          ...(g <= 9 ? { asset: familyRack(g), mapping: BASE + 3_900_000 + g * 10 + m } : {}),
+        })),
+      };
+    }),
+  }));
+
+  const mapped: ApiPoint[] = Array.from({ length: 400 }, (_, index) => {
+    const n = index + 1;
+    return point({ id: BASE + 3_700_000 + n, name: `${familyPduName(n)}_PM0_PENRG`, metric: "energy_kwh", asset: familyPdu(n), mapping: BASE + 3_950_000 + n });
+  });
+  const large: ApiLargeSource = {
+    ...source({
+      id: FAMILY.large, name: FAMILY_NAMES.large, connector_type: "opcua", status: "online", config: { endpoint: "opc.tcp://10.37.0.2:4840" }, ungrouped: mapped,
+    }),
+    point_count: 15_000,
+    large: { points: 15_000, mapped: 400, unmapped: 14_600, rules_new: 0 },
+  };
+  return { sources: [small, large], unidentified: [], assets, layout: {} };
+}
