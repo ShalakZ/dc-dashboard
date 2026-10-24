@@ -1,10 +1,11 @@
+import asyncio
 import math
 from dataclasses import asdict
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
-from sqlalchemy import Text, cast, delete, func, literal, or_, select, text
+from sqlalchemy import ARRAY, Integer, Text, all_, any_, cast, delete, exists, func, literal, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,9 +28,12 @@ from dcdash.moves.freshness import not_seen_map
 from dcdash.moves.load import Loaded, load_offers_detailed
 from dcdash.moves.match import MOVABLE_TYPES, Offer, Two
 from dcdash.moves.urls import address_key, display_endpoint
+from dcdash.shapes.core import member_text, shape_key
+from dcdash.shapes.rules import load_rule_keys
 
 router = APIRouter(prefix="/api/discovery", tags=["discovery"])
 MAX_UNIT_LENGTH = 20  # keep in step with MAX_UNIT_LENGTH in frontend/src/lib/drop.ts
+LARGE_SOURCE_POINTS = 1000  # a source with MORE points than this is answered as a small card: only its mapped points (w36)
 
 
 class AcceptPoint(BaseModel):
@@ -191,8 +195,16 @@ def source_json(
     *,
     not_seen: dict[str, Any] | None = None,
     move_candidate: dict[str, Any] | None = None,
+    large: dict[str, Any] | None = None,
+    total: int | None = None,
 ) -> dict[str, Any]:
-    """One source with its points clustered by name and a suggested mapping for each point."""
+    """One source with its points clustered by name and a suggested mapping for each point.
+
+    w36: for a source over LARGE_SOURCE_POINTS points `rows` holds only its mapped points (and the unmapped twins of mapped
+    points); `total` is then ALL its points (the answer's `point_count`, and what decides `needs_credentials`: a large source
+    with nothing mapped has no rows and still has points) and `large` is added to the answer. With both None the answer is the
+    one every source always had."""
+    count = len(rows) if total is None else total
     infos = [PointInfo(r.id, r.address, r.name, r.unit_hint) for r in rows]
     by_id = {r.id: r for r in rows}
     guess_for = {info.id: guess_mapping(info) for info in infos}
@@ -206,7 +218,7 @@ def source_json(
     last_error = source.last_error
     if last_error is not None:
         last_error = scrub_url_credentials(last_error, hidden_values(source.config))
-    return {
+    answer = {
         "id": source.id,
         "name": source.name,
         "connector_type": source.connector_type,
@@ -215,10 +227,10 @@ def source_json(
         "status": source.status,
         "last_error": last_error,
         "has_secret": source.has_secret,
-        "needs_credentials": not rows and latest_outcome == "needs_credentials",
+        "needs_credentials": count == 0 and latest_outcome == "needs_credentials",
         "last_scan": last_scan,  # not `last_seen`: that is Source.last_seen, the last poll or browse that worked
         "config": safe_config(source.config),  # never the user name and password of a URL
-        "point_count": len(rows),
+        "point_count": count,
         "clusters": [{"key": g.key, "points": [render(pid) for pid in g.point_ids]} for g in groups],
         "ungrouped": [render(pid) for pid in ungrouped],
         "not_seen": not_seen,  # a discovered source the newest scan of the same range did not find (moves/freshness.py)
@@ -226,6 +238,32 @@ def source_json(
         "name_hint": name_hint_of(source),
         "move_candidate": move_candidate,  # on a NEW source: the old one it looks like (moves/load.py); null on every other
     }
+    if large is not None:
+        answer["large"] = large  # only a source over LARGE_SOURCE_POINTS has this key: {points, mapped, unmapped, rules_new}
+    return answer
+
+
+def _count_ruled(points: list[tuple[int, str, str]], twin_ids: set[int], keys: frozenset[str]) -> int:
+    """The pure part of `rules_new_counts`: the points (id, address, name) that are not twins and whose shape key has a rule. It runs in
+    a worker thread (a large source has tens of thousands of points), so it touches no session and no row of one."""
+    return sum(1 for point_id, address, name in points if point_id not in twin_ids and shape_key(member_text(address, name)) in keys)
+
+
+async def rules_new_counts(db: AsyncSession, large_ids: list[int], twin_ids: set[int]) -> dict[int, int]:
+    """For each large source with saved shape rules: how many of its unmapped, non-twin points are in a shape that has a rule (the new
+    tags a person already decided about). One settings lookup for all the large sources; a source without rules costs nothing more,
+    one with rules one light read of its unmapped points (id, address, name), read on the event loop and counted in a worker thread,
+    as the shapes route does. {source id: count}, only for sources with rules."""
+    counts: dict[int, int] = {}
+    for source_id, keys in (await load_rule_keys(db, large_ids)).items():
+        unmapped = await db.execute(
+            select(Point.id, Point.address, Point.name).where(
+                Point.source_id == source_id, ~exists().where(Mapping.point_id == Point.id)
+            )
+        )
+        points = [(p.id, p.address, p.name) for p in unmapped]  # plain tuples: nothing of the session crosses into the thread
+        counts[source_id] = await asyncio.to_thread(_count_ruled, points, twin_ids, keys)
+    return counts
 
 
 @router.get("/graph", dependencies=[Depends(require_permission("discovery.view"))])
@@ -236,15 +274,63 @@ async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     offline = [s.id for s in sources if s.status == "offline" and s.connector_type in MOVABLE_TYPES]
     offers = await load_offers_detailed(db, old_ids=offline, not_seen=not_seen)
     by_id = {s.id: s for s in sources}
-    points = await db.execute(
-        select(Point.id, Point.source_id, Point.address, Point.name, Point.unit_hint).order_by(Point.name, Point.id)
-    )
-    points_by_source: dict[int, list[Any]] = {}
-    for row in points:
-        points_by_source.setdefault(row.source_id, []).append(row)
     mappings = {
         m.point_id: m for m in await db.execute(select(Mapping.id, Mapping.point_id, Mapping.asset_id, Mapping.metric))
     }
+    # w36: a source with more than LARGE_SOURCE_POINTS points is answered by its mapped points only (and the unmapped twins of
+    # mapped points), never by all of them: one aggregate decides which sources those are, so a small install reads its points
+    # exactly as before. {source id: (points, mapped)}.
+    totals = {
+        r.source_id: (r.points, r.mapped)
+        for r in await db.execute(
+            select(Point.source_id, func.count(Point.id).label("points"), func.count(Mapping.id).label("mapped"))
+            .select_from(Point)
+            .outerjoin(Mapping, Mapping.point_id == Point.id)  # one mapping per point (UNIQUE), so no point counts twice
+            .group_by(Point.source_id)
+            .having(func.count(Point.id) > LARGE_SOURCE_POINTS)
+        )
+    }
+    point_columns = (Point.id, Point.source_id, Point.address, Point.name, Point.unit_hint)
+    points_query = select(*point_columns).order_by(Point.name, Point.id)
+    twin_counts: dict[int, int] = {}
+    twin_ids: list[int] = []
+    if totals:
+        large_ids = literal(sorted(totals), ARRAY(Integer))
+        # Twins: the unmapped points that are the same tag as a mapped one, for the large sources whose addresses have a stable
+        # key and that have a mapping to be a twin of. One light read for all of them, then the same pass the small sources use.
+        # Only the SET of twins matters, so this read has no order.
+        probed = {
+            s.id: s
+            for s in sources
+            if s.id in totals and totals[s.id][1] > 0 and address_key_for(s.connector_type, s.config) is not identity_key
+        }
+        if probed:
+            light: dict[int, list[Any]] = {}
+            for row in await db.execute(
+                select(Point.id, Point.source_id, Point.address).where(
+                    Point.source_id == any_(literal(sorted(probed), ARRAY(Integer)))
+                )
+            ):
+                light.setdefault(row.source_id, []).append(row)
+            for source_id, source in probed.items():
+                found = same_tag_map(source, light.get(source_id, []), mappings)
+                twin_counts[source_id] = len(found)
+                twin_ids.extend(found)
+        mapped_or_twin = or_(exists().where(Mapping.point_id == Point.id), Point.id == any_(literal(twin_ids, ARRAY(Integer))))
+        # One statement in the database's own order (`ORDER BY name, id`) for the small sources, one for the large ones.
+        points_query = select(*point_columns).where(Point.source_id != all_(large_ids)).order_by(Point.name, Point.id)
+        trimmed_query = (
+            select(*point_columns)
+            .where(Point.source_id == any_(large_ids), mapped_or_twin)
+            .order_by(Point.name, Point.id)
+        )
+    points_by_source: dict[int, list[Any]] = {}
+    for row in await db.execute(points_query):
+        points_by_source.setdefault(row.source_id, []).append(row)
+    if totals:
+        for row in await db.execute(trimmed_query):
+            points_by_source.setdefault(row.source_id, []).append(row)
+    rules_new = await rules_new_counts(db, sorted(totals), set(twin_ids)) if totals else {}
     # The most recent finding per source decides "needs credentials": a later scan may have browsed it fine. The same row
     # says which scan last saw the source, and when (its finish time, or its start while it is still running).
     latest_finding = (
@@ -276,11 +362,22 @@ async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     icons = await kind_icons(db)
     icon_cache: dict[str, str | None] = {}
     layout = await db.execute(select(GraphLayout.node_id, GraphLayout.x, GraphLayout.y))
+    def large_of(source_id: int) -> dict[str, Any] | None:
+        """What a large source says about the points it does not send: all of them, the mapped ones, those that are neither mapped
+        nor the twin of a mapped one (the ones a person can still decide about), and the unmapped, non-twin ones in a shape
+        that has a saved rule (0 when the source has no rules)."""
+        if source_id not in totals:
+            return None
+        points, mapped = totals[source_id]
+        unmapped = points - mapped - twin_counts.get(source_id, 0)
+        return {"points": points, "mapped": mapped, "unmapped": unmapped, "rules_new": rules_new.get(source_id, 0)}
+
     return {
         "sources": [
             source_json(
                 s, points_by_source.get(s.id, []), mappings, latest_outcome.get(s.id), last_scan.get(s.id),
                 not_seen=not_seen.get(s.id), move_candidate=move_candidate_json(offers.decision.by_new.get(s.id), offers, by_id),
+                large=large_of(s.id), total=totals[s.id][0] if s.id in totals else None,
             )
             for s in sources
         ],

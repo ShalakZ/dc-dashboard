@@ -98,7 +98,7 @@ describe("the toast's stylesheet", () => {
     const stack = rule(".toast-stack");
     expect(stack).toMatch(/position:\s*fixed/);
     expect(stack).toMatch(/right:\s*16px/);
-    expect(stack).toMatch(/bottom:\s*16px/);
+    expect(stack).toMatch(/bottom:\s*calc\(var\(--bottom-bar-h,\s*0px\)\s*\+\s*16px\)/); // 16px above the corner, or above the sticky bar a page published (review I-2)
     expect(stack).toMatch(/width:\s*min\(360px,\s*calc\(100vw - 32px\)\)/);
     expect(stack).toMatch(/pointer-events:\s*none/);
     expect(rule(".toast")).toMatch(/pointer-events:\s*auto/);
@@ -107,6 +107,16 @@ describe("the toast's stylesheet", () => {
     expect(z(stack)).toBeGreaterThan(z(only(appRules, ".row-menu-panel").body));
     expect(z(stack)).toBeGreaterThan(z(only(appRules, ".prof-menu").body));
     expect(z(stack)).toBeLessThan(z(only(appRules, ".dialog-backdrop").body));
+  });
+
+  it("lifts the stack by the height of a sticky bar a page publishes (--bottom-bar-h on <html>; app.css holds 0px, so no bar means no lift), and keeps the ladder: tip 1100 > dialog 1000 > toasts 900", () => {
+    expect(base.get("bottom-bar-h")).toBe("0px");
+    const z = (body: string) => Number(/z-index:\s*(\d+)/.exec(body)?.[1]);
+    expect(z(only(appRules, ".tip-bubble").body)).toBeGreaterThan(z(only(appRules, ".dialog-backdrop").body));
+    expect(z(only(appRules, ".dialog-backdrop").body)).toBeGreaterThan(z(rule(".toast-stack")));
+    // the narrow-window rule moves the stack sideways only: it must not put a plain bottom back
+    const narrow = toastRules.filter((r) => r.selector === ".toast-stack" && r.at.some((a) => /max-width:\s*719\.98px/.test(a)));
+    expect(narrow[0].body).not.toMatch(/\bbottom:/);
   });
 
   it("stacks upward from the corner (oldest first in the column, bottom anchored), and takes the full width below 720px", () => {

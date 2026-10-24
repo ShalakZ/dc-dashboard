@@ -77,7 +77,8 @@ TCP connection but never answers is reported as `timeout` after about twice `tim
 
 Discovery finds sources on the network and lets an admin map their points to assets without typing
 addresses. Everything it does toward the network is read-only: a TCP connect, then the same
-data-retrieval requests the connectors already use, nothing else.
+data-retrieval requests the connectors already use, nothing else. A source of more than 1,000 points is a small card with **Map by shape**:
+[Mapping a large source by tag shape](mapping-large-sources.md).
 
 1. **Scan scopes** (Scans, admin): a named list of targets (CIDR ranges, host names or addresses,
    URLs) and TCP ports (at most 20). A new scope is pre-filled from the collector's own network

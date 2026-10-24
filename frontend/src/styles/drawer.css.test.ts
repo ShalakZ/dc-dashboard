@@ -131,7 +131,7 @@ describe("the toast stack over a drawer (plan review C2)", () => {
 
   it("while a drawer is open the stack's bottom is the footer height plus the stack's own 16px margin, at every width", () => {
     const stackMargin = bottom(toasts.find((r) => r.selector === ".toast-stack" && r.at.length === 1)!.body);
-    expect(stackMargin).toBe("16px");
+    expect(stackMargin).toBe("calc(var(--bottom-bar-h, 0px) + 16px)"); // the 16px margin, above the sticky bar of a page that publishes one (w36 review I-2; no bar is 0px)
     const lift = rule("body:has(.drawer) .toast-stack");
     expect(bottom(lift)).toBe("calc(var(--drawer-foot-h) + 16px)");
     expect(lift.replace(/bottom:[^;]+;?/, "").trim(), "it changes the bottom and nothing else").toBe("");

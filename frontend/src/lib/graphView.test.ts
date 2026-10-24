@@ -789,3 +789,44 @@ describe("graphCounts with a point that is the same tag as a mapped point (w34)"
     expect(graphCounts(model({ sources }))).toEqual({ sources: 1, points: 3, mapped: 1, needing: 0, unmapped: 1 });
   });
 });
+
+// (w36) A source over 1,000 points arrives trimmed to its mapped points and the twins of mapped points, with `large` saying what it really holds. Every count reads `large` where it is present
+// (and only there): the drawn points of a large source are never added to it, or the mapped ones would count twice.
+describe("graphCounts and graphSummary with a large source (w36)", () => {
+  const large = { points: 15000, mapped: 800, unmapped: 14000, rules_new: 0 };
+  /** What the server sends for it: two mapped points and the twin of one of them. */
+  const trimmed = (id: number, over: object = {}) => source(id, {
+    point_count: 15000, large,
+    clusters: [{ key: "PDUA01", points: [point(9001, "a", { asset_id: 10, mapping_id: 1 }), point(9002, "b", { asset_id: 10, mapping_id: 2 }), point(9003, "c", { same_tag_as: 9001 })] }],
+    ...over,
+  });
+
+  it("a large source adds its own points, mapped and unmapped, and not the ones it draws", () => {
+    expect(graphCounts(model({ sources: [trimmed(1)] }))).toEqual({ sources: 1, points: 15000, mapped: 800, needing: 0, unmapped: 14000 });
+  });
+
+  it("next to a small source: the small one still counts the points it draws, exactly as before", () => {
+    const m = model({ sources: [...model().sources, trimmed(3)] });
+    expect(graphCounts(m)).toEqual({ sources: 3, points: 9 + 15000, mapped: 2 + 800, needing: 0, unmapped: 7 + 14000 });
+  });
+
+  it("the summary says it with thousands separators, and the Unmapped only words lead with the points that leaves", () => {
+    expect(graphSummary(model({ sources: [trimmed(1)] }))).toBe("1 source, 15,000 points, 800 mapped");
+    expect(graphSummary(model({ sources: [trimmed(1)] }), view({ unmappedOnly: true }))).toBe("Showing 14,000 of 15,000 points, 1 source, 800 mapped");
+  });
+
+  it("a source without `large` is counted by what it draws whatever its point_count says (the client never decides by a count of its own)", () => {
+    const big = source(1, { point_count: 15000, clusters: [{ key: "G", points: [point(1, "a", { asset_id: 10 }), point(2, "b")] }] });
+    expect(graphCounts(model({ sources: [big] }))).toEqual({ sources: 1, points: 2, mapped: 1, needing: 0, unmapped: 1 });
+    expect(graphCounts(model({ sources: [{ ...big, large: null }] }))).toEqual({ sources: 1, points: 2, mapped: 1, needing: 0, unmapped: 1 });
+  });
+
+  it("needing credentials is still the source's own flag", () => {
+    expect(graphCounts(model({ sources: [trimmed(1, { needs_credentials: true })] })).needing).toBe(1);
+  });
+
+  it("any count of four digits has a thousands separator in the summary", () => {
+    const sources = [source(1, { ungrouped: Array.from({ length: 1200 }, (_, i) => point(i + 1, "p", i < 1100 ? { asset_id: 10 } : {})) })];
+    expect(graphSummary(model({ sources }))).toBe("1 source, 1,200 points, 1,100 mapped");
+  });
+});

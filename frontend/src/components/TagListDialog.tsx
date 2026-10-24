@@ -88,7 +88,8 @@ function keepFocusAfterUndo(sourceId: number): void {
   target?.focus({ preventScroll: true });
 }
 
-function undoOptions(auditId: number, sourceId: number, toast: ToastApi, invalidate: Invalidate): ToastOptions {
+/** The toast options of a finished tag list: the Undo button. Exported for the other pages that write through the tag-list route (Map by shape). */
+export function undoOptions(auditId: number, sourceId: number, toast: ToastApi, invalidate: Invalidate): ToastOptions {
   return {
     durationMs: UNDO_MS,
     // No Ctrl+Z here: that shortcut belongs to the mapping Undo of the pages that mount useMappingActions, and a second listener could race it.

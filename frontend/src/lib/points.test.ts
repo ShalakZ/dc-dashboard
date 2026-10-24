@@ -1,5 +1,5 @@
 import type { PointRow } from "../api/types";
-import { DEFAULT_POINT_VIEW, sortBy, viewPoints, type PointView } from "./points";
+import { DEFAULT_POINT_VIEW, firstRows, POINT_PAGE_SIZE, sortBy, viewPoints, type PointView } from "./points";
 
 type Mapped = { asset_id: number; metric: "active_power_kw" | "energy_kwh" | "voltage_v" };
 let nextId = 1;
@@ -130,5 +130,19 @@ describe("sortBy", () => {
     const next = sortBy(start, "name");
     expect(next).toMatchObject({ unmappedOnly: true, query: "pump" });
     expect(start).toEqual(view({ unmappedOnly: true, query: "pump" }));
+  });
+});
+
+describe("firstRows", () => {
+  const rows = Array.from({ length: 450 }, (_, i) => point(`a${i}`));
+  it("is 200 rows per page", () => expect(POINT_PAGE_SIZE).toBe(200));
+  it("keeps the first `cap` rows in order", () => {
+    expect(addresses(firstRows(rows, 200))).toEqual(addresses(rows.slice(0, 200)));
+    expect(firstRows(rows, 400)).toHaveLength(400);
+  });
+  it("returns everything when there are no more rows than the cap", () => {
+    expect(firstRows(rows, 450)).toBe(rows);
+    expect(firstRows(rows, 1000)).toBe(rows);
+    expect(firstRows([], 200)).toEqual([]);
   });
 });

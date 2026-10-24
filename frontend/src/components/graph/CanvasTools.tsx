@@ -1,6 +1,6 @@
 import { Panel } from "@xyflow/react";
 import type { RefObject } from "react";
-import type { FindEntry, FindResult } from "../../lib/graphFind";
+import type { FindEntry, FindResult, ShapesTarget } from "../../lib/graphFind";
 import { FindBox } from "./FindBox";
 
 /**
@@ -11,9 +11,12 @@ import { FindBox } from "./FindBox";
  * `triggerRef` is the bar's Find button: the card gives the focus back to it when nothing better is known, and a press on it is not an
  * outside press (its click toggles). `cardId` is the id that button's `aria-controls` names.
  */
-export function CanvasTools({ search, onChoose, open, onClose, triggerRef, cardId }: {
+export function CanvasTools({ search, onChoose, shapes, onShapes, open, onClose, triggerRef, cardId }: {
   search: (query: string) => FindResult;
   onChoose: (entry: FindEntry) => void;
+  /** (w36) The large sources whose tags the card can search, and where choosing one goes (see FindBox). */
+  shapes?: readonly ShapesTarget[];
+  onShapes?: (to: string) => void;
   open: boolean;
   onClose: () => void;
   triggerRef: RefObject<HTMLElement | null>;
@@ -22,7 +25,7 @@ export function CanvasTools({ search, onChoose, open, onClose, triggerRef, cardI
   if (!open) return null;
   return (
     <Panel position="top-right" className="graph-tools">
-      <FindBox id={cardId} search={search} onChoose={onChoose} onClose={onClose} trigger={triggerRef} />
+      <FindBox id={cardId} search={search} onChoose={onChoose} shapes={shapes} onShapes={onShapes} onClose={onClose} trigger={triggerRef} />
     </Panel>
   );
 }

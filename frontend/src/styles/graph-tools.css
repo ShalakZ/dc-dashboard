@@ -23,6 +23,11 @@
   .graph-find-opt svg.i { flex: none; width: 16px; height: 16px; color: var(--text-2); }
   .graph-find-label { flex: 0 0 auto; max-width: 60%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .graph-find-context { flex: 1 1 0; min-width: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: var(--fs-xs); }
+  /* (w36) The search of a large source's tags reads `Search the 29,998 tags of <source> for "<query>"`: the label takes the room and wraps (two lines, a long name or query
+     breaks anywhere), the context keeps its own words. The row is at least as tall as the others (min-height above) and grows only with the text. */
+  .graph-find-opt[data-kind="tags"] { padding-block: 6px; }
+  .graph-find-opt[data-kind="tags"] .graph-find-label { flex: 1 1 0; max-width: none; overflow: visible; white-space: normal; overflow-wrap: anywhere; }
+  .graph-find-opt[data-kind="tags"] .graph-find-context { flex: 0 0 auto; }
   .graph-find-note { margin: 0; color: var(--text-2); font-size: var(--fs-xs); }
   .graph-find-note:not(:empty) { margin: 6px 2px 0; }
 

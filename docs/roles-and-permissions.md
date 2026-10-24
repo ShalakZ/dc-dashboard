@@ -34,10 +34,10 @@ those, the page or the control shows nothing. The server does not enforce these 
 | Sources and discovery | `sources.view` | See sources | see | Open the Sources page, a source's points and the collector status. | |
 | | `sources.edit` | Change sources | change | Add, edit and delete data sources and browse their points. | `sources.view` |
 | | `sources.test` | Test source connections | change | Make the server try to reach a source (Test and Test all). | `sources.view` |
-| | `discovery.view` | See scans and the graph | see | Open the Scans and Discovery pages. | |
+| | `discovery.view` | See scans and the graph | see | Open the Scans and Discovery pages, and look at Map by shape (the shapes of a large source; nothing is written). | |
 | | `discovery.edit` | Change scan scopes and the graph layout | change | Add, edit and delete scan scopes; save the graph layout; remove discovered sources that have nothing mapped. | `discovery.view` |
 | | `discovery.scan` | Run network scans | risky | Start a scan of a scope (it probes a network). | `discovery.view` |
-| | `discovery.accept` | Accept scan results | risky | Turn scan results into sources, assets and mappings, and a tag list into points and mappings. | `discovery.view` |
+| | `discovery.accept` | Accept scan results | risky | Turn scan results into sources, assets and mappings, a tag list into points and mappings, and the decisions of Map by shape (which end in a tag list). | `discovery.view` |
 | | `readings.import` | Import readings from a file | risky | Load readings from a CSV export into a source, and save the import profiles that say how a file is laid out. | `sources.view` |
 | Storage and settings | `storage.view` | See storage | see | Open the Storage page. | |
 | | `storage.edit` | Change storage settings | change | Change retention, compression and disk limits. | `storage.view` |
@@ -57,7 +57,7 @@ a stored value and the address of its point (five samples at most) where the fil
 call unknown is an address of that source, so a person without See sources can probe for them; it is for trusted roles, and only the
 built-in Admin holds it until an administrator ticks it on a role. It needs See sources to be of use: **Import file...** is in the
 Sources row menu ([Importing readings from a file](sources-and-discovery.md#importing-readings-from-a-file)).
-`discovery.accept` also gates **Map tag list...** and the Undo of a tag list. The import, the tag list and its Undo also refuse (403)
+`discovery.accept` also gates **Map tag list...**, the Undo of a tag list, the Review of **Map by shape** (its check writes nothing; its Map is a tag list, so it is audited and undone as one) and the saved shape rules of a source (`discovery.view` reads them). The import, the tag list and its Undo also refuse (403)
 a request the browser marks as coming from another site, or from an origin other than the dashboard's own (a page on another port of the
 same host counts): the sign-in cookie alone does not keep that out, and a file sent as plain text needs no preflight, so without this
 rule another web page could make a signed-in administrator import readings. `curl` and the import command send no such mark and are

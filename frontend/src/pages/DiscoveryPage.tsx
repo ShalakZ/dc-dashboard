@@ -4,7 +4,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FocusEvent } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { api } from "../api/client";
 import { keys, useAssetKinds, useAssets, useGraph, useInvalidate, useRemoveDiscoveredSources, useSite, useTidyLayout } from "../api/queries";
 import type { Asset, GraphModel, GraphSource } from "../api/types";
@@ -12,6 +12,7 @@ import { useAppearance } from "../auth/AppearanceProvider";
 import { useAuth } from "../auth/AuthProvider";
 import { meets } from "../auth/need";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { PAGE_NEED } from "../components/navItems";
 import { AlignGuides, type AlignGuidesHandle } from "../components/graph/AlignGuides";
 import { BulkCreateDialog } from "../components/graph/BulkCreateDialog";
 import { CanvasTools } from "../components/graph/CanvasTools";
@@ -48,7 +49,7 @@ import {
   type AssetNodeData, type ClusterNodeData, type Group, type GraphView, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
 import { cameraMs, keepInView, overlayMargin, unionRect } from "../lib/graphCamera";
-import { buildFindIndex, findMatches, findPlan, type FindEntry } from "../lib/graphFind";
+import { buildFindIndex, findMatches, findPlan, type FindEntry, type ShapesTarget } from "../lib/graphFind";
 import { alignGuides, type Rect } from "../lib/graphGuides";
 import { navIndex } from "../lib/graphNav";
 import {
@@ -56,10 +57,11 @@ import {
 } from "../lib/graphPrefs";
 import { reuseEdges, reuseNodes } from "../lib/graphReuse";
 import {
-  canCollapse, canExpand, changeNote, collapseAll, collapseTargets, EXPAND_NODE_BUDGET, expandAll, expandNote, expandTargets, graphCounts, graphSummary, selectionStates,
-  type Change,
+  canCollapse, canExpand, changeNote, collapseAll, collapseTargets, EXPAND_NODE_BUDGET, expandAll, expandNote, expandTargets, graphCounts, graphSummary, groupsOverBudget, selectionStates,
+  tooManyGroupsNote, type Change,
 } from "../lib/graphView";
 import { mappedRefs, mappedSourcesByAsset, mappingsWhat } from "../lib/mappedRefs";
+import { shapesPageLink } from "../lib/shapes";
 import { formatOfflineSince } from "../lib/sourceStatus";
 
 /**
@@ -133,6 +135,8 @@ const toggled = <T,>(set: ReadonlySet<T>, value: T): Set<T> => {
 type Callbacks = {
   onToggle: (id: string) => void; onSelect: (id: string) => void; onMap: (id: string) => void; onNewAsset: (id: string) => void;
   onCreateAssets: (id: string) => void; onRemove: (id: string) => void; onMoveSource: (id: string) => void;
+  /** (w36) Map by shape on a large source's card: opens `/sources/:id/shapes`. */
+  onShapes: (id: string) => void;
   onMenu: (button: HTMLElement) => void; onUnmap: (id: string) => void; onMove: (id: string) => void; onUnmapSource: (id: string, sourceId: number) => void;
   onAdd: (id: string) => void;
   /** W12b: the `more` node's button, and the fold of an asset's sub-assets (the latter is given to every role). */
@@ -170,8 +174,11 @@ const NEEDS_FORM = ["assets.edit", "assets.view"] as const;
 const NEVER_VALID = () => false;
 
 /** What the page's permissions give the nodes (see `nodeData`). `formWait`: the asset list the New asset form needs is not read yet. */
-/** `canMove`: sources.edit, the right to move an old source to the address where a scan found its device (w33): the Move... button of a new source that has an offer. */
-interface NodeGates { canAccept: boolean; canRemove: boolean; canEdit: boolean; canForm: boolean; formWait: boolean; canMove: boolean }
+/**
+ * `canMove`: sources.edit, the right to move an old source to the address where a scan found its device (w33): the Move... button of a new source that has an offer.
+ * `canShapes` (w36): the page's whole need, `meets(PAGE_NEED.sourceShapes, can)`: the Map by shape button of a large source.
+ */
+interface NodeGates { canAccept: boolean; canRemove: boolean; canEdit: boolean; canForm: boolean; formWait: boolean; canMove: boolean; canShapes: boolean }
 
 /** What the page works out about a source once per graph, so a toggle or a drag does not do it again for every node. */
 interface SourceFacts { seen: string; groups: number; removable: boolean; looks?: string }
@@ -201,13 +208,14 @@ function looksOf(source: GraphSource, siteZone: string | undefined): string | un
  * the menu-only New asset… (`menuNewAsset`); the group's New asset… button is given by `canAccept` alone, as before (what it opens depends on `canForm`).
  *
  * (w33) A source that has an offer (`moveOfferFor`) gets `onMoveSource` for a person with sources.edit (`canMove`): the Move... button beside Details.
+ * (w36) A source with `large` (the server's field, never a count of ours) gets `onShapes` for a person who meets the shapes page's need (`canShapes`): the Map by shape button beside them.
  *
  * W12b: the `more` node gets `onMore` and EVERY asset node gets `onToggleAssets` (the fold only changes the view, so no permission is needed; the node draws
  * the button only when the asset has sub-assets).
  */
 function nodeData(
-  node: Node, { canAccept, canRemove, canEdit, canForm, formWait, canMove }: NodeGates, facts: ReadonlyMap<number, SourceFacts>, mappedBy: ReadonlyMap<number, MappedSource[]>,
-  { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets }: Callbacks,
+  node: Node, { canAccept, canRemove, canEdit, canForm, formWait, canMove, canShapes }: NodeGates, facts: ReadonlyMap<number, SourceFacts>, mappedBy: ReadonlyMap<number, MappedSource[]>,
+  { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onShapes, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets }: Callbacks,
 ): Node["data"] {
   if (node.type === "more") return { ...node.data, onMore };
   if (node.type === "source") {
@@ -220,6 +228,7 @@ function nodeData(
       ...(creates ? { onCreateAssets, groups: fact.groups } : {}),
       ...(removes ? { onRemove } : {}),
       ...(canMove && moveOfferFor(data.source) !== null ? { onMoveSource } : {}),
+      ...(canShapes && data.source.large ? { onShapes } : {}),
       // (W12c) The node draws no Create assets and no Remove: they are items of the menu its Source actions button opens (the right-click menu's own).
       // A source with neither has nothing to put in it that Details and the fold do not already do, so it gets no button.
       ...(creates || removes ? { onMenu } : {}),
@@ -251,6 +260,9 @@ function Canvas({ model }: { model: GraphModel }) {
   const canLayout = can("discovery.edit"); // the shared layout
   const canRemove = canLayout; // Remove and Clear unmapped ride on the same permission (it is the remove route's)
   const canEditSource = can("sources.edit"); // the source panel's credentials and Browse again
+  const canShapes = meets(PAGE_NEED.sourceShapes, can); // (w36) a link to a page takes that page's whole need: the Map by shape button of a large source and its panel link
+  const canPoints = meets(PAGE_NEED.sourcePoints, can); // (w36) the panel's link to the Points page of a large source
+  const navigate = useNavigate();
   const invalidate = useInvalidate();
   const toast = useToast();
   const movedToast = useMovedToast(); // (w33) "Moved ... 12 mappings kept." with an Undo for 10 seconds: the one toast of a finished move
@@ -471,10 +483,25 @@ function Canvas({ model }: { model: GraphModel }) {
     if (to) void setViewport({ ...view, ...to }, { duration: cameraMs(reducedMotion()) });
   }, [getNodes, getViewport, setViewport]);
 
+  // The one place every toggle goes through: the card's expand button, a click, Enter on a focused node (`navToggle`) and the menu's Expand.
+  // (w36) A closed source whose visible groups alone are more than the Expand all budget is not opened: thousands of nodes freeze the tab. Any source, `large` or not;
+  // it says why in a toast, with the same words as Find's note. The model, the view and the permission are read from refs, so this callback keeps its identity.
+  const canPointsNow = useRef(canPoints);
+  canPointsNow.current = canPoints;
+  const toastNow = useRef(toast);
+  toastNow.current = toast;
   const onToggle = useCallback((id: string) => {
     if (id.startsWith("src:")) {
       const sourceId = Number(id.slice("src:".length));
       const opens = !openNow.current.sources.has(sourceId);
+      if (opens) {
+        const source = modelRef.current.sources.find((s) => s.id === sourceId);
+        const tooMany = source ? groupsOverBudget(source, viewNow.current) : null;
+        if (source && tooMany !== null) {
+          toastNow.current.info(tooManyGroupsNote(source, tooMany, canPointsNow.current));
+          return;
+        }
+      }
       setOpen((prev) => ({ ...prev, sources: toggled(prev.sources, sourceId) }));
       if (opens) void panToOpened(id);
     } else {
@@ -511,6 +538,11 @@ function Canvas({ model }: { model: GraphModel }) {
     afterMove.current = moving?.oldId ?? null;
     setMoving(null);
   }, [moving]);
+  // (w36) Map by shape on a large source's card: the page of its tag shapes. The card is a plain button, so Enter and Space press it like a click.
+  const onShapes = useCallback((id: string) => {
+    const source = sourceOf(id);
+    if (source?.large) navigate(shapesPageLink(source.id, { rules: (source.large.rules_new ?? 0) > 0 })); // new tags that match saved rules: the page opens with those rows preset
+  }, [sourceOf, navigate]);
   const removable = useMemo(() => model.sources.filter(isRemovable), [model]);
   const clearUnmapped = () => {
     if (removable.length > 0) setRemoval({ sources: removable.map((s) => ({ id: s.id, name: s.name })), fromNode: false });
@@ -527,7 +559,8 @@ function Canvas({ model }: { model: GraphModel }) {
   // assets (a role that may not accept has none) and whether it is removable. `asOf` moves with each read of the graph: the "ago" is as old as the data.
   const asOf = useMemo(() => new Date(), [model]);
   const facts = useMemo(() => new Map<number, SourceFacts>(model.sources.map((s) => [s.id, {
-    seen: seenLine(s, asOf, timezone), groups: canAccept ? mappableClusters(s).length : 0, removable: isRemovable(s), looks: looksOf(s, siteZone),
+    // (w36) A large source draws only its mapped points: no group of it is offered for Create assets, whatever the model holds.
+    seen: seenLine(s, asOf, timezone), groups: canAccept && !s.large ? mappableClusters(s).length : 0, removable: isRemovable(s), looks: looksOf(s, siteZone),
   }])), [model, asOf, timezone, siteZone, canAccept]);
 
   // ---- Unmap and move (W12a): the module's confirmation, Move dialog, toasts and Undo; the page names the mappings and where the focus goes afterwards ----
@@ -725,12 +758,12 @@ function Canvas({ model }: { model: GraphModel }) {
     const built = buildGraph(model, open, { moved: moved.current, ignoreSaved: tidyRuns > 0, animate: !reduced, view });
     const nodes: Node[] = built.nodes.map((n) => ({
       ...n,
-      data: nodeData(n, { canAccept, canRemove, canEdit: canEditAssets, canForm, formWait, canMove: canEditSource }, facts, mappedBy, {
-        onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets,
+      data: nodeData(n, { canAccept, canRemove, canEdit: canEditAssets, canForm, formWait, canMove: canEditSource, canShapes }, facts, mappedBy, {
+        onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onShapes, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets,
       }),
     }));
     return { nodes, edges: built.edges };
-  }, [model, open, view, tidyRuns, reduced, canAccept, canRemove, canEditAssets, canForm, formWait, canEditSource, facts, mappedBy, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets]);
+  }, [model, open, view, tidyRuns, reduced, canAccept, canRemove, canEditAssets, canForm, formWait, canEditSource, canShapes, facts, mappedBy, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMoveSource, onShapes, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(seeded.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(seeded.edges);
   useEffect(() => {
@@ -1014,6 +1047,12 @@ function Canvas({ model }: { model: GraphModel }) {
   // ---- Find (Ctrl+K on the canvas), the right-click menus and the canvas's keys ----
   const findIndex = useMemo(() => buildFindIndex(model), [model]);
   const search = useCallback((query: string) => findMatches(findIndex, query), [findIndex]);
+  // (w36) The tags of a large source are not on the canvas, so Find offers to search them on its shapes page; only to a person who may open that page (its whole need).
+  const shapesTargets = useMemo<ShapesTarget[]>(
+    () => (canShapes ? model.sources.flatMap((s) => (s.large ? [{ id: s.id, name: s.name, points: s.large.points }] : [])) : []),
+    [model, canShapes],
+  );
+  const goToShapes = useCallback((to: string) => navigate(to), [navigate]);
   /** Ctrl+K (on the canvas, or on the bar outside the card): opens the card, or, when it is open, takes the focus back into its field. */
   const openFind = useCallback(() => {
     if (!findOpenNow.current) {
@@ -1051,7 +1090,7 @@ function Canvas({ model }: { model: GraphModel }) {
         toast.info(`Not seen lately is off so ${entry.label} can be shown.`);
       }
     }
-    const plan = findPlan(modelRef.current, openNow.current, entry, EXPAND_NODE_BUDGET, now); // the model, open set and view of the moment: a refresh may have come in while the card was open
+    const plan = findPlan(modelRef.current, openNow.current, entry, EXPAND_NODE_BUDGET, now, canPointsNow.current); // the model, open set and view of the moment: a refresh may have come in while the card was open
     if (plan.open !== openNow.current) setOpen(plan.open); // the very same object when nothing has to open: no rebuild
     if (plan.view) {
       // The jump needs a longer page, an unfolded asset or no filter: change those first (one batch with the open set), then wait for the paint as below.
@@ -1268,7 +1307,7 @@ function Canvas({ model }: { model: GraphModel }) {
             <Background />
             <GraphMiniMap />
             {GUIDES_ENABLED && <AlignGuides handleRef={guides} />}
-            <CanvasTools search={search} onChoose={onFind} open={findOpen} onClose={closeFind} triggerRef={findButton} cardId={findCardId} />
+            <CanvasTools search={search} onChoose={onFind} shapes={shapesTargets} onShapes={goToShapes} open={findOpen} onClose={closeFind} triggerRef={findButton} cardId={findCardId} />
           </ReactFlow>
           {canAccept && offer && (
             <div className="offer-bar" role="status">
@@ -1285,6 +1324,7 @@ function Canvas({ model }: { model: GraphModel }) {
         {selected && (
           <SourcePanel
             key={selected.id} source={selected} canEdit={canEditSource} seen={facts.get(selected.id)?.seen ?? ""} looks={facts.get(selected.id)?.looks} onClose={closePanel}
+            canShapes={canShapes} canPoints={canPoints}
             onMoveSource={canEditSource && moveOfferFor(selected) !== null ? () => onMoveSource(nodeId.source(selected.id)) : undefined}
           />
         )}

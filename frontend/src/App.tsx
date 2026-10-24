@@ -24,6 +24,7 @@ import { ScansPage } from "./pages/ScansPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { SourcePointsPage } from "./pages/SourcePointsPage";
+import { SourceShapesPage } from "./pages/SourceShapesPage";
 import { SourcesPage } from "./pages/SourcesPage";
 import { StoragePage } from "./pages/StoragePage";
 import { TariffsPage } from "./pages/TariffsPage";
@@ -69,6 +70,7 @@ export function App() {
         <Route path="/billing" element={<RequirePermission need={PAGE_NEED.billing}><BillingPage /></RequirePermission>} />
         <Route path="/sources" element={<RequirePermission need={PAGE_NEED.sources}><SourcesPage /></RequirePermission>} />
         <Route path="/sources/:id/points" element={<RequirePermission need={PAGE_NEED.sourcePoints}><SourcePointsPage /></RequirePermission>} />
+        <Route path="/sources/:id/shapes" element={<RequirePermission need={PAGE_NEED.sourceShapes}><SourceShapesPage /></RequirePermission>} />
         <Route path="/scans" element={<RequirePermission need={PAGE_NEED.scans}><ScansPage /></RequirePermission>} />
         <Route path="/discovery" element={<RequirePermission need={PAGE_NEED.discovery}><Suspense fallback={loading}><DiscoveryPage /></Suspense></RequirePermission>} />
         <Route path="/users/:tab?" element={<RequirePermission need={PAGE_NEED.users}><UsersPage /></RequirePermission>} />

@@ -96,7 +96,9 @@ lacks says "No access".
   [Sources and discovery](sources-and-discovery.md#importing-readings-from-a-file).
 - **Points** of a source (admins): the Points item of a source's row menu; needs `sources.edit`. **Browse points** asks the source
   what it offers; **Map** ties a point to an asset, and **Unmap…** (asks first, then offers an Undo for 10 seconds) takes it off. Both need
-  `assets.edit` and `assets.view` as well.
+  `assets.edit` and `assets.view` as well. The table draws 200 rows at a time: `Showing 200 of 1,306 points. Search to narrow them.` with **Show 200 more**
+  (it stays as `All 1,306 shown` once everything is drawn); search, **Unmapped only** and the sort look at every point. The header has a **Map by shape**
+  link for a person with `discovery.view` ([Mapping a large source by tag shape](mapping-large-sources.md)).
 - **Scans** and **Discovery** (operators and admins; only admins can change anything): need `discovery.view`. Scans lists the
   scan scopes and their results, names the ports it knows (`4840 (OPC UA)`) and warns, without blocking, about a port that looks like
   a typo of one; **Details** on a result opens that scan in a panel on the right, with the scope it covered
@@ -131,7 +133,11 @@ lacks says "No access".
   shows 50 and a **Show 50 more** button at the end of its list; an asset with sub-assets has a small arrow to fold them away. Arrow keys
   move between nodes and Enter opens or closes one. Every node starts with a small icon (a source shows its protocol, a point what it
   measures, an asset its own icon), and a source is a card: its short name on up to two lines, the protocol and address, a status dot with the status in
-  words, `60 of 60 mapped` with a thin bar, **Details**, and when a scan last found it. Resting the pointer on a node lights its whole
+  words, `60 of 60 mapped` with a thin bar, **Details**, and when a scan last found it. A source of more than 1,000 points is a **large** card:
+  `15,000 points, 800 mapped` takes the place of that line (`, 12 new` is added, and **Map by shape** reads **Review 12 new**, when unmapped tags match the rules saved from earlier maps), **Map by shape** stands beside **Details** (`discovery.view`), and the canvas holds only the source's
+  mapped points, not thousands of nodes; **Find** ends its list, for a query of 2 to 100 characters, with `Search the 15,000 tags of <source> for "PENRG"`, which opens
+  the source's Map by shape page, and a source whose arrow would draw more than 600 groups is not opened (a toast says why). See
+  [Mapping a large source by tag shape](mapping-large-sources.md). Resting the pointer on a node lights its whole
   path, and on a mapped point it also shows the point's last value in a small card (`12.40 kW, 3 s ago`) for a person who may view
   assets; the view glides, a minimap sits at the bottom right, Shift-drag selects several
   nodes, and right-click (or Shift+F10) opens a node's actions. A mapped point or group has a small `Mapping actions for <name>` button for **Unmap…** and
@@ -142,6 +148,20 @@ lacks says "No access".
   accepting results (**Map…**, **New asset…**, **Create assets…** for a whole source) `discovery.accept`; unmapping, moving, the Undo
   and the New asset form (also the **+**) need `assets.edit`, the form `assets.view` too. See
   [Discovery](sources-and-discovery.md#discovery).
+- **Map by shape** of a source (`/sources/<id>/shapes`; operators and admins can look, only admins can decide): needs `discovery.view` to open and look, and
+  `discovery.accept` to decide, review and map; without it every decision is text and there is no **Review** button. It is reached from a large source's
+  card on Discovery, from its **Details** panel, from the header of its Points page and from Find. The heading is `<source name>: map by tag shape`; under it a
+  line saying every shape, billing label and asset name is a guess, four tiles (**Points**, **Shapes**, **Mapped**, **Other tags**), the **Search tags** box,
+  **Suggested for billing** (energy counters first, then power), **Not needed for billing (N points)** (closed until you open it) and the **Other tags** line.
+  A row is one shape: its label, tag count, three examples, unit and suggestion, a decision (**Ignore**, or **Map as** a reading), **Asset name from**
+  (part 1, parts 1 and 2, or part 1 / part 2), a **Same decision for ...** tick when a twin shape exists, and a line for warnings and for the row's saved rule
+  (`Saved rule: Map as energy counter, asset name part 1`, with **Forget this rule**). The bottom bar has **Review N
+  mappings...**, **Put new assets under**, **Create missing assets** and a note. The review is a dialog with the checks, the counts (`400 tags on up to 400
+  assets`) and a table of samples (tag and address, asset, unit hint, reading, scale) for each shape, then the tag list planner's report; the scale comes from
+  the unit the tags carry, and a shape with mixed or unknown units is blocked. When the assets above the new ones changed during the check, the dialog says so and
+  offers **Review again**. **Map N points** maps through the tag list: one `tags.mapped` row in the Audit log, an **Undo** in the message for 10 seconds and
+  **Undo this tag list** in the drawer for 24 hours. The page opened with `?rules=1` (the card's **Review N new**, or the `N new tags match your rules: review`
+  link in the source's **Details** panel) has the rows that match a saved rule set to it. See [Mapping a large source by tag shape](mapping-large-sources.md).
 
 ## Administer
 

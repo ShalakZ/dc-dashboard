@@ -1,0 +1,125 @@
+@layer w6 {
+  /* w36 Map by tag shape (pages/SourceShapesPage.tsx, components/shapes/ShapeRow.tsx, components/shapes/ReviewShapesDialog.tsx). Tokens only, no colour of its own.
+     Every selector starts with the page class .shapes-page or, for the Review dialog (a portal outside the page), .shapes-dialog. The tiles (.tiles, .tile) and the
+     tip are app.css's and are named here only below the page class. Nothing animates or transitions: there is no motion to switch off under reduced motion. */
+
+  .shapes-page .shapes-guess { max-width: 110ch; margin: 0 0 18px; font-size: var(--fs-sm); color: var(--text-2); }
+
+  /* The four tiles: the caption is [icon and title, tip] with the tip pushed to the right, as on Storage and System events. */
+  .shapes-page .shape-tiles { margin-bottom: 20px; }
+  .shapes-page .shape-tiles .tile > .muted:first-child { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .shapes-page .shape-tiles .tile > .muted:first-child .tip { margin: -4px -6px -4px 0; } /* the 24 px tip button does not make the caption line taller */
+
+  /* The search box, the one line that speaks for the search (always there: its room is held, so a result arriving moves nothing) and the first matches. */
+  .shapes-page .shapes-search { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 6px; }
+  .shapes-page .shapes-search input[type="search"] { width: 320px; max-width: 100%; }
+  .shapes-page .shapes-live { min-height: 2lh; margin: 0 0 6px; font-size: var(--fs-sm); }
+  .shapes-page .shapes-matches { display: grid; gap: 6px; margin: 0 0 18px; padding: 0; list-style: none; font-size: var(--fs-sm); }
+  .shapes-page .shapes-matches li { overflow-wrap: anywhere; }
+  .shapes-page .shapes-matches button { min-height: 28px; padding: 0 10px; }
+
+  /* A section: its heading, one line about it, and the rows in one bordered box. */
+  .shapes-page .shapes-section { margin: 0 0 24px; }
+  .shapes-page .shapes-section h2 { margin: 0 0 2px; font-size: var(--fs-lg); font-weight: 600; }
+  .shapes-page .shapes-count { margin: 0 0 10px; font-size: var(--fs-sm); }
+  .shapes-page .shapes-rows { border: 1px solid var(--border); border-radius: var(--radius); }
+  .shapes-page .shapes-disclosure { justify-content: flex-start; width: 100%; padding: 0 12px; font-size: var(--fs-base); font-weight: 600; text-align: left; }
+  .shapes-page .shapes-disclosure svg.i { flex: none; }
+  .shapes-page .shapes-disclosure[aria-expanded="true"] svg.i { transform: rotate(90deg); }
+  .shapes-page .shapes-disclosure + .shapes-rows { margin-top: 10px; }
+  .shapes-page .shapes-other { max-width: 110ch; margin: 0 0 18px; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+
+  /* A row: what the shape is at the left, the decision at the right, the warning slot under both. The slot is at least two lines tall whether it holds a warning or
+     not, so a warning arriving (a choice that does not fit the example) moves nothing. Below 1100 px the two columns become one. */
+  .shapes-page .shape-row { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); column-gap: 24px; row-gap: 4px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .shapes-page .shape-row:last-child { border-bottom: 0; }
+  .shapes-page .shape-row[data-chosen] { box-shadow: inset 3px 0 0 var(--accent); }
+  .shapes-page .shape-row[data-focus] { background: var(--accent-tint); }
+  .shapes-page .shape-row:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+  .shapes-page .shape-info { min-width: 0; display: grid; gap: 2px; align-content: start; }
+  .shapes-page .shape-info p, .shapes-page .shape-decide p { margin: 0; }
+  .shapes-page .shape-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
+  .shapes-page .shape-label { font-size: var(--fs-md); font-weight: 600; overflow-wrap: anywhere; }
+  .shapes-page .shape-examples, .shapes-page .shape-guess, .shapes-page .shape-asset { font-size: var(--fs-sm); overflow-wrap: anywhere; }
+  .shapes-page .shape-decide { min-width: 0; display: grid; gap: 6px; align-content: start; }
+  .shapes-page .shape-decide select { width: 100%; max-width: 24rem; }
+  .shapes-page .shape-name-pick { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; max-width: 24rem; font-size: var(--fs-sm); }
+  .shapes-page .shape-tick { font-size: var(--fs-sm); overflow-wrap: anywhere; }
+  .shapes-page .shape-readonly { font-size: var(--fs-sm); }
+  .shapes-page .shape-warn { grid-column: 1 / -1; min-height: 2lh; font-size: var(--fs-sm); }
+  .shapes-page .shape-warn p { margin: 0; overflow-wrap: anywhere; }
+  /* The saved rule of a row (T7b) stands in the same slot: its sentence, and Forget this rule beside it. The slot holds two lines either way, so a rule appearing after a Map, or
+     going after a Forget, moves nothing. The quiet button is app.css's (borderless, --ctl-h-sm tall). */
+  .shapes-page .shape-warn .shape-rule { display: flex; flex-wrap: wrap; align-items: center; gap: 0 12px; }
+  .shapes-page .shape-warn .shape-rule button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+  @media (max-width: 1099.98px) {
+    .shapes-page .shape-row { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  /* The bar under the table sticks to the bottom edge while the rows scroll. The button is first, at the left: the toast that follows a Map is at the right. */
+  .shapes-page .shapes-bar { position: sticky; bottom: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 24px; margin-top: 16px; padding: 12px 0; border-top: 1px solid var(--border); background: var(--bg); }
+  .shapes-page .shapes-bar-field { display: grid; gap: 6px; }
+  .shapes-page .shapes-bar-field select { min-width: 14rem; max-width: 100%; }
+  .shapes-page .shapes-bar-check { min-height: var(--ctl-h); } /* the box and its words are app.css's label rule (a label that holds a checkbox: two columns, centred); label.inline would be a stacked grid outside a dialog */
+  /* The note is ONE line (the whole sentence is also its title): it takes what the controls leave on their row, or a row of its own when that is under 12rem, and an
+     ellipsis cuts a longer one. So the bar is the controls and one line at 1024 with the sidebar open, not the controls and a paragraph. */
+  .shapes-page .shapes-bar-note { flex: 1 1 0; min-width: 12rem; min-height: 1lh; margin: 0; overflow: hidden; font-size: var(--fs-sm); text-overflow: ellipsis; white-space: nowrap; }
+  /* The go button's label changes with every decision ("Review mappings..." to "Review 19,190 mappings..."): the button keeps the width of the longest, so the parent select and
+     the tick after it never move. --shapes-go-w is app.css's. */
+  .shapes-page .shapes-bar-go button { min-width: var(--shapes-go-w); max-width: 100%; white-space: nowrap; }
+  .shapes-page .shapes-bar button[aria-disabled="true"] { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); cursor: not-allowed; }
+  .shapes-page .shapes-bar button[aria-disabled="true"]:hover { background: var(--surface); }
+
+  /* The Review dialog (portaled). A column, not the dialog's grid: the result box has a height of its own, so the buttons stay in sight with a long result. It carries
+     .dialog (app.css's) beside its own class and never names it. Wide enough (1080 px, and never wider than the window less 24 px each side) for the samples table to
+     keep a tag, an address, an asset path and three short columns on a line each at 1440 and 1024; at 800 it is 752 px and the footer is still inside the window. */
+  .shapes-dialog { display: flex; flex-direction: column; gap: 12px; width: min(1080px, calc(100vw - 48px)); }
+  .shapes-dialog > * { flex: none; }
+  .shapes-dialog h2 { overflow-wrap: anywhere; }
+  /* The buttons stick to the bottom edge of the dialog (its own scroll box), as the tag list dialog's do: the negative margin undoes the dialog's padding so the row runs
+     edge to edge, and its own padding puts the buttons where they were. */
+  .shapes-dialog { scroll-padding-bottom: calc(3lh + 12px + 22px + 1px + 12px); }
+  .shapes-dialog > .row { justify-content: flex-end; position: sticky; bottom: 0; z-index: 1; margin: 0 -24px -22px; padding: 12px 24px 22px; border-top: 1px solid var(--border); background: var(--bg); box-shadow: 0 22px 0 var(--bg); }
+
+  /* The one line that speaks for the dialog stands in the footer, at the left of the buttons it speaks for: no empty band between the first sentence and the result.
+     A FIXED three lines, so a longer sentence never moves the box above it or the buttons (it scrolls inside). Under 1000 px the window is too narrow to share the line
+     with three buttons: the sentence takes the whole first line of the footer and the buttons the second, whatever the sentence says. */
+  .shapes-dialog .shapes-status { flex: 1 1 18rem; min-width: 0; height: 3lh; overflow: auto; font-size: var(--fs-sm); overflow-wrap: anywhere; text-align: left; }
+  .shapes-dialog .shapes-status[data-tone="error"] { color: var(--crit); font-weight: 600; }
+  @media (max-width: 999.98px) {
+    .shapes-dialog .shapes-status { flex-basis: 100%; }
+  }
+
+  /* The result: a box of a FIXED height that scrolls (a tab stop, so the keyboard can scroll it). A result arriving moves nothing. */
+  .shapes-dialog .shapes-report { display: grid; gap: 14px; align-content: start; height: min(26rem, 44vh); overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); }
+  .shapes-dialog .shapes-report:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .shapes-dialog .shapes-report h3 { margin: 0 0 4px; font-size: var(--fs-base); font-weight: 600; overflow-wrap: anywhere; }
+  .shapes-dialog .shapes-report h4 { margin: 8px 0 0; font-size: var(--fs-sm); font-weight: 600; }
+  .shapes-dialog .shapes-report table { margin: 4px 0; }
+  .shapes-dialog .shapes-report p { margin: 0; font-size: var(--fs-sm); }
+  .shapes-dialog .shapes-cell { overflow-wrap: anywhere; } /* the planner's problem lines and units (an address or a sentence): these may break anywhere */
+
+  /* The samples table: never a break in the middle of a word. The tag, the unit hint, the metric and the scale stay on one line; the address is the muted second line of the
+     tag's own cell and is the only text that may break anywhere; the asset path breaks after a slash (the <wbr> after each one) or at a space, never inside a name. With
+     overflow-wrap: anywhere on every cell the table's minimum width was one letter and the columns were squeezed until they broke words (PDUA01_PM0_PEN / RG). */
+  .shapes-dialog .shapes-samples td, .shapes-dialog .shapes-samples th { white-space: nowrap; }
+  .shapes-dialog .shapes-samples .shapes-asset { white-space: normal; overflow-wrap: normal; }
+  .shapes-dialog .shapes-samples .shapes-address { white-space: normal; overflow-wrap: anywhere; }
+
+  /* The checks: a blocking one in the error style, a warning in the warning style; the word says which, colour is not the only sign. */
+  .shapes-dialog .shapes-checks { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); }
+  .shapes-dialog .shapes-checks li { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+  .shapes-dialog .shapes-checks li[data-severity="blocking"] { border-color: var(--crit); background: var(--crit-tint); }
+  .shapes-dialog .shapes-checks li[data-severity="blocking"] strong { color: var(--crit); }
+  .shapes-dialog .shapes-checks li[data-severity="warning"] { border-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
+
+  .shapes-dialog .shapes-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 8px 0; }
+  .shapes-dialog .shapes-tiles > div { padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); }
+  .shapes-dialog .shapes-tiles dt { color: var(--text-2); font-size: var(--fs-xs); }
+  .shapes-dialog .shapes-tiles dd { margin: 0; font-size: var(--fs-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* The buttons that wait do so with aria-disabled, not disabled (the person is on one of them when a call starts): they look the way a disabled button does and do nothing. */
+  .shapes-dialog .shapes-go { min-width: 11rem; }
+  .shapes-dialog .shapes-go[aria-disabled="true"], .shapes-dialog .shapes-go[aria-disabled="true"]:hover { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); cursor: not-allowed; }
+  .shapes-dialog .shapes-cancel[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+}

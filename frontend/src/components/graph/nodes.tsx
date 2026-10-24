@@ -2,7 +2,7 @@ import { getBezierPath, Handle, Position, type ConnectionLineComponentProps, typ
 import { memo, useMemo, type KeyboardEvent, type MouseEvent, type ReactElement, type ReactNode } from "react";
 import type { GraphSource } from "../../api/types";
 import { Icon, type IconName } from "../Icon";
-import { isNotSeen, moveOfferFor, seenCard } from "../../lib/graph";
+import { countNumber, isNotSeen, moveOfferFor, seenCard } from "../../lib/graph";
 import type {
   AssetNodeData, ClusterNodeData, MoreNodeData, NodeActions, PointNodeData, SourceNodeData, UnidentifiedNodeData,
 } from "../../lib/graph";
@@ -163,24 +163,36 @@ function mappedPoints(source: GraphSource): number {
  * (w33) A new source that looks like an old one that stopped answering says so on that same last line (`Looks like <old name>`; the whole sentence in the tooltip) and, for a person who may
  * edit sources, gets a Move... button beside Details in the same 20px row; two such old sources, or another server answering at the address, replace the seen line in the same way
  * (the latter in the warning ink, `gsrc-warn`). The card is no taller (`seenCard`).
+ * (w36) A source with `large` (the server sends it for a source over 1,000 points, which then holds only its mapped points and their twins) says `15,000 points, 800 mapped` in the words line, from
+ * `large` and from nothing it draws, and a Map by shape button (`onShapes`, given to a person who may open that page) is the LAST button of the same 20px row: no line is added, the card is no taller.
+ * (w36) With `large.rules_new` above 0 (new tags in a shape the owner already decided about) the words read `15,000 points, 800 mapped, 12 new` and the same button reads `Review 12 new`; the page sends it to ?rules=1.
  * Create assets and Remove are not drawn: they are items of the menu the page opens from the `⋯` button (and from a right click), so `onCreateAssets`, `onRemove` and
  * `groups` stay in the data for the page and are not read here.
  */
 function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
-  const { source, expanded, onToggle, onSelect, onMenu, onMoveSource, seen, looks } = data;
+  const { source, expanded, onToggle, onSelect, onMenu, onMoveSource, onShapes, seen, looks } = data;
   const status = sourceStatus(source);
   const protocol = protocolLabel(source.connector_type);
   const address = sourceAddress(source);
   const facts = address ? `${protocol} · ${address}` : protocol;
-  const total = source.point_count;
+  // (w36) A large source draws only its mapped points and their twins, so what it holds comes from `large` (the server's), never from the points drawn or from `point_count`.
+  const large = source.large ?? null;
+  const total = large ? large.points : source.point_count;
   // The count that came with the source can lag behind the points the graph holds; the share never passes the whole.
-  const mapped = useMemo(() => Math.min(total, mappedPoints(source)), [source, total]);
+  const mapped = useMemo(() => Math.min(total, large ? large.mapped : mappedPoints(source)), [source, total, large]);
   const share = total > 0 ? Math.round((mapped / total) * 100) : 0;
+  // (w36) New tags that match the owner's saved rules ride on the same line (`, 12 new`) and turn the Map by shape button into `Review 12 new`: no line, no row is added. An older server sends no `rules_new`.
+  const fresh = large?.rules_new ?? 0;
+  const words = large
+    ? `${countNumber(total)} ${total === 1 ? "point" : "points"}, ${countNumber(mapped)} mapped${fresh > 0 ? `, ${countNumber(fresh)} new` : ""}`
+    : total > 0 ? `${mapped} of ${total} mapped` : "No points yet";
   // (w33) A source the newest scan of its range did not find is drawn quieter (graph-source-card.css); a mapped one swaps its seen line for what to do about it (graph.ts `seenCard`).
   const missing = isNotSeen(source);
   const last = seen ? seenCard(source, seen, looks) : null;
   // (w33) A new source that looks like an old one: its Move... button stands beside Details (the same 20px row, so the card is no taller), for a person who may edit sources (the page gives the callback).
   const offer = onMoveSource ? moveOfferFor(source) : null;
+  // (w36) Map by shape: a large source's third button, the last of the same row (the page gives the callback to a person who may open the page).
+  const shapes = large && onShapes ? onShapes : null;
   return (
     <div className={missing ? `gnode gnode-source ${source.origin} gsrc-not-seen` : `gnode gnode-source ${source.origin}`}>
       <Handles>
@@ -198,14 +210,22 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
             {` · ${source.origin}`}
           </div>
           <div className="gsrc-mapped">
-            <div className="gsrc-words">{total > 0 ? `${mapped} of ${total} mapped` : "No points yet"}</div>
+            <div className="gsrc-words" title={large ? words : undefined}>{words}</div>
             <div className="gsrc-bar" aria-hidden="true"><span className="gsrc-fill" style={{ width: `${share}%` }} /></div>
           </div>
-          {(onSelect || offer) && (
+          {(onSelect || offer || shapes) && (
             <div className="gsrc-actions">
               {onSelect && <button type="button" className="nodrag gsrc-details" aria-label={`Details for ${source.name}`} onClick={press(() => onSelect(id))}>Details</button>}
               {offer && onMoveSource && (
                 <button type="button" className="nodrag gsrc-move" aria-label={`Move ${offer.from_name} to ${source.name}...`} onClick={press(() => onMoveSource(id))}>Move...</button>
+              )}
+              {shapes && (
+                <button
+                  type="button" className="nodrag gsrc-shapes" onClick={press(() => shapes(id))}
+                  aria-label={fresh > 0 ? `Review ${countNumber(fresh)} new ${fresh === 1 ? "tag that matches" : "tags that match"} your rules` : `Map by shape for ${source.name}`}
+                >
+                  {fresh > 0 ? `Review ${countNumber(fresh)} new` : "Map by shape"}
+                </button>
               )}
             </div>
           )}

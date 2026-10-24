@@ -41,6 +41,8 @@
   --ctl-h-xs: 28px;                                       /* icon buttons and the small button of a banner, a toast or an audit entry */
   --chip-h: 22px;                                         /* a status chip inside a line of text or a table cell (in a row of controls it is --ctl-h) */
   --toast-clear: 96px;                                    /* room under a page, so the end of a list scrolls clear of a settled toast (two lines: 62px plus its 16px margin) */
+  --bottom-bar-h: 0px;                                    /* the room under the top edge of a bar that sticks to the bottom edge, set on <html> by the page that has one (the Map by shape page) and taken away when it goes: the toast stack sits above it (feedback-toasts.css) */
+  --shapes-go-w: 30ch;                                    /* the Map by shape bar's go button never gets narrower than its longest label, "Review 99,999 mappings..." (about 207px; ch is a digit of the button's own font) */
   /* w13 dashboard widgets (styles/widgets.css; the dark values are themes.css's, the presets change none of them). Every widget colour, size and corner is one
      of these, so a tweak is an edit here: the card (density and corners: --widget-pad, --widget-head-h, --widget-row-h, --widget-radius, --widget-shadow,
      --widget-figure, -sm and -max), the chart colours (--chart-1 to --chart-8, --chart-band-opacity, --chart-grid, --chart-tip-bg) and the gauge (--gauge-track,

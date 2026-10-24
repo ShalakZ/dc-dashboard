@@ -21,6 +21,7 @@ vi.mock("../pages/DashboardPage", () => ({ DashboardPage: () => <h1>the dashboar
 vi.mock("../pages/BillingPage", () => ({ BillingPage: () => <h1>the billing page</h1> }));
 vi.mock("../pages/SourcesPage", () => ({ SourcesPage: () => <h1>the sources page</h1> }));
 vi.mock("../pages/SourcePointsPage", () => ({ SourcePointsPage: () => <h1>the points page</h1> }));
+vi.mock("../pages/SourceShapesPage", () => ({ SourceShapesPage: () => <h1>the shapes page</h1> }));
 vi.mock("../pages/ScansPage", () => ({ ScansPage: () => <h1>the scans page</h1> }));
 vi.mock("../pages/DiscoveryPage", () => ({ DiscoveryPage: () => <h1>the discovery page</h1> }));
 vi.mock("../pages/UsersPage", () => ({ UsersPage: () => <h1>the users page</h1> }));
@@ -71,6 +72,7 @@ const PAGE: Record<string, string> = {
   "/scans": "the scans page",
   "/discovery": "the discovery page",
   "/sources/4/points": "the points page",
+  "/sources/4/shapes": "the shapes page",
   "/users": "the users page",
   "/settings": "the settings page",
   "/tariffs": "the tariffs page",
@@ -83,7 +85,7 @@ const PAGE: Record<string, string> = {
   "/diagnostics": "the diagnostics page",
 };
 const EVERYONE = ["/assets", "/dashboards", "/dashboards/3", "/billing", "/password"];
-const OPERATORS_ADD = ["/sources", "/scans", "/discovery"];
+const OPERATORS_ADD = ["/sources", "/scans", "/discovery", "/sources/4/shapes"]; // w36: the shapes page needs discovery.view, which the Operator holds
 const ADMINS_ADD = ["/sources/4/points", "/users", "/settings", "/tariffs", "/storage", "/audit", "/audit/7", "/events", "/events/7", "/diagnostics"];
 const MAY_OPEN: Record<BuiltinRole, string[]> = {
   viewer: EVERYONE,

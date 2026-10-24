@@ -1,6 +1,6 @@
-import type { GraphModel } from "../api/types";
+import type { GraphModel, GraphSource } from "../api/types";
 import {
-  NO_VIEW, descendantNodeIds, drawnCount, groupVisible, groupsOf, isOfferable, nodeId, sourceVisible, visiblePoints, type Group, type GraphView, type OpenState,
+  NO_VIEW, countNumber, descendantNodeIds, drawnCount, groupVisible, groupsOf, isOfferable, nodeId, sourceVisible, visiblePoints, type Group, type GraphView, type OpenState,
 } from "./graph";
 
 /**
@@ -9,11 +9,29 @@ import {
  */
 export const EXPAND_NODE_BUDGET = 600;
 
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+/**
+ * (w36) How many groups opening this source would draw (the ones the view lets through, the Ungrouped one included), when that alone is more than the
+ * budget: the number. Else null. Opening such a source is refused (a toggle) or not planned (Find): thousands of nodes freeze the page, and the groups are
+ * more than a person could read. Applies to every source, one with `large` too; `buildGraph` itself draws whatever it is given.
+ */
+export function groupsOverBudget(source: GraphSource, view: GraphView = NO_VIEW, budget: number = EXPAND_NODE_BUDGET): number | null {
+  const groups = groupsOf(source).filter((g) => groupVisible(g, view)).length;
+  return groups > budget ? groups : null;
+}
+
+/**
+ * (w36) The one sentence both guards say (a toast for a toggle, the note of a Find jump): `Plant has 13,851 groups, too many to draw; use Map by shape`, and
+ * ` or the Points page` for a person who may open that page (its whole need, `PAGE_NEED.sourcePoints`; Map by shape needs only what Discovery does).
+ */
+export function tooManyGroupsNote(source: GraphSource, groups: number, canPoints: boolean): string {
+  return `${source.name} has ${countNumber(groups)} groups, too many to draw; use Map by shape${canPoints ? " or the Points page" : ""}`;
+}
+
+const plural =(n: number, one: string, many: string) => `${countNumber(n)} ${n === 1 ? one : many}`;
 
 export interface GraphCounts {
   sources: number;
-  /** The points the graph draws, not the sources' `point_count`. */
+  /** The points the graph draws, not the sources' `point_count`; a large source (w36) adds `large.points` instead, since it draws only the mapped ones. */
   points: number;
   mapped: number;
   /** Sources that need credentials. */
@@ -26,6 +44,7 @@ export interface GraphCounts {
  * The figures behind the line above the canvas and the bar's chips. They are the whole graph's whatever the view: the "Unmapped only" filter
  * changes the words that are said about them (`graphSummary`), not the figures, so a person can always see how much is mapped and how much the
  * filter hides. The view is accepted so a caller passes the same arguments as to `graphSummary`.
+ * (w36) A source with `large` is counted by `large` and not by the few points it draws (its mapped ones and their twins): its points, its mapped and its unmapped. Only `large` switches this.
  */
 export function graphCounts(model: GraphModel, _view: GraphView = NO_VIEW): GraphCounts {
   let points = 0;
@@ -34,6 +53,12 @@ export function graphCounts(model: GraphModel, _view: GraphView = NO_VIEW): Grap
   let unmapped = 0;
   for (const source of model.sources) {
     if (source.needs_credentials) needing++;
+    if (source.large) {
+      points += source.large.points;
+      mapped += source.large.mapped;
+      unmapped += source.large.unmapped;
+      continue;
+    }
     for (const p of [...source.ungrouped, ...source.clusters.flatMap((c) => c.points)]) {
       points++;
       if (p.asset_id !== null) mapped++;
@@ -44,7 +69,7 @@ export function graphCounts(model: GraphModel, _view: GraphView = NO_VIEW): Grap
 }
 
 /**
- * "3 sources, 120 points, 6 mapped, 1 needs credentials": the line above the canvas. Counts the points the graph draws, not `point_count`.
+ * "3 sources, 120 points, 6 mapped, 1 needs credentials": the line above the canvas. Counts the points the graph draws, not `point_count` (w36: a large source counts by its `large`), with thousands separators.
  * While the "Unmapped only" filter is on it leads with how many points that leaves ("Showing 42 of 120 points, 3 sources, 6 mapped"): the
  * figures stay the whole graph's, so a person can always see how much is mapped and how much the filter hides.
  */
@@ -52,9 +77,9 @@ export function graphSummary(model: GraphModel, view: GraphView = NO_VIEW): stri
   const { sources, points, mapped, needing, unmapped } = graphCounts(model, view);
   const [sourceText, pointText] = [plural(sources, "source", "sources"), plural(points, "point", "points")];
   const parts = view.unmappedOnly
-    ? [`Showing ${unmapped} of ${pointText}`, sourceText, `${mapped} mapped`]
-    : [sourceText, pointText, `${mapped} mapped`];
-  if (needing > 0) parts.push(`${needing} ${needing === 1 ? "needs" : "need"} credentials`);
+    ? [`Showing ${countNumber(unmapped)} of ${pointText}`, sourceText, `${countNumber(mapped)} mapped`]
+    : [sourceText, pointText, `${countNumber(mapped)} mapped`];
+  if (needing > 0) parts.push(`${countNumber(needing)} ${needing === 1 ? "needs" : "need"} credentials`);
   return parts.join(", ");
 }
 

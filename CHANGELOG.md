@@ -16,6 +16,10 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w36 (2026-10-24, MERGE)
+
+Discovery at scale (no migration, no new permission, no figure change, no recompute). A source over 1,000 points is a small card on Discovery that draws only what is mapped, with **Map by shape**: a page that groups its tags into a few dozen shapes (digits become `#`; the shapes, the billing label and the asset name are guesses, and the page says so), billing rows first, one decision per row. **Review** shows samples and checks (collisions, renumbered tags, units, 1,000 at a time, meters missing a tag), then goes through the tag list: dry run, Map, Undo for 24 hours. Find offers to search a large source's tags, a source with too many groups is not opened, the Points page draws 200 rows, decisions are remembered as saved rules. At 30,000 tags the graph answer fell from 8.0 MB to 16 KB and the Points Map dialog from 4.3 s to 0.1 s; 400 energy counters take 5 actions.
+
 ## w34 (2026-10-23, c14a027)
 
 OPC UA at real scale (no migration, no new permission, no figure change). **Stable tag addresses**, a new tick on an OPC UA source (off by default; from a community answer on AVEVA's forum, not tested against your SCADA): the connector then reads `ns=3;s=Cluster.Tag` without the browse number (`20403:`), so a SCADA project change does not turn every mapped point Bad; a browse lands on the stored point and adds no twin, and a tag cannot be mapped twice. **Test** compares the numbered and the stable address and suggests the tick when the server looks like Plant SCADA. The poll reads in slices of at most 200 tags (halving when a server refuses), the browse goes level by level (15,000 tags: 78 Browse and 225 Read requests, not about 75,000), and the simulator can play a 15,000-tag SCADA (`SIM_SCADA_*`, dev only). New page [Large OPC UA servers](docs/opc-ua-at-scale.md); questions 26 to 35 in [Historian integration](docs/historian-integration.md). Also: Discovery's New asset no longer shows a false "graph could not be refreshed" error on a busy page.

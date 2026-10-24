@@ -136,6 +136,16 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     # Added in W31 (a tag list turned into mappings, and its Undo): after the freeze, so not in auth_matrix_pre_w9a.json; the gate and
     # isolation tests cover them. The list is the request body, so the isolation probe (a JSON body) is refused with a 415, after the gate.
     _all("discovery.accept", "POST /api/sources/{source_id}/tag-list", "POST /api/tag-lists/{audit_id}/undo"),
+    # Added in W36 (Map by tag shape: a source's points as a few dozen shapes): after the freeze, so not in auth_matrix_pre_w9a.json; the
+    # gate and isolation tests cover it. A read, so discovery.view (the Operator holds it); the decisions are sent with discovery.accept.
+    _all("discovery.view", "GET /api/sources/{source_id}/shapes"),
+    # Added in W36 (the decisions about shapes as tag-list lines and their checks): after the freeze, so not in auth_matrix_pre_w9a.json;
+    # the gate and isolation tests cover it. A read sent as POST (the body is the decisions), but it prepares a write, so discovery.accept.
+    _all("discovery.accept", "POST /api/sources/{source_id}/shapes/lines"),
+    # Added in W36 (the decisions a person made about a source's shapes, remembered): after the freeze, so not in auth_matrix_pre_w9a.json;
+    # the gate and isolation tests cover them. Reading them is discovery.view (the Operator holds it); replacing them is discovery.accept.
+    _all("discovery.view", "GET /api/sources/{source_id}/shape-rules"),
+    _all("discovery.accept", "PUT /api/sources/{source_id}/shape-rules"),
     # Added in W33 (move a source that stopped answering to the address where its server turned up): after the freeze, so not in
     # auth_matrix_pre_w9a.json; the gate and isolation tests cover them (the move, and the Undo of a move).
     _all("sources.edit", "POST /api/sources/{source_id}/move", "POST /api/sources/moves/{audit_id}/undo"),
