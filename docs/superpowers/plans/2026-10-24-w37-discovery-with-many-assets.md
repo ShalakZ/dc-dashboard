@@ -124,6 +124,6 @@ R4 order of the next fixes (from this profile, ruled below in the ledger): R5 fi
 ### Task 4 (conditional, one commit per fix): R7 callback identity, R8 `interactionWidth: 0` on every edge `buildGraph` makes, R9 `onlyRenderVisibleElements` above 600 nodes. Taken only as the T-mid numbers and R4's profile say; each with its measured before and after in the ledger and a unit test.
 
 ### Task 5: `frontend/e2e/w37.spec.ts` (R13)
-- [ ] `familyModel` in `graphModel.ts`; the seven cases of R13 (at rest 17 nodes and one edge into the summary labelled `400 mapped`; Show 50 twice; Find `PDUB177`-like child past page 1; drop onto a drawn PDU opens the Review (Cancel); fold and unfold; pan frames at rest and in the stress view, generous limits; 1024 x 768 no sideways scroll); playwright project after w36; e2e type check prints nothing; docs bullet. The controller runs it through `spec-run.sh`.
+- [x] `familyModel` in `graphModel.ts`; the seven cases of R13 (at rest 17 nodes and one edge into the summary labelled `400 mapped`; Show 50 twice; Find `PDUB177`-like child past page 1; drop onto a drawn PDU opens the Review (Cancel); fold and unfold; pan frames at rest and in the stress view, generous limits; 1024 x 768 no sideways scroll); playwright project after w36; e2e type check prints nothing; docs bullet. The controller runs it through `spec-run.sh`.
 
 ### Task 6: docs and close-out (R14, R15), gallery, R2 proof, before/after table, the plan's log. Doc tests right after the docs edit.
