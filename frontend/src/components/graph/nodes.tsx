@@ -210,7 +210,7 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
             {` · ${source.origin}`}
           </div>
           <div className="gsrc-mapped">
-            <div className="gsrc-words">{words}</div>
+            <div className="gsrc-words" title={large ? words : undefined}>{words}</div>
             <div className="gsrc-bar" aria-hidden="true"><span className="gsrc-fill" style={{ width: `${share}%` }} /></div>
           </div>
           {(onSelect || offer || shapes) && (
