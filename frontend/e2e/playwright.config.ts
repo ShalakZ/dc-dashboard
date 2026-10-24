@@ -476,7 +476,7 @@ export default defineConfig({
     // Discovery with hundreds of mapped assets (w37). WRITES NOTHING and needs nothing from the stack beyond the sign-in, like w7u and w12b: every case answers GET /api/discovery/graph (and the layout's PUT and DELETE, and
     // GET /api/mappings/{id}/latest) through page.route from `familyModel()` in e2e/graphModel.ts (the owner's shape: MV2, three rooms, ten racks, 400 PDUs under Room 3, a large source with one mapped point per PDU, a 60-point
     // source mapped onto nine racks); any OTHER write the app tries is refused and fails the case. Cases (each its own test; 1440 x 900, the look at 1024 x 768 last): at rest ONE summary node under Room 3 (`400 sub-assets`,
-    // `400 mapped`, Show 50) with one mapped edge into it; Show 50 twice (100 PDUs, the focus on the first new one, ArrowDown from the last reaches the summary, ArrowLeft goes to Room 3); Find `PDUB177` extends the page to 400;
+    // `400 mapped`, Show 50) with one mapped edge into it; Show 50 twice (100 PDUs, the focus on the first new one, ArrowDown from the last reaches the summary, ArrowLeft goes to Room 3); Find `the 377th sub-asset` extends the page to 400;
     // a group dropped on a drawn PDU opens the Review, its menu has its items, a drop on the summary is a plain move; fold and unfold Room 3; the frames of a 3 s pan at rest and with 817 nodes drawn (logged, generous
     // limits); the summary is reachable and the page does not scroll sideways at 1024 x 768, sidebar expanded and minimised.
     {
