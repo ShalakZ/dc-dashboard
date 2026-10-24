@@ -233,6 +233,8 @@ data-retrieval requests the connectors already use, nothing else. A source of mo
    page can fold; the choice is remembered in this browser. **Collapse all** and **Expand all** leave it alone, and **Tidy layout**
    does not undo it.
 
+   An asset with more than 50 sub-assets shows them as one box, 50 at a time ([Hundreds of assets on Discovery](mapping-large-sources.md#after-mapping-hundreds-of-assets-on-discovery)).
+
    **Arrow keys.** Tab reaches the nodes (the canvas itself takes the focus when you click empty space, or when Esc closes Find or a
    menu, and Down or Right on it goes to the first node). Then: Up and Down move to the previous or next node in the same list (the
    sources, the groups of a source, the points of a group, the assets of one level), Right moves to the first node under it and Left
