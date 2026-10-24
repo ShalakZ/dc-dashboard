@@ -44,6 +44,8 @@ const LAST_INCOMER = "ME5IN_QM_P";
 /** The labels of the two energy counter shapes (a digit that differs between the members is `#`, one that is the same is kept). */
 const A = "PDUA#_PM0_PENRG";
 const B = "PDUB#_PM0_PENRG";
+/** The active power shape of the same meters: still unmapped when case 6 looks at the Review (cases 3 to 5 mapped the energy counters). */
+const POWER = "PDUA#_PM0_P";
 const ROLE = "w36-no-accept";
 const USER = "w36-viewer";
 const PASSWORD = `w36-${RUN}-password`;
@@ -578,7 +580,12 @@ test.describe("W36: Map by shape", () => {
 
     await page.goto(shapesUrl());
     await expect(shapesHeading(page)).toBeVisible({ timeout: 30_000 });
-    await chooseEnergyCounters(page);
+    // Cases 3 to 5 mapped the energy counters, so the Review of those rows is now (rightly) inert: the look decides about the active power of the same meters,
+    // which are still unmapped (PDUA01 under the hall holds an energy counter, and its active power is free).
+    await decisionOf(shapeRow(page, POWER), POWER).selectOption({ label: "Map as active power" });
+    await page.getByLabel("Put new assets under", { exact: true }).selectOption({ value: String(world.hallId) });
+    await expect(reviewButton(page)).toHaveText(`Review ${PER_FEED} mappings...`);
+    await expect(reviewButton(page)).not.toHaveAttribute("aria-disabled", "true");
 
     for (const want of ["expanded", "minimized"] as const) {
       await test.step(`the shapes page, sidebar ${want}`, async () => {
@@ -586,7 +593,7 @@ test.describe("W36: Map by shape", () => {
         const bar = await settledBox(page.locator(".shapes-bar"));
         const button = await settledBox(reviewButton(page));
         expect(inside(bar), `the bottom bar lies inside the window: ${JSON.stringify(bar)}`).toBe(true);
-        expect(inside(button), `Review ${MAPPINGS} mappings... lies inside the window: ${JSON.stringify(button)}`).toBe(true);
+        expect(inside(button), `Review ${PER_FEED} mappings... lies inside the window: ${JSON.stringify(button)}`).toBe(true);
         const overflow = await page.evaluate((width) => {
           const out: string[] = [];
           for (let el: HTMLElement | null = document.querySelector<HTMLElement>(".shapes-page"); el && !el.classList.contains("shell"); el = el.parentElement) {
