@@ -40,7 +40,6 @@ def test_member_text_is_the_name_when_the_address_is_not_an_opcua_string_id_with
     assert member_text("PDU-A01.kWh", "PDU-A01.kWh") == "PDU-A01.kWh"
     assert member_text("ns=2;i=9", "Temperature") == "Temperature"  # a numeric id has no tag in it
     assert member_text("ns=3;s=NoDotHere", "Power") == "Power"  # a string id without a cluster
-    assert member_text("ns=3;s=Site.PDUA01_PM0_P", "PDUA01_PM0_P") == "PDUA01_PM0_P"  # a stable id (read from the address; the name agrees)
 
 
 def test_member_text_of_a_name_that_fell_back_to_the_node_id_is_the_part_after_the_cluster():
@@ -49,6 +48,7 @@ def test_member_text_of_a_name_that_fell_back_to_the_node_id_is_the_part_after_t
     assert member_text("ns=3;s=Site.PDUA01_PM0_P", "ns=3;s=Site.PDUA01_PM0_P") == "PDUA01_PM0_P"  # stable form
     assert member_text("s=Site.PDUA01_PM0_P", "s=Site.PDUA01_PM0_P") == "PDUA01_PM0_P"  # no namespace
     assert member_text("ns=3;s=Site.A.B", "ns=3;s=Site.A.B") == "A.B"  # the rest after the first dot, dots and all
+    assert member_text("ns=3;s=Site.PDUA01_PM0_P", "PDUA01_PM0_P") == "PDUA01_PM0_P"  # a stable id with a cluster whose name already is the tag: the same text
     # neither form: the name is used as it is
     assert member_text("ns=3;i=2253", "ns=3;i=2253") == "ns=3;i=2253"
     assert member_text("ns=3;s=NoDotHere", "ns=3;s=NoDotHere") == "ns=3;s=NoDotHere"
@@ -71,7 +71,7 @@ TAG_TEXTS = json.loads((Path(__file__).resolve().parent / "fixtures" / "tag_text
 
 def test_every_row_of_the_shared_tag_text_fixture_has_the_text_written_by_hand():
     # the browser's copy of the rule reads the same file (frontend/src/lib/shapes.test.ts); the texts are written from the rule, not dumped from this code
-    assert len(TAG_TEXTS) >= 60
+    assert len(TAG_TEXTS) >= 100
     for row in TAG_TEXTS:
         assert member_text(row["address"], row["name"]) == row["text"], row
 

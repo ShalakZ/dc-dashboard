@@ -53,15 +53,15 @@ describe("the words of a row", () => {
   });
 
   it("reads the same tag text as the server for every row of backend/tests/fixtures/tag_texts.json", () => {
-    expect(TAG_TEXTS.length).toBeGreaterThanOrEqual(60); // an empty or missing file must fail, not pass with no rows
+    expect(TAG_TEXTS.length).toBeGreaterThanOrEqual(100); // an empty or missing file must fail, not pass with no rows
     for (const row of TAG_TEXTS) expect(exampleText({ address: row.address, name: row.name }), JSON.stringify(row)).toBe(row.text);
   });
 
   // Holds the JS numbered regex to Python's on every adversarial id of the w34 fixture (leading/trailing spaces, a trailing newline, Arabic-Indic digits, `NS=`, `nsu=`,
-  // `s=1:2:A.B`...): `out` is Python's `stable_address(in)`, so `in !== out` exactly when Python calls `in` numbered.
+  // `s=1:2:A.B`...): `out` is Python's `stable_address(in)`, so `in !== out` exactly when Python calls `in` numbered. Only the numbered decision is held here;
+  // the exact text of every other id is pinned by the rows of tag_texts.json (the test above), so no second copy of the stable form is kept in this file.
   it("calls an id numbered exactly when Python does, and then reads the tag Python reads (backend/tests/fixtures/opcua_id_samples.json)", () => {
     expect(ID_SAMPLES.length).toBeGreaterThanOrEqual(40);
-    const stable = /^(?:ns=[0-9]+;)?s=[^.\s]*\.(\S+)$/; // a test-local copy of the stable form
     const numberedByPython = ID_SAMPLES.filter((row) => row.in !== row.out);
     expect(numberedByPython.length).toBeGreaterThan(0);
     for (const row of ID_SAMPLES) {
@@ -73,8 +73,8 @@ describe("the words of a row", () => {
         const tag = dot === -1 ? rest : rest.slice(dot + 1) || rest;
         expect(text, JSON.stringify(row)).toBe(tag);
       } else {
-        const found = stable.exec(row.in);
-        expect(text, JSON.stringify(row)).toBe(found === null ? "SENTINEL" : found[1]);
+        // not numbered for Python: the text is the name that was given or the tail of the id itself, never a numbered read of another part
+        expect(text === "SENTINEL" || row.in.endsWith(text), JSON.stringify(row)).toBe(true);
       }
     }
   });
@@ -320,13 +320,13 @@ describe("saved rules (T7b)", () => {
   });
 
   it("merges the decisions into the rules already saved: the decided keys are replaced, the others stay exactly as they are", () => {
-    const saved = { "other#": { metric: "current_a" as const, name_from: "part1" as const, interval_seconds: 5 }, [A.key]: { metric: "custom" as const, name_from: "part1" as const, unit: "x" } };
+    const saved = { "qatarmv#.pdua#_pm#_p": { metric: "current_a" as const, name_from: "part1" as const, interval_seconds: 5 }, [A.key]: { metric: "custom" as const, name_from: "part1" as const, unit: "x" } };
     const merged = mergeRules(saved, [
       { shape: A.key, metric: "energy_kwh", name_from: "parts12" },
       { shape: B.key, metric: "energy_kwh", name_from: "part1" },
     ]);
     expect(merged).toEqual({
-      "other#": { metric: "current_a", name_from: "part1", interval_seconds: 5 },
+      "qatarmv#.pdua#_pm#_p": { metric: "current_a", name_from: "part1", interval_seconds: 5 },
       [A.key]: { metric: "energy_kwh", name_from: "parts12" },
       [B.key]: { metric: "energy_kwh", name_from: "part1" },
     });

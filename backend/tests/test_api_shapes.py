@@ -909,7 +909,9 @@ async def test_a_rule_under_the_old_key_is_kept_and_listed_and_only_the_new_key_
     assert (await client.get(rules_url(source))).json() == saved  # the orphan is kept and listed beside the rule that shows
 
 
-async def test_a_put_of_the_merged_rules_keeps_the_orphan(client, db):
+async def test_a_put_that_carries_the_orphan_stores_it_and_the_shapes_answer_still_hides_it(client, db):
+    # What this pins is the server half only: a PUT that carries the orphan stores it. That the page carries it is the page's own keep, `mergeRules`
+    # (frontend/src/lib/shapes.ts), pinned by frontend/src/lib/shapes.test.ts ("merges the decisions into the rules already saved", around line 322).
     source = await cluster_source(db)
     await login_as(client, db, "admin")
     await client.put(rules_url(source), json={"rules": {OLD_POWER_KEY: POWER_RULE, NEW_POWER_KEY: ENERGY_RULE}})

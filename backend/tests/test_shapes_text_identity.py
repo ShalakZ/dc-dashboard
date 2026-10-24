@@ -2,6 +2,7 @@
 
 (a) For every (address, name) of a literal corpus, `member_text` equals a verbatim copy of main's rule, except for the rows the rule
 changes on purpose: an address that is not numbered but fully matches the stable form, with a name that is neither the address nor the tag.
+Both halves are held: unchanged outside the exception, and inside it the tag after the first dot of the address (not the name).
 (b) One hash of the whole shapes answer for the 15,000-tag numbered SCADA source. Identical texts give identical shapes, so (a) and (b)
 together say that nothing else moved.
 """
@@ -76,6 +77,13 @@ def test_member_text_equals_mains_rule_for_every_row_outside_the_deliberate_exce
     assert not differing, "rows whose text moved (address, name, new, main): " + repr(differing)
 
 
+def test_member_text_is_the_tag_after_the_first_dot_for_every_row_of_the_deliberate_exception():
+    exceptions = [(a, n) for a, n in _corpus() if _is_the_exception(a, n)]
+    assert exceptions  # an empty list must fail, not pass with no rows
+    wrong = [(a, n, member_text(a, n)) for a, n in exceptions if member_text(a, n) != _STABLE_FORM_OF_MAIN.fullmatch(a)[1]]
+    assert not wrong, "rows of the exception that do not read the tag of their address (address, name, text): " + repr(wrong)
+
+
 def test_the_exception_is_a_few_rows_and_cannot_swallow_the_corpus():
     corpus = _corpus()
     exceptions = [row for row in corpus if _is_the_exception(*row)]
@@ -87,6 +95,8 @@ def test_the_exception_is_a_few_rows_and_cannot_swallow_the_corpus():
 
 
 # The SHA-256 of the shapes and the one-member tags of the 15,000-tag numbered SCADA source, computed on main's code (w38 T0), before the rule changed.
+# The constant may be recomputed whenever the simulator's tag set (`dcdash.simulator.scada._build_tags`) changes, provided the differential test above
+# still passes: it is the differential test that proves the rule; the hash only proves that the 15,000-tag numbered answer is unchanged by it.
 BIG_SOURCE_HASH = "67f70308556a8bbf34c576b25c912a307e344698f6eac5418c7b3775bb7aed49"
 
 
