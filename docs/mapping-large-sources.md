@@ -156,4 +156,18 @@ Related: [Sources and discovery](sources-and-discovery.md), [Large OPC UA server
 
 ## What it was measured at
 
-The measured table is added when the wave is closed.
+Measured on the development machine (Linux under WSL2, Docker, one browser, nothing else on the network), on the rehearsal server of [Large OPC UA servers](opc-ua-at-scale.md) with 15,000 and with 30,000 distinct tags, before this change and after it. Your SCADA, your network and the laptop you open it on will give other numbers; the shape of the change is the point.
+
+| What | Before, 15,000 | After, 15,000 | Before, 30,000 | After, 30,000 |
+|---|---|---|---|---|
+| The graph answer Discovery loads | 0.2 s, 4.0 MB | 0.02 s, 16 KB | 0.4 to 0.5 s, 8.0 MB | 0.03 s, 16 KB |
+| Boxes drawn after Enter on the source's card | 1,202 (5.5 s to settle) | 8 (the whole canvas, other sources included) | 1,202 (5 s) | 4 |
+| Find a tag, then Enter | opens the source: 1,202 boxes | offers to search the 15,000 tags: the shapes page | the same | the same |
+| Rows the Points page draws | 15,000 | 200 | 30,000 | 200 |
+| Search on the Points page | 0.8 s | 0.03 s | 1.1 s | 0.03 s |
+| Map dialog on the Points page | 1.7 s | 0.09 s | 4.3 s | 0.11 s |
+| The shapes route (29 shapes) | not there | 0.2 s, 19 KB | not there | 0.3 to 0.4 s, 19 KB |
+| The shapes page to its first row | not there | 0.4 s | not there | 0.9 s |
+| Search tags on the shapes page | not there | 0.5 s (0.3 s of it the wait for a pause in typing) | not there | 0.65 s |
+
+Mapping every meter's energy counter (400 meters): choose **Map as energy counter** on `PDUA#_PM0_PENRG`, tick the PDUB twin, choose the parent asset, press **Review 400 mappings...**, press **Map 400 points**: **5 actions**, 400 mappings and one `tags.mapped` row in the Audit log. A script does it in 1.4 s at 15,000 tags and 1.9 s at 30,000 (the page ready in under a second, the Review's server work about 0.8 s); a person reading the samples takes a minute or two, well under the 2 minutes the wave asked for. Before this change the same job was a selection of 400 points among 15,000, group by group.
