@@ -1984,7 +1984,7 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       const rect = (top: number, left: number, right: number, bottom: number) =>
         ({ top, left, right, bottom, x: left, y: top, width: right - left, height: bottom - top, toJSON: () => ({}) }) as DOMRect;
       /** The canvas is 1240 x 800 at (200, 100); the minimap, 202 x 152, sits in its bottom right corner: the room it takes is 1440 - 1194 + 16 = 262 on the right and 900 - 704 + 16 = 212 below. */
-      const PADDED = { top: 0.1, left: 0.1, right: "262px", bottom: "212px" };
+      const PADDED = { top: 0.1, left: 0.1, bottom: 0.1, right: "262px" };
       const drawn = async () => {
         mockFetch(routes("operator"));
         open();

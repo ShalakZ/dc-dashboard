@@ -76,7 +76,7 @@ export function overlayMargin(canvas: Box, minimap: Box | null, tools: Box | nul
 type Edges = Pick<DOMRect, "top" | "bottom" | "left" | "right" | "width" | "height">;
 
 /** The padding `fitView` takes (`@xyflow/react`'s `Padding`): a number is the library's own ratio (0.1 is its default), a `px` string is a size on that side. */
-export interface FitPadding { top: number; left: number; right: `${number}px`; bottom: `${number}px` }
+export interface FitPadding { top: number; left: number; bottom: number; right: `${number}px` }
 
 /** The gap, in screen pixels, between a fitted graph and the minimap. */
 const FIT_GAP = 16;
@@ -84,11 +84,12 @@ const px = (n: number): `${number}px` => `${Math.max(0, Math.ceil(n))}px`;
 
 /**
  * (w37) The padding that makes Fit View keep the graph out of the minimap, which is drawn over the canvas's bottom right corner: the summary node of the last asset is the
- * last node of the rightmost column, so a plain fit puts its button right under the minimap. The right and bottom sides are the room the minimap takes from those edges (measured
- * on screen, its own margin included) and a gap; the top and left stay at the library's default of 0.1. Undefined when the minimap is not drawn (null, or no size: a canvas under
- * 700 px, or a page that cannot measure): the fit is then the library's default, as before.
+ * last node of the rightmost column, so a plain fit puts its button right under the minimap. ONLY the right side takes the room the minimap covers from that edge (measured on
+ * screen, its own margin included, and a gap): every node then lies left of the minimap, whatever its height. The other three sides stay at the library's default of 0.1 on purpose:
+ * a bottom strip as well shrank the fit of a tall graph below the zoom floor (0.2), and then not every node lay inside the canvas (w7r.spec.ts, 1024 x 640). Undefined when the minimap
+ * is not drawn (null, or no size: a canvas under 700 px, or a page that cannot measure): the fit is then the library's default, as before.
  */
 export function fitPadding(canvas: Edges, minimap: Edges | null): FitPadding | undefined {
   if (minimap === null || minimap.width <= 0 || minimap.height <= 0) return undefined;
-  return { top: 0.1, left: 0.1, right: px(canvas.right - minimap.left + FIT_GAP), bottom: px(canvas.bottom - minimap.top + FIT_GAP) };
+  return { top: 0.1, left: 0.1, bottom: 0.1, right: px(canvas.right - minimap.left + FIT_GAP) };
 }

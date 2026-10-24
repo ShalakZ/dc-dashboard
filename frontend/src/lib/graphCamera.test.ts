@@ -202,15 +202,16 @@ describe("fitPadding (w37)", () => {
   const canvas = { top: 100, bottom: 900, left: 200, right: 1440, width: 1240, height: 800 };
   const minimap = { top: 704, bottom: 856, left: 1194, right: 1396, width: 202, height: 152 };
 
-  it("keeps the fitted graph out of the minimap's corner: the room it covers from the canvas's right and bottom edges, and a gap", () => {
-    // right: 1440 - 1194 + 16 = 262; bottom: 900 - 704 + 16 = 212
-    expect(fitPadding(canvas, minimap)).toEqual({ top: 0.1, left: 0.1, right: "262px", bottom: "212px" });
+  it("keeps the fitted graph out of the minimap: the room it covers from the canvas's right edge, and a gap", () => {
+    // right: 1440 - 1194 + 16 = 262
+    expect(fitPadding(canvas, minimap)).toEqual({ top: 0.1, left: 0.1, bottom: 0.1, right: "262px" });
   });
 
-  it("leaves the top and left as today (the library's own 0.1), so only the minimap's two sides change", () => {
+  it("leaves the other three sides as today (the library's own 0.1): a bottom strip as well shrank a tall graph's fit below the zoom floor (w7r.spec.ts at 1024 x 640)", () => {
     const padding = fitPadding(canvas, minimap);
     expect(padding?.top).toBe(0.1);
     expect(padding?.left).toBe(0.1);
+    expect(padding?.bottom).toBe(0.1);
   });
 
   it("is undefined (the library's default, as before) when the minimap is not drawn: null, or without a size", () => {
@@ -220,10 +221,10 @@ describe("fitPadding (w37)", () => {
   });
 
   it("rounds up to whole pixels", () => {
-    expect(fitPadding(canvas, { ...minimap, left: 1194.4, top: 704.2 })).toMatchObject({ right: "262px", bottom: "212px" });
+    expect(fitPadding(canvas, { ...minimap, left: 1194.4, top: 704.2 })).toMatchObject({ right: "262px" });
   });
 
   it("is never negative (a minimap measured outside the canvas)", () => {
-    expect(fitPadding(canvas, { ...minimap, left: 1500, top: 1000 })).toMatchObject({ right: "0px", bottom: "0px" });
+    expect(fitPadding(canvas, { ...minimap, left: 1500, top: 1000 })).toMatchObject({ right: "0px" });
   });
 });
