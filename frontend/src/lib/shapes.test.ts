@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { METRICS } from "../api/types";
 import { check, created, PENRG_B, POWER, report, shape, VOLTAGE } from "../test/shapesFixtures";
 import {
@@ -6,6 +7,12 @@ import {
   mixedUnitsWarning, namePartsWarning, NO_DECISIONS, onExistingAssets, outlierTexts, partsOf, plannerStops, readLink, realRunPath, reviewLabel, rowOf, rowWarnings,
   mergeRules, presetFromRules, ruleChoice, ruleSentence, searchTerm, shapeCountsSentence, shapesPageLink, similarSentence, splitSections, suggestionSentence, tick, tooManyText, wantsRules, withoutRule,
 } from "./shapes";
+
+// The same files backend/tests/test_shapes.py and test_opcua_ids.py read: the server's rule is the reference, this file holds the browser's copy to it.
+const TAG_TEXTS: ReadonlyArray<{ address: string; name: string; text: string }> = JSON.parse(
+  readFileSync("../backend/tests/fixtures/tag_texts.json", "utf8"), // vitest runs from the frontend directory
+);
+const ID_SAMPLES: ReadonlyArray<{ in: string; out: string }> = JSON.parse(readFileSync("../backend/tests/fixtures/opcua_id_samples.json", "utf8"));
 
 const A = shape();
 const B = PENRG_B();
@@ -43,6 +50,44 @@ describe("the words of a row", () => {
     expect(exampleText({ name: "ns=3;s=20403:Site.PDUA01_PM0_P", address: "ns=3;s=20403:Site.PDUA01_PM0_P" })).toBe("PDUA01_PM0_P");
     expect(exampleText({ name: "i=85", address: "i=85" })).toBe("i=85");
     expect(exampleText({ name: "Meter 1", address: "a1" })).toBe("Meter 1");
+  });
+
+  it("reads the same tag text as the server for every row of backend/tests/fixtures/tag_texts.json", () => {
+    expect(TAG_TEXTS.length).toBeGreaterThanOrEqual(60); // an empty or missing file must fail, not pass with no rows
+    for (const row of TAG_TEXTS) expect(exampleText({ address: row.address, name: row.name }), JSON.stringify(row)).toBe(row.text);
+  });
+
+  // Holds the JS numbered regex to Python's on every adversarial id of the w34 fixture (leading/trailing spaces, a trailing newline, Arabic-Indic digits, `NS=`, `nsu=`,
+  // `s=1:2:A.B`...): `out` is Python's `stable_address(in)`, so `in !== out` exactly when Python calls `in` numbered.
+  it("calls an id numbered exactly when Python does, and then reads the tag Python reads (backend/tests/fixtures/opcua_id_samples.json)", () => {
+    expect(ID_SAMPLES.length).toBeGreaterThanOrEqual(40);
+    const stable = /^(?:ns=[0-9]+;)?s=[^.\s]*\.(\S+)$/; // a test-local copy of the stable form
+    const numberedByPython = ID_SAMPLES.filter((row) => row.in !== row.out);
+    expect(numberedByPython.length).toBeGreaterThan(0);
+    for (const row of ID_SAMPLES) {
+      const text = exampleText({ address: row.in, name: "SENTINEL" });
+      if (row.in !== row.out) {
+        const prefix = /^(?:ns=[0-9]+;)?s=/.exec(row.out)![0];
+        const rest = row.out.slice(prefix.length);
+        const dot = rest.indexOf(".");
+        const tag = dot === -1 ? rest : rest.slice(dot + 1) || rest;
+        expect(text, JSON.stringify(row)).toBe(tag);
+      } else {
+        const found = stable.exec(row.in);
+        expect(text, JSON.stringify(row)).toBe(found === null ? "SENTINEL" : found[1]);
+      }
+    }
+  });
+
+  it("shows the asset of the first example from the tag in its address, whatever the name says (the row preview)", () => {
+    const owner = { name: "Active power", address: "ns=3;s=qatarmv2.pdua01.pm0_p" };
+    expect(exampleText(owner)).toBe("pdua01.pm0_p");
+    expect(partsOf(exampleText(owner))).toEqual(["pdua01", "pm0", "p"]);
+    expect(derivedAsset(owner, "part1")).toBe("pdua01");
+    expect(derivedAsset(owner, "parts12")).toBe("pdua01 pm0");
+    expect(derivedAsset(owner, "part1_part2")).toBe("pdua01 / pm0");
+    // a name that fell back to the raw numbered id, beside the stable address: the address is read, not the name
+    expect(derivedAsset({ name: "ns=3;s=20403:Site.PDUA01_PM0_P", address: "ns=3;s=Site.PDUA01_PM0_P" }, "part1")).toBe("PDUA01");
   });
 
   it("warns about mixed units, about renumbered duplicates and about an asset name that needs two parts", () => {
