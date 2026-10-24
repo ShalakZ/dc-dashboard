@@ -161,6 +161,70 @@ function unfoldedAncestors(model: GraphModel, id: string, folded: ReadonlySet<nu
   return reopened.size === folded.size ? null : reopened;
 }
 
+/** The pages of a view that has none: ONE map, so "nothing changed" is a comparison of objects. */
+const NO_PAGES: ReadonlyMap<number, number> = new Map();
+
+/**
+ * (w37) The sub-asset pages that draw asset `assetId`: every ancestor with MORE than `view.assetPageSize` sub-assets (the walk's own rule: a parent that is set, is not the
+ * asset itself and is in the model, the children in the model's order) whose page stops short of the one on the path gets it extended to the next multiple of the page
+ * size that holds that one, never past the sub-assets it has. Worked from the OUTERMOST ancestor inward with a running cost, the sub-assets each extension newly draws
+ * (what is drawn already is free; a folded ancestor is taken as the plan opens it, with nothing drawn yet): extensions are made while the cost stays within `budget`.
+ * At the first ancestor that does not fit the extensions so far are kept, that one is left alone and its id comes back as `stoppedAt`: its summary node is drawn (its own
+ * parent is on a page), the asset is not. Never changes the view or its map; `assetsShown` is the very map of the view when nothing changes (a stable empty one when it has none).
+ */
+export function extendPagesFor(
+  model: GraphModel, view: GraphView, assetId: number, budget: number = EXPAND_NODE_BUDGET,
+): { assetsShown: ReadonlyMap<number, number>; stoppedAt: number | null } {
+  const base = view.assetsShown ?? NO_PAGES;
+  const pageSize = view.assetPageSize;
+  const unchanged = { assetsShown: base, stoppedAt: null };
+  if (pageSize === undefined || !Number.isFinite(pageSize) || pageSize < 1) return unchanged;
+  const ids = new Set(model.assets.map((a) => a.id));
+  if (!ids.has(assetId)) return unchanged;
+  const parentOf = new Map<number, number>();
+  const childrenOf = new Map<number, number[]>();
+  for (const a of model.assets) {
+    if (a.parent_id === null || a.parent_id === a.id || !ids.has(a.parent_id)) continue;
+    parentOf.set(a.id, a.parent_id);
+    const siblings = childrenOf.get(a.parent_id);
+    if (siblings) siblings.push(a.id);
+    else childrenOf.set(a.parent_id, [a.id]);
+  }
+  // The way from the asset up: [asset, parent, grandparent, ...] (stops on a cycle), then walked from the far end.
+  const path = [assetId];
+  const seen = new Set(path);
+  for (let at = parentOf.get(assetId); at !== undefined && !seen.has(at); at = parentOf.get(at)) {
+    seen.add(at);
+    path.push(at);
+  }
+  let pages: Map<number, number> | null = null; // made at the first change
+  let cost = 0;
+  for (let i = path.length - 1; i >= 1; i--) {
+    const [parent, onPath] = [path[i], path[i - 1]];
+    const kids = childrenOf.get(parent) ?? [];
+    if (kids.length <= pageSize) continue;
+    const drawn = view.assetsClosed.has(parent) ? 0 : (pages ?? base).get(parent) ?? 0;
+    const place = kids.indexOf(onPath);
+    if (drawn >= kids.length || place < drawn) continue; // no summary, or the page holds it already
+    const needed = Math.min(kids.length, Math.ceil((place + 1) / pageSize) * pageSize);
+    cost += needed - drawn;
+    if (cost > budget) return { assetsShown: pages ?? base, stoppedAt: parent };
+    pages ??= new Map(base);
+    pages.set(parent, needed);
+  }
+  return { assetsShown: pages ?? base, stoppedAt: null };
+}
+
+/**
+ * (w37) What to tell the person when an asset is too far down its parent's sub-assets to draw at once (the budget): `Room 3 has 5,000 sub-assets; PDU4321 is too far down
+ * to draw at once. Showing the first ones: use Show 50 more to go on.` `parentId` is the `stoppedAt` of `extendPagesFor`.
+ */
+export function tooFarNote(model: GraphModel, view: GraphView, parentId: number, label: string): string {
+  const name = model.assets.find((a) => a.id === parentId)?.name ?? "This asset";
+  const kids = model.assets.filter((a) => a.parent_id === parentId && a.id !== parentId).length;
+  return `${name} has ${count(kids)} sub-assets; ${label} is too far down to draw at once. Showing the first ones: use Show ${view.assetPageSize ?? kids} more to go on.`;
+}
+
 /**
  * What to open so that `entry` is on the canvas, within a budget of NEW nodes (what is already drawn costs nothing; the same rule as Expand
  * all). A source and an asset are always drawn. A group needs its source open; a point needs its source and its group. Opening a CLOSED source
@@ -175,6 +239,9 @@ function unfoldedAncestors(model: GraphModel, id: string, folded: ReadonlySet<nu
  * shows the group on the page it has, and the note says to use Show 50 more. An asset inside folded assets opens its folded ancestors. A source,
  * group or point the "Unmapped only" filter hides turns the filter off. The new view comes back as `view`, and only when it differs.
  *
+ * (w37) An asset behind the summary of a parent with many sub-assets extends that page (`extendPagesFor`, with the same budget, outermost ancestor first); when the cost
+ * is over the budget the plan targets the summary of the first parent that does not fit (`more:asset:<id>`) and `note` says so.
+ *
  * (w36) A CLOSED source whose visible groups alone are more than the budget is never opened, whatever the target: the plan targets the source card and
  * says `<source> has 13,851 groups, too many to draw; use Map by shape` (`canPoints`: the person may open the Points page, so it adds ` or the Points page`).
  * The filter changes only when the source card itself is hidden by it. The source's `large` does not matter: the rule is for every source.
@@ -185,7 +252,13 @@ export function findPlan(
   const same: FindPlan = { open, targetId: entry.id, note: null };
   if (entry.kind === "asset") {
     const unfolded = unfoldedAncestors(model, entry.id, view.assetsClosed);
-    return unfolded ? { ...same, view: { ...view, assetsClosed: unfolded } } : same;
+    // (w37) A sub-asset behind a summary: the pages of the ancestors that hold it back are extended (within the budget). Over it, the plan points at the summary of the first
+    // ancestor that cannot be extended (it is drawn), and says how to go on.
+    const { assetsShown, stoppedAt } = extendPagesFor(model, view, Number(entry.id.slice("asset:".length)), budget);
+    const paged = assetsShown !== (view.assetsShown ?? NO_PAGES);
+    const plan: FindPlan = stoppedAt === null ? same : { ...same, targetId: nodeId.moreAssets(stoppedAt), note: tooFarNote(model, view, stoppedAt, entry.label) };
+    if (unfolded || paged) plan.view = { ...view, ...(unfolded ? { assetsClosed: unfolded } : {}), ...(paged ? { assetsShown } : {}) };
+    return plan;
   }
   const filterNote = `Unmapped only is off so ${entry.label} can be shown.`;
   if (entry.kind === "source") {

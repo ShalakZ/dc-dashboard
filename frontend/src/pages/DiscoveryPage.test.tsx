@@ -5732,6 +5732,111 @@ describe("DiscoveryPage many sub-assets (w37)", () => {
     });
   });
 
+  describe("Find", () => {
+    const find = async (text: string) => {
+      await userEvent.click(screen.getByRole("button", { name: "Find" }));
+      await userEvent.type(await screen.findByRole("combobox"), text);
+      await userEvent.keyboard("{Enter}");
+    };
+    const FAR = (n: string, label: string) => `Room 3 has ${n} sub-assets; ${label} is too far down to draw at once. Showing the first ones: use Show 50 more to go on.`;
+
+    it("a hidden sub-asset is drawn (its page extended to the next 50), the camera goes to it, it is flashed, and it takes the focus", async () => {
+      mockFetch(routes("operator", many(120)));
+      const { toasts } = openToasts();
+      await screen.findByText("Room 3");
+      await find("PDU 77");
+      await waitFor(() => expect(node("asset:1076")).not.toBeNull());
+      expect(count("asset:")).toBe(102); // Site, Room 3 and the first 100
+      expect(within(summary()).getByText("20 more sub-assets")).toBeInTheDocument();
+      await waitFor(() => expect(flow.setCenter).toHaveBeenCalledTimes(1));
+      const [x, y] = at("asset:1076");
+      expect(flow.setCenter).toHaveBeenCalledWith(x + 110, y + 40, expect.anything());
+      await waitFor(() => expect(node("asset:1076")).toHaveFocus());
+      expect(node("asset:1076").dataset.class).toMatch(/\bflash\b/);
+      expect(toasts.calls).toEqual([]); // it fits: nothing to say
+    });
+
+    it("a sub-asset on the page that is drawn already changes no page", async () => {
+      mockFetch(routes("operator", many(120)));
+      openToasts();
+      await screen.findByText("Room 3");
+      await userEvent.click(showButton());
+      await waitFor(() => expect(node("asset:1000")).toHaveFocus()); // (the jump of Show 50 has landed: a focus that moves later would take the focus from Find's)
+      await find("PDU 10");
+      await waitFor(() => expect(node("asset:1009")).toHaveFocus());
+      expect(count("asset:")).toBe(52);
+      expect(within(summary()).getByText("70 more sub-assets")).toBeInTheDocument();
+    });
+
+    it("one too far down to draw at once: the summary is the target, takes the focus on its button and is flashed, and the toast says how to go on", async () => {
+      mockFetch(routes("operator", many(700)));
+      const { toasts } = openToasts();
+      await screen.findByText("Room 3");
+      await find("PDU 650");
+      await waitFor(() => expect(toasts.calls).toEqual([{ kind: "info", text: FAR("700", "PDU 650") }]));
+      expect(count("asset:")).toBe(2); // nothing was drawn
+      await waitFor(() => expect(showButton()).toHaveFocus()); // (the summary's wrapper is no stop: the button inside takes the focus)
+      expect(document.body).not.toHaveFocus();
+      expect(summary().dataset.class).toMatch(/\bflash\b/);
+      const [x, y] = at(`more:asset:${ROOM}`);
+      expect(flow.setCenter).toHaveBeenCalledWith(x + 110, y + 40, expect.anything());
+      await userEvent.click(showButton()); // and the person goes on with Show 50
+      expect(count("asset:")).toBe(52);
+    });
+  });
+
+  describe("a new sub-asset under a summarised parent", () => {
+    const NEW_ID = 5000;
+    /** A server that makes asset 5000 when it is asked to and lists it, last, in the next graph. */
+    const serve = (kids = 120) => {
+      let created: { id: number; parent_id: number | null; name: string; kind: string } | null = null;
+      const form = [{ id: 10, parent_id: null, name: "Site", kind: "generic", sort_order: 0 }, { id: ROOM, parent_id: 10, name: "Room 3", kind: "generic", sort_order: 0 }];
+      const calls = mockFetch({
+        ...routes("admin", () => {
+          const m = many(kids);
+          if (created) m.assets.push({ id: created.id, parent_id: created.parent_id, name: created.name, kind: created.kind });
+          return m;
+        }),
+        "GET /api/assets": () => ({ body: form }),
+        "POST /api/assets": ({ body }: { body: unknown }) => { created = { id: NEW_ID, ...(body as { parent_id: number | null; name: string; kind: string }) }; return { status: 201, body: { sort_order: 0, ...created } }; },
+      });
+      return calls;
+    };
+    const makeUnder = async (name: string) => {
+      await accountKnown();
+      fireEvent.contextMenu(node(`asset:${ROOM}`));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Room 3" })).getByRole("menuitem", { name: "New sub-asset…" }));
+      const form = await screen.findByRole("dialog", { name: "New asset" });
+      expect(within(form).getByLabelText("Parent")).toHaveValue(String(ROOM));
+      await userEvent.type(within(form).getByLabelText("Name"), name);
+      await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "New asset" })).not.toBeInTheDocument());
+    };
+
+    it("is drawn, behind a page that now reaches it, and takes the focus", async () => {
+      serve(120);
+      open();
+      await screen.findByText("Room 3");
+      await makeUnder("Newest PDU");
+      await waitFor(() => expect(node(`asset:${NEW_ID}`)).not.toBeNull());
+      expect(count("asset:")).toBe(2 + 121); // the whole page up to it: Site, Room 3 and every one of the 121
+      expect(summary()).toBeNull();
+      await waitFor(() => expect(node(`asset:${NEW_ID}`)).toHaveFocus());
+      expect(document.body).not.toHaveFocus();
+    });
+
+    it("the 51st under a parent of 50 keeps all 51 on the canvas (the summary would have hidden every one)", async () => {
+      serve(50);
+      open();
+      await screen.findByText("Room 3");
+      expect(count("asset:")).toBe(52);
+      await makeUnder("The 51st");
+      await waitFor(() => expect(node(`asset:${NEW_ID}`)).not.toBeNull());
+      expect(count("asset:")).toBe(2 + 51);
+      expect(summary()).toBeNull();
+    });
+  });
+
   describe("dragging", () => {
     const puts = <T extends { method: string }>(calls: T[]) => calls.filter((c) => c.method === "PUT");
     const sentIds = (call: { body?: unknown }) => (call.body as { nodes: { node_id: string }[] }).nodes.map((n) => n.node_id);

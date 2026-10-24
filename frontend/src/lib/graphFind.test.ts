@@ -1,7 +1,7 @@
 import type { GraphModel } from "../api/types";
 import { model, point, source } from "../test/graphFixtures";
-import { buildFindIndex, findMatches, findPlan, type FindEntry, type FindKind } from "./graphFind";
-import { NO_VIEW, PAGE_SIZE, nodeId, UNGROUPED, type GraphView, type OpenState } from "./graph";
+import { buildFindIndex, extendPagesFor, findMatches, findPlan, type FindEntry, type FindKind } from "./graphFind";
+import { ASSET_PAGE, NO_VIEW, PAGE_SIZE, nodeId, UNGROUPED, type GraphView, type OpenState } from "./graph";
 import { EXPAND_NODE_BUDGET } from "./graphView";
 import { assetIcon } from "./assetIcons";
 import { clusterIcon } from "./graphIcons";
@@ -833,5 +833,184 @@ describe("findPlan: a closed source whose groups alone are too many to draw (w36
     const m = crowded(5);
     expect(findPlan(m, closed(), entryOf(m, "G1"), 4).note).toBe(SENTENCE("5"));
     expect(findPlan(m, closed(), entryOf(m, "G1"), 5).note).toBeNull();
+  });
+});
+
+/* ---------------------------------------------------------------------------------------------------------------------------- w37: an asset behind a summary */
+
+describe("findPlan and extendPagesFor: an asset behind a summary (w37)", () => {
+  const withPages = (over: Partial<GraphView> = {}): GraphView => ({ ...NO_VIEW, pageSize: PAGE_SIZE, assetPageSize: ASSET_PAGE, ...over });
+  const asset = (id: number, parent: number | null, name: string) => ({ id, parent_id: parent, name, kind: "generic" });
+  /** Site (10) > Room 3 (20) > `n` PDUs: ids 1000 + the index, "PDU 1" and up. */
+  const room = (n: number, prefix = "PDU ") => model({
+    sources: [], unidentified: [],
+    assets: [asset(10, null, "Site"), asset(20, 10, "Room 3"), ...Array.from({ length: n }, (_, i) => asset(1000 + i, 20, `${prefix}${i + 1}`))],
+  });
+  /** Site (10) > `halls` Halls (ids 100 and up, "Hall 1" and up); Hall 55 (id 154) has `under` UPSs (ids 5000 and up, "UPS 1" and up). */
+  const campus = (halls: number, under: number) => model({
+    sources: [], unidentified: [],
+    assets: [
+      asset(10, null, "Site"),
+      ...Array.from({ length: halls }, (_, i) => asset(100 + i, 10, `Hall ${i + 1}`)),
+      ...Array.from({ length: under }, (_, i) => asset(5000 + i, 154, `UPS ${i + 1}`)),
+    ],
+  });
+  const planFor = (m: GraphModel, label: string, view: GraphView, budget?: number) => {
+    const entry = buildFindIndex(m).find((e) => e.kind === "asset" && e.label === label);
+    if (!entry) throw new Error(`no entry ${label}`);
+    return findPlan(m, closed(), entry, budget, view);
+  };
+  const pagesOf = (result: { view?: GraphView }) => Object.fromEntries(result.view?.assetsShown ?? []);
+
+  it("an asset 377th of 400 under a summarised parent extends the page to 400", () => {
+    const result = planFor(room(400), "PDU 377", withPages());
+    expect(pagesOf(result)).toEqual({ 20: 400 });
+    expect(result.targetId).toBe("asset:1376");
+    expect(result.note).toBeNull();
+    expect(result.open).toBeDefined();
+  });
+
+  it("child 3 extends it to 50, child 50 stays on page 1, child 51 needs 100, 301 needs 350", () => {
+    const m = room(400);
+    expect(pagesOf(planFor(m, "PDU 3", withPages()))).toEqual({ 20: 50 });
+    expect(pagesOf(planFor(m, "PDU 50", withPages()))).toEqual({ 20: 50 });
+    expect(pagesOf(planFor(m, "PDU 51", withPages()))).toEqual({ 20: 100 });
+    expect(pagesOf(planFor(m, "PDU 301", withPages()))).toEqual({ 20: 350 });
+  });
+
+  it("the page never goes past the sub-assets there are", () => {
+    expect(pagesOf(planFor(room(120), "PDU 115", withPages()))).toEqual({ 20: 120 });
+  });
+
+  it("two summarised ancestors each extend (the outer one holds the inner one)", () => {
+    const m = campus(60, 70); // Site has 60 Halls, Hall 55 (id 154) has 70 UPSs
+    const result = planFor(m, "UPS 60", withPages());
+    expect(pagesOf(result)).toEqual({ 10: 60, 154: 70 });
+    expect(result.targetId).toBe("asset:5059");
+    expect(result.note).toBeNull();
+  });
+
+  it("a folded ancestor plus a summary: both change in one plan", () => {
+    const m = room(120);
+    const result = planFor(m, "PDU 100", withPages({ assetsClosed: new Set([10]) }));
+    expect([...result.view!.assetsClosed]).toEqual([]);
+    expect(pagesOf(result)).toEqual({ 20: 100 });
+    // the parent itself folded: it is opened, and its page (a fold forgets the pages) starts from nothing
+    const parent = planFor(m, "PDU 70", withPages({ assetsClosed: new Set([20]) }));
+    expect([...parent.view!.assetsClosed]).toEqual([]);
+    expect(pagesOf(parent)).toEqual({ 20: 100 });
+  });
+
+  it("keeps the other pages and the other fields of the view, and never changes the map it is given", () => {
+    const given = new Map([[777, 150]]);
+    const view = withPages({ assetsShown: given, unmappedOnly: true });
+    const result = planFor(room(400), "PDU 377", view);
+    expect(pagesOf(result)).toEqual({ 777: 150, 20: 400 });
+    expect(result.view!.unmappedOnly).toBe(true);
+    expect([...given]).toEqual([[777, 150]]);
+    expect(view.assetsShown).toBe(given);
+  });
+
+  describe("over the budget", () => {
+    const SENTENCE = (parent: string, n: string, label: string) =>
+      `${parent} has ${n} sub-assets; ${label} is too far down to draw at once. Showing the first ones: use Show 50 more to go on.`;
+
+    it("over the 600 budget the plan targets the summary and says how to go on", () => {
+      const result = planFor(room(5000, "PDU"), "PDU4321", withPages());
+      expect(result.targetId).toBe("more:asset:20");
+      expect(result.note).toBe(SENTENCE("Room 3", "5,000", "PDU4321"));
+      expect("view" in result).toBe(false); // nothing else had to change: the page stays as it is
+    });
+
+    it("the budget is a parameter: 377 of 400 needs 400 new nodes", () => {
+      const m = room(400);
+      expect(planFor(m, "PDU 377", withPages(), 400).targetId).toBe("asset:1376");
+      const tight = planFor(m, "PDU 377", withPages(), 399);
+      expect(tight.targetId).toBe("more:asset:20");
+      expect(tight.note).toBe(SENTENCE("Room 3", "400", "PDU 377"));
+    });
+
+    it("a page that is shown already costs nothing: only what is newly drawn counts", () => {
+      const m = room(400);
+      const view = withPages({ assetsShown: new Map([[20, 300]]) });
+      expect(pagesOf(planFor(m, "PDU 377", view, 100))).toEqual({ 20: 400 });
+      expect(planFor(m, "PDU 377", view, 99).targetId).toBe("more:asset:20");
+    });
+
+    it("outer page fits, inner page does not: the outer is extended and the target is the inner parent's summary", () => {
+      const m = campus(60, 5000); // the outer page costs 60, the inner one 4,050
+      const result = planFor(m, "UPS 4001", withPages());
+      expect(pagesOf(result)).toEqual({ 10: 60 });
+      expect(result.targetId).toBe("more:asset:154");
+      expect(result.note).toBe(SENTENCE("Hall 55", "5,000", "UPS 4001"));
+    });
+
+    it("the cost runs on from the outer ancestor to the inner one", () => {
+      const m = campus(60, 70); // 60 for the outer page, then 70 for the inner one
+      expect(pagesOf(planFor(m, "UPS 60", withPages(), 130))).toEqual({ 10: 60, 154: 70 });
+      const result = planFor(m, "UPS 60", withPages(), 129);
+      expect(pagesOf(result)).toEqual({ 10: 60 });
+      expect(result.targetId).toBe("more:asset:154");
+    });
+
+    it("an outer page that does not fit stops there: nothing is extended and its summary is the target", () => {
+      const m = campus(60, 70);
+      const result = planFor(m, "UPS 60", withPages(), 50);
+      expect("view" in result).toBe(false);
+      expect(result.targetId).toBe("more:asset:10");
+    });
+  });
+
+  describe("nothing to do", () => {
+    it("an asset already drawn leaves the plan with no view", () => {
+      const m = room(400);
+      expect("view" in planFor(m, "PDU 3", withPages({ assetsShown: new Map([[20, 50]]) }))).toBe(false);
+      expect("view" in planFor(m, "PDU 300", withPages({ assetsShown: new Map([[20, 400]]) }))).toBe(false);
+      expect("view" in planFor(m, "Room 3", withPages())).toBe(false);
+      expect("view" in planFor(m, "Site", withPages())).toBe(false);
+    });
+
+    it("a parent of 50 or fewer sub-assets has no summary, so nothing is extended", () => {
+      const m = room(50);
+      const result = planFor(m, "PDU 50", withPages());
+      expect("view" in result).toBe(false);
+      expect(result.targetId).toBe("asset:1049");
+    });
+
+    it("a view with no assetPageSize (NO_VIEW) never extends anything", () => {
+      const result = planFor(room(400), "PDU 377", { ...NO_VIEW });
+      expect("view" in result).toBe(false);
+      expect(result.targetId).toBe("asset:1376");
+    });
+  });
+
+  describe("extendPagesFor", () => {
+    it("returns the very map it is given when nothing changes, and a new one otherwise", () => {
+      const m = room(400);
+      const pages = new Map([[20, 100]]);
+      const view = withPages({ assetsShown: pages });
+      expect(extendPagesFor(m, view, 1010).assetsShown).toBe(pages);
+      const extended = extendPagesFor(m, view, 1150);
+      expect(extended.assetsShown).not.toBe(pages);
+      expect(extended.stoppedAt).toBeNull();
+      expect([...pages]).toEqual([[20, 100]]);
+      expect(extended.assetsShown.get(20)).toBe(200);
+    });
+
+    it("answers with a stable empty map for a view with none, and for an unknown asset", () => {
+      const m = room(400);
+      const first = extendPagesFor(m, withPages(), 1005).assetsShown;
+      expect(first.get(20)).toBe(50);
+      const none = extendPagesFor(m, withPages(), 424242);
+      expect(none.assetsShown.size).toBe(0);
+      expect(none.stoppedAt).toBeNull();
+      expect(extendPagesFor(m, withPages(), 424242).assetsShown).toBe(none.assetsShown);
+    });
+
+    it("is safe on a cycle and on a self-parent", () => {
+      const odd = model({ sources: [], unidentified: [], assets: [asset(10, 11, "A"), asset(11, 10, "B"), asset(13, 13, "Loop")] });
+      expect(extendPagesFor(odd, withPages(), 10).assetsShown.size).toBe(0);
+      expect(extendPagesFor(odd, withPages(), 13).stoppedAt).toBeNull();
+    });
   });
 });

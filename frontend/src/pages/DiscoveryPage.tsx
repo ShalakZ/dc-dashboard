@@ -49,7 +49,7 @@ import {
   type AssetNodeData, type ClusterNodeData, type Group, type GraphView, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
 import { cameraMs, keepInView, overlayMargin, unionRect } from "../lib/graphCamera";
-import { buildFindIndex, findMatches, findPlan, type FindEntry, type ShapesTarget } from "../lib/graphFind";
+import { buildFindIndex, extendPagesFor, findMatches, findPlan, tooFarNote, type FindEntry, type ShapesTarget } from "../lib/graphFind";
 import { alignGuides, type Rect } from "../lib/graphGuides";
 import { navIndex } from "../lib/graphNav";
 import {
@@ -776,11 +776,21 @@ function Canvas({ model }: { model: GraphModel }) {
   const onNewAssetCreated = async (asset: Asset) => {
     const payload = newAsset?.payload;
     setNewAsset(null);
-    if (!payload) return;
+    if (!payload && asset.parent_id === null) return; // (a root asset is never behind a summary)
     const found = await framesUntil(() => modelRef.current.assets.some((a) => a.id === asset.id), { stop: () => !mounted.current });
     if (!mounted.current) return;
-    if (found) openReview(payload, { kind: "existing", assetId: asset.id }, asset.name);
-    else toast.error("The asset was created, but the graph could not be refreshed. Use Map… to map to it.");
+    if (!found) {
+      if (payload) toast.error("The asset was created, but the graph could not be refreshed. Use Map… to map to it.");
+      return;
+    }
+    // (w37) A new sub-asset can land behind its parent's summary (or, as the 51st, turn 50 drawn ones into a summary): the pages that hold it back are extended, as Find does,
+    // so it is drawn. Over the budget the summary is where the person is taken, with the same words as Find's. A Review that opens takes the focus itself.
+    const pages = extendPagesFor(modelRef.current, viewNow.current, asset.id);
+    const paged = pages.assetsShown !== viewNow.current.assetsShown;
+    if (paged) setAssetsShown(pages.assetsShown);
+    if (pages.stoppedAt !== null) toast.info(tooFarNote(modelRef.current, viewNow.current, pages.stoppedAt, asset.name));
+    if (payload) openReview(payload, { kind: "existing", assetId: asset.id }, asset.name);
+    else if (paged || pages.stoppedAt !== null) void goToNode(pages.stoppedAt === null ? nodeId.asset(asset.id) : nodeId.moreAssets(pages.stoppedAt));
   };
 
   const seeded = useMemo(() => {
@@ -1125,6 +1135,7 @@ function Canvas({ model }: { model: GraphModel }) {
       // The jump needs a longer page, an unfolded asset or no filter: change those first (one batch with the open set), then wait for the paint as below.
       setShown(plan.view.shown);
       if (plan.view.assetsClosed !== now.assetsClosed) setAssetsClosed(plan.view.assetsClosed);
+      if (plan.view.assetsShown && plan.view.assetsShown !== now.assetsShown) setAssetsShown(plan.view.assetsShown); // (w37) the pages of the parents that hold the asset back
       if (plan.view.unmappedOnly !== now.unmappedOnly) setUnmappedOnly(plan.view.unmappedOnly);
     }
     if (plan.note) toast.info(plan.note);
@@ -1135,7 +1146,7 @@ function Canvas({ model }: { model: GraphModel }) {
     const { x, y, w, h } = rectOf(target);
     await setCenter(x + w / 2, y + h / 2, { zoom: Math.min(1, Math.max(0.75, getZoom())), duration: cameraMs(reducedMotion()) });
     if (!mounted.current) return;
-    const element = canvas.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectorId(plan.targetId)}"]`);
+    const element = focusTargetOf(canvas.current, plan.targetId); // (w37) a summary node is no stop of its own: its button takes the focus
     if (!element) return;
     window.clearTimeout(flashTimer.current);
     setFlashId(plan.targetId); // (the outline holds under reduced motion too; the CSS drops only the pulse)
