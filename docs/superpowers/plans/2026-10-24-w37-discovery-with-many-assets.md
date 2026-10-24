@@ -119,7 +119,7 @@ R4 order of the next fixes (from this profile, ruled below in the ledger): R5 fi
 - [x] Step 2: run, see them fail. Step 3: implement `findPlan`'s asset branch (children order is the model's `assets` order filtered by parent, as `buildGraph` sees them) the `onFind` application of `plan.view.assetsShown` (it focuses through `focusTargetOf(canvas.current, plan.targetId)`), and the `onNewAssetCreated` call of `extendPagesFor`. Step 4: targeted tests and typecheck. Step 5: commit `feat(w37): Find reaches an asset behind a summary`.
 
 ### Task M (controller): T-mid
-- [ ] Refresh the look stack from the branch, rerun `measure37.mjs` (the stress case with `SHOWALL=1`, so the after view draws the 800-node state of R3; the refresh case too), rule on T4 from the numbers.
+- [x] Refresh the look stack from the branch, rerun `measure37.mjs`, rule on T4 from the numbers: done at T3 (T4 not taken: R7, R8, R9 each with its numbers in the ledger and BV).
 
 ### Task 4 (conditional, one commit per fix): R7 callback identity, R8 `interactionWidth: 0` on every edge `buildGraph` makes, R9 `onlyRenderVisibleElements` above 600 nodes. Taken only as the T-mid numbers and R4's profile say; each with its measured before and after in the ledger and a unit test.
 
@@ -127,3 +127,9 @@ R4 order of the next fixes (from this profile, ruled below in the ledger): R5 fi
 - [x] `familyModel` in `graphModel.ts`; the seven cases of R13 (at rest 17 nodes and one edge into the summary labelled `400 mapped`; Show 50 twice; Find `PDUB177`-like child past page 1; drop onto a drawn PDU opens the Review (Cancel); fold and unfold; pan frames at rest and in the stress view, generous limits; 1024 x 768 no sideways scroll); playwright project after w36; e2e type check prints nothing; docs bullet. The controller runs it through `spec-run.sh`.
 
 ### Task 6: docs and close-out (R14, R15), gallery, R2 proof, before/after table, the plan's log. Doc tests right after the docs edit.
+
+## Execution log (the controller, 2026-10-24; the ledger `.waves/w37/progress.md` has every time and ruling)
+- T0 measured on main 86a7658 (look stack, the owner's shape): the before table above, the cause sentence; the plan review (Opus high: 1 Critical, 6 Important, 8 Minor) folded in.
+- T1 `06c263a` the summary in `buildGraph`; T2 `0bb5c97` the node and the page; T3 `1ad86e2` Find and the new-asset path; T5 `81b0406` + `fb16c9a` the end-to-end spec (7 cases); T6 `75f433f` the docs. T4 (R7, R8, R9) was not taken: a refresh after a change makes no long task over 52 ms; removing the edge interaction paths did not improve the 817-node view's frames; that view already meets R11.
+- Whole-wave review (Opus high, browser): 0 Critical, 1 Important (the minimap covered the box after Fit View), 9 Minor; the fix round `3663272` + `f2118dc` + `792f527`; scoped re-review 0 / 0. Chain 1 found that the padding broke `w7r.spec.ts:1002`; `6cb58f9` pads only the minimap's side; chain 2 on that tree.
+- Measured after (look stack, same script): at rest 17 nodes, 24 edges, 710 elements (was 416, 822, 9,087); every R11 target met on this machine; the 817-node view with every page open is unchanged and smooth.

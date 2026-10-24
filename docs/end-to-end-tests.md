@@ -555,7 +555,7 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   every case answers the graph route from `familyModel()` in `graphModel.ts` (a root, three rooms, ten racks, 400 PDUs under one room, a large source with a mapped point on each, a 60-point source
   on nine racks) and any other write fails the case. Cases: at rest ONE summary node (`400 sub-assets`, `400 mapped`, **Show 50**) and at most 25 nodes; **Show 50** twice, with the focus, ArrowDown
   and ArrowLeft; Find the 377th sub-asset of Room 3; a group dropped on a PDU opens the Review and one dropped on the summary does not; fold and unfold; the frames of a 3 s pan at rest and with 817 nodes (logged, generous
-  limits); 1024 x 768 with no sideways scroll. The summary's button is found by `sub-assets under`.
+  limits); 1024 x 768 with no sideways scroll; after Fit View the summary's button is not under the minimap. The summary's button is found by `sub-assets under`.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
