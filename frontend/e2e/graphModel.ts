@@ -276,9 +276,21 @@ export const FAMILY_NAMES = { small: "W37 Small", large: "W37 Large", mv2: "MV2"
 /** The ten racks (1 to 5 under Room 1, 6 to 10 under Room 2). */
 export const familyRack = (n: number): number => BASE + 37_110 + n;
 const familyRackName = (n: number): string => `Rack ${n <= 5 ? 1 : 2}.${n <= 5 ? n : n - 5}`;
-/** The 400 PDUs under Room 3, numbered 1 to 400 in the server's order: `PDUA001` ... `PDUA200`, then `PDUB001` ... `PDUB200` (the 377th is `PDUB177`). */
+/**
+ * The 400 PDUs under Room 3 as the owner's data names them: `PDUA01` ... `PDUA99`, `PDUA100` ... `PDUA200`, `PDUB01` ... `PDUB99`, `PDUB100` ... `PDUB200` (two digits up to 99, three after).
+ * `familyPdu(n)` and `familyPduName(n)` are the n-th child of Room 3 (n from 1 to 400) in the order the server lists a parent's children (`sort_order, name, id`; every sort order is 0 here), and the
+ * model sends them in that order. The order is a plain code-point compare of the names, an APPROXIMATION of the database collation: `PDUA01` ... `PDUA09`, `PDUA10`, `PDUA100` ... `PDUA109`, `PDUA11`,
+ * `PDUA110` ... and so on, so the first page of 50 ends at `PDUA136` and the last PDU is `PDUB99`. Nothing may name a PDU by its number: ask for the n-th and read its name from here.
+ */
+const PDU_NAMES: readonly string[] = ["A", "B"]
+  .flatMap((hall) => Array.from({ length: 200 }, (_, index) => `PDU${hall}${String(index + 1).padStart(2, "0")}`))
+  .sort(); // no comparator: UTF-16 code-unit order, which is the code-point order for these ASCII names
 export const familyPdu = (n: number): number => BASE + 37_200 + n;
-export const familyPduName = (n: number): string => (n <= 200 ? `PDUA${String(n).padStart(3, "0")}` : `PDUB${String(n - 200).padStart(3, "0")}`);
+export const familyPduName = (n: number): string => {
+  const name = PDU_NAMES[n - 1];
+  if (name === undefined) throw new Error(`Room 3 has 400 PDUs: there is no number ${n}`);
+  return name;
+};
 /** The ten groups of the small source, one per meter: `MTR01` ... `MTR10` (the tenth has nothing mapped). */
 export const familyGroup = (n: number): string => `MTR${String(n).padStart(2, "0")}`;
 /** The id of the summary node the page draws under the asset `parentId` (src/lib/graph.ts `nodeId.moreAssets`). */

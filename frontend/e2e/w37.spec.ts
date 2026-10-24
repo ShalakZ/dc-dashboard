@@ -11,21 +11,23 @@ import {
 // and DELETE and GET /api/mappings/{id}/latest through `page.route`, so the stack's own sources and assets do not matter. Any OTHER write the app tries (the sign-in aside) is refused with a 500 and written down, and
 // afterEach fails the case that made one. Each case runs in a fresh browser context, so the browser-side settings (the folded assets, the sidebar) start from nothing.
 //
-// The shape: one root `MV2`; under it `Room 1`, `Room 2` and `Room 3`; five racks under each of the first two; 400 PDUs under `Room 3` (`PDUA001` ... `PDUA200`, `PDUB001` ... `PDUB200`, in the server's order: the 377th is
-// `PDUB177`). Two sources: `W37 Small` (the 60-point simulator: ten groups of six points, `MTR01` to `MTR09` mapped onto racks 1 to 9, `MTR10` not mapped) and `W37 Large` (the graph says `large` and sends only
+// The shape: one root `MV2`; under it `Room 1`, `Room 2` and `Room 3`; five racks under each of the first two; 400 PDUs under `Room 3` (`PDUA01` ... `PDUA99`, `PDUA100` ... `PDUA200`, `PDUB01` ... `PDUB99`, `PDUB100` ... `PDUB200`, as the owner's data has them,
+// listed in the server's order: by name, so `PDUA10` is followed by `PDUA100`; no case names a PDU by its number, `familyPdu(n)` and `familyPduName(n)` give the n-th child). Two sources: `W37 Small` (the 60-point simulator: ten groups of six points, `MTR01` to `MTR09` mapped onto racks 1 to 9, `MTR10` not mapped) and `W37 Large` (the graph says `large` and sends only
 // its 400 mapped points, in the Ungrouped bag, one energy counter on each PDU).
 //
 // The cases (each its own test, 1440 x 900 unless said; one failing does not stop the next):
-//   1  AT REST       exactly one summary node, `400 sub-assets`, `400 mapped`, the button `Show 50`; at most 25 nodes; no PDU drawn; one mapped edge into the summary, labelled `400 mapped`.
+//   1  AT REST       exactly one summary node, `400 sub-assets`, `400 mapped`, the button `Show 50`; at most 25 nodes; no PDU drawn; one mapped edge into the summary, labelled `400 mapped`; after Fit View
+//                    (the page opens with it) the minimap does not lie over the button.
 //   2  SHOW 50       twice: 100 PDUs, the summary says `300 more sub-assets`; after each press the focus is on the first child that press drew (child 51 after the second); ArrowDown from the last child
 //                    reaches the summary's button and ArrowLeft goes to `Room 3`.
-//   3  FIND          `PDUB177` (Ctrl+K, type, choose the asset): the page extends to 400, the summary is gone, the node is flashed and holds the focus.
+//   3  FIND          the 377th child of Room 3 (Ctrl+K, type its name, choose the asset): the page extends to 400, the summary is gone, the node is flashed and holds the focus.
 //   4  DROPS         with Show 50 done, `MTR10` dropped on a drawn PDU opens the Review (the asset is a PDU; Cancel closes it, the focus is on a node, nothing is saved); the PDU's right-click menu has its
 //                    items; after a fold and an unfold, `MTR10` dropped on the summary is a plain move (no Review; the offer bar; the move is saved, the summary never is).
 //   5  FOLD          `Room 3` folded after a Show 50: no summary, no PDU, the badge `400 mapped`, 16 nodes; unfolded: the summary is back with nothing shown.
 //   6  FRAMES        a 3 s pan on an empty spot at rest, and in the stress view (the large source open, its 400 points and then all 400 PDUs shown: more than 800 nodes). The numbers go to the case's `measure`
 //                    annotations and to the console; the limits are generous on purpose, the controller reads the numbers.
-//   7  LOOK          1024 x 768, sidebar minimised and expanded: the summary is drawn, its button lies inside the canvas and nothing lies over it, and the page does not scroll sideways.
+//   7  LOOK          1024 x 768, sidebar minimised and expanded: the summary is drawn, after Fit View nothing (the minimap) lies over its button, then Find and the keyboard bring it inside the canvas
+//                    with nothing over it, and the page does not scroll sideways.
 //
 // Locators. Playwright matches a name by case-insensitive SUBSTRING: the summary's button is found by the words `sub-assets under` (its name is `Show 50 of the sub-assets under Room 3, 400 left`; the group's own button says
 // `Show 50 more points of ...`, and the "+" of an asset says `Add a sub-asset under ...`), every other lookup of a button is `exact: true`. The summary's own words are read from its classes (`gma-title`, `gma-mapped`,
@@ -35,6 +37,8 @@ const ADMIN = { username: "admin", password: "correct-horse" };
 
 /** lib/graph.ts: a parent with more sub-assets than this is summarised, and the summary's button draws this many more. */
 const ASSET_PAGE = 50;
+/** The child of Room 3 that case 3 looks for, by its place in the server's order (page 8 of 8: far behind the summary). Its name is read from the fixture, never written here. */
+const FOUND_CHILD = 377;
 const ROOM3 = nid.asset(FAMILY.room3);
 const SUMMARY = summaryId(FAMILY.room3);
 const SMALL_SRC = nid.source(FAMILY.small);
@@ -129,7 +133,7 @@ const assetNodes = (page: Page) => page.locator('.react-flow__node[data-id^="ass
 /** The summary nodes of assets (the group's own "Show 50 more" node is `more:cluster:...`). */
 const summaries = (page: Page) => page.locator('.react-flow__node[data-id^="more:asset:"]');
 /** The PDU nodes drawn (the assets whose title is a PDU name; MV2, the rooms and the racks are not). */
-const pduNodes = (page: Page) => assetNodes(page).filter({ has: page.locator(".node-title", { hasText: /^PDU[AB]\d{3}$/ }) });
+const pduNodes = (page: Page) => assetNodes(page).filter({ has: page.locator(".node-title", { hasText: /^PDU[AB]\d{2,3}$/ }) });
 const summaryEl = (page: Page) => nodeEl(page, SUMMARY);
 const summaryButton = (page: Page) => summaryEl(page).getByRole("button", { name: /sub-assets under/ });
 const edgeSel = (id: string) => `.react-flow__edge[data-id="${id}"]`;
@@ -388,6 +392,11 @@ test.describe("W37: a parent with hundreds of sub-assets", () => {
       await expect(summaryButton(page), "named for the parent and for what is left").toHaveAttribute("aria-label", "Show 50 of the sub-assets under Room 3, 400 left");
     });
 
+    await test.step("after Fit View (arrive pressed it) the minimap does not lie over the summary's button at 1440 x 900", async () => {
+      // The summary is the last node of the deepest column, so a fit puts it in the bottom right corner of the canvas, where the minimap lies: Fit View leaves room for it.
+      expect(await reachable(summaryButton(page)), "after Fit View nothing lies over the button: a click on Show 50 reaches it").toBe(true);
+    });
+
     await test.step("a graph of next to nothing: at most 25 nodes, and no PDU", async () => {
       const count = await page.locator(".react-flow__node").count();
       measured("nodes drawn at rest", count);
@@ -447,11 +456,14 @@ test.describe("W37: a parent with hundreds of sub-assets", () => {
     });
   });
 
-  test("3 Find PDUB177 extends the page to 400: every PDU is drawn, the summary is gone, the node is flashed and holds the focus", async ({ page }) => {
+  test("3 Find the 377th sub-asset of Room 3 extends the page to 400: every PDU is drawn, the summary is gone, the node is flashed and holds the focus", async ({ page }) => {
     test.setTimeout(180_000);
     await arrive(page, familyModel());
-    const target = pduId(377);
-    expect(familyPduName(377), "the 377th child of Room 3 is PDUB177").toBe("PDUB177");
+    const target = pduId(FOUND_CHILD);
+    const name = familyPduName(FOUND_CHILD);
+    const pageHolding = Math.ceil(FOUND_CHILD / ASSET_PAGE) * ASSET_PAGE;
+    measured("Find looks for the 377th child of Room 3 in the server's order", name);
+    expect(name, "a PDU name, two digits up to 99 and three after").toMatch(/^PDU[AB]\d{2,3}$/);
     await expect(nodeEl(page, target), "it is not drawn: it is behind the summary").toHaveCount(0);
 
     const spot = await emptySpot(page);
@@ -459,16 +471,16 @@ test.describe("W37: a parent with hundreds of sub-assets", () => {
     await page.keyboard.press("Control+K");
     const field = findField(page);
     await expect(field, "Find opens").toBeFocused();
-    await field.pressSequentially("PDUB177");
-    // The point `PDUB177_PM0_PENRG` of the large source matches too, and the card adds the search of the large source's tags: the option is the ASSET, whose label is exactly the name.
-    const option = findOptions(page).filter({ has: page.locator(".graph-find-label", { hasText: /^PDUB177$/ }) });
-    await expect(option, "one asset named PDUB177").toHaveCount(1);
+    await field.pressSequentially(name);
+    // The point `<name>_PM0_PENRG` of the large source matches too, and the card adds the search of the large source's tags: the option is the ASSET, whose label is exactly the name.
+    const option = findOptions(page).filter({ has: page.locator(".graph-find-label", { hasText: new RegExp(`^${name}$`) }) });
+    await expect(option, `one asset named ${name}`).toHaveCount(1);
     await option.click();
 
     // The flash lasts 1.5 s from the end of the glide: it is looked for before anything else is counted.
     await expect(nodeEl(page, target), "the found node pulses").toHaveClass(/flash/, { timeout: 30_000 });
     await expect.poll(() => focusedNodeId(page), { message: "and holds the focus", timeout: 15_000 }).toBe(target);
-    await expect(pduNodes(page), "the page grew to the next multiple of 50 that holds the 377th: 400").toHaveCount(400);
+    await expect(pduNodes(page), `the page grew to the next multiple of 50 that holds the ${FOUND_CHILD}th: ${pageHolding}, which is all 400`).toHaveCount(Math.min(pageHolding, 400));
     await expect(summaries(page), "nothing is left to show: the summary is gone").toHaveCount(0);
     await expect(nodeEl(page, target)).toBeVisible();
   });
@@ -641,9 +653,10 @@ test.describe("W37: a parent with hundreds of sub-assets", () => {
         await expect(summaries(page)).toHaveCount(1);
         await expect(summaryTitle(page)).toHaveText("400 sub-assets");
 
-        // Fit View puts the deepest column in the bottom right corner, where the minimap lies (told in the annotation): a person brings the node into the middle of the canvas, here with Find.
+        // Fit View puts the deepest column in the bottom right corner, where the minimap lies: it leaves room for it, so the button is not covered.
         await fitViewNow(page);
-        measured(`1024 x 768, sidebar ${want}: after Fit View the summary's button is covered by something`, !(await reachable(summaryButton(page))));
+        expect(await reachable(summaryButton(page)), `1024 x 768, sidebar ${want}: after Fit View nothing (the minimap) lies over the summary's button`).toBe(true);
+        // Then the other way a person gets to it: Find brings Room 3 into the middle of the canvas and the keyboard goes on from there.
         const spot = await emptySpot(page);
         await page.mouse.click(spot.x, spot.y);
         await page.keyboard.press("Control+K");
