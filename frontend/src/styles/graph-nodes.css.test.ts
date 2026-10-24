@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { THEMES } from "../lib/appearance";
-import { SOURCE_H } from "../lib/graph";
+import { SOURCE_H, SUMMARY_ROWS } from "../lib/graph";
 import { AA, NON_TEXT, contrast, customProperties, parseRules, stripComments } from "../test/cssTools";
 
 // vitest runs from the frontend directory and reads the stylesheets as text (css: false).
@@ -103,6 +103,32 @@ describe("the Discovery node styles (W7u)", () => {
     expect(node).toMatch(/background:\s*none/);
     expect(node).not.toMatch(/(?:^|;)\s*(?:height|min-height)\s*:/);
     expect(rule(".gnode-more button")).toMatch(/width:\s*100%/);
+  });
+
+  it("the sub-assets summary (w37) has THREE rows of fixed height in a grid, keeps its frame, is under 120px (inside the two rows the layout gives it), and never moves the button when a word changes", () => {
+    const px = (body: string, property: string) => {
+      const m = new RegExp(`(?:^|[;\\s])${property}:\\s*(\\d+)px`).exec(body);
+      expect(m, `${property} in px in "${body}"`).not.toBeNull();
+      return Number(m![1]);
+    };
+    const node = rule(".gnode-more-assets");
+    expect(node).toMatch(/display:\s*grid/);
+    const rows = /grid-template-rows:\s*(\d+)px\s+(\d+)px\s+(\d+)px\s*;/.exec(node);
+    expect(rows, "three px rows").not.toBeNull();
+    const [title, mapped, button] = [Number(rows![1]), Number(rows![2]), Number(rows![3])];
+    expect({ title: px(rule(".gma-title"), "height"), mapped: px(rule(".gma-mapped"), "height"), button: px(rule(".gma-button"), "height") }).toEqual({ title, mapped, button });
+    // each line has its own row, so the mapped line leaving at 0 does not lift the button
+    expect(rule(".gma-title")).toMatch(/grid-row:\s*1\b/);
+    expect(rule(".gma-mapped")).toMatch(/grid-row:\s*2\b/);
+    expect(rule(".gma-button")).toMatch(/grid-row:\s*3\b/);
+    for (const name of [".gma-title", ".gma-mapped"]) expect(rule(name), name).toMatch(/overflow:\s*hidden/); // a long word is cut, never a taller node
+    // the frame is the asset node's: nothing here strips it (the doubled `.gnode-more` rule does, and this node does not carry that class)
+    expect(node).not.toMatch(/border-color:\s*transparent|background:\s*none|padding:\s*0\b/);
+    // 6px padding on both sides (app.css `.gnode`) and the 1px border
+    const total = title + mapped + button + 2 * px(node, "row-gap") + 12 + 2;
+    expect(total).toBeLessThan(120);
+    expect(total).toBeLessThanOrEqual(SUMMARY_ROWS * 64); // the rows the layout keeps for it (graph.ts ROW)
+    for (const r of rules.filter((x) => /gma-|gnode-more-assets/.test(x.selector))) expect(r.body, r.selector).not.toMatch(/transition|animation|position:\s*absolute|display:\s*none|visibility\s*:/);
   });
 
   it("the mapped badge of a collapsed asset (W12b) is a plain rectangle in tokens, on the title row, which the title leaves room on", () => {

@@ -31,6 +31,14 @@
   .gnode-more.gnode-more { padding: 0; border-color: transparent; background: none; } /* doubled class: it beats the base .gnode rule without naming .gnode here (app.css.test.ts keeps one page file from restyling another) */
   .gnode-more button { width: 100%; }
 
+  /* w37: the summary of an asset with more sub-assets than a page ("400 sub-assets", "Show 50"). It keeps the frame of an asset node (it does NOT carry gnode-more, whose doubled rule strips it). THREE rows of FIXED
+     height in a grid: the title, the muted "N mapped" line and the one button, each on its own row, so the line leaving at 0 mapped, or a word that changes, never moves the button between two presses. Height:
+     6 + 16 + 4 + 16 + 4 + 20 + 6 padding + 2 border = 74px, inside the two rows (128px) the layout keeps for it. The title and the mapped line are cut at their row, never a taller node. No transition (node paint is immediate). */
+  .gnode-more-assets { display: grid; grid-template-rows: 16px 16px 20px; row-gap: 4px; }
+  .gma-title { grid-row: 1; height: 16px; line-height: 16px; overflow: hidden; }
+  .gma-mapped { grid-row: 2; height: 16px; line-height: 16px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .gma-button { grid-row: 3; height: 20px; width: 100%; }
+
   /* W14 (P2): the source card's padding is 4px 8px, not the 6px 8px of every node (app.css `.gnode`), so a name of two lines still fits the 136px that SOURCE_H keeps (134 with the lines of
      graph-source-card.css; graph-nodes.css.test.ts adds it up). Doubled class, as above: it beats the base .gnode rule without naming .gnode here. */
   .gnode-source.gnode-source { padding: 4px 8px; }

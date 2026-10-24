@@ -5534,3 +5534,239 @@ describe("DiscoveryPage a source too big to draw, and Find for a large source (w
     });
   });
 });
+
+// ---- w37: a parent with more sub-assets than a page (50) is drawn as ONE summary node that shows them 50 at a time ----
+
+describe("DiscoveryPage many sub-assets (w37)", () => {
+  const FOLDED = "dcdash.discovery.assets-closed";
+  const ROOM = 20;
+  /** Site (10) > Room 3 (20) > `n` PDUs (ids 1000 + the index, "PDU 1" and up). */
+  const assetsOf = (n: number) => [
+    { id: 10, parent_id: null, name: "Site", kind: "generic" },
+    { id: ROOM, parent_id: 10, name: "Room 3", kind: "generic" },
+    ...Array.from({ length: n }, (_, i) => ({ id: 1000 + i, parent_id: ROOM, name: `PDU ${i + 1}`, kind: "generic" })),
+  ];
+  const many = (n = 120, sources: GraphSource[] = [srcOf(1, "Plant")]) => world(sources, { assets: assetsOf(n) }); // (a page with no source at all says "Nothing discovered yet")
+  const count = (prefix: string) => document.querySelectorAll(`[data-id^="${prefix}"]`).length;
+  const summary = () => node(`more:asset:${ROOM}`);
+  /** (the mock draws test buttons beside the node's own) */
+  const showButton = () => within(summary()).getByRole("button", { name: /^Show \d+( more)? of the sub-assets under Room 3/ });
+  const at = (id: string) => [Number(node(id).dataset.x), Number(node(id).dataset.y)];
+  const focusOn = (id: string) => act(() => node(id).focus());
+  const later = (ms = 150) => new Promise((resolve) => setTimeout(resolve, ms));
+  const start = async (n = 120, role = "operator", sources?: GraphSource[]) => {
+    const calls = mockFetch(routes(role, many(n, sources)));
+    open();
+    await screen.findByText("Room 3");
+    return calls;
+  };
+
+  beforeEach(() => {
+    window.localStorage.removeItem(FOLDED);
+    flow.state.intersecting = [];
+    // jsdom measures nothing, and the page waits for a node to be measured before it aims the camera at it: every node is measured.
+    flow.getNodes.mockImplementation(() => flow.state.nodes.map((n: any) => (n.measured ? n : { ...n, measured: { width: 220, height: 80 } })));
+  });
+  afterEach(() => {
+    flow.getNodes.mockImplementation(() => flow.state.nodes);
+  });
+
+  it("draws the parent and ONE summary, no sub-asset: the words, a node that cannot be dragged, selected or tabbed to", async () => {
+    await start();
+    expect(count("asset:")).toBe(2); // Site and Room 3
+    expect(within(summary()).getByText("120 sub-assets")).toBeInTheDocument();
+    expect(within(summary()).getByRole("button", { name: "Show 50 of the sub-assets under Room 3, 120 left" })).toHaveTextContent(/^Show 50$/);
+    expect(summary()).toHaveAttribute("data-draggable", "false");
+    expect(summary()).toHaveAttribute("data-selectable", "false");
+    expect(summary()).toHaveAttribute("data-focusable", "false");
+    expect(summary()).not.toHaveAttribute("tabindex");
+    expect([...document.querySelectorAll("[data-edge]")].map((e) => e.getAttribute("data-edge"))).toEqual(expect.arrayContaining(["a:10>20", "a:20>more:asset:20"]));
+  });
+
+  it("a parent of exactly 50 sub-assets draws them all and no summary; 51 draws a summary", async () => {
+    await start(50);
+    expect(count("asset:")).toBe(52);
+    expect(summary()).toBeNull();
+    cleanup();
+    await start(51);
+    expect(count("asset:")).toBe(2);
+    expect(within(summary()).getByText("51 sub-assets")).toBeInTheDocument();
+  });
+
+  it("Show 50 draws a page and the focus goes to the first new sub-asset; the next page and the last one do the same, and the last one removes the summary", async () => {
+    await start();
+    await userEvent.click(showButton());
+    expect(count("asset:")).toBe(52);
+    await waitFor(() => expect(node("asset:1000")).toHaveFocus());
+    expect(document.body).not.toHaveFocus();
+    expect(within(summary()).getByText("70 more sub-assets")).toBeInTheDocument();
+    expect(showButton()).toHaveTextContent(/^Show 50 more$/);
+    expect(within(summary()).getByRole("button", { name: "Show 50 more of the sub-assets under Room 3, 70 left" })).toBeInTheDocument();
+    await userEvent.click(showButton());
+    expect(count("asset:")).toBe(102);
+    await waitFor(() => expect(node("asset:1050")).toHaveFocus());
+    expect(within(summary()).getByText("20 more sub-assets")).toBeInTheDocument();
+    expect(showButton()).toHaveTextContent(/^Show 20 more$/);
+    await userEvent.click(showButton());
+    expect(count("asset:")).toBe(122);
+    expect(summary()).toBeNull(); // the last page: the node is gone, and the focus is on the first of its sub-assets
+    await waitFor(() => expect(node("asset:1100")).toHaveFocus());
+    expect(document.body).not.toHaveFocus();
+  });
+
+  it("the pages are for this visit and for this parent: a second summarised parent keeps its own count", async () => {
+    mockFetch(routes("operator", world([srcOf(1, "Plant")], {
+      assets: [...assetsOf(120), { id: 30, parent_id: 10, name: "Room 4", kind: "generic" }, ...Array.from({ length: 80 }, (_, i) => ({ id: 3000 + i, parent_id: 30, name: `UPS ${i + 1}`, kind: "generic" }))],
+    })));
+    open();
+    await screen.findByText("Room 4");
+    await userEvent.click(showButton());
+    expect(within(summary()).getByText("70 more sub-assets")).toBeInTheDocument();
+    expect(within(node("more:asset:30")).getByText("80 sub-assets")).toBeInTheDocument();
+    expect(count("asset:")).toBe(3 + 50);
+  });
+
+  it("a right-click on the summary opens the canvas menu: it has no actions of its own", async () => {
+    await start();
+    fireEvent.contextMenu(summary());
+    const menu = await screen.findByRole("menu", { name: "Canvas actions" });
+    expect(within(menu).getByRole("menuitem", { name: "Expand all" })).toBeInTheDocument();
+    expect(screen.queryByRole("menu", { name: /^Actions for/ })).not.toBeInTheDocument();
+  });
+
+  describe("folding the parent", () => {
+    it("Hide sub-assets draws no summary; Show sub-assets brings it back with nothing shown (the pages are forgotten); the focus is never the body", async () => {
+      await start();
+      await userEvent.click(showButton());
+      await waitFor(() => expect(node("asset:1000")).toHaveFocus());
+      await userEvent.click(screen.getByRole("button", { name: "Hide sub-assets of Room 3" }));
+      expect(summary()).toBeNull();
+      expect(node("asset:1000")).toBeNull();
+      expect(window.localStorage.getItem(FOLDED)).toBe("[20]");
+      await later();
+      expect(document.body).not.toHaveFocus();
+      await userEvent.click(screen.getByRole("button", { name: "Show sub-assets of Room 3" }));
+      expect(count("asset:")).toBe(2);
+      expect(within(summary()).getByText("120 sub-assets")).toBeInTheDocument();
+      expect(within(summary()).getByRole("button", { name: "Show 50 of the sub-assets under Room 3, 120 left" })).toBeInTheDocument();
+      await later();
+      expect(document.body).not.toHaveFocus();
+    });
+
+    it("Collapse this branch on the parent forgets its pages: unfolding shows the summary with nothing shown", async () => {
+      await start();
+      await userEvent.click(showButton());
+      expect(count("asset:")).toBe(52);
+      await waitFor(() => expect(node("asset:1000")).toHaveFocus()); // (the jump has landed: a focus that moves later would close the menu)
+      fireEvent.contextMenu(node(`asset:${ROOM}`));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Room 3" })).getByRole("menuitem", { name: "Collapse this branch" }));
+      await waitFor(() => expect(node("asset:1000")).toBeNull());
+      expect(summary()).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Show sub-assets of Room 3" }));
+      expect(count("asset:")).toBe(2);
+      expect(within(summary()).getByText("120 sub-assets")).toBeInTheDocument();
+    });
+
+    it("Collapse all and Expand all leave the asset pages as they were (they never touch the folds)", async () => {
+      await start(120, "operator", [srcOf(1, "Plant")]);
+      await userEvent.click(showButton());
+      expect(count("asset:")).toBe(52);
+      await userEvent.click(screen.getByRole("button", { name: "Expand all" }));
+      await screen.findByText("Plant kW");
+      expect(count("asset:")).toBe(52);
+      expect(within(summary()).getByText("70 more sub-assets")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Collapse all" }));
+      await waitFor(() => expect(screen.queryByText("Plant kW")).not.toBeInTheDocument());
+      expect(count("asset:")).toBe(52);
+      expect(within(summary()).getByText("70 more sub-assets")).toBeInTheDocument();
+      expect([null, "[]"]).toContain(window.localStorage.getItem(FOLDED)); // Room 3 was never folded
+    });
+  });
+
+  describe("a graph read again", () => {
+    it("with fewer sub-assets (as after an Undo) the summary gets smaller, then goes; what was shown stays shown and the focus stays on a node", async () => {
+      let kids = 120;
+      mockFetch(routes("operator", () => many(kids)));
+      open();
+      await screen.findByText("Room 3");
+      await userEvent.click(showButton());
+      await waitFor(() => expect(node("asset:1000")).toHaveFocus());
+      const refresh = screen.getByRole("button", { name: "Refresh" });
+      kids = 70;
+      fireEvent.click(refresh); // (a click that leaves the focus where it is)
+      await waitFor(() => expect(within(summary()).getByText("20 more sub-assets")).toBeInTheDocument());
+      expect(count("asset:")).toBe(52);
+      expect(node("asset:1000")).toHaveFocus();
+      kids = 40;
+      fireEvent.click(refresh);
+      await waitFor(() => expect(summary()).toBeNull());
+      expect(count("asset:")).toBe(42); // Site, Room 3 and the 40 that are left, all drawn
+      expect(node("asset:1000")).toHaveFocus();
+      expect(document.body).not.toHaveFocus();
+    });
+  });
+
+  describe("the keyboard", () => {
+    it("Down from the last drawn sub-asset puts the focus on the summary's button, Left goes back to the parent", async () => {
+      await start();
+      await userEvent.click(showButton());
+      await waitFor(() => expect(node("asset:1000")).toHaveFocus());
+      focusOn("asset:1049");
+      await userEvent.keyboard("{ArrowDown}");
+      await waitFor(() => expect(showButton()).toHaveFocus());
+      await userEvent.keyboard("{ArrowLeft}");
+      await waitFor(() => expect(node(`asset:${ROOM}`)).toHaveFocus());
+    });
+
+    it("Right from a parent with nothing shown reaches the summary's button, Up has nowhere to go, and Enter presses it", async () => {
+      await start();
+      focusOn(`asset:${ROOM}`);
+      await userEvent.keyboard("{ArrowRight}");
+      await waitFor(() => expect(showButton()).toHaveFocus());
+      await userEvent.keyboard("{ArrowUp}");
+      await later();
+      expect(showButton()).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(count("asset:")).toBe(52));
+      await waitFor(() => expect(node("asset:1000")).toHaveFocus());
+    });
+  });
+
+  describe("dragging", () => {
+    const puts = <T extends { method: string }>(calls: T[]) => calls.filter((c) => c.method === "PUT");
+    const sentIds = (call: { body?: unknown }) => (call.body as { nodes: { node_id: string }[] }).nodes.map((n) => n.node_id);
+
+    it("a drag of the grandparent takes the summary along by the same distance, and the summary is never sent to the layout", async () => {
+      const calls = await start(120, "admin");
+      const before = at(`more:asset:${ROOM}`);
+      const site = at("asset:10");
+      flow.state.dropAt = { x: site[0] + 100, y: site[1] + 50 };
+      await userEvent.click(screen.getByTestId("drag-asset:10"));
+      expect(at(`more:asset:${ROOM}`)).toEqual([before[0] + 100, before[1] + 50]);
+      await waitFor(() => expect(puts(calls)).toHaveLength(1));
+      expect(sentIds(puts(calls)[0]).every((id) => !id.startsWith("more:"))).toBe(true);
+    });
+
+    it("a drag of the parent takes it along too", async () => {
+      const calls = await start(120, "admin");
+      const before = at(`more:asset:${ROOM}`);
+      const room = at(`asset:${ROOM}`);
+      flow.state.dropAt = { x: room[0] + 30, y: room[1] + 40 };
+      await userEvent.click(screen.getByTestId(`drag-asset:${ROOM}`));
+      expect(at(`more:asset:${ROOM}`)).toEqual([before[0] + 30, before[1] + 40]);
+      await waitFor(() => expect(puts(calls)).toHaveLength(1));
+      expect(sentIds(puts(calls)[0]).every((id) => !id.startsWith("more:"))).toBe(true);
+    });
+
+    it("a group dropped on the summary is a plain move: no Review opens, the layout is saved, and the group is offered an asset as on the empty canvas", async () => {
+      const calls = await start(120, "admin", [srcOf(1, "Plant")]);
+      await userEvent.click(await screen.findByRole("button", { name: "Expand Plant" }));
+      flow.state.intersecting = [{ id: `more:asset:${ROOM}`, type: "moreAssets" }];
+      await userEvent.click(screen.getByTestId("drag-cluster:1:Plant A"));
+      expect(flow.getIntersectingNodes).toHaveBeenCalledWith(expect.objectContaining({ id: "cluster:1:Plant A" }));
+      await waitFor(() => expect(puts(calls)).toHaveLength(1));
+      expect(sentIds(puts(calls)[0])).toEqual(["cluster:1:Plant A"]);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+});

@@ -12,6 +12,8 @@ const point = (sourceId: number, clusterKey: string, id: number): Node => ({
 });
 const more = (clusterId: string): Node => ({ id: `more:${clusterId}`, type: "more", position: at, data: { clusterId } });
 const asset = (id: number, navParent: string | null): Node => ({ id: `asset:${id}`, type: "asset", position: at, data: { navParent } });
+/** (w37) The summary node of an asset with many sub-assets: it belongs to the asset column and hangs under that asset (`navParent`). */
+const summary = (parentId: number): Node => ({ id: `more:asset:${parentId}`, type: "moreAssets", position: at, data: { parentId, navParent: `asset:${parentId}` } });
 const unid = (host: string, port: number): Node => ({ id: `unid:${host}:${port}`, type: "unidentified", position: at, data: {} });
 
 /** Draw order as buildGraph makes it: each source with its groups and points, then unidentified services, then the assets depth first. */
@@ -131,6 +133,45 @@ describe("navTarget", () => {
     const self = navIndex([asset(1, "asset:1")]);
     expect(navTarget(self, "asset:1", "left")).toBeNull();
     expect(navTarget(self, "asset:1", "right")).toBeNull();
+  });
+});
+
+describe("navTarget over the summary node of a parent with many sub-assets (w37)", () => {
+  // Room 3 (asset:4) under MV2 (asset:1) draws two sub-assets and then its summary; Room 4 (asset:5) is its next sibling.
+  const drawn = [asset(1, null), asset(4, "asset:1"), asset(10, "asset:4"), asset(11, "asset:4"), summary(4), asset(5, "asset:1")];
+  const index = navIndex(drawn);
+
+  it("Down from the last drawn sub-asset reaches the summary, Up goes back, and the summary is the last child", () => {
+    expect(navTarget(index, "asset:11", "down")).toBe("more:asset:4");
+    expect(navTarget(index, "more:asset:4", "up")).toBe("asset:11");
+    expect(navTarget(index, "more:asset:4", "down")).toBeNull();
+  });
+
+  it("Left from the summary reaches its parent, and it has no children (Right goes nowhere)", () => {
+    expect(navTarget(index, "more:asset:4", "left")).toBe("asset:4");
+    expect(navTarget(index, "more:asset:4", "right")).toBeNull();
+  });
+
+  it("Right from a parent with nothing shown reaches the summary, the only child", () => {
+    const none = navIndex([asset(1, null), asset(4, "asset:1"), summary(4), asset(5, "asset:1")]);
+    expect(navTarget(none, "asset:4", "right")).toBe("more:asset:4");
+    expect(navTarget(none, "more:asset:4", "up")).toBeNull();
+  });
+
+  it("stays the last child even when it is listed before the sub-assets", () => {
+    const early = navIndex([asset(4, null), summary(4), asset(10, "asset:4"), asset(11, "asset:4")]);
+    expect(navTarget(early, "asset:11", "down")).toBe("more:asset:4");
+    expect(navTarget(early, "asset:4", "right")).toBe("asset:10");
+  });
+
+  it("does not disturb the parent's own siblings", () => {
+    expect(navTarget(index, "asset:4", "down")).toBe("asset:5");
+    expect(navTarget(index, "asset:5", "up")).toBe("asset:4");
+  });
+
+  it("belongs to the assets column: it is never the first node of the discovered one", () => {
+    expect(navFirst(navIndex([summary(9), source(1)]))).toBe("src:1");
+    expect(navFirst(navIndex([summary(9)]))).toBe("more:asset:9");
   });
 });
 

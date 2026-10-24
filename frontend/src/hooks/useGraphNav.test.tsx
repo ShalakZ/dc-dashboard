@@ -30,6 +30,7 @@ function Host({ selected, portal, withNodes = nodes }: { selected?: string; port
           <div key={node.id} className={`react-flow__node${node.id === selected ? " selected" : ""}`} data-id={node.id} data-testid={node.id} tabIndex={0}>
             {node.id === "src:1" && <button type="button">inside</button>}
             {node.type === "more" && <button type="button">Show 50 more</button>}
+            {node.type === "moreAssets" && <button type="button">Show 50 of the sub-assets</button>}
           </div>
         ))}
         <div className="graph-find"><input aria-label="in find" /></div>
@@ -257,6 +258,50 @@ describe("useGraphNav arrows on the Show more button", () => {
     const event = press(button, "ArrowUp");
     expect(calls.goToNode).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("useGraphNav arrows on the button of a summary node (w37)", () => {
+  // The summary of an asset with many sub-assets is a more: node too (its wrapper is no focus stop); the arrows walk on from its button like from the Show more button of a group.
+  const summarised: Node[] = [
+    { id: "asset:1", type: "asset", position: at, data: { children: 120, navParent: null } },
+    { id: "asset:2", type: "asset", position: at, data: { children: 0, navParent: "asset:1" } },
+    { id: "more:asset:1", type: "moreAssets", position: at, data: { parentId: 1, navParent: "asset:1" } },
+  ];
+  const button = () => screen.getByRole("button", { name: "Show 50 of the sub-assets" });
+
+  it.each([
+    ["ArrowUp", "asset:2"],
+    ["ArrowLeft", "asset:1"],
+  ])("%s on the button goes to %s, and React Flow never sees the key", (key, to) => {
+    render(<Host withNodes={summarised} />);
+    const event = press(button(), key);
+    expect(calls.goToNode).toHaveBeenCalledTimes(1);
+    expect(calls.goToNode).toHaveBeenCalledWith(to);
+    expect(event.defaultPrevented).toBe(true);
+    expect(reached.down).not.toHaveBeenCalled();
+  });
+
+  it.each(["ArrowDown", "ArrowRight"])("%s on the button has nowhere to go and is still swallowed", (key) => {
+    render(<Host withNodes={summarised} />);
+    const event = press(button(), key);
+    expect(calls.goToNode).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("ArrowDown on the last drawn sub-asset reaches the summary", () => {
+    render(<Host withNodes={summarised} />);
+    press(screen.getByTestId("asset:2"), "ArrowDown");
+    expect(calls.goToNode).toHaveBeenCalledWith("more:asset:1");
+  });
+
+  it.each(["Enter", " "])("%s on the button is the native button's", (key) => {
+    render(<Host withNodes={summarised} />);
+    const event = press(button(), key);
+    expect(calls.goToNode).not.toHaveBeenCalled();
+    expect(calls.onToggle).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+    expect(reached.down).toHaveBeenCalledWith(key);
   });
 });
 
