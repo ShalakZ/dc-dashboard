@@ -16,7 +16,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w38 (2026-10-24, pending)
+## w38 (2026-10-24, c315c08)
 
 The shapes page reads the same tag text from every address form (no migration, no new permission, no new answer field; nothing to do on upgrade). For an OPC UA string id the text is the part of the ADDRESS after the first dot: `ns=3;s=QatarMV2.PDUA01_PM0_P` and `ns=3;s=20403:QatarMV2.PDUA01_PM0_P` both give `PDUA01_PM0_P`, whatever the display name says, so a name that repeats the cluster or only says `PM0_P` no longer spoils the shapes or the asset names; the row's `Asset:` preview agrees with the Review. Other sources use the name as before. It is a guess until the real SCADA is seen. A rule saved under an old key stays, unseen. With the option off, a tag mapped under its numbered address and seen again as a stable one is one tag and the Review blocks it (it could be mapped twice). Reviews: plan 0 Critical / 6 Important, tasks 0 / 0, whole wave in a browser 0 / 0.
 
