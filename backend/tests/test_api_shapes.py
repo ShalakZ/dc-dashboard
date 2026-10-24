@@ -1,6 +1,7 @@
 """GET /api/sources/{id}/shapes (w36): a source's points as a few dozen tag shapes. The pure grouping is tests/test_shapes.py."""
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 
@@ -246,6 +247,30 @@ async def test_reading_shapes_writes_nothing(client, db):
     before = [await db.fetchval(f"SELECT count(*) FROM {table}") for table in ("points", "mappings", "assets", "audit_log", "sources")]
     assert (await client.get(f"/api/sources/{source}/shapes", params={"q": "pdu"})).status_code == 200
     assert [await db.fetchval(f"SELECT count(*) FROM {table}") for table in ("points", "mappings", "assets", "audit_log", "sources")] == before
+
+
+# computed on main's code (w38 T0), before the rule changed
+HASH_OF_THE_ANSWER = "e55b3874dc2faf5ff2d07b48814e95dffdd94418996e4b430b7939e8d34ae27d"  # no q
+HASH_OF_THE_ANSWER_FOR_PENRG = "fe672db748b59541280a47037d8aa349dc469dc37a920a8e9e09a584b3d49a5b"  # q=penrg
+
+
+async def test_the_answer_is_byte_identical_to_main_for_a_numbered_source(client, db):
+    # Protects w38: a source of numbered node ids whose names are the tags answers the same bytes as before the tag-text rule changed.
+    source = await make_source(db, "Hall A SCADA", "opcua", {"endpoint": "opc.tcp://h:4840/"}, enabled=False)  # its own copy of small_source's rows
+    rows: list[tuple[str, str, str | None]] = []
+    for n in range(1, 7):
+        rows.append((f"ns=3;s={20000 + n}:Site.PDUA{n:02d}_PM0_PENRG", f"PDUA{n:02d}_PM0_PENRG", "kWh"))
+        rows.append((f"ns=3;s={20100 + n}:Site.PDUA{n:02d}_PM0_P", f"PDUA{n:02d}_PM0_P", "kW"))
+    rows.append(("ns=3;s=20900:Site.Lonely", "Lonely", None))
+    await add_points(db, source, rows)
+    await login_as(client, db, "admin")
+    digests = []
+    for params in ({}, {"q": "penrg"}):
+        answer = (await client.get(f"/api/sources/{source}/shapes", params=params)).json()
+        for key in ("source_id", "assets"):  # the ids of this run
+            del answer[key]
+        digests.append(hashlib.sha256(json.dumps(answer, sort_keys=True).encode("utf-8")).hexdigest())
+    assert digests == [HASH_OF_THE_ANSWER, HASH_OF_THE_ANSWER_FOR_PENRG]
 
 
 # ======================================================================================================================================
