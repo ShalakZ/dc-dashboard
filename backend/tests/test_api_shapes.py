@@ -1,6 +1,7 @@
 """GET /api/sources/{id}/shapes (w36): a source's points as a few dozen tag shapes. The pure grouping is tests/test_shapes.py."""
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 
@@ -246,6 +247,30 @@ async def test_reading_shapes_writes_nothing(client, db):
     before = [await db.fetchval(f"SELECT count(*) FROM {table}") for table in ("points", "mappings", "assets", "audit_log", "sources")]
     assert (await client.get(f"/api/sources/{source}/shapes", params={"q": "pdu"})).status_code == 200
     assert [await db.fetchval(f"SELECT count(*) FROM {table}") for table in ("points", "mappings", "assets", "audit_log", "sources")] == before
+
+
+# computed on main's code (w38 T0), before the rule changed
+HASH_OF_THE_ANSWER = "e55b3874dc2faf5ff2d07b48814e95dffdd94418996e4b430b7939e8d34ae27d"  # no q
+HASH_OF_THE_ANSWER_FOR_PENRG = "fe672db748b59541280a47037d8aa349dc469dc37a920a8e9e09a584b3d49a5b"  # q=penrg
+
+
+async def test_the_answer_is_byte_identical_to_main_for_a_numbered_source(client, db):
+    # Protects w38: a source of numbered node ids whose names are the tags answers the same bytes as before the tag-text rule changed.
+    source = await make_source(db, "Hall A SCADA", "opcua", {"endpoint": "opc.tcp://h:4840/"}, enabled=False)  # its own copy of small_source's rows
+    rows: list[tuple[str, str, str | None]] = []
+    for n in range(1, 7):
+        rows.append((f"ns=3;s={20000 + n}:Site.PDUA{n:02d}_PM0_PENRG", f"PDUA{n:02d}_PM0_PENRG", "kWh"))
+        rows.append((f"ns=3;s={20100 + n}:Site.PDUA{n:02d}_PM0_P", f"PDUA{n:02d}_PM0_P", "kW"))
+    rows.append(("ns=3;s=20900:Site.Lonely", "Lonely", None))
+    await add_points(db, source, rows)
+    await login_as(client, db, "admin")
+    digests = []
+    for params in ({}, {"q": "penrg"}):
+        answer = (await client.get(f"/api/sources/{source}/shapes", params=params)).json()
+        for key in ("source_id", "assets"):  # the ids of this run
+            del answer[key]
+        digests.append(hashlib.sha256(json.dumps(answer, sort_keys=True).encode("utf-8")).hexdigest())
+    assert digests == [HASH_OF_THE_ANSWER, HASH_OF_THE_ANSWER_FOR_PENRG]
 
 
 # ======================================================================================================================================
@@ -847,6 +872,57 @@ async def test_the_shapes_answer_carries_the_saved_rule_of_each_key_or_null(clie
     assert (power["key"], power["rule"]) == ("pdua#_pm#_p", None)  # a rule of a shape the source no longer has is simply not shown
     filtered = (await client.get(f"/api/sources/{source}/shapes", params={"q": "PENRG"})).json()["shapes"]
     assert [(s["key"], s["rule"]) for s in filtered] == [("pdua#_pm#_penrg", ENERGY_RULE)]
+
+
+# -- w38: a rule saved under the key the old text built (the cluster in the key) is kept and not shown --------------------------------
+# The cap of 300 rules is not tested again here: it is pinned by the `range(301)` case of `test_a_bad_rule_body_is_a_422_and_stores_nothing`
+# and by `test_exactly_300_rules_are_accepted`. An orphan counts toward it, as any rule does.
+
+OLD_POWER_KEY = "qatarmv#.pdua#_pm#_p"  # w36 built this from the DisplayName `QatarMV2.PDUA01_PM0_P` of a stable-address source
+NEW_POWER_KEY = "pdua#_pm#_p"  # w38 builds this from the address, whatever the DisplayName says
+COUNTER_RULE = {"metric": "energy_kwh", "name_from": "parts12"}  # unlike ENERGY_RULE, so a rule under the wrong key shows
+
+
+async def cluster_source(db) -> int:
+    """A source with Stable tag addresses whose DisplayNames carry the cluster: power and energy tags of four PDUs."""
+    source = await make_source(db, "Qatar MV2", "opcua", {"endpoint": "opc.tcp://h:4840/plantscada", "stable_addresses": True}, enabled=False)
+    rows = [(f"ns=3;s=QatarMV2.PDUA{n:02d}_PM0_P", f"QatarMV2.PDUA{n:02d}_PM0_P", "kW") for n in range(1, 5)]
+    rows += [(f"ns=3;s=QatarMV2.PDUA{n:02d}_PM0_PENRG", f"QatarMV2.PDUA{n:02d}_PM0_PENRG", "kWh") for n in range(1, 5)]
+    await add_points(db, source, rows)
+    return source
+
+
+async def test_a_rule_under_the_old_key_is_kept_and_listed_and_only_the_new_key_shows_a_rule(client, db):
+    source = await cluster_source(db)
+    numbered = await small_source(db)
+    await login_as(client, db, "admin")
+    reference = (await client.get(f"/api/sources/{numbered}/shapes")).json()
+    saved = {"rules": {OLD_POWER_KEY: POWER_RULE, NEW_POWER_KEY: ENERGY_RULE}}
+    assert (await client.put(rules_url(source), json=saved)).status_code == 200
+    body = (await client.get(f"/api/sources/{source}/shapes")).json()
+    assert [s["key"] for s in body["shapes"]] == ["pdua#_pm#_penrg", NEW_POWER_KEY]  # as for a numbered source: the cluster is not in the key
+    assert [s["count"] for s in body["shapes"]] == [4, 4] and body["points"] == 8 and body["other_tags"] == 0
+    assert {s["key"]: s["rule"] for s in body["shapes"]} == {"pdua#_pm#_penrg": None, NEW_POWER_KEY: ENERGY_RULE}  # the old key shows nowhere
+    shape_fields = {frozenset(s) for s in reference["shapes"]}
+    assert list(body) == list(reference)  # no new field in the answer ...
+    assert len(shape_fields) == 1 and {frozenset(s) for s in body["shapes"]} == shape_fields  # ... nor in a shape
+    assert (await client.get(rules_url(source))).json() == saved  # the orphan is kept and listed beside the rule that shows
+
+
+async def test_a_put_that_carries_the_orphan_stores_it_and_the_shapes_answer_still_hides_it(client, db):
+    # What this pins is the server half only: a PUT that carries the orphan stores it. That the page carries it is the page's own keep, `mergeRules`
+    # (frontend/src/lib/shapes.ts), pinned by frontend/src/lib/shapes.test.ts ("merges the decisions into the rules already saved", around line 322).
+    source = await cluster_source(db)
+    await login_as(client, db, "admin")
+    await client.put(rules_url(source), json={"rules": {OLD_POWER_KEY: POWER_RULE, NEW_POWER_KEY: ENERGY_RULE}})
+    merged = {"rules": {OLD_POWER_KEY: POWER_RULE, NEW_POWER_KEY: ENERGY_RULE, "pdua#_pm#_penrg": COUNTER_RULE}}  # what the page sends (mergeRules)
+    put = await client.put(rules_url(source), json=merged)
+    assert put.status_code == 200 and put.json() == merged
+    assert (await client.get(rules_url(source))).json() == merged
+    stored = await stored_rules(db, source)
+    assert (json.loads(stored) if isinstance(stored, str) else stored) == merged
+    shapes = (await client.get(f"/api/sources/{source}/shapes")).json()["shapes"]
+    assert {s["key"]: s["rule"] for s in shapes} == {"pdua#_pm#_penrg": COUNTER_RULE, NEW_POWER_KEY: ENERGY_RULE}
 
 
 async def test_the_shapes_answer_reads_the_settings_once(client, db):

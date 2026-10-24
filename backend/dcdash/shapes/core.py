@@ -23,7 +23,7 @@ from dcdash.core.discovery import MappingGuess, PointInfo, _natural, _tokens, gu
 from dcdash.core.metrics import Metric, default_interval
 
 _DIGITS = re.compile(r"([0-9]+)")  # ASCII digits only; the capture group makes re.split keep the runs (odd positions)
-# `[ns=N;]s=<cluster>.<tag>`: the stable form of an OPC UA node id, used when a name fell back to the node id.
+# `[ns=N;]s=<cluster>.<tag>`: the stable form of an OPC UA string id; its tag (after the first dot) is the text of a member, whatever the name says.
 _STABLE_FORM = re.compile(r"(?:ns=[0-9]+;)?s=[^.\s]*\.(\S+)")
 MIN_SIMILAR_LENGTH = 3  # the first tokens of two similar shapes are at least this many characters long (the `#` of a digit run counts)
 MISSING_NAMED = 5  # how many equipment values without a shape are named; the rest are counted
@@ -94,12 +94,11 @@ class ShapeSet:
 
 
 def member_text(address: str, name: str) -> str:
-    """The text a member is grouped by: the tag of a numbered node id; else the name; else (the name fell back to the node id) the part
-    of a stable node id after the cluster; else the name."""
+    """The text a member is grouped by, taken from the ADDRESS when it is a string id with a cluster: the tag of a numbered id; else the
+    part of a stable id after the FIRST dot (the cluster is the first dot segment only, dots inside the tag stay), whatever the name
+    says; else the name. The numbered test comes first: `ns=3;s=1:Site.` and `ns=3;s=20403:.` differ between the two forms."""
     if has_number_prefix(address):
         return tag_name(address)
-    if name != address:
-        return name
     found = _STABLE_FORM.fullmatch(address)
     return found[1] if found is not None else name
 

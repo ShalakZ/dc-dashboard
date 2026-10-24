@@ -1,7 +1,9 @@
 """Tag shapes (w36, shapes/core.py): the pure grouping of a source's points by the SHAPE of their tag text. No database."""
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 
 import pytest
 
@@ -32,9 +34,12 @@ def test_member_text_of_a_numbered_address_is_the_tag_whatever_the_name_is():
     assert member_text("ns=3;s=20403:Site.PDUA01_PM0_P", "Active power") == "PDUA01_PM0_P"
 
 
-def test_member_text_is_the_name_when_the_address_is_not_numbered_and_the_name_is_a_real_name():
+def test_member_text_is_the_name_when_the_address_is_not_an_opcua_string_id_with_a_cluster():
     assert member_text("40001", "Feed A kWh") == "Feed A kWh"
-    assert member_text("ns=3;s=Site.PDUA01_PM0_P", "PDUA01_PM0_P") == "PDUA01_PM0_P"
+    assert member_text("/api/v1/meters/3/power", "Meter 3 power") == "Meter 3 power"
+    assert member_text("PDU-A01.kWh", "PDU-A01.kWh") == "PDU-A01.kWh"
+    assert member_text("ns=2;i=9", "Temperature") == "Temperature"  # a numeric id has no tag in it
+    assert member_text("ns=3;s=NoDotHere", "Power") == "Power"  # a string id without a cluster
 
 
 def test_member_text_of_a_name_that_fell_back_to_the_node_id_is_the_part_after_the_cluster():
@@ -43,6 +48,7 @@ def test_member_text_of_a_name_that_fell_back_to_the_node_id_is_the_part_after_t
     assert member_text("ns=3;s=Site.PDUA01_PM0_P", "ns=3;s=Site.PDUA01_PM0_P") == "PDUA01_PM0_P"  # stable form
     assert member_text("s=Site.PDUA01_PM0_P", "s=Site.PDUA01_PM0_P") == "PDUA01_PM0_P"  # no namespace
     assert member_text("ns=3;s=Site.A.B", "ns=3;s=Site.A.B") == "A.B"  # the rest after the first dot, dots and all
+    assert member_text("ns=3;s=Site.PDUA01_PM0_P", "PDUA01_PM0_P") == "PDUA01_PM0_P"  # a stable id with a cluster whose name already is the tag: the same text
     # neither form: the name is used as it is
     assert member_text("ns=3;i=2253", "ns=3;i=2253") == "ns=3;i=2253"
     assert member_text("ns=3;s=NoDotHere", "ns=3;s=NoDotHere") == "ns=3;s=NoDotHere"
@@ -56,6 +62,59 @@ def test_a_renumbered_address_and_its_stable_twin_have_the_same_text_and_so_the_
     assert member_text(old.address, old.name) == member_text(new.address, new.name) == "X01_P"
     shapes = build_shapes([old, new, other_old])
     assert [s.key for s in shapes.shapes] == ["x#_p"] and shapes.shapes[0].count == 3 and not shapes.other
+
+
+# -- one tag, one text, whatever the form of its address or the name the server gave it (w38) ---------------------------------------
+
+TAG_TEXTS = json.loads((Path(__file__).resolve().parent / "fixtures" / "tag_texts.json").read_text(encoding="ascii"))
+
+
+def test_every_row_of_the_shared_tag_text_fixture_has_the_text_written_by_hand():
+    # the browser's copy of the rule reads the same file (frontend/src/lib/shapes.test.ts); the texts are written from the rule, not dumped from this code
+    assert len(TAG_TEXTS) >= 100
+    for row in TAG_TEXTS:
+        assert member_text(row["address"], row["name"]) == row["text"], row
+
+
+def test_the_same_tag_has_the_same_text_and_the_same_shape_in_every_form_of_address_and_name():
+    tags = ("PDUA01_PM0_P", "PDUA02_PM0_P")
+
+    def numbered(name_of) -> list[Member]:
+        return [Member(n, f"ns=3;s={20400 + n}:QatarMV2.{tag}", name_of(n, tag), "kW") for n, tag in enumerate(tags, 1)]
+
+    def stable(name_of) -> list[Member]:
+        return [Member(n, f"ns=3;s=QatarMV2.{tag}", name_of(n, tag), "kW") for n, tag in enumerate(tags, 1)]
+
+    names = {
+        "the tag": lambda n, tag: tag,
+        "the cluster and the tag": lambda n, tag: f"QatarMV2.{tag}",
+        "the leaf": lambda n, tag: "PM0_P",
+        "a friendly name": lambda n, tag: "Active power",
+        "no name": lambda n, tag: "",
+        "the stable id (no DisplayName)": lambda n, tag: f"ns=3;s=QatarMV2.{tag}",
+        "the raw numbered id (no DisplayName, stable addresses on)": lambda n, tag: f"ns=3;s={20400 + n}:QatarMV2.{tag}",
+    }
+    baseline = build_shapes(numbered(names["the tag"]))
+    assert [(s.key, s.count) for s in baseline.shapes] == [("pdua#_pm#_p", 2)] and not baseline.other
+    for form in (numbered, stable):
+        for described, name_of in names.items():
+            members = form(name_of)
+            assert [member_text(m.address, m.name) for m in members] == list(tags), (form.__name__, described)
+            found = build_shapes(members)
+            assert [(s.key, s.count) for s in found.shapes] == [(s.key, s.count) for s in baseline.shapes], (form.__name__, described)
+            assert [s.label for s in found.shapes] == ["PDUA#_PM0_P"] and not found.other, (form.__name__, described)
+    # one source holding the tag in both forms, each with another name (a rebrowse after switching the option on): still one shape
+    mixed = [Member(1, "ns=3;s=20401:QatarMV2.PDUA01_PM0_P", "Active power", "kW"), Member(2, "ns=3;s=QatarMV2.PDUA02_PM0_P", "PM0_P", "kW")]
+    assert [(s.key, s.count) for s in build_shapes(mixed).shapes] == [("pdua#_pm#_p", 2)]
+
+
+def test_a_member_without_a_unit_hint_is_guessed_from_its_tag_not_from_a_friendly_name():
+    for last, metric, scale in (("KWH", Metric.ENERGY_KWH, 1.0), ("W", Metric.ACTIVE_POWER_KW, 0.001)):
+        members = [Member(n, f"ns=3;s=Site.PDUA{n:02d}_PM0_{last}", "Power") for n in (1, 2, 3)]  # no hint; the name says nothing about a unit
+        [shape] = build_shapes(members).shapes
+        assert shape.key == f"pdua#_pm#_{last.lower()}" and shape.count == 3  # the name "Power" would have made one shape of three equal texts
+        assert (shape.suggestion.metric, shape.suggestion.scale, shape.suggestion.custom_unit) == (metric, scale, None), last
+        assert shape.billing == {Metric.ENERGY_KWH: "counter", Metric.ACTIVE_POWER_KW: "power"}[metric]
 
 
 # -- the key ----------------------------------------------------------------------------------------------------------------------

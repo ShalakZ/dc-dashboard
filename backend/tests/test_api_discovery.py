@@ -1050,6 +1050,27 @@ async def test_rules_new_counts_the_twin_of_a_mapped_point_when_the_addresses_ar
     assert (await graph_source(client, ids["source"]))["large"]["rules_new"] == 3
 
 
+async def test_rules_new_counts_only_the_new_key_when_a_rule_was_saved_under_the_key_with_the_cluster_in_it(client, db):
+    """w38: the text of a stable id is read from its address, so `ns=3;s=QatarMV2.PDUA001_PM0_P` is the shape `pdua#_pm#_p`, whatever its
+    DisplayName says. A rule saved by w36 under `qatarmv#.pdua#_pm#_p` matches no shape any more: it is kept, and it counts nothing."""
+    await login_as(client, db, "admin")
+    source = await make_source(db, "qatar", "opcua", {"endpoint": "opc.tcp://qatar:4840/plantscada", "stable_addresses": True})
+    for suffix, count in (("_PM0_P", 600), ("_PM0_PENRG", 401)):  # 1,001 points: over the threshold, DisplayName = cluster.tag
+        await db.execute(
+            "INSERT INTO points (source_id, address, name) SELECT $1::int, 'ns=3;s=' || t, t FROM "
+            "(SELECT 'QatarMV2.PDUA' || lpad(i::text, 3, '0') || $2::text AS t FROM generate_series(1, $3::int) AS i) AS tags",
+            source, suffix, count,
+        )
+    src = await graph_source(client, source)
+    assert src["large"] == {"points": 1001, "mapped": 0, "unmapped": 1001, "rules_new": 0}
+    await save_rules(db, source, "qatarmv#.pdua#_pm#_p")  # the old key alone: nothing matches it
+    assert (await graph_source(client, source))["large"]["rules_new"] == 0
+    await save_rules(db, source, "qatarmv#.pdua#_pm#_p", "pdua#_pm#_p")  # the old key and the new key of the 600 power tags
+    src = await graph_source(client, source)
+    assert src["large"]["rules_new"] == 600  # the new key only; the orphan adds nothing
+    assert src["large"]["unmapped"] == 1001 and src["large"]["points"] == 1001  # the other numbers do not move
+
+
 async def test_the_rules_count_is_worked_out_off_the_event_loop_and_is_the_same_number(client, db, monkeypatch):
     import threading
 

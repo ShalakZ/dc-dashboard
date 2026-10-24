@@ -71,10 +71,23 @@ const NAME_TEXT = Object.fromEntries(NAME_OPTIONS.map((option) => [option.value,
 /** The tag text split into parts at the server's separators (core/discovery.py `_SEPARATORS`). */
 export const partsOf = (text: string): string[] => text.trim().split(/[_\s./:-]+/).filter((part) => part !== "");
 
-/** The text of an example the parts are taken from: its name, or, when the name fell back to the node id, the part after the cluster of a `s=<cluster>.<tag>` id. */
+// copy of connectors/opcua_ids.py `_NUMBERED` (the numbered form of a string id: `[ns=N;]s=<digits>:<rest>`)
+const NUMBERED_ID = /^((?:ns=[0-9]+;)?s=)[0-9]+:((?![0-9]+:)(?=\S*\.)\S+)$/;
+// copy of shapes/core.py `_STABLE_FORM`
+const STABLE_ID = /^(?:ns=[0-9]+;)?s=[^.\s]*\.(\S+)$/;
+
+/**
+ * The text of an example the parts are taken from: the tag in the ADDRESS of an OPC UA string id (the part after the cluster, whatever the name says),
+ * else the name. It must give what the server gives (core.py `member_text`): backend/tests/fixtures/tag_texts.json holds both to it.
+ */
 export function exampleText(example: ShapeExample): string {
-  if (example.name !== example.address) return example.name;
-  return /^(?:ns=[0-9]+;)?s=[^.\s]*\.(\S+)$/.exec(example.address)?.[1] ?? example.name;
+  const numbered = NUMBERED_ID.exec(example.address);
+  if (numbered !== null) {
+    const rest = numbered[2];
+    const dot = rest.indexOf(".");
+    return dot === -1 ? rest : rest.slice(dot + 1) || rest; // `tag_name`: the rest after the FIRST dot, else the rest
+  }
+  return STABLE_ID.exec(example.address)?.[1] ?? example.name;
 }
 
 /** The asset the first example would get, as the select shows it ("PDUA01", "PDUA01 PM0", "PDUA01 / PM0"); null when the example has too few parts. A preview only: the Review shows the server's own. */

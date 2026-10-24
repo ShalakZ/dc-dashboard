@@ -608,6 +608,51 @@ def test_renumbered_needs_equal_stable_addresses_two_clusters_with_the_same_tag_
     assert run(mapped_a, [decide("pdua#_p")]).checks == []
 
 
+def test_a_stable_form_source_whose_names_carry_the_cluster_names_the_assets_after_the_tag_not_the_cluster():
+    # w38: the text is read from the address. Before, the DisplayName "QatarMV2.PDUA01_PM0_P" was the text and part 1 was "QatarMV2" for every tag.
+    members = [Member(n, f"ns=3;s=QatarMV2.PDUA{n:02d}_PM0_P", f"QatarMV2.PDUA{n:02d}_PM0_P", "kW") for n in range(1, 5)]
+    result = run(members, [decide("pdua#_pm#_p")])
+    assert not result.blocking and result.checks == [] and result.lines == 4
+    parsed, planned_list = planned(result, members)
+    assets = [row.values["asset"] for row in parsed.rows]
+    assert assets == [f"PDUA{n:02d}" for n in range(1, 5)] and "QatarMV2" not in "".join(assets)
+    assert planned_list.problems == () and len(planned_list.assets) == 4
+    assert result.samples[0]["tag"] == "PDUA01_PM0_P" and result.samples[0]["address"] == "ns=3;s=QatarMV2.PDUA01_PM0_P"
+    assert result.samples[0]["asset"] == "PDUA01"
+
+
+def test_two_clusters_with_the_same_tags_in_the_stable_form_block_and_are_told_apart_by_address():
+    points = [(cluster, n) for cluster in ("ClusterA", "ClusterB") for n in (1, 2)]
+    named_by = (  # the name the server gave: none (the browse stored the id), or the cluster and the tag
+        ("the address", lambda cluster, n: f"ns=3;s={cluster}.PDU{n:02d}_P"),
+        ("the cluster and the tag", lambda cluster, n: f"{cluster}.PDU{n:02d}_P"),
+    )
+    for described, name_of in named_by:
+        members = [Member(i, f"ns=3;s={cluster}.PDU{n:02d}_P", name_of(cluster, n), "kW") for i, (cluster, n) in enumerate(points, 1)]
+        result = run(members, [decide("pdu#_p")])
+        assert kinds(result) == [("collision", "blocking")] and result.csv == "", described
+        assert only(result, "collision").text == (
+            "2 tags of this shape would land on each of 2 assets (PDU01 gets ns=3;s=ClusterA.PDU01_P and ns=3;s=ClusterB.PDU01_P); "
+            "decide those tags on the Points page"
+        ), described
+
+
+def test_without_the_option_a_mapped_numbered_tag_and_its_stable_spelling_with_another_name_are_one_tag_and_block():
+    # w38 (plan I5): before, the unmapped stable point's text was its name ("Active power"), it landed in another shape than the mapped tag and
+    # that tag could be mapped twice. Now both read "X01_P" from their addresses, and a source with the option off has no twin flag to leave it out.
+    members = [
+        Member(1, "ns=3;s=1:QatarMV2.X01_P", "X01_P", "kW", mapped=True),
+        Member(2, "ns=3;s=QatarMV2.X01_P", "Active power", "kW"),
+        Member(3, "ns=3;s=2:QatarMV2.X02_P", "X02_P", "kW"),
+        Member(4, "ns=3;s=3:QatarMV2.X03_P", "X03_P", "kW"),
+    ]
+    assert [member_text(m.address, m.name) for m in members] == ["X01_P", "X01_P", "X02_P", "X03_P"]
+    result = run(members, [decide("x#_p")])
+    assert result.blocking and result.csv == "" and kinds(result) == [("renumbered", "blocking")]
+    assert result.by_shape[0]["skipped_mapped"] == 1 and result.by_shape[0]["lines"] == 3
+    assert only(result, "renumbered").text.startswith('1 tag of this shape appears twice (the SCADA renumbered it)')
+
+
 def test_mixed_units_block_a_known_metric_but_not_a_custom_one_with_a_unit():
     members = [Member(1, "a1", "M1_E", "kWh"), Member(2, "a2", "M2_E", "kWh"), Member(3, "a3", "M3_E", "kWh"), Member(4, "a4", "M4_E", "Wh")]
     blocked = run(members, [decide("m#_e", "energy_kwh")])
