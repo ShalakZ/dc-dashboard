@@ -874,6 +874,55 @@ async def test_the_shapes_answer_carries_the_saved_rule_of_each_key_or_null(clie
     assert [(s["key"], s["rule"]) for s in filtered] == [("pdua#_pm#_penrg", ENERGY_RULE)]
 
 
+# -- w38: a rule saved under the key the old text built (the cluster in the key) is kept and not shown --------------------------------
+# The cap of 300 rules is not tested again here: it is pinned by the `range(301)` case of `test_a_bad_rule_body_is_a_422_and_stores_nothing`
+# and by `test_exactly_300_rules_are_accepted`. An orphan counts toward it, as any rule does.
+
+OLD_POWER_KEY = "qatarmv#.pdua#_pm#_p"  # w36 built this from the DisplayName `QatarMV2.PDUA01_PM0_P` of a stable-address source
+NEW_POWER_KEY = "pdua#_pm#_p"  # w38 builds this from the address, whatever the DisplayName says
+COUNTER_RULE = {"metric": "energy_kwh", "name_from": "parts12"}  # unlike ENERGY_RULE, so a rule under the wrong key shows
+
+
+async def cluster_source(db) -> int:
+    """A source with Stable tag addresses whose DisplayNames carry the cluster: power and energy tags of four PDUs."""
+    source = await make_source(db, "Qatar MV2", "opcua", {"endpoint": "opc.tcp://h:4840/plantscada", "stable_addresses": True}, enabled=False)
+    rows = [(f"ns=3;s=QatarMV2.PDUA{n:02d}_PM0_P", f"QatarMV2.PDUA{n:02d}_PM0_P", "kW") for n in range(1, 5)]
+    rows += [(f"ns=3;s=QatarMV2.PDUA{n:02d}_PM0_PENRG", f"QatarMV2.PDUA{n:02d}_PM0_PENRG", "kWh") for n in range(1, 5)]
+    await add_points(db, source, rows)
+    return source
+
+
+async def test_a_rule_under_the_old_key_is_kept_and_listed_and_only_the_new_key_shows_a_rule(client, db):
+    source = await cluster_source(db)
+    numbered = await small_source(db)
+    await login_as(client, db, "admin")
+    reference = (await client.get(f"/api/sources/{numbered}/shapes")).json()
+    saved = {"rules": {OLD_POWER_KEY: POWER_RULE, NEW_POWER_KEY: ENERGY_RULE}}
+    assert (await client.put(rules_url(source), json=saved)).status_code == 200
+    body = (await client.get(f"/api/sources/{source}/shapes")).json()
+    assert [s["key"] for s in body["shapes"]] == ["pdua#_pm#_penrg", NEW_POWER_KEY]  # as for a numbered source: the cluster is not in the key
+    assert [s["count"] for s in body["shapes"]] == [4, 4] and body["points"] == 8 and body["other_tags"] == 0
+    assert {s["key"]: s["rule"] for s in body["shapes"]} == {"pdua#_pm#_penrg": None, NEW_POWER_KEY: ENERGY_RULE}  # the old key shows nowhere
+    shape_fields = {frozenset(s) for s in reference["shapes"]}
+    assert list(body) == list(reference)  # no new field in the answer ...
+    assert len(shape_fields) == 1 and {frozenset(s) for s in body["shapes"]} == shape_fields  # ... nor in a shape
+    assert (await client.get(rules_url(source))).json() == saved  # the orphan is kept and listed beside the rule that shows
+
+
+async def test_a_put_of_the_merged_rules_keeps_the_orphan(client, db):
+    source = await cluster_source(db)
+    await login_as(client, db, "admin")
+    await client.put(rules_url(source), json={"rules": {OLD_POWER_KEY: POWER_RULE, NEW_POWER_KEY: ENERGY_RULE}})
+    merged = {"rules": {OLD_POWER_KEY: POWER_RULE, NEW_POWER_KEY: ENERGY_RULE, "pdua#_pm#_penrg": COUNTER_RULE}}  # what the page sends (mergeRules)
+    put = await client.put(rules_url(source), json=merged)
+    assert put.status_code == 200 and put.json() == merged
+    assert (await client.get(rules_url(source))).json() == merged
+    stored = await stored_rules(db, source)
+    assert (json.loads(stored) if isinstance(stored, str) else stored) == merged
+    shapes = (await client.get(f"/api/sources/{source}/shapes")).json()["shapes"]
+    assert {s["key"]: s["rule"] for s in shapes} == {"pdua#_pm#_penrg": COUNTER_RULE, NEW_POWER_KEY: ENERGY_RULE}
+
+
 async def test_the_shapes_answer_reads_the_settings_once(client, db):
     from test_moves_freshness import statements
 
