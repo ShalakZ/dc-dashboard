@@ -82,7 +82,9 @@ describe("buildGraph: a parent with many sub-assets", () => {
     expect(find(nodes, "asset:100")?.data).toMatchObject({ children: 51, collapsed: false });
   });
 
-  it("the output equals the output without the fields for every model of the shared fixtures", () => {
+  // This is a narrower claim than "same as today": it builds six models from this file's own fixture factories. The proof that a graph with no parent over 50 sub-assets is drawn
+  // exactly as before is `graph.test.ts`, which this wave did not edit and which stays green.
+  it("a graph built with assetPageSize absent equals the one built with it where no parent has more than 50 sub-assets, over the fixture models", () => {
     const cycle = [A(1, 2), A(2, 3), A(3, 1), A(4, null), A(5, 5), A(6, 99)]; // a cycle, a root, a self-parent and an orphan
     const tree = [A(10, null), A(11, 10), A(12, 11), A(13, 11), A(14, 10), A(15, null)];
     const mapped = [source(1, { clusters: [{ key: "K", points: [pt(1, 12), pt(2, 12), pt(3, 14), pt(4, 99), pt(5, null)] }], ungrouped: [pt(6, 11)] })];

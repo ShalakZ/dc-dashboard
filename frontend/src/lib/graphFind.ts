@@ -147,12 +147,16 @@ export function shapesOptions(targets: readonly ShapesTarget[], query: string): 
   return targets.map((t) => ({ id: `shapes:${t.id}`, label: `Search the ${count(t.points)} tags of ${t.name} for "${q}"`, to: `/sources/${t.id}/shapes?${search}` }));
 }
 
-/** The folded assets with the folded ancestors of asset node `id` taken out, or null when none of its ancestors is folded (the asset itself may stay folded: it is drawn). */
-function unfoldedAncestors(model: GraphModel, id: string, folded: ReadonlySet<number>): Set<number> | null {
+/**
+ * The folded assets with the folded ancestors of asset node `id` taken out, or null when none of them is folded (the asset itself may stay folded: it is drawn). `withSelf`
+ * (w37): the asset's own fold is taken out too, for the asset whose summary is the target (a folded asset draws no summary).
+ */
+function unfoldedAncestors(model: GraphModel, id: string, folded: ReadonlySet<number>, withSelf: boolean = false): Set<number> | null {
   const asset = folded.size > 0 ? model.assets.find((a) => nodeId.asset(a.id) === id) : undefined;
   if (!asset) return null;
   const parentOf = new Map(model.assets.map((a) => [a.id, a.parent_id]));
   const reopened = new Set(folded);
+  if (withSelf) reopened.delete(asset.id);
   const seen = new Set([asset.id]);
   for (let at = parentOf.get(asset.id) ?? null; at !== null && parentOf.has(at) && !seen.has(at); at = parentOf.get(at) ?? null) {
     seen.add(at);
@@ -197,6 +201,8 @@ export function extendPagesFor(
     seen.add(at);
     path.push(at);
   }
+  // Note: `kids` and `place` index the parent's FULL child list, while `buildGraph` pages `fresh` (the children the walk had not already drawn). Under a parent cycle
+  // (pathological data) the page needed can be off by the number skipped, as `onMoreAssets`' index in the page; a normal tree has no such child.
   let pages: Map<number, number> | null = null; // made at the first change
   let cost = 0;
   for (let i = path.length - 1; i >= 1; i--) {
@@ -216,13 +222,41 @@ export function extendPagesFor(
 }
 
 /**
+ * (w37) The pages after asset `assetId` has just been made: `extendPagesFor` (the pages that hold it), and, for its own parent, one more than was drawn before. The page that
+ * holds a new sub-asset is the next multiple of 50 that holds its place, but the sub-assets after it all move one place down: with 50 drawn of 50 and the new one sorting first, the
+ * old 50th would go behind `1 sub-asset` (and with 100 drawn, a new one among the first 100 does the same). So the parent keeps what it drew before plus the new one: all
+ * its sub-assets if there were at most 50 (nothing was cut), else its page + 1, never past the sub-assets there are, and never less than `extendPagesFor` gave. A folded parent,
+ * a root and a stop (over the budget) are left to `extendPagesFor`. Never changes the view or its map; the very map of the view when nothing changes.
+ */
+export function pagesForNewAsset(
+  model: GraphModel, view: GraphView, assetId: number, budget: number = EXPAND_NODE_BUDGET,
+): { assetsShown: ReadonlyMap<number, number>; stoppedAt: number | null } {
+  const extended = extendPagesFor(model, view, assetId, budget);
+  const pageSize = view.assetPageSize;
+  const parent = model.assets.find((a) => a.id === assetId)?.parent_id ?? null;
+  if (extended.stoppedAt !== null || pageSize === undefined || !Number.isFinite(pageSize) || pageSize < 1) return extended;
+  if (parent === null || parent === assetId || view.assetsClosed.has(parent) || !model.assets.some((a) => a.id === parent)) return extended;
+  const after = model.assets.filter((a) => a.parent_id === parent && a.id !== parent).length; // (the walk's own rule for a sub-asset)
+  if (after <= pageSize) return extended; // no summary: all of them are drawn
+  const before = after - 1;
+  const drawnBefore = before <= pageSize ? before : view.assetsShown?.get(parent) ?? 0;
+  const keep = Math.min(after, drawnBefore + 1);
+  if (keep <= (extended.assetsShown.get(parent) ?? 0)) return extended;
+  return { assetsShown: new Map(extended.assetsShown).set(parent, keep), stoppedAt: null };
+}
+
+/**
  * (w37) What to tell the person when an asset is too far down its parent's sub-assets to draw at once (the budget): `Room 3 has 5,000 sub-assets; PDU4321 is too far down
- * to draw at once. Showing the first ones: use Show 50 more to go on.` `parentId` is the `stoppedAt` of `extendPagesFor`.
+ * to draw at once. Showing the first ones: use Show 50 more to go on.` `parentId` is the `stoppedAt` of `extendPagesFor`. While none of the parent's sub-assets is drawn (a folded
+ * parent counts as none) its button reads `Show 50`, not `Show 50 more`, and there are no first ones to show, so the sentence is `... at once: use Show 50 to go on.`
  */
 export function tooFarNote(model: GraphModel, view: GraphView, parentId: number, label: string): string {
   const name = model.assets.find((a) => a.id === parentId)?.name ?? "This asset";
   const kids = model.assets.filter((a) => a.parent_id === parentId && a.id !== parentId).length;
-  return `${name} has ${count(kids)} sub-assets; ${label} is too far down to draw at once. Showing the first ones: use Show ${view.assetPageSize ?? kids} more to go on.`;
+  const step = view.assetPageSize ?? kids;
+  const drawn = view.assetsClosed.has(parentId) ? 0 : view.assetsShown?.get(parentId) ?? 0; // (the rule of `extendPagesFor`)
+  const head = `${name} has ${count(kids)} sub-assets; ${label} is too far down to draw at once`;
+  return drawn === 0 ? `${head}: use Show ${step} to go on.` : `${head}. Showing the first ones: use Show ${step} more to go on.`;
 }
 
 /**
@@ -251,10 +285,12 @@ export function findPlan(
 ): FindPlan {
   const same: FindPlan = { open, targetId: entry.id, note: null };
   if (entry.kind === "asset") {
-    const unfolded = unfoldedAncestors(model, entry.id, view.assetsClosed);
     // (w37) A sub-asset behind a summary: the pages of the ancestors that hold it back are extended (within the budget). Over it, the plan points at the summary of the first
     // ancestor that cannot be extended (it is drawn), and says how to go on.
     const { assetsShown, stoppedAt } = extendPagesFor(model, view, Number(entry.id.slice("asset:".length)), budget);
+    // The folds that are opened are the ones that hide what the plan draws: the target's ancestors, or, when it stops at a summary, that parent and ITS ancestors. A fold
+    // below the stop hides an asset that is not drawn; opening it would be saved (localStorage) without the person seeing it.
+    const unfolded = stoppedAt === null ? unfoldedAncestors(model, entry.id, view.assetsClosed) : unfoldedAncestors(model, nodeId.asset(stoppedAt), view.assetsClosed, true);
     const paged = assetsShown !== (view.assetsShown ?? NO_PAGES);
     const plan: FindPlan = stoppedAt === null ? same : { ...same, targetId: nodeId.moreAssets(stoppedAt), note: tooFarNote(model, view, stoppedAt, entry.label) };
     if (unfolded || paged) plan.view = { ...view, ...(unfolded ? { assetsClosed: unfolded } : {}), ...(paged ? { assetsShown } : {}) };

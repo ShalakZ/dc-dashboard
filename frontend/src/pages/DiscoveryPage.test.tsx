@@ -137,7 +137,12 @@ vi.mock("@xyflow/react", async (importOriginal) => {
     },
     ViewportPortal: ({ children }: any) => <div data-testid="viewport-portal">{children}</div>,
     Background: () => null,
-    Controls: ({ fitViewOptions }: any) => <div data-testid="controls" data-fit-duration={String(fitViewOptions?.duration)} />,
+    // The library's Controls: the fit-view button fits with the options it is given, THEN calls `onFitView` (Controls.tsx in @xyflow/react 12.12).
+    Controls: ({ fitViewOptions, onFitView }: any) => (
+      <div data-testid="controls" data-fit-duration={String(fitViewOptions?.duration)}>
+        <button type="button" data-testid="controls-fit" onClick={() => { flow.fitView(fitViewOptions); onFitView?.(); }} />
+      </div>
+    ),
   };
 });
 
@@ -1973,6 +1978,45 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       open();
       await screen.findByText("Plant OPC");
       expect(screen.getByTestId("controls")).toHaveAttribute("data-fit-duration", "0");
+    });
+
+    describe("Fit View keeps the graph out of the minimap (w37)", () => {
+      const rect = (top: number, left: number, right: number, bottom: number) =>
+        ({ top, left, right, bottom, x: left, y: top, width: right - left, height: bottom - top, toJSON: () => ({}) }) as DOMRect;
+      /** The canvas is 1240 x 800 at (200, 100); the minimap, 202 x 152, sits in its bottom right corner: the room it takes is 1440 - 1194 + 16 = 262 on the right and 900 - 704 + 16 = 212 below. */
+      const PADDED = { top: 0.1, left: 0.1, right: "262px", bottom: "212px" };
+      const drawn = async () => {
+        mockFetch(routes("operator"));
+        open();
+        await screen.findByText("Plant OPC");
+        screen.getByRole("group", { name: "Discovery graph" }).getBoundingClientRect = () => rect(100, 200, 1440, 900);
+        screen.getByTestId("minimap").getBoundingClientRect = () => rect(704, 1194, 1396, 856);
+        flow.fitView.mockClear();
+      };
+
+      it("the Controls' button fits with a padding that clears the minimap, the last fit being the padded one", async () => {
+        await drawn();
+        await userEvent.click(screen.getByTestId("controls-fit"));
+        expect(flow.fitView).toHaveBeenLastCalledWith({ padding: PADDED, duration: 300 });
+      });
+
+      it("the canvas menu's Fit view does the same", async () => {
+        await drawn();
+        fireEvent.contextMenu(screen.getByTestId("pane"));
+        await userEvent.click(within(await screen.findByRole("menu", { name: "Canvas actions" })).getByRole("menuitem", { name: "Fit view" }));
+        expect(flow.fitView).toHaveBeenCalledTimes(1);
+        expect(flow.fitView).toHaveBeenCalledWith({ padding: PADDED, duration: 300 });
+      });
+
+      it("a minimap that is not drawn (no size) leaves the fit as it was: no padding, and under reduced motion no glide", async () => {
+        stubMedia(true);
+        mockFetch(routes("operator"));
+        open();
+        await screen.findByText("Plant OPC");
+        flow.fitView.mockClear();
+        await userEvent.click(screen.getByTestId("controls-fit"));
+        expect(flow.fitView).toHaveBeenLastCalledWith({ duration: 0 });
+      });
     });
 
     it("Tidy's refit glides", async () => {
@@ -5634,6 +5678,17 @@ describe("DiscoveryPage many sub-assets (w37)", () => {
     expect(screen.queryByRole("menu", { name: /^Actions for/ })).not.toBeInTheDocument();
   });
 
+  it("Escape in that menu gives the focus back to the summary's button, never the body (the wrapper is no focus stop)", async () => {
+    await start();
+    expect(summary()).not.toHaveAttribute("tabindex");
+    fireEvent.contextMenu(summary());
+    await screen.findByRole("menu", { name: "Canvas actions" });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(showButton()).toHaveFocus();
+    expect(document.body).not.toHaveFocus();
+  });
+
   describe("folding the parent", () => {
     it("Hide sub-assets draws no summary; Show sub-assets brings it back with nothing shown (the pages are forgotten); the focus is never the body", async () => {
       await start();
@@ -5738,7 +5793,8 @@ describe("DiscoveryPage many sub-assets (w37)", () => {
       await userEvent.type(await screen.findByRole("combobox"), text);
       await userEvent.keyboard("{Enter}");
     };
-    const FAR = (n: string, label: string) => `Room 3 has ${n} sub-assets; ${label} is too far down to draw at once. Showing the first ones: use Show 50 more to go on.`;
+    // (nothing of Room 3 is drawn when Find stops: the button reads "Show 50")
+    const FAR = (n: string, label: string) => `Room 3 has ${n} sub-assets; ${label} is too far down to draw at once: use Show 50 to go on.`;
 
     it("a hidden sub-asset is drawn (its page extended to the next 50), the camera goes to it, it is flashed, and it takes the focus", async () => {
       mockFetch(routes("operator", many(120)));
@@ -5788,13 +5844,14 @@ describe("DiscoveryPage many sub-assets (w37)", () => {
   describe("a new sub-asset under a summarised parent", () => {
     const NEW_ID = 5000;
     /** A server that makes asset 5000 when it is asked to and lists it, last, in the next graph. */
-    const serve = (kids = 120) => {
+    // `first`: the server lists the new asset FIRST among its parent's sub-assets (it sorts by sort_order, name, id), so every old one moves one place down.
+    const serve = (kids = 120, first = false) => {
       let created: { id: number; parent_id: number | null; name: string; kind: string } | null = null;
       const form = [{ id: 10, parent_id: null, name: "Site", kind: "generic", sort_order: 0 }, { id: ROOM, parent_id: 10, name: "Room 3", kind: "generic", sort_order: 0 }];
       const calls = mockFetch({
         ...routes("admin", () => {
           const m = many(kids);
-          if (created) m.assets.push({ id: created.id, parent_id: created.parent_id, name: created.name, kind: created.kind });
+          if (created) m.assets.splice(first ? 2 : m.assets.length, 0, { id: created.id, parent_id: created.parent_id, name: created.name, kind: created.kind }); // (after Site and Room 3)
           return m;
         }),
         "GET /api/assets": () => ({ body: form }),
@@ -5825,15 +5882,33 @@ describe("DiscoveryPage many sub-assets (w37)", () => {
       expect(document.body).not.toHaveFocus();
     });
 
-    it("the 51st under a parent of 50 keeps all 51 on the canvas (the summary would have hidden every one)", async () => {
-      serve(50);
+    it("the 51st under a parent of 50 keeps all 51 on the canvas: sorted LAST, and sorted FIRST (every old one moves a place down; the old 50th must not go behind a summary)", async () => {
+      for (const first of [false, true]) {
+        serve(50, first);
+        open();
+        await screen.findByText("Room 3");
+        expect(count("asset:")).toBe(52);
+        await makeUnder("The 51st");
+        await waitFor(() => expect(node(`asset:${NEW_ID}`)).not.toBeNull());
+        expect(count("asset:")).toBe(2 + 51);
+        expect(node("asset:1049")).not.toBeNull(); // the old 50th
+        expect(summary()).toBeNull();
+        cleanup();
+      }
+    });
+
+    it("a new one among the 50 drawn of 120 makes 51 drawn: the old 50th stays on the canvas and the summary counts the rest", async () => {
+      serve(120, true);
       open();
       await screen.findByText("Room 3");
+      await userEvent.click(showButton());
       expect(count("asset:")).toBe(52);
-      await makeUnder("The 51st");
-      await waitFor(() => expect(node(`asset:${NEW_ID}`)).not.toBeNull());
-      expect(count("asset:")).toBe(2 + 51);
-      expect(summary()).toBeNull();
+      await waitFor(() => expect(node("asset:1000")).toHaveFocus()); // (the jump of Show 50 has landed: a focus that moves later would close the menu below)
+      await makeUnder("Sorted first");
+      await waitFor(() => expect(count("asset:")).toBe(2 + 51)); // (the new one is in the first 50 at once; the page that keeps the old 50th is set a few frames later)
+      expect(node(`asset:${NEW_ID}`)).not.toBeNull();
+      expect(node("asset:1049")).not.toBeNull();
+      expect(within(summary()).getByText("70 more sub-assets")).toBeInTheDocument();
     });
   });
 

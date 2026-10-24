@@ -1,4 +1,4 @@
-import { CAMERA_MS, cameraMs, keepInView, overlayMargin, unionRect } from "./graphCamera";
+import { CAMERA_MS, cameraMs, fitPadding, keepInView, overlayMargin, unionRect } from "./graphCamera";
 
 describe("cameraMs", () => {
   it.each([
@@ -193,5 +193,37 @@ describe("overlayMargin", () => {
     // a node at screen y 45..125: clear of the usual margin, under the tools panel (limit 58)
     expect(keepInView({ x: 100, y: 45, w: 220, h: 80 }, view, size)).toBeNull();
     expect(keepInView({ x: 100, y: 45, w: 220, h: 80 }, view, size, margin)).toEqual({ x: 0, y: 13 });
+  });
+});
+
+describe("fitPadding (w37)", () => {
+  // A canvas 1240 wide and 800 tall that starts 200 px from the left and 100 down the page; the minimap (202 x 152) sits in its bottom right corner, 44 px above the bottom
+  // (its own 28 px margin plus the corner link) and 44 px in from the right.
+  const canvas = { top: 100, bottom: 900, left: 200, right: 1440, width: 1240, height: 800 };
+  const minimap = { top: 704, bottom: 856, left: 1194, right: 1396, width: 202, height: 152 };
+
+  it("keeps the fitted graph out of the minimap's corner: the room it covers from the canvas's right and bottom edges, and a gap", () => {
+    // right: 1440 - 1194 + 16 = 262; bottom: 900 - 704 + 16 = 212
+    expect(fitPadding(canvas, minimap)).toEqual({ top: 0.1, left: 0.1, right: "262px", bottom: "212px" });
+  });
+
+  it("leaves the top and left as today (the library's own 0.1), so only the minimap's two sides change", () => {
+    const padding = fitPadding(canvas, minimap);
+    expect(padding?.top).toBe(0.1);
+    expect(padding?.left).toBe(0.1);
+  });
+
+  it("is undefined (the library's default, as before) when the minimap is not drawn: null, or without a size", () => {
+    expect(fitPadding(canvas, null)).toBeUndefined();
+    expect(fitPadding(canvas, { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 })).toBeUndefined();
+    expect(fitPadding(canvas, { ...minimap, width: 0 })).toBeUndefined();
+  });
+
+  it("rounds up to whole pixels", () => {
+    expect(fitPadding(canvas, { ...minimap, left: 1194.4, top: 704.2 })).toMatchObject({ right: "262px", bottom: "212px" });
+  });
+
+  it("is never negative (a minimap measured outside the canvas)", () => {
+    expect(fitPadding(canvas, { ...minimap, left: 1500, top: 1000 })).toMatchObject({ right: "0px", bottom: "0px" });
   });
 });

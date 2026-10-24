@@ -1,6 +1,6 @@
 import type { GraphModel } from "../api/types";
 import { model, point, source } from "../test/graphFixtures";
-import { buildFindIndex, extendPagesFor, findMatches, findPlan, type FindEntry, type FindKind } from "./graphFind";
+import { buildFindIndex, extendPagesFor, findMatches, findPlan, pagesForNewAsset, type FindEntry, type FindKind } from "./graphFind";
 import { ASSET_PAGE, NO_VIEW, PAGE_SIZE, nodeId, UNGROUPED, type GraphView, type OpenState } from "./graph";
 import { EXPAND_NODE_BUDGET } from "./graphView";
 import { assetIcon } from "./assetIcons";
@@ -912,7 +912,10 @@ describe("findPlan and extendPagesFor: an asset behind a summary (w37)", () => {
   });
 
   describe("over the budget", () => {
+    // Nothing of the parent is drawn yet: its button reads "Show 50", and there are no "first ones" to speak of. A page that is shown: "Show 50 more".
     const SENTENCE = (parent: string, n: string, label: string) =>
+      `${parent} has ${n} sub-assets; ${label} is too far down to draw at once: use Show 50 to go on.`;
+    const SENTENCE_SHOWN = (parent: string, n: string, label: string) =>
       `${parent} has ${n} sub-assets; ${label} is too far down to draw at once. Showing the first ones: use Show 50 more to go on.`;
 
     it("over the 600 budget the plan targets the summary and says how to go on", () => {
@@ -934,7 +937,15 @@ describe("findPlan and extendPagesFor: an asset behind a summary (w37)", () => {
       const m = room(400);
       const view = withPages({ assetsShown: new Map([[20, 300]]) });
       expect(pagesOf(planFor(m, "PDU 377", view, 100))).toEqual({ 20: 400 });
-      expect(planFor(m, "PDU 377", view, 99).targetId).toBe("more:asset:20");
+      const over = planFor(m, "PDU 377", view, 99);
+      expect(over.targetId).toBe("more:asset:20");
+      expect(over.note).toBe(SENTENCE_SHOWN("Room 3", "400", "PDU 377")); // a page is drawn: the button reads "Show 50 more"
+    });
+
+    it("a folded parent has nothing drawn, whatever page the map holds: the note says Show 50", () => {
+      const m = room(400);
+      const view = withPages({ assetsShown: new Map([[20, 300]]), assetsClosed: new Set([20]) });
+      expect(planFor(m, "PDU 377", view, 99).note).toBe(SENTENCE("Room 3", "400", "PDU 377"));
     });
 
     it("outer page fits, inner page does not: the outer is extended and the target is the inner parent's summary", () => {
@@ -951,6 +962,39 @@ describe("findPlan and extendPagesFor: an asset behind a summary (w37)", () => {
       const result = planFor(m, "UPS 60", withPages(), 129);
       expect(pagesOf(result)).toEqual({ 10: 60 });
       expect(result.targetId).toBe("more:asset:154");
+    });
+
+    // Site (10) > Room 3 (20) > 5,000 PDUs ("PDU1".., ids 1000 and up) > DEEP (9000) under PDU4321 (id 5320).
+    const deep = () => {
+      const m = room(5000, "PDU");
+      return { ...m, assets: [...m.assets, asset(9000, 1000 + 4320, "DEEP")] };
+    };
+
+    it("a fold BELOW the stop is kept: only the summary is drawn, so only the folds that hide the summary are opened", () => {
+      const view = withPages({ assetsClosed: new Set([5320]) }); // PDU4321 is folded (it is not drawn: it is behind Room 3's summary)
+      const result = planFor(deep(), "DEEP", view);
+      expect(result.targetId).toBe("more:asset:20");
+      expect("view" in result).toBe(false); // nothing to change: Room 3 and Site are open
+    });
+
+    it("the folds from the stop upward are opened (the stop itself, and the ancestors above it) and the ones below stay", () => {
+      const view = withPages({ assetsClosed: new Set([5320, 20, 10]) });
+      const result = planFor(deep(), "DEEP", view);
+      expect(result.targetId).toBe("more:asset:20");
+      expect([...result.view!.assetsClosed]).toEqual([5320]);
+      expect(pagesOf(result)).toEqual({}); // nothing was extended
+      expect([...view.assetsClosed].sort()).toEqual([10, 20, 5320]); // the view it was given is not changed
+    });
+
+    it("the folds of the ancestors above an inner stop are opened with the outer pages extended; the fold below the stop stays", () => {
+      // Site has 60 Halls; Hall 55 (id 154) has 5,000 UPSs (ids 5000 and up): the outer page fits, the inner one does not, and UPS 4001 (id 9000) is folded under it.
+      const m = campus(60, 5000);
+      const withChild = { ...m, assets: [...m.assets, asset(20000, 9000, "Child of UPS 4001")] };
+      const view = withPages({ assetsClosed: new Set([10, 154, 9000]) }); // Site, Hall 55 and UPS 4001
+      const result = planFor(withChild, "Child of UPS 4001", view);
+      expect(result.targetId).toBe("more:asset:154");
+      expect(pagesOf(result)).toEqual({ 10: 60 });
+      expect([...result.view!.assetsClosed]).toEqual([9000]);
     });
 
     it("an outer page that does not fit stops there: nothing is extended and its summary is the target", () => {
@@ -1011,6 +1055,82 @@ describe("findPlan and extendPagesFor: an asset behind a summary (w37)", () => {
       const odd = model({ sources: [], unidentified: [], assets: [asset(10, 11, "A"), asset(11, 10, "B"), asset(13, 13, "Loop")] });
       expect(extendPagesFor(odd, withPages(), 10).assetsShown.size).toBe(0);
       expect(extendPagesFor(odd, withPages(), 13).stoppedAt).toBeNull();
+    });
+  });
+
+  describe("pagesForNewAsset: a new sub-asset never pushes a drawn sibling behind the summary", () => {
+    const NEW = 5000;
+    /** `room(n)` with the new asset (id 5000, "New one") listed as the `index`th sub-asset of Room 3: the server lists children by sort_order, name, id. */
+    const withNew = (n: number, index: number, parent: number | null = 20): GraphModel => {
+      const m = room(n);
+      const assets = [...m.assets];
+      assets.splice(2 + index, 0, asset(NEW, parent, "New one")); // (Site and Room 3 come first)
+      return { ...m, assets };
+    };
+    const pagesAfter = (m: GraphModel, view: GraphView) => Object.fromEntries(pagesForNewAsset(m, view, NEW).assetsShown);
+
+    it("50 sub-assets, all drawn (no summary): the 51st that sorts FIRST keeps all 51 drawn", () => {
+      expect(pagesAfter(withNew(50, 0), withPages())).toEqual({ 20: 51 });
+      expect(pagesAfter(withNew(50, 25), withPages())).toEqual({ 20: 51 });
+    });
+
+    it("the 51st that sorts last is drawn with the others (as extendPagesFor alone did)", () => {
+      expect(pagesAfter(withNew(50, 50), withPages())).toEqual({ 20: 51 });
+    });
+
+    it("fewer than 50 before: nothing is cut into pages, so no page is set", () => {
+      const result = pagesForNewAsset(withNew(40, 0), withPages(), NEW);
+      expect(result.assetsShown.size).toBe(0);
+      expect(result.stoppedAt).toBeNull();
+    });
+
+    it("120 sub-assets with the first 50 drawn: a new one among them makes it 51 drawn, one past the page", () => {
+      expect(pagesAfter(withNew(120, 10), withPages({ assetsShown: new Map([[20, 50]]) }))).toEqual({ 20: 51 });
+    });
+
+    it("120 sub-assets with 100 drawn: a new one among them makes it 101", () => {
+      expect(pagesAfter(withNew(120, 3), withPages({ assetsShown: new Map([[20, 100]]) }))).toEqual({ 20: 101 });
+    });
+
+    it("a new one behind the page is drawn by extendPagesFor (the next multiple of 50), which is more than the one extra", () => {
+      expect(pagesAfter(withNew(120, 80), withPages({ assetsShown: new Map([[20, 50]]) }))).toEqual({ 20: 100 });
+      expect(pagesAfter(withNew(120, 70), withPages())).toEqual({ 20: 100 }); // nothing drawn before (the summary alone)
+    });
+
+    it("120 sub-assets and none drawn: the page that holds the new one, as before", () => {
+      expect(pagesAfter(withNew(120, 5), withPages())).toEqual({ 20: 50 });
+    });
+
+    it("never past the sub-assets there are: 100 drawn of 100, a new one makes 101 and no more", () => {
+      expect(pagesAfter(withNew(100, 0), withPages({ assetsShown: new Map([[20, 100]]) }))).toEqual({ 20: 101 });
+    });
+
+    it("a folded parent draws nothing, so there is nothing to keep: only the page extendPagesFor gives (50), not one more", () => {
+      const view = withPages({ assetsClosed: new Set([20]) });
+      expect(pagesAfter(withNew(50, 0), view)).toEqual({ 20: 50 });
+    });
+
+    it("a root asset, an unknown asset and a view without pages change nothing", () => {
+      const view = withPages();
+      expect(pagesForNewAsset(withNew(50, 0, null), view, NEW).assetsShown.size).toBe(0);
+      expect(pagesForNewAsset(room(50), view, 424242).assetsShown.size).toBe(0);
+      expect(pagesForNewAsset(withNew(50, 0), { ...NO_VIEW }, NEW).assetsShown.size).toBe(0);
+    });
+
+    it("over the budget it is what extendPagesFor says: the stop, and no page for the new asset's parent", () => {
+      const m = campus(60, 5000); // (its UPSs have the ids 5000 and up)
+      const withChild = { ...m, assets: [...m.assets, asset(99999, 154, "New one")] };
+      const result = pagesForNewAsset(withChild, withPages({ assetsShown: new Map([[10, 60]]) }), 99999, 100);
+      expect(result.stoppedAt).toBe(154);
+      expect(Object.fromEntries(result.assetsShown)).toEqual({ 10: 60 });
+    });
+
+    it("never changes the view or its map", () => {
+      const given = new Map([[20, 50]]);
+      const view = withPages({ assetsShown: given });
+      pagesForNewAsset(withNew(120, 10), view, NEW);
+      expect([...given]).toEqual([[20, 50]]);
+      expect(view.assetsShown).toBe(given);
     });
   });
 });

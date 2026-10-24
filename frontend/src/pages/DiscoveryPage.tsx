@@ -32,7 +32,7 @@ import { CanvasSkeleton, GraphBarSpace } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { useAction } from "../hooks/useAction";
 import { useCanvasKeys } from "../hooks/useCanvasKeys";
-import { useCanvasMenu } from "../hooks/useCanvasMenu";
+import { focusTargetOf, useCanvasMenu } from "../hooks/useCanvasMenu";
 import { useConfirm } from "../hooks/useConfirm";
 import { useCreateAsset } from "../hooks/useCreateAsset";
 import { useGraphHighlight } from "../hooks/useGraphHighlight";
@@ -48,8 +48,8 @@ import {
   PAGE_SIZE, pruneAssetsShown, pruneShown, removableNotSeen, removalDialogText, removalOutcome, seenLine, shiftedPlaces, sourceIdOfNode, visiblePoints,
   type AssetNodeData, type ClusterNodeData, type Group, type GraphView, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
-import { cameraMs, keepInView, overlayMargin, unionRect } from "../lib/graphCamera";
-import { buildFindIndex, extendPagesFor, findMatches, findPlan, tooFarNote, type FindEntry, type ShapesTarget } from "../lib/graphFind";
+import { cameraMs, fitPadding, keepInView, overlayMargin, unionRect } from "../lib/graphCamera";
+import { buildFindIndex, findMatches, findPlan, pagesForNewAsset, tooFarNote, type FindEntry, type ShapesTarget } from "../lib/graphFind";
 import { alignGuides, type Rect } from "../lib/graphGuides";
 import { navIndex } from "../lib/graphNav";
 import {
@@ -85,6 +85,15 @@ const isMeasured = (n: Node) => n.measured?.width !== undefined && n.measured?.h
 const overlayMarginOf = (area: HTMLElement) => overlayMargin(
   area.getBoundingClientRect(), area.querySelector(".graph-minimap")?.getBoundingClientRect() ?? null, area.querySelector(".graph-tools")?.getBoundingClientRect() ?? null,
 );
+/**
+ * (w37) The options of one Fit View press (the Controls' button, the canvas menu): the glide, and a padding that keeps the fitted graph out of the minimap (`fitPadding`; none
+ * when it is not drawn). Measured when the button is pressed, like `overlayMarginOf`: the summary node of the last asset ends the rightmost column, so a plain fit
+ * parked its button under the minimap.
+ */
+const fitOptionsNow = (area: HTMLElement | null) => {
+  const padding = area ? fitPadding(area.getBoundingClientRect(), area.querySelector(".graph-minimap")?.getBoundingClientRect() ?? null) : undefined;
+  return { ...(padding ? { padding } : {}), duration: cameraMs(reducedMotion()) };
+};
 const nap =(ms: number) => new Promise<void>((resolve) => { window.setTimeout(resolve, ms); });
 /**
  * What a screen reader is told when a node takes the focus. The library's own sentence says Enter or Space selects it and the arrows move a SELECTED node, which
@@ -101,14 +110,6 @@ const FLASH_MS = 1500;
 const SNAP_GRID_XY: [number, number] = [SNAP_GRID, SNAP_GRID];
 const NO_IDS: readonly string[] = [];
 const selectorId = (id: string) => id.replace(/["\\]/g, "\\$&");
-/**
- * What takes the focus for a node: its wrapper, or, for the "show more" node of a group and the summary of an asset's sub-assets (w37; their wrappers are not a stop), its button.
- * Null when the node is not on the canvas.
- */
-function focusTargetOf(root: HTMLElement | null, id: string): HTMLElement | null {
-  const wrapper = root?.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectorId(id)}"]`) ?? null;
-  return id.startsWith("more:") ? wrapper?.querySelector<HTMLElement>(".gnode-more button, .gnode-more-assets button") ?? null : wrapper;
-}
 
 /**
  * What a drag works from, taken ONCE when it starts (the callbacks must not read the maps they are changing): which nodes are dragged, where every
@@ -346,6 +347,9 @@ function Canvas({ model }: { model: GraphModel }) {
   const [flashId, setFlashId] = useState<string | null>(null);
   const flashTimer = useRef<number | undefined>(undefined);
   const fitOptions = useMemo(() => ({ duration: cameraMs(reduced) }), [reduced]);
+  // (w37) The Controls' fit-view button calls `fitView(fitViewOptions)` and THEN `onFitView` (@xyflow/react 12.12, Controls: `index.js` 4609-4612); `fitView` only queues the fit and keeps the
+  // options of the LAST call (`index.js` 1218-1225, read when the queue is run, 3392-3404). So this second call is the one that counts: the same fit with the minimap's padding, measured now.
+  const onControlsFit = useCallback(() => { void fitView(fitOptionsNow(canvas.current)); }, [fitView]);
   const [ask, askDialog] = useConfirm();
   const { dark } = useAppearance();
   // `createdAsset`: the Review that follows the New asset form carries the name of the asset the form made (it says Cancel keeps it).
@@ -674,7 +678,9 @@ function Canvas({ model }: { model: GraphModel }) {
    */
   const onMoreAssets = useCallback((summaryId: string) => {
     const parentId = Number(summaryId.slice("more:asset:".length));
-    const kids = modelRef.current.assets.filter((a) => a.parent_id === parentId && a.id !== parentId); // the walk's own rule for a sub-asset, in the model's order
+    // The walk's own rule for a sub-asset, in the model's order. This indexes the FULL list, while `buildGraph` pages `fresh` (the children the walk had not already drawn, graph.ts):
+    // under a parent cycle (pathological data) the two can differ by the number it skipped, and the jump below can land on a neighbour. Normal trees have no such child.
+    const kids = modelRef.current.assets.filter((a) => a.parent_id === parentId && a.id !== parentId);
     const drawn = viewNow.current.assetsShown?.get(parentId) ?? 0;
     if (drawn >= kids.length) {
       void goToNode(nodeId.asset(parentId)); // (a stale press: nothing is left to draw)
@@ -784,8 +790,9 @@ function Canvas({ model }: { model: GraphModel }) {
       return;
     }
     // (w37) A new sub-asset can land behind its parent's summary (or, as the 51st, turn 50 drawn ones into a summary): the pages that hold it back are extended, as Find does,
-    // so it is drawn. Over the budget the summary is where the person is taken, with the same words as Find's. A Review that opens takes the focus itself.
-    const pages = extendPagesFor(modelRef.current, viewNow.current, asset.id);
+    // so it is drawn, and its parent keeps every sub-asset it drew before as well (the old ones move a place down when the new one sorts before them). Over the budget the
+    // summary is where the person is taken, with the same words as Find's. A Review that opens takes the focus itself.
+    const pages = pagesForNewAsset(modelRef.current, viewNow.current, asset.id);
     const paged = pages.assetsShown !== viewNow.current.assetsShown;
     if (paged) setAssetsShown(pages.assetsShown);
     if (pages.stoppedAt !== null) toast.info(tooFarNote(modelRef.current, viewNow.current, pages.stoppedAt, asset.name));
@@ -1254,7 +1261,7 @@ function Canvas({ model }: { model: GraphModel }) {
     { label: "Expand all", disabled: !expandable, onSelect: onExpandAll },
     { label: "Collapse all", disabled: !collapsible, onSelect: onCollapseAll },
     { label: "Tidy layout", disabled: tidying, onSelect: () => void onTidy() },
-    { label: "Fit view", onSelect: () => void fitView({ duration: cameraMs(reducedMotion()) }) },
+    { label: "Fit view", onSelect: () => void fitView(fitOptionsNow(canvas.current)) },
   ];
   /** W12b: what the selected nodes (a box selection, a Ctrl-click) can open or close; a disabled one says why. */
   const selectionActions = (): RowAction[] => [
@@ -1344,7 +1351,7 @@ function Canvas({ model }: { model: GraphModel }) {
             fitViewOptions={opening}
             minZoom={0.2} // the opening view holds 0.75 through fitViewOptions; this floor is what lets Fit View (and the wheel) show a tall graph whole
           >
-            <Controls fitViewOptions={fitOptions} />
+            <Controls fitViewOptions={fitOptions} onFitView={onControlsFit} />
             <Background />
             <GraphMiniMap />
             {GUIDES_ENABLED && <AlignGuides handleRef={guides} />}
