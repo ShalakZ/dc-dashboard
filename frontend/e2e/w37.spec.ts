@@ -285,15 +285,14 @@ async function dragOnto(page: Page, handle: Locator, target: Locator): Promise<v
 async function pressWithMouse(page: Page, button: Locator): Promise<void> {
   const box = await button.boundingBox();
   const pane = await boxOf(page.locator(".react-flow__pane"), "the pane");
-  if (box && inside(box, pane)) {
-    try {
-      await button.click({ timeout: 3_000 });
-      return;
-    } catch {
-      /* something lies over it (a tool, the minimap): the event itself will do */
-    }
-  }
-  await button.dispatchEvent("click");
+  // One press only: a real click that threw after it had acted, followed by the click event, would toggle a source open and shut again.
+  const free = box && inside(box, pane) && (await button.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return top !== null && el.contains(top);
+  }));
+  if (free) await button.click({ timeout: 10_000 });
+  else await button.dispatchEvent("click"); // something lies over it (a tool, the minimap) or it is outside the canvas
 }
 
 /** Pans the camera by `by` screen pixels, the way a person does: the empty canvas is taken and dragged. */
@@ -558,7 +557,9 @@ test.describe("W37: a parent with hundreds of sub-assets", () => {
     });
 
     await test.step("fold: no summary, no PDU, 16 nodes, the badge and the one edge say 400 mapped", async () => {
-      await pressWithMouse(page, hide);
+      // As a person folds with the keyboard: the focus goes to Room 3 (ArrowLeft from a child), Enter folds it. (A click event sent from a script leaves the focus on a child that the fold removes: nobody does that.)
+      await room.focus();
+      await page.keyboard.press("Enter");
       await expect(summaries(page)).toHaveCount(0);
       await expect(pduNodes(page)).toHaveCount(0);
       await expect(page.locator(".react-flow__node"), "2 sources, MV2, 3 rooms and 10 racks").toHaveCount(16);
@@ -570,7 +571,7 @@ test.describe("W37: a parent with hundreds of sub-assets", () => {
     });
 
     await test.step("unfold: the summary is back, 400 sub-assets, nothing shown", async () => {
-      await pressWithMouse(page, show);
+      await page.keyboard.press("Enter"); // the focus is still on Room 3
       await expect(summaries(page)).toHaveCount(1);
       await expect(summaryTitle(page)).toHaveText("400 sub-assets");
       await expect(summaryMapped(page)).toHaveText("400 mapped");
@@ -596,9 +597,12 @@ test.describe("W37: a parent with hundreds of sub-assets", () => {
     });
 
     await test.step("the stress view: the large source open, its 400 points shown, then all 400 PDUs", async () => {
-      await pressWithMouse(page, nodeEl(page, LARGE_SRC).getByRole("button", { name: `Expand ${FAMILY_NAMES.large}`, exact: true }));
+      // The keyboard opens them (Enter on the focused node), so no press depends on where the camera stands after the pan.
+      await nodeEl(page, LARGE_SRC).focus();
+      await page.keyboard.press("Enter");
       await expect(nodeEl(page, UNGROUPED_GROUP)).toBeVisible();
-      await pressWithMouse(page, nodeEl(page, UNGROUPED_GROUP).getByRole("button", { name: "Expand Ungrouped", exact: true }));
+      await nodeEl(page, UNGROUPED_GROUP).focus();
+      await page.keyboard.press("Enter");
       await expect(pointNodes(page)).toHaveCount(ASSET_PAGE);
       const morePoints = nodeEl(page, `more:${UNGROUPED_GROUP}`).getByRole("button", { name: /more points of Ungrouped/ });
       for (let shown = 2 * ASSET_PAGE; shown <= 400; shown += ASSET_PAGE) {
