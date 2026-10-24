@@ -20,6 +20,32 @@
 - The graph route returns every asset (`api/discovery.py:356-391`); verified on the look stack: 414 assets, 400 children under `W37 Room 3`.
 - No test or spec has more than 48 sibling assets (grep of `length: N` in the graph tests, `graphModel.ts`, w12b, w7u, w7t, w36): `ASSET_PAGE = 50` leaves every existing fixture unsummarised.
 
+## Before (main 86a7658; look stack 18265; owner's shape: 414 assets, 454 mappings; 1440 x 900; headless Chromium in WSL, software raster; x1 unthrottled, x4 CDP CPU throttle 4; quiet repeat `before2-x1.txt`, `before2-x4.txt`; HiDPI (device scale 2) `before-dpr2-x1.txt`, `before-dpr2-x4.txt` agree within noise)
+
+| Measure | x1 | x4 |
+|---|---|---|
+| Open Discovery: first node (node clock, includes the page load) / in page | 863 ms / 538 ms | 1,462 ms / 925 ms |
+| Open: settled (last long task ended) | 661 ms | 1,413 ms |
+| At rest: nodes / edges / DOM elements / JS heap | 416 / 822 / 9,087 / 24.9 MB | same |
+| Pan 3 s on an empty spot (about 40 moves a second): frame p95, worst, over 50 ms | 16.7 ms, 16.8, 0 | 33.3 ms, 33.4, 0 |
+| Wheel zoom (10 out, 10 in): frame p95 | 16.7 ms | 16.7 ms |
+| Sweep over 20 asset nodes: frame p95; first move to the lit path (median, max; includes the 120 ms dwell) | 16.7 ms; 168, 185 ms | 33.3 ms; 199, 218 ms |
+| Click to a selected node (5 tries) | 13 to 15 ms | 41 to 59 ms |
+| Right-click to the menu (5 tries) | 12 to 15 ms | 57 to 68 ms |
+| Refresh after one asset was renamed (3 passes), worst frame, long tasks | 16.8 ms, 0 | 50 ms, 1 of 52 ms |
+| Idle busy share of a core over 5 s | 0 percent | 0 percent |
+| 817-node view (large source's 400 points shown): nodes / edges / DOM | 817 / 1,223 / 17,110 | same |
+| 817-node view, pan 3 s: frame p95 / over 50 ms / long tasks (max, sum) | 16.7 ms / 0 / 0 | 50 ms / 6 / 21 (80 ms, 1,326 ms) |
+| 817-node view, idle busy share | 0 | 3.2 percent |
+| Assets page (5,249 DOM elements): content / settled | 81 ms / 0 | 244 ms / 544 ms |
+| Billing, Dashboards (list): content | 70, 75 ms | 241, 253 ms |
+
+Where a 3 s pan goes on the main thread (trace, self time, quiet repeat): x1 busy 969 to 1,247 ms = 32 to 42 percent of a core; x4 2,232 to 2,264 ms (74 to 75 percent). Shares of that busy time, x1 / x4: hit testing 27 to 28 / 29 percent (the largest), script 24 / 23, paint and raster on the main thread 13 / 14, style and layout 4 / 3, rest (task overhead, compositing, input) 31 to 32. A sweep: hit testing 22 / 23, script 26 / 29 to 30, paint 12 / 10 to 11. The 817-node view's pan: hit testing 32 / 32, PaintArtifactCompositor::Update the second item, script 20 / 21, busy 1,199 ms / 2,633 ms. Rasterisation (about 1.5 s of 3 s on other threads) is software here and not the owner's GPU path.
+
+Cause (R4), one sentence: Nothing is slow at rest or after a refresh on this machine; what grows with the 416 nodes, 822 edges and 9,087 DOM elements is the main-thread work per pointer event while moving over the graph (hit testing against about 1,640 edge paths and the nodes is the largest part, then script, then paint), and it passes 50 ms per frame only under a 4x slowdown in the 817-node view, so his lag is the pointer moving over a graph this size on a slower or busier machine, and it is the node count that has to come down (R5), with the edge hit-test (R8) next; the callback identity (R7) is not it: a refresh after a change makes no long task over 52 ms.
+
+R4 order of the next fixes (from this profile, ruled below in the ledger): R5 first (it removes 414 of 416 nodes and all 822 edges at rest), then R8 (hit testing is the largest bucket; judged on the 817-node view at T-mid), R7 only if T-mid shows a re-render over 100 ms after a change (before: none), R9 only if the 817-node view still misses its target.
+
 ## Global constraints
 - Edit files with the Edit tool or an anchored `sed`, never with a script that rewrites a whole file; check `git diff --stat` after.
 - Tokens only inside `@layer w6`; no pill buttons, no monospace labels, no italic accents; icons are inline SVG; no `transition` on node paint (`graph-nodes.css.test.ts`).
@@ -67,7 +93,7 @@
 ## Tasks
 
 ### Task 0 (controller): T0 baseline
-- [x] Look stack from main 86a7658 (18265/18619), the owner's shape built (414 assets, 454 mappings), counts 416 nodes and 822 edges at rest; `measure37.mjs` before at 1x and 4x, trace summaries, other pages; the table and the one-sentence cause in the ledger (R4).
+- [x] Look stack from main 86a7658 (18265/18619), the owner's shape built (414 assets, 454 mappings), counts 416 nodes and 822 edges at rest; `measure37.mjs` before at 1x and 4x, trace summaries, other pages; the table (above) and the one-sentence cause in the ledger (R4).
 
 ### Task 1: the summary in `buildGraph` (pure)
 **Files:** modify `frontend/src/lib/graph.ts`; create `frontend/src/lib/graphAssetPages.test.ts`.
