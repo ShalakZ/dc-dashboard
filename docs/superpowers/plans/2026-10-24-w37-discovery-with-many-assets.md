@@ -1,0 +1,100 @@
+# w37: Discovery with hundreds of mapped assets Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** A parent asset with more than 50 sub-assets is drawn as ONE summary node that shows them 50 at a time, so Discovery with the owner's 414 assets draws 17 nodes and about 24 edges instead of 416 and 822; the next fixes follow the measured profile.
+
+**Architecture:** `buildGraph` (pure, `lib/graph.ts`) gets two optional view fields (`assetPageSize`, `assetsShown`); absent they change nothing, so `NO_VIEW` and every existing caller build today's graph. The walk draws the first `shown` children of a summarised parent, then one `more:asset:<parentId>` node (new node type `moreAssets`), hides the rest with their subtrees, and ends the hidden children's mapped edges on the summary. The page keeps `assetsShown` in state (session only, like a group's pages) and passes `ASSET_PAGE = 50`. Find extends the page of each summarised ancestor.
+
+**Tech Stack:** React 19, @xyflow/react 12.12, TypeScript, vitest (jsdom), Playwright (e2e, controller only).
+
+**Spec:** `.waves/w37.md` (the brief; rulings R1 to R16 are binding, this plan refines them).
+
+## Facts checked in the code (main 86a7658)
+- `buildGraph` (`lib/graph.ts:282-489`) walks assets depth first with a stack (`walk`, `:352-363`), one `ROW` (64) per planned asset (`plan.forEach`, `:462-474`), folds with `fold` (`:342-351`) and `representative`/`visibleOf` (`:339, :367`); mapped edges are keyed by the DRAWN asset id (`countMapped` `:226-233`, `mappedLinks` `:312-319`); the hierarchy edge list is `parentLinks` filtered to drawn assets (`:475-479`); `NO_VIEW` has `pageSize: Infinity` (`:157`).
+- Ids that start `more:` have no saved place (`isMoreId` `:262`, `ownPlaces` `:268`, `layoutBatches` `:569`) and follow a drag through `moreNodeIds` (`:209-219`; used `DiscoveryPage.tsx:821`).
+- `nodeTypes` is module level and memoised (`nodes.tsx:345-352`); `nodes.test.tsx:834` and `:1033` pin its key list; `DiscoveryPage.test.tsx:64-100` and `DiscoveryPage.canvas.test.tsx:20` render `nodeTypes[n.type]`, so a new type must be registered.
+- `navIndex` (`lib/graphNav.ts:31-75`): `columnOf` returns "assets" only for `type === "asset"`, `parentOf` has a case per type, and a `more` node is added late; `useGraphNav.ts:~69-78` lets the arrows work from the button of any node whose id starts `more:`.
+- `findPlan` (`lib/graphFind.ts:~180`): for an asset it only unfolds folded ancestors (`unfoldedAncestors`); `onFind` (`DiscoveryPage.tsx:~1091-1099`) applies `plan.view.shown` and `plan.view.assetsClosed`.
+- `pickDropTarget` matches `^asset:(\d+)$` (`lib/drop.ts:18, 99-105`): `more:asset:4` is never a drop target. The canvas menu falls back to the canvas actions for a node with no actions of its own (`DiscoveryPage.tsx:~1223-1238`).
+- The graph route returns every asset (`api/discovery.py:356-391`); verified on the look stack: 414 assets, 400 children under `W37 Room 3`.
+- No test or spec has more than 48 sibling assets (grep of `length: N` in the graph tests, `graphModel.ts`, w12b, w7u, w7t, w36): `ASSET_PAGE = 50` leaves every existing fixture unsummarised.
+
+## Global constraints
+- Edit files with the Edit tool or an anchored `sed`, never with a script that rewrites a whole file; check `git diff --stat` after.
+- Tokens only inside `@layer w6`; no pill buttons, no monospace labels, no italic accents; icons are inline SVG; no `transition` on node paint (`graph-nodes.css.test.ts`).
+- Implementers run only targeted `npx vitest run <files>`, `npm run typecheck`, `npm run build`, the e2e type check, git, grep; never docker, `scripts/*`, `npx playwright test`. Wide jobs only through `flock /tmp/dcdash-heavy.lock`, `VITEST_MAX_FORKS=4`.
+- One commit per task, `git add` named files only, trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
+- Nothing under `backend/` changes (R2).
+
+## Decisions (refining the brief)
+- **D1 Node type and id:** type `moreAssets`; id `nodeId.moreAssets(parentId)` = `more:asset:<parentId>`; data `MoreAssetsNodeData = NodeActions & { parentId: number; parentName: string; left: number; step: number; shown: number; mapped: number; navParent: string }` with `onMoreAssets?: (summaryId: string) => void` added to `NodeActions`. `draggable: false, selectable: false, focusable: false`, a left (target) handle only.
+- **D2 Constants:** `export const ASSET_PAGE = 50` in `lib/graph.ts`. The summary takes TWO rows (`SUMMARY_ROWS = 2`, 128 px) so its three fixed lines never overlap the next asset; plain assets keep one row, so a graph without a summary is byte for byte as today.
+- **D3 View:** `GraphView` gains optional `assetPageSize?: number` (absent = `Infinity`) and `assetsShown?: ReadonlyMap<number, number>` (parent id to how many of its children are drawn; absent = 0). A parent is summarised only when it is not closed (`assetsClosed`), has MORE than `assetPageSize` children and `shown < children`. The top level (assets with no parent) is never summarised. `NO_VIEW` stays as is.
+- **D4 Edges:** hierarchy edge `a:<parent>>more:asset:<parent>` (plain, like asset edges); a mapped point under a hidden child ends on the summary, one edge per source, group or point, id `m:<from>>more:asset:<parent>`, label `N mapped` above one. A hidden child's subtree is hidden with it (marked visited, so a cycle or a second walk never draws it); a hidden child that is itself folded keeps its fold.
+- **D5 Words:** title `400 sub-assets` (`350 more sub-assets` once something is shown; `1 sub-asset` for one); muted line `400 mapped` (the points mapped to the hidden children and everything under them, over the whole model; line absent at 0); button `Show 50` first, then `Show 50 more`, the last press `Show 30 more`; `aria-label` `Show 50 of the sub-assets under Room 3, 400 left` first, `Show 50 more of the sub-assets under Room 3, 350 left` after. The summary's wrapper has no label of its own (unfocusable).
+- **D6 Show 50:** `onMoreAssets(summaryId)` sets `assetsShown[parent] = min(children, drawn + 50)` and moves the focus to the first child just drawn (`nodeId.asset`, the `onMore` pattern); after the last page the summary is gone and the focus is on that child. A parent that gets folded (`assetsClosed` has it) forgets its pages (`pruneAssetsShown`, same idea as `pruneShown`). Expand all / Expand branch never touch the pages.
+- **D7 Find:** an asset target hidden behind summarised ancestors extends each such ancestor's page to the next multiple of 50 that holds the child on the path; if the assets that would newly draw exceed `EXPAND_NODE_BUDGET` (600) the plan targets the nearest summary-bearing ancestor's summary (`targetId` = its `more:asset:<id>`) and says: `Room 3 has 5,000 sub-assets; PDU4321 is too far down to draw at once. Showing the first ones: use Show 50 more to go on.` (counts with thousands separators).
+- **D8 Measure the same way before and after:** `.waves/w37/measure37.mjs`, look stack 18265, 1440 x 900, unthrottled and 4x.
+
+## Existing tests that will change (A1, grepped)
+- `nodes.test.tsx:834` (`Object.keys(nodeTypes).sort()` list) and `:1028-1035` (one case per node type, must equal `Object.keys(nodeTypes)`): add `moreAssets`. `MoreNode` cases (`:855-`) unchanged.
+- `graphNav.test.ts` and `useGraphNav.test.tsx`: add cases only.
+- `GraphMiniMap.test.tsx`: add the new type's colour if the colour table gets a key.
+- `graph-nodes.css.test.ts`, `app.css.test.ts`: new selectors must name classes, tokens inside `@layer w6`, no transition on node paint.
+- Must stay green WITHOUT edits: all of `lib/graph.test.ts`, `graphReuse.test.ts`, `graphView.test.ts`, `graphFind.test.ts` cases, `DiscoveryPage.test.tsx` (largest sibling set 48), `w36.spec.ts` (48 children), w12b/w7u perf specs (12 root assets), every spec that finds its own asset (roots).
+- Substring audit: new button names `Show 50 of the sub-assets under …` / `Show 50 more of the sub-assets under …` against `getByRole("button", { name: /Show 50 more/ })` lookups (w12b 5, w7u 3, w7t 2, graphModel 1): they run on graphs with no summary; the new spec uses `sub-assets under` and `exact`. The title `400 sub-assets` against `sub-assets` lookups (`w12b.spec.ts` 10, `DiscoveryPage.test.tsx` 12, `nodes.test.tsx` 6): those match an asset's `N sub-assets` aria text on small parents only.
+- LESSONS B (UI): A1 grep done above; A2 fixed line heights (the node has three fixed lines); A5 focus never on `<body>` after Show 50, fold or Find; A7 selectors; A9 one announcer (the node has no live region; the page's toast carries the Find note).
+
+## File map
+- Modify `frontend/src/lib/graph.ts` (view fields, `nodeId.moreAssets`, `ASSET_PAGE`, `SUMMARY_ROWS`, walk, summary node and edges, `moreNodeIds`, `pruneAssetsShown`, `MoreAssetsNodeData`, `NodeActions.onMoreAssets`).
+- Create `frontend/src/lib/graphAssetPages.test.ts` (T1 unit tests; `graph.test.ts` stays untouched).
+- Modify `frontend/src/components/graph/nodes.tsx` (`MoreAssetsNode`, `nodeTypes.moreAssets`), `styles/graph-nodes.css` (`.gnode-more-assets`), `components/graph/GraphMiniMap.tsx`, `lib/graphNav.ts`, `hooks/useGraphNav.ts` only if its `more:` branch needs it, `pages/DiscoveryPage.tsx` (state, view, `onMoreAssets`, `nodeData`, prune, `onFind` applies `assetsShown`), `lib/graphFind.ts` (T3).
+- Tests: `nodes.test.tsx`, `DiscoveryPage.test.tsx` (one new `describe`), `graphNav.test.ts`, `useGraphNav.test.tsx`, `graphFind.test.ts`, CSS guards as listed.
+- T5: create `frontend/e2e/w37.spec.ts`, modify `frontend/e2e/graphModel.ts` (new `familyModel`), `frontend/playwright.config.ts` (own project after w36), `docs/end-to-end-tests.md`.
+- T6 (docs): `docs/mapping-large-sources.md` (section), `docs/sources-and-discovery.md` (one sentence, under 300 bytes net), `docs/screens.md`, CHANGELOG, backlog BV, roadmap O-67.
+
+## Review Focus
+1. `assetPageSize` absent, or a parent with exactly 50 children, builds byte for byte as today (equality test over the models `graph.test.ts` builds).
+2. Every mapped point under a hidden child counts on exactly ONE edge to the summary; none is lost or doubled when the source is open, closed, filtered ("Unmapped only" draws no mapped edge) or a group is paged.
+3. The summary is never saved (`isMoreId`), follows a drag of its parent and of any ancestor, and is not a drop target.
+4. Find reaches child 377 of 400 in one jump (page extended to 400), the keyboard reaches the summary (Down from the last child) and back (Left), and focus never lands on `<body>` after Show 50, a fold, an Undo or Find.
+5. The after numbers are measured like the before numbers; a missed R11 target is said honestly.
+
+## Tasks
+
+### Task 0 (controller): T0 baseline
+- [x] Look stack from main 86a7658 (18265/18619), the owner's shape built (414 assets, 454 mappings), counts 416 nodes and 822 edges at rest; `measure37.mjs` before at 1x and 4x, trace summaries, other pages; the table and the one-sentence cause in the ledger (R4).
+
+### Task 1: the summary in `buildGraph` (pure)
+**Files:** modify `frontend/src/lib/graph.ts`; create `frontend/src/lib/graphAssetPages.test.ts`.
+**Interfaces:** Produces `ASSET_PAGE`, `nodeId.moreAssets(parentId: number): string`, `GraphView.assetPageSize?`, `GraphView.assetsShown?`, `MoreAssetsNodeData`, `NodeActions.onMoreAssets?`, `moreNodeIds(model, "asset:<id>")` returning the asset's own summary id (and nothing for ids it does not summarise; a model-free check is fine because the caller keeps ids that are on the canvas), `pruneAssetsShown(shown: ReadonlyMap<number, number>, assetsClosed: ReadonlySet<number>): ReadonlyMap<number, number>` (same object when nothing drops).
+- [ ] Step 1: write failing tests in `graphAssetPages.test.ts` (names are the spec): `owner shape at rest builds 17 nodes and 24 edges` (root MV2, 3 rooms, 5 racks under two rooms, 400 children under room 3 with one energy mapping each from a large source, a small source mapped onto 9 racks: expect the `more:asset:<room3>` node with `left: 400, step: 50, mapped: 400`, one edge `m:src:L>more:asset:<room3>` labelled `400 mapped`, nine edges labelled `6 mapped`, hierarchy edge to the summary); `a parent with exactly 50 children builds as without assetPageSize`; `a parent with 51 children draws no child and a summary of 51`; `the output equals the output without the fields for every model graph.test.ts uses` (import the same builders or rebuild three representative models); `shown 100 draws the first 100 children in order, then the summary with left 300 and mapped counted over the hidden ones`; `shown >= children draws all and no summary`; `a folded parent draws no summary and keeps its badge`; `a hidden child's subtree is hidden and its mapped points end on the summary`; `a point mapped under a hidden grandchild counts once`; `an open group's mapped point under a hidden child ends on the summary with no label (n = 1), a closed group's with the count`; `the summary stands two rows after the last drawn subtree and follows the parent's moved place; its id is never in ownPlaces or layoutBatches`; `moreNodeIds for an asset id returns its summary id`; `pruneAssetsShown drops closed parents and returns the same map when nothing drops`; `a root with 60 children is summarised but the set of roots never is (80 roots draw 80 nodes)`.
+- [ ] Step 2: run `cd frontend && npx vitest run src/lib/graphAssetPages.test.ts` and see the new cases fail (not compile errors for the cases that only need the absent fields).
+- [ ] Step 3: implement in `buildGraph` (signatures above; walk: push a `{summary}` marker BEFORE the children so it pops after the last drawn child's subtree; hidden children and their subtrees are marked visited and recorded in a `summarisedUnder` map; `visibleOf` becomes a target resolver that returns the summary's node id for them; keep `countMapped`'s number-keyed API for the whole-model `mappedAll`). `y` of a planned item = rows so far times `ROW`, a summary adding `SUMMARY_ROWS`.
+- [ ] Step 4: run the new file and `npx vitest run src/lib/graph.test.ts src/lib/graphReuse.test.ts src/lib/graphView.test.ts src/lib/graphNav.test.ts` (all green, none edited) and `npm run typecheck`.
+- [ ] Step 5: commit `feat(w37): buildGraph draws a parent with more than 50 sub-assets as one summary node`.
+
+### Task 2: the node and the page
+**Files:** modify `components/graph/nodes.tsx`, `styles/graph-nodes.css`, `components/graph/GraphMiniMap.tsx`, `lib/graphNav.ts`, `pages/DiscoveryPage.tsx`; tests `nodes.test.tsx`, `GraphMiniMap.test.tsx`, `graphNav.test.ts`, `useGraphNav.test.tsx`, `DiscoveryPage.test.tsx`, the CSS guards.
+**Interfaces:** Consumes Task 1. Produces the visible feature; `navIndex` treats `moreAssets` as an asset-column node whose parent is `data.navParent`, last among its siblings.
+- [ ] Step 1: failing tests: `nodes.test.tsx` `MoreAssetsNode` cases (the words of D5 for first and later pages and for `left` 30 and 1; the button's `aria-label`; click calls `onMoreAssets` with the node id and does not select; Enter and Space are the button's (`nokey`); no button without the callback; exactly one handle, the target; line heights fixed: classes `gnode-more-assets`, `gma-title`, `gma-mapped`, `gma-button`, and no `gma-mapped` element at `mapped: 0`); update the two key-list pins for `moreAssets`; `graphNav.test.ts`: Down from the last child of a summarised parent reaches the summary, Left from it reaches the parent, Up goes back to the last child; `useGraphNav.test.tsx`: the arrows work from the summary's button; `GraphMiniMap.test.tsx`: the colour is the asset's; `DiscoveryPage.test.tsx` new `describe("many sub-assets")`: a parent of 120 children draws 0 children and the summary, Show 50 draws 50 and the focus is on the first new child, a second press 100, the third 120 and the summary is gone with the focus on child 101, folding the parent and unfolding shows the summary with nothing shown, a right-click on the summary opens the canvas menu, a toast Undo that removes children makes the summary smaller or gone (graph read again), Collapse all then Expand all leaves no page open.
+- [ ] Step 2: run the new cases, see them fail.
+- [ ] Step 3: implement `MoreAssetsNode` (icon `assets`-like inline SVG via the existing `assetIcon`/`Icon` set, title, optional muted line, one `nodrag nokey` button; `Handle type="target"` only), register `moreAssets` in `nodeTypes`, minimap colour, CSS (`.gnode-more-assets` doubled-class pattern of `.gnode-more`, fixed line heights, tokens only in `@layer w6`), `navIndex` cases (`columnOf`, `parentOf`), page: `assetsShown` state, `view` gets `assetPageSize: ASSET_PAGE` and `assetsShown`, `onMoreAssets`, `nodeData` gives `moreAssets` its callback, `useEffect` prunes with `pruneAssetsShown`, `viewNow` carries the new fields.
+- [ ] Step 4: run the touched test files (targeted, no wide run), `npm run typecheck`, the CSS guards.
+- [ ] Step 5: commit `feat(w37): the summary node, Show 50 and the page wiring`.
+
+### Task 3: Find
+**Files:** modify `lib/graphFind.ts`, `pages/DiscoveryPage.tsx` (`onFind`), tests `graphFind.test.ts`, `DiscoveryPage.test.tsx`.
+- [ ] Step 1: failing tests (`graphFind.test.ts`): `an asset 377th of 400 under a summarised parent extends the page to 400`; `child 3 extends it to 50`; `two summarised ancestors each extend`; `a folded ancestor plus a summary: both change in one plan`; `over the 600 budget the plan targets the summary and says "Room 3 has 5,000 sub-assets; PDU4321 is too far down to draw at once. Showing the first ones: use Show 50 more to go on."`; `an asset already drawn leaves the plan unchanged (same view object)`. Page: Find on a hidden child draws it, flashes it and focuses it.
+- [ ] Step 2: run, see them fail. Step 3: implement `findPlan`'s asset branch (children order is the model's `assets` order filtered by parent, as `buildGraph` sees them) and the `onFind` application of `plan.view.assetsShown`. Step 4: targeted tests and typecheck. Step 5: commit `feat(w37): Find reaches an asset behind a summary`.
+
+### Task M (controller): T-mid
+- [ ] Refresh the look stack from the branch, rerun `measure37.mjs`, rule on T4 from the numbers.
+
+### Task 4 (conditional, one commit per fix): R7 callback identity, R8 `interactionWidth: 0` on every edge `buildGraph` makes, R9 `onlyRenderVisibleElements` above 600 nodes. Taken only as the T-mid numbers and R4's profile say; each with its measured before and after in the ledger and a unit test.
+
+### Task 5: `frontend/e2e/w37.spec.ts` (R13)
+- [ ] `familyModel` in `graphModel.ts`; the seven cases of R13 (at rest 17 nodes and one edge into the summary labelled `400 mapped`; Show 50 twice; Find `PDUB177`-like child past page 1; drop onto a drawn PDU opens the Review (Cancel); fold and unfold; pan frames at rest and in the stress view, generous limits; 1024 x 768 no sideways scroll); playwright project after w36; e2e type check prints nothing; docs bullet. The controller runs it through `spec-run.sh`.
+
+### Task 6: docs and close-out (R14, R15), gallery, R2 proof, before/after table, the plan's log. Doc tests right after the docs edit.
